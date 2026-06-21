@@ -1,0 +1,23 @@
+replicaCount: 1
+namespace: zivo
+image:
+  repository: ghcr.io/benitojd/zivo-web
+  tag: Zivo_0.1.0
+  pullPolicy: IfNotPresent
+imagePullSecrets:
+  - name: ghcr-cred
+service:
+  port: 80
+ingress:
+  enabled: true
+  className: traefik
+  host: zivo.fyi
+  wwwHost: www.zivo.fyi
+  tls: true
+  entrypoint: websecure
+resources:
+  requests:
+    cpu: 50m
+    memory: 256Mi
+  limits:
+    memory: 512Mi

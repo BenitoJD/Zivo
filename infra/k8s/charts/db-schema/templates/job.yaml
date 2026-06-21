@@ -1,0 +1,34 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Values.jobName }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "db-schema.labels" . | nindent 4 }}
+spec:
+  backoffLimit: {{ .Values.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.ttlSecondsAfterFinished }}
+  activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "db-schema.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: schema
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python"]
+          args: ["scripts/apply_intel_schema.py"]
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secretName }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Context Testing"
+  short_description: "Validate agent context changes with static checks and dynamic scenario probes"
+  default_prompt: "I modified agent context or instructions. Help me derive scenario probes from the diff, run static checks, and verify the context changes behave correctly."

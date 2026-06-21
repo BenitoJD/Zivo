@@ -1,0 +1,57 @@
+# ====================
+# Zivo monorepo
+# ====================
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+*.env
+*.pem
+*.key
+credentials.json
+secrets/
+
+# Logs
+*.log
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+backend/.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# Node / frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.next/
+*.tsbuildinfo
+
+# Docker / local data
+pgdata/
+
+# Test / tooling output
+.coverage
+htmlcov/
+test-results/
+playwright-report/
+output/

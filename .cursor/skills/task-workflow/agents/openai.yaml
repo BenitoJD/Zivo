@@ -1,0 +1,4 @@
+interface:
+  display_name: "Task Workflow"
+  short_description: "Branch, build, test, review, and prepare handoff for end-to-end tasks"
+  default_prompt: "Use this skill to execute a task end-to-end in this repo: create a fresh branch, implement changes, run AGENTS.md validations, run pr-review on the local diff before commit/PR handoff, fix any merge-blocking review items, and prepare PR handoff only when requested."

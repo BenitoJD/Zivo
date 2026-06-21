@@ -1,0 +1,4 @@
+interface:
+  display_name: "Production Release Deploy"
+  short_description: "Prepare release notes, deploy backend/frontend production, and verify backend pods"
+  default_prompt: "Use this skill to prepare release notes with release-notes-since-deploy, request explicit production approvals, trigger the backend production GitHub Actions workflow, monitor the prod EC2/Kubernetes rollout until API and worker pods are replaced and healthy, trigger the frontend deployment workflow, and hand the release notes report back to the user."

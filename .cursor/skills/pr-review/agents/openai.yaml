@@ -1,0 +1,4 @@
+interface:
+  display_name: "PR Review"
+  short_description: "Review code changes for correctness, security, and simplicity before commit or PR"
+  default_prompt: "Review a PR or local branch diff before commit/PR creation. Start with a ship/no-ship decision, check correctness/security/simplicity, and label findings as merge-blocking or optional."

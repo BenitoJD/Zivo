@@ -1,0 +1,11 @@
+namespace: zivo
+image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+storage: 40Gi
+ingress:
+  enabled: true
+  className: traefik
+  host: s3.zivo.fyi
+  tls: true
+  entrypoint: websecure
+  tlsSecret: zivo-s3-tls
+publicUrl: https://s3.zivo.fyi

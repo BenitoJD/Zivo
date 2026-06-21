@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release Notes Since Deploy"
+  short_description: "Find deployed baselines, migrations, merged PRs, and screenshot evidence for release notes"
+  default_prompt: "Use this skill to find the latest backend and frontend production deployments from GitHub Actions, compare origin/main against those deployed commits, list new Alembic migrations, classify merged work as functional or non-functional, add a functional summary with screenshot links, pull PR screenshot links where available, and write a Markdown report outside the repo."

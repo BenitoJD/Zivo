@@ -1,0 +1,131 @@
+name: Deploy Zivo
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch to deploy
+        required: false
+        default: main
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: deploy-zivo
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.tag.outputs.image_tag }}
+      image_owner: ${{ steps.owner.outputs.owner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || 'main' }}
+
+      - id: owner
+        run: echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - run: ./scripts/ci-docker-disk-guard.sh
+
+      - id: tag
+        run: echo "image_tag=Zivo_0.1.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: ghcr.io/${{ steps.owner.outputs.owner }}/zivo-api:${{ steps.tag.outputs.image_tag }}
+          target: runtime
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: ghcr.io/${{ steps.owner.outputs.owner }}/zivo-web:${{ steps.tag.outputs.image_tag }}
+          build-args: |
+            NEXT_PUBLIC_API_URL=https://api.zivo.fyi
+          target: runtime
+
+  deploy:
+    needs: build
+    runs-on: [self-hosted, zivo]
+    timeout-minutes: 45
+    env:
+      KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || 'main' }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - run: |
+          command -v helm >/dev/null || curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          command -v yq >/dev/null || (curl -fsSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && chmod +x /usr/local/bin/yq)
+
+      - name: GHCR pull secret
+        run: |
+          NS=zivo
+          kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n "$NS" delete secret ghcr-cred --ignore-not-found=true
+          kubectl -n "$NS" create secret docker-registry ghcr-cred \
+            --docker-server=ghcr.io \
+            --docker-username="${{ github.actor }}" \
+            --docker-password="${{ secrets.GITHUB_TOKEN }}"
+          kubectl -n "$NS" patch serviceaccount default \
+            -p '{"imagePullSecrets":[{"name":"ghcr-cred"}]}' --type=merge
+
+      - name: Promote image tags
+        run: |
+          chmod +x scripts/promote-prod-image-tags.sh
+          ./scripts/promote-prod-image-tags.sh "${{ needs.build.outputs.image_tag }}" "${{ needs.build.outputs.image_owner }}"
+
+      - name: Helm upgrade data plane
+        run: |
+          NS=zivo
+          helm upgrade --install zivo-postgres ./infra/k8s/charts/postgres -n $NS --create-namespace \
+            -f infra/k8s/environments/prod/postgres-values.yaml --wait --timeout 5m
+          helm upgrade --install zivo-minio ./infra/k8s/charts/minio -n $NS \
+            -f infra/k8s/environments/prod/minio-values.yaml --wait --timeout 10m
+
+      - name: Apply intel schema
+        run: |
+          chmod +x scripts/run-k8s-schema-migrate.sh
+          IMAGE_REPOSITORY="ghcr.io/${{ needs.build.outputs.image_owner }}/zivo-api" \
+          IMAGE_TAG="${{ needs.build.outputs.image_tag }}" \
+            ./scripts/run-k8s-schema-migrate.sh
+
+      - name: Helm upgrade API + web
+        run: |
+          TAG="${{ needs.build.outputs.image_tag }}"
+          helm upgrade --install zivo-api ./infra/k8s/charts/api -n zivo \
+            -f infra/k8s/environments/prod/backend-release-values.yaml \
+            -f infra/k8s/environments/prod/api-values.yaml --set image.tag=${TAG} --wait --timeout 5m
+          helm upgrade --install zivo-web ./infra/k8s/charts/web -n zivo \
+            -f infra/k8s/environments/prod/web-values.yaml --set image.tag=${TAG} --wait --timeout 5m
+
+      - name: Commit promoted tags
+        if: ${{ github.event.inputs.branch == '' || github.event.inputs.branch == 'main' }}
+        run: |
+          TAG="${{ needs.build.outputs.image_tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add infra/k8s/environments/prod/backend-release-values.yaml \
+            infra/k8s/environments/prod/api-values.yaml \
+            infra/k8s/environments/prod/web-values.yaml
+          git diff --staged --quiet && exit 0
+          git commit -m "chore: promote ${TAG}"
+          git pull --rebase origin main
+          git push origin HEAD:main

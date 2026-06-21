@@ -1,0 +1,30 @@
+from __future__ import annotations
+
+import socket
+
+DEFAULT_BACKEND_PORT = 8200
+
+
+def port_available(port: int, host: str = "127.0.0.1") -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((host, port))
+            sock.listen(1)
+        except OSError:
+            return False
+    return True
+
+
+def find_available_port(start: int, host: str = "127.0.0.1", max_tries: int = 200) -> int:
+    for port in range(start, start + max_tries):
+        if port_available(port, host):
+            return port
+    raise RuntimeError(f"No available port found from {start} to {start + max_tries - 1}")
+
+
+def allocate_backend_port(requested: int | None = None) -> int:
+    if requested is not None:
+        if not port_available(requested):
+            raise RuntimeError(f"Port {requested} is already in use.")
+        return requested
+    return find_available_port(DEFAULT_BACKEND_PORT)

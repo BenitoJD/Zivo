@@ -1,0 +1,4 @@
+interface:
+  display_name: "Alembic Migrations"
+  short_description: "Create, rebase, validate, and safely roll out Alembic migrations"
+  default_prompt: "Create or rebase Alembic migrations and validate upgrade/downgrade for this repo."

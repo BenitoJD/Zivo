@@ -1,0 +1,23 @@
+namespace: zivo
+jobName: intel-schema
+ttlSecondsAfterFinished: 600
+backoffLimit: 2
+activeDeadlineSeconds: 900
+
+image:
+  repository: ghcr.io/benitojd/zivo-api
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: ghcr-cred
+
+secretName: zivo-secrets
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
