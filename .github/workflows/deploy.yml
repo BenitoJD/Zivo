@@ -43,14 +43,16 @@ jobs:
       - id: tag
         run: echo "image_tag=Zivo_0.1.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: ./backend
           push: true
           tags: ghcr.io/${{ steps.owner.outputs.owner }}/zivo-api:${{ steps.tag.outputs.image_tag }}
           target: runtime
+          provenance: false
+          sbom: false
 
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: ./frontend
           push: true
@@ -58,6 +60,8 @@ jobs:
           build-args: |
             NEXT_PUBLIC_API_URL=https://api.zivo.fyi
           target: runtime
+          provenance: false
+          sbom: false
 
   deploy:
     needs: build

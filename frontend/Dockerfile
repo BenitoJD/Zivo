@@ -15,7 +15,7 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
-RUN addgroup -g 1000 app && adduser -u 1000 -G app -D app
+RUN addgroup -S app && adduser -S app -G app
 
 COPY --from=build --chown=app:app /app/public ./public
 COPY --from=build --chown=app:app /app/.next/standalone ./
