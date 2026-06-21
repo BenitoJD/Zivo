@@ -38,7 +38,8 @@ Under the hood:
 
 Year 1 is deliberately narrow: **become the best question generator.** One product. Nothing else.
 
-Full strategy and 10-year roadmap: [docs/VISION.md](docs/VISION.md).
+Full strategy and 10-year roadmap: [docs/VISION.md](docs/VISION.md).  
+Database table guide (all 27 tables): [docs/DATA_MODEL.md](docs/DATA_MODEL.md).
 
 ## What we are not building (yet)
 

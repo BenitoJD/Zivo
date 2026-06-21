@@ -4,7 +4,7 @@ Monorepo for [zivo.fyi](https://zivo.fyi). Engineering codename: **Zivo**. Produ
 
 Same deployment model as [citepage](https://github.com/BenitoJD/citepage): **K3s + Helm on one VPS**; Docker Compose only for local Postgres and MinIO.
 
-**Product direction:** measure and improve understanding through questions. Year 1 = best AI-powered question generator. Strategy: [docs/VISION.md](docs/VISION.md).
+**Product direction:** measure and improve understanding through questions. Year 1 = best AI-powered question generator. Strategy: [docs/VISION.md](docs/VISION.md). **Data model (all tables):** [docs/DATA_MODEL.md](docs/DATA_MODEL.md).
 
 ## Readiness checklist
 
@@ -34,7 +34,8 @@ Same deployment model as [citepage](https://github.com/BenitoJD/citepage): **K3s
 ```
 zivo/
 ├── docs/
-│   └── VISION.md         # product strategy and 10-year roadmap
+│   ├── VISION.md         # product strategy and 10-year roadmap
+│   └── DATA_MODEL.md     # every intel table → Question Better use case
 ├── .cursor/skills/       # agent skills (zivo-dev, fastapi, postgres, …)
 ├── agents/               # prod-safety, testing notes
 ├── backend/
@@ -126,6 +127,7 @@ Deploy: GitHub → Actions → **Deploy Zivo** → Run workflow.
 
 - Business copy: root `README.md` only.
 - Product strategy: `docs/VISION.md`.
+- Table reference: `docs/DATA_MODEL.md`.
 - Schema changes: `backend/schema/` only.
 - New routes: `backend/app/api/`.
 - Background jobs: `backend/app/workers/`.
