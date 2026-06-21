@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiPost } from "@/lib/api/client";
+import { apiPost, setCsrfToken } from "@/lib/api/client";
 
 type AuthModalProps = {
   open: boolean;
@@ -42,7 +42,8 @@ export function AuthModal({ open, onClose, onSuccess }: AuthModalProps) {
               confirm_password: password,
               accept_terms: true,
             };
-      const res = await apiPost<{ username: string }>(path, payload);
+      const res = await apiPost<{ username: string; csrf_token: string }>(path, payload);
+      setCsrfToken(res.csrf_token);
       onSuccess(res.username);
       onClose();
     } catch (err) {

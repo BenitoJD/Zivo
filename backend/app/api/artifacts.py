@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import Account, Document, User
 from app.repositories import workspace as workspace_repo
-from app.services.auth import get_current_user, get_optional_user, require_csrf
+from app.services.auth import get_current_user, get_optional_user, require_csrf, require_csrf_or_guest
 from app.services.guest import can_access_document
 from app.services.guest_session import optional_guest_session
 from app.services.jobs import enqueue_ingest
@@ -87,15 +87,15 @@ def get_pages(
     }
 
 
-@router.post("/{artifact_id}/page-range")
+@router.post("/{artifact_id}/page-range", dependencies=[Depends(require_csrf_or_guest)])
 def confirm_page_range(
     artifact_id: uuid.UUID,
     body: PageRangeIn,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-    _: None = Depends(require_csrf),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(optional_guest_session),
 ) -> dict:
-    doc = _resolve_document(db, artifact_id, user, None)
+    doc = _resolve_document(db, artifact_id, user, guest_id)
     if body.to_page < body.from_page:
         raise HTTPException(status_code=400, detail="Invalid page range")
     page_count = (doc.meta or {}).get("page_count") or body.to_page
@@ -109,14 +109,19 @@ def confirm_page_range(
     captured = doc.artifact_captured_at or doc.created_at
     workspace_repo.upsert_workspace(
         db,
-        account_id=user.id,
+        account_id=user.id if user else None,
         artifact_id=doc.id,
         artifact_captured_at=captured,
         status="indexing",
         page_count=page_count,
         selected_range=selected,
     )
-    job = enqueue_ingest(db, document_id=doc.id, account_id=user.id, page_range=selected)
+    job = enqueue_ingest(
+        db,
+        document_id=doc.id,
+        account_id=user.id if user else None,
+        page_range=selected,
+    )
     db.commit()
     return {"activity_id": str(job.payload.get("activity_id", job.id)), "job_id": str(job.id)}
 

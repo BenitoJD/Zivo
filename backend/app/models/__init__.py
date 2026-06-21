@@ -6,7 +6,6 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
-    Enum,
     ForeignKey,
     Index,
     Integer,
@@ -15,7 +14,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ENUM, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -52,6 +51,13 @@ class EtaExecutionStatus(StrEnum):
     partial_failed = "partial_failed"
     failed = "failed"
     cancelled = "cancelled"
+
+
+_JOB_PRIORITY = ENUM(JobPriority, name="jobpriority", schema="qb", create_type=False)
+_ETA_EXECUTION_MODE = ENUM(EtaExecutionMode, name="etaexecutionmode", schema="qb", create_type=False)
+_ETA_EXECUTION_STATUS = ENUM(
+    EtaExecutionStatus, name="etaexecutionstatus", schema="qb", create_type=False
+)
 
 
 class Account(Base):
@@ -125,21 +131,30 @@ class LlmResponseCache(Base):
 
 
 class ChatThread(Base):
-    __tablename__ = "chat_threads"
-    __table_args__ = (UniqueConstraint("account_id", "document_id", "version", name="uq_thread_version"),)
+    __tablename__ = "chat_thread"
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id",
+            "artifact_id",
+            "artifact_captured_at",
+            "version",
+            name="uq_chat_thread_version",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     account_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("account.id"), index=True)
-    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id"), index=True)
+    artifact_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    artifact_captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class ChatMessage(Base):
-    __tablename__ = "chat_messages"
+    __tablename__ = "chat_message"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    thread_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("chat_threads.id"), index=True)
+    thread_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("chat_thread.id"), index=True)
     role: Mapped[str] = mapped_column(String(16))
     content: Mapped[str] = mapped_column(Text)
     citations: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
@@ -152,13 +167,13 @@ class EtaExecution(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     mode: Mapped[EtaExecutionMode] = mapped_column(
-        Enum(EtaExecutionMode), nullable=False, default=EtaExecutionMode.dag
+        _ETA_EXECUTION_MODE, nullable=False, default=EtaExecutionMode.dag
     )
     status: Mapped[EtaExecutionStatus] = mapped_column(
-        Enum(EtaExecutionStatus), nullable=False, default=EtaExecutionStatus.queued, index=True
+        _ETA_EXECUTION_STATUS, nullable=False, default=EtaExecutionStatus.queued, index=True
     )
     priority: Mapped[JobPriority] = mapped_column(
-        Enum(JobPriority), nullable=False, default=JobPriority.MEDIUM, index=True
+        _JOB_PRIORITY, nullable=False, default=JobPriority.MEDIUM, index=True
     )
     account_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("account.id"), nullable=True, index=True
@@ -206,7 +221,7 @@ class Job(Base):
     status: Mapped[str] = mapped_column(String(16), default=JobStatus.queued, index=True)
     workload: Mapped[str] = mapped_column(String(8), default=JobWorkload.io, index=True)
     priority: Mapped[JobPriority] = mapped_column(
-        Enum(JobPriority), nullable=False, default=JobPriority.MEDIUM, index=True
+        _JOB_PRIORITY, nullable=False, default=JobPriority.MEDIUM, index=True
     )
     account_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("account.id"), nullable=True, index=True
@@ -215,7 +230,7 @@ class Job(Base):
         UUID(as_uuid=True), ForeignKey("eta_executions.id"), nullable=True, index=True
     )
     activity_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("intel.activity.id"), nullable=True, index=True
+        UUID(as_uuid=True), nullable=True, index=True
     )
     node_key: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     payload: Mapped[dict] = mapped_column(JSONB, default=dict)

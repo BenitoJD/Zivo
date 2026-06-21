@@ -10,12 +10,40 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Account, User
+from app.models import Account, Document, User
 from app.repositories.intel import create_activity
-from app.services.auth import get_current_user, require_csrf
+from app.services.auth import get_current_user, get_optional_user, require_csrf
+from app.services.guest import can_access_document
+from app.services.guest_session import guest_session_for_read, optional_guest_session
 from app.services.jobs import enqueue_generate
 
 router = APIRouter()
+
+
+def _assertion_access(
+    db: Session,
+    assertion_id: uuid.UUID,
+    user: Account | None,
+    guest_id: str | None,
+) -> dict:
+    row = db.execute(
+        text(
+            """
+            SELECT id, title, summary, payload, status
+            FROM intel.assertion
+            WHERE id = :id
+            """
+        ),
+        {"id": assertion_id},
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Not found")
+    artifact_raw = (row.get("payload") or {}).get("artifact_id")
+    if artifact_raw:
+        doc = db.get(Document, uuid.UUID(str(artifact_raw)))
+        if not doc or not can_access_document(doc, user, guest_id):
+            raise HTTPException(status_code=404, detail="Not found")
+    return dict(row)
 
 
 class GenerateIn(BaseModel):
@@ -34,21 +62,10 @@ class FlagIn(BaseModel):
 def get_assertion(
     assertion_id: uuid.UUID,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
 ) -> dict:
-    row = db.execute(
-        text(
-            """
-            SELECT id, title, summary, payload, status
-            FROM intel.assertion
-            WHERE id = :id
-            """
-        ),
-        {"id": assertion_id},
-    ).mappings().first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Not found")
-    return dict(row)
+    return _assertion_access(db, assertion_id, user, guest_id)
 
 
 @router.get("")
@@ -57,29 +74,32 @@ def list_assertions(
     page: int | None = None,
     concept_key: str | None = None,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
 ) -> list[dict]:
-  rows = db.execute(
-      text(
-          """
-          SELECT id, title, summary, payload, status
-          FROM intel.assertion
-          WHERE payload->>'artifact_id' = :artifact_id
-          ORDER BY recorded_at DESC
-          LIMIT 200
-          """
-      ),
-      {"artifact_id": str(artifact_id)},
-  ).mappings().all()
-  return [dict(r) for r in rows]
+    doc = db.get(Document, artifact_id)
+    if not doc or not can_access_document(doc, user, guest_id):
+        raise HTTPException(status_code=404, detail="Not found")
+    rows = db.execute(
+        text(
+            """
+            SELECT id, title, summary, payload, status
+            FROM intel.assertion
+            WHERE payload->>'artifact_id' = :artifact_id
+            ORDER BY recorded_at DESC
+            LIMIT 200
+            """
+        ),
+        {"artifact_id": str(artifact_id)},
+    ).mappings().all()
+    return [dict(r) for r in rows]
 
 
-@router.post("/generate")
+@router.post("/generate", dependencies=[Depends(require_csrf)])
 def generate_assertions(
     body: GenerateIn,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
-    _: None = Depends(require_csrf),
 ) -> dict:
     activity_id = create_activity(
         db,

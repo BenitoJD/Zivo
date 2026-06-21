@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.graphs.mcq_graph import grade_mcq
-from app.models import User
-from app.services.auth import get_current_user, require_csrf
+from app.models import Account, User
+from app.services.auth import get_optional_user, require_csrf_or_guest
 
 router = APIRouter()
 
@@ -24,12 +24,11 @@ class GradeIn(BaseModel):
     confidence: int | None = None
 
 
-@router.post("/grade")
+@router.post("/grade", dependencies=[Depends(require_csrf_or_guest)])
 def grade(
     body: GradeIn,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-    _: None = Depends(require_csrf),
+    user: Account | None = Depends(get_optional_user),
 ) -> dict:
     result = grade_mcq(db, body.assertion_id, body.choice_index)
     if user:

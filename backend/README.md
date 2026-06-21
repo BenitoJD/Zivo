@@ -26,9 +26,14 @@ backend/
 │   ├── db.py
 │   └── main.py
 ├── schema/
-│   └── intel_foundation.sql   # legacy scaffold — question graph DDL next
+│   ├── intel_foundation.sql   # intel DDL (Alembic 001)
+│   ├── qb_app.sql             # qb app DDL (Alembic 002)
+│   └── qb_infra.sql           # qb infra DDL (Alembic 002)
+├── alembic/
+│   └── versions/              # migration chain
 └── scripts/
-    └── apply_intel_schema.py
+    ├── run_alembic_with_lock.py
+    └── test_alembic_migrations.sh
 ```
 
 ## Run locally
@@ -44,10 +49,11 @@ curl http://127.0.0.1:8200/health/ready
 ## Schema
 
 ```bash
-./scripts/dev.sh db schema
+./scripts/dev.sh db migrate
+./scripts/dev.sh db seed
 ```
 
-Idempotent in production via the `db-schema` Helm job (`scripts/run-k8s-schema-migrate.sh`).
+Production: `alembic-migrate` K8s Job via `scripts/run-k8s-schema-migrate.sh`.
 
 ## Docker
 

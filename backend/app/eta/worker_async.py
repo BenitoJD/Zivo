@@ -82,7 +82,11 @@ def _async_url() -> str:
     return url
 
 
-engine = create_async_engine(_async_url(), pool_pre_ping=True)
+engine = create_async_engine(
+    _async_url(),
+    pool_pre_ping=True,
+    connect_args={"server_settings": {"search_path": "qb,intel,public"}},
+)
 AsyncSessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
 
 

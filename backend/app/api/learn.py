@@ -3,37 +3,49 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Account, Document, User
+from app.models import Account, Document
 from app.repositories import workspace as workspace_repo
-from app.services.auth import get_current_user
+from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.services.guest import can_access_document
+from app.services.guest_session import guest_session_for_read
 
 router = APIRouter()
 
 
-class AdvanceIn(BaseModel):
-    page: int
+def _workspace_state(
+    db: Session,
+    doc: Document,
+    user: Account | None,
+) -> dict:
+    captured = doc.artifact_captured_at or doc.created_at
+    if user:
+        return workspace_repo.get_workspace(db, user.id, doc.id, captured) or {}
+    meta = doc.meta or {}
+    selected = meta.get("selected_range") or {}
+    return {
+        "current_page": selected.get("from"),
+        "status": "page_ready" if doc.status == "ready" else doc.status,
+        "selected_range": selected,
+    }
 
 
 @router.get("/{artifact_id}/learn-queue")
 def learn_queue(
     artifact_id: uuid.UUID,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
 ) -> dict:
     doc = db.get(Document, artifact_id)
-    if not doc or not can_access_document(doc, user, None):
+    if not doc or not can_access_document(doc, user, guest_id):
         raise HTTPException(status_code=404, detail="Not found")
-    captured = doc.artifact_captured_at or doc.created_at
-    ws = workspace_repo.get_workspace(db, user.id, artifact_id, captured) or {}
+    ws = _workspace_state(db, doc, user)
     concepts = db.execute(
         text(
             """
@@ -73,9 +85,10 @@ def learn_queue(
 def mastery(
     artifact_id: uuid.UUID,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
 ) -> dict:
-    q = learn_queue(artifact_id, db, user)
+    q = learn_queue(artifact_id, db, user, guest_id)
     return {
         "page": q["current_page"],
         "concepts": q["concepts"],
@@ -84,24 +97,26 @@ def mastery(
     }
 
 
-@router.post("/{artifact_id}/pages/{page}/advance")
+@router.post("/{artifact_id}/pages/{page}/advance", dependencies=[Depends(require_csrf_or_guest)])
 def advance_page(
     artifact_id: uuid.UUID,
     page: int,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
 ) -> dict:
     doc = db.get(Document, artifact_id)
-    if not doc:
+    if not doc or not can_access_document(doc, user, guest_id):
         raise HTTPException(status_code=404, detail="Not found")
-    captured = doc.artifact_captured_at or doc.created_at
-    workspace_repo.upsert_workspace(
-        db,
-        account_id=user.id,
-        artifact_id=artifact_id,
-        artifact_captured_at=captured,
-        status="page_ready",
-        unlocked_through_page=page,
-    )
-    db.commit()
+    if user:
+        captured = doc.artifact_captured_at or doc.created_at
+        workspace_repo.upsert_workspace(
+            db,
+            account_id=user.id,
+            artifact_id=artifact_id,
+            artifact_captured_at=captured,
+            status="page_ready",
+            unlocked_through_page=page,
+        )
+        db.commit()
     return {"unlocked_through_page": page, "page_ready": True}

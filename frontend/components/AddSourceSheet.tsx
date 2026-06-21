@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { apiPost } from "@/lib/api/client";
+import { apiPost, apiPostForm, ensureGuestSession } from "@/lib/api/client";
 
 type AddSourceSheetProps = {
   open: boolean;
@@ -23,16 +23,10 @@ export function AddSourceSheet({ open, onClose, onUploaded }: AddSourceSheetProp
     setBusy(true);
     setError(null);
     try {
+      await ensureGuestSession();
       const form = new FormData();
       form.append("file", file);
-      const base = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8200";
-      const res = await fetch(`${base}/api/sources`, {
-        method: "POST",
-        credentials: "include",
-        body: form,
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const data = (await res.json()) as { id: string };
+      const data = await apiPostForm<{ id: string }>("/api/sources", form);
       onUploaded(data.id);
       onClose();
     } catch (e) {
@@ -46,6 +40,7 @@ export function AddSourceSheet({ open, onClose, onUploaded }: AddSourceSheetProp
     setBusy(true);
     setError(null);
     try {
+      await ensureGuestSession();
       const path =
         kind === "github"
           ? "/api/sources/import-github"

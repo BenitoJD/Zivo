@@ -1,7 +1,47 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8200";
 
+const GUEST_HEADER = "X-Zivo-Guest-Id";
+const CSRF_HEADER = "X-CSRF-Token";
+
+let csrfToken: string | null = null;
+let guestId: string | null = null;
+
+function captureResponseMeta(res: Response) {
+  const headerGuest = res.headers.get(GUEST_HEADER);
+  if (headerGuest) guestId = headerGuest;
+}
+
+function buildHeaders(extra?: HeadersInit): Headers {
+  const headers = new Headers(extra);
+  if (csrfToken) headers.set(CSRF_HEADER, csrfToken);
+  if (guestId) headers.set(GUEST_HEADER, guestId);
+  return headers;
+}
+
+/** Bootstrap anonymous guest session (sets httponly cookie + header). */
+export async function ensureGuestSession(): Promise<void> {
+  if (guestId) return;
+  const res = await fetch(`${API_BASE}/api/sources`, {
+    credentials: "include",
+    headers: buildHeaders(),
+  });
+  captureResponseMeta(res);
+  // 200 = listed docs; either way optional_guest_session ran on the backend.
+  if (!res.ok && res.status !== 401) {
+    await res.text();
+  }
+}
+
+export function setCsrfToken(token: string | null) {
+  csrfToken = token;
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { credentials: "include" });
+  const res = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
+    headers: buildHeaders(),
+  });
+  captureResponseMeta(res);
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<T>;
 }
@@ -10,9 +50,22 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     credentials: "include",
-    headers: { "Content-Type": "application/json" },
+    headers: buildHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
+  captureResponseMeta(res);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json() as Promise<T>;
+}
+
+export async function apiPostForm<T>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    credentials: "include",
+    headers: buildHeaders(),
+    body: form,
+  });
+  captureResponseMeta(res);
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<T>;
 }
@@ -25,10 +78,15 @@ export async function apiPostSSE(
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     credentials: "include",
-    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    headers: buildHeaders({
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    }),
     body: JSON.stringify(body),
   });
-  if (!res.ok || !res.body) throw new Error("SSE failed");
+  captureResponseMeta(res);
+  if (!res.ok || !res.body) throw new Error(await res.text().catch(() => "SSE failed"));
+
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -39,8 +97,26 @@ export async function apiPostSSE(
     const parts = buffer.split("\n\n");
     buffer = parts.pop() ?? "";
     for (const part of parts) {
-      const line = part.split("\n").find((l) => l.startsWith("data:"));
-      if (line) onChunk(line.replace(/^data:\s*/, ""));
+      const lines = part.split("\n");
+      const event = lines.find((l) => l.startsWith("event:"))?.replace(/^event:\s*/, "");
+      const dataLine = lines.find((l) => l.startsWith("data:"))?.replace(/^data:\s*/, "");
+      if (!dataLine) continue;
+      if (event === "token") {
+        try {
+          const payload = JSON.parse(dataLine) as { text?: string };
+          if (payload.text) onChunk(payload.text);
+        } catch {
+          onChunk(dataLine);
+        }
+      } else if (event === "error") {
+        try {
+          const payload = JSON.parse(dataLine) as { message?: string };
+          throw new Error(payload.message ?? "Chat error");
+        } catch (e) {
+          if (e instanceof Error && e.message !== "Chat error") throw e;
+          throw new Error("Chat error");
+        }
+      }
     }
   }
 }

@@ -9,10 +9,28 @@ import { ChatPanel } from "@/components/workspace/ChatPanel";
 import { ModeSwitcher } from "@/components/workspace/ModeSwitcher";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 
-export function WorkspaceLayout({ artifactId }: { artifactId?: string }) {
+export function WorkspaceLayout({
+  artifactId,
+  emptyState,
+}: {
+  artifactId?: string;
+  emptyState?: React.ReactNode;
+}) {
   const [mode, setMode] = useState<"learn" | "test">("learn");
   const [pane, setPane] = useState<WorkspacePane>("mcq");
   const isLg = useMediaQuery("(min-width: 1024px)");
+
+  if (!artifactId && emptyState) {
+    return (
+      <div className="workspace workspace--learn">
+        <header className="workspace__header">
+          <ModeSwitcher mode={mode} onChange={setMode} />
+          <span className="workspace__title">Question Better.</span>
+        </header>
+        <div className="workspace__body">{emptyState}</div>
+      </div>
+    );
+  }
 
   if (mode === "test") {
     return (

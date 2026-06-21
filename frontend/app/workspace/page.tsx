@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { AddSourceSheet } from "@/components/AddSourceSheet";
 import { AuthModal } from "@/components/AuthModal";
 import { WorkspaceLayout } from "@/components/workspace/WorkspaceLayout";
-import { apiGet } from "@/lib/api/client";
+import { apiGet, ensureGuestSession, setCsrfToken } from "@/lib/api/client";
 
 export default function WorkspaceIndexPage() {
   const router = useRouter();
@@ -14,8 +14,12 @@ export default function WorkspaceIndexPage() {
   const [username, setUsername] = useState<string | null>(null);
 
   useEffect(() => {
-    apiGet<{ username: string }>("/api/auth/session")
-      .then((s) => setUsername(s.username))
+    void ensureGuestSession();
+    apiGet<{ username: string; csrf_token: string }>("/api/auth/session")
+      .then((s) => {
+        setUsername(s.username);
+        setCsrfToken(s.csrf_token);
+      })
       .catch(() => setUsername(null));
   }, []);
 
@@ -36,7 +40,19 @@ export default function WorkspaceIndexPage() {
           )}
         </div>
       </header>
-      <WorkspaceLayout />
+      <WorkspaceLayout
+        emptyState={
+          <div className="workspace-empty">
+            <h2>Start learning</h2>
+            <p className="muted">
+              Add a PDF, article, or notes. We&apos;ll turn them into questions you can practice and discuss.
+            </p>
+            <button type="button" className="workspace-empty__cta" onClick={() => setAddOpen(true)}>
+              Add your first source
+            </button>
+          </div>
+        }
+      />
       <AddSourceSheet
         open={addOpen}
         onClose={() => setAddOpen(false)}

@@ -49,7 +49,7 @@ backend/scripts/test_alembic_migrations.sh   # upgrade / downgrade smoke test
 
 Production: K8s Job `alembic-migrate` via `scripts/run-k8s-schema-migrate.sh` before API rollout.
 
-If your local DB was created with the old `db schema` scripts and has no `qb.alembic_version` row, stamp once: `cd backend && alembic stamp head`.
+If your local DB was created with the old `db schema` scripts and has no `alembic_version` row, stamp once: `cd backend && alembic stamp head`.
 
 ## Docker deps
 

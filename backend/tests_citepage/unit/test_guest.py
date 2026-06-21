@@ -9,28 +9,36 @@ from app.services.guest import can_access_document, claim_guest_documents, docum
 
 
 def _doc(**kwargs) -> Document:
-    return Document(id=uuid.uuid4(), slug="test", filename="t.txt", content_type="text/plain", size_bytes=1, storage_key="k", **kwargs)
+    return Document(
+        id=uuid.uuid4(),
+        slug="test",
+        filename="t.txt",
+        content_type="text/plain",
+        size_bytes=1,
+        storage_key="k",
+        **kwargs,
+    )
 
 
 def test_guest_can_access_own_document() -> None:
-    doc = _doc(user_id=None, meta={"guest_id": "abc"})
+    doc = _doc(account_id=None, meta={"guest_id": "abc"})
     assert can_access_document(doc, None, "abc")
 
 
 def test_guest_cannot_access_other_guest_document() -> None:
-    doc = _doc(user_id=None, meta={"guest_id": "abc"})
+    doc = _doc(account_id=None, meta={"guest_id": "abc"})
     assert not can_access_document(doc, None, "xyz")
 
 
 def test_demo_document_is_public() -> None:
-    doc = _doc(user_id=None, meta={"is_demo": True})
+    doc = _doc(account_id=None, meta={"is_demo": True})
     assert can_access_document(doc, None, None)
 
 
 def test_user_document_requires_owner() -> None:
-    user_id = uuid.uuid4()
-    doc = _doc(user_id=user_id, meta={})
-    user = User(id=user_id, username="dev", password_hash="x")
+    account_id = uuid.uuid4()
+    doc = _doc(account_id=account_id, meta={})
+    user = User(id=account_id, username="dev", password_hash="x")
     assert can_access_document(doc, user, None)
     assert not can_access_document(doc, None, "guest")
 
@@ -44,7 +52,7 @@ def test_guest_limits_config() -> None:
 
 
 def test_document_owned_by_guest() -> None:
-    doc = _doc(user_id=None, meta={"guest_id": "g1"})
+    doc = _doc(account_id=None, meta={"guest_id": "g1"})
     assert document_owned_by_guest(doc, "g1")
     assert not document_owned_by_guest(doc, "g2")
 
@@ -54,10 +62,10 @@ def test_claim_guest_documents_transfers_ownership() -> None:
 
     from app.models import ChatThread, Document
 
-    user_id = uuid.uuid4()
+    account_id = uuid.uuid4()
     doc_id = uuid.uuid4()
     guest_id = "a" * 32
-    doc = _doc(user_id=None, meta={"guest_id": guest_id})
+    doc = _doc(account_id=None, meta={"guest_id": guest_id})
     doc.id = doc_id
 
     db = MagicMock()
@@ -72,9 +80,9 @@ def test_claim_guest_documents_transfers_ownership() -> None:
 
     db.query.side_effect = query_side
 
-    claimed = claim_guest_documents(db, user_id, guest_id)
+    claimed = claim_guest_documents(db, account_id, guest_id)
 
     assert claimed == [doc_id]
-    assert doc.user_id == user_id
+    assert doc.account_id == account_id
     assert "guest_id" not in doc.meta
     db.commit.assert_called_once()

@@ -3,7 +3,7 @@
 How every table in `backend/schema/intel_foundation.sql` maps to **Question Better.**, with references to industry standards.
 
 **Schema file:** `backend/schema/intel_foundation.sql`  
-**Apply locally:** `./scripts/dev.sh db schema`
+**Apply locally:** `./scripts/dev.sh db migrate` (Alembic)
 
 ---
 

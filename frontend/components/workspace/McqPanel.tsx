@@ -29,10 +29,15 @@ export function McqPanel({
   const [options, setOptions] = useState<string[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!artifactId) return;
-    apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`).then(setQueue).catch(() => {});
+    setLoading(true);
+    apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`)
+      .then(setQueue)
+      .catch(() => setQuestion("Sign in or reload to load questions."))
+      .finally(() => setLoading(false));
   }, [artifactId]);
 
   useEffect(() => {
@@ -74,7 +79,15 @@ export function McqPanel({
           </span>
         )}
       </div>
-      <h2 className="mcq-panel__stem">{question}</h2>
+      <h2 className="mcq-panel__stem">
+        {loading
+          ? "Loading questions…"
+          : !artifactId
+            ? "Upload a source to begin."
+            : queue && !queue.current_assertion_id
+              ? "Questions will appear once indexing finishes."
+              : question}
+      </h2>
       <div className="mcq-panel__choices">
         {options.map((opt, i) => (
           <button
