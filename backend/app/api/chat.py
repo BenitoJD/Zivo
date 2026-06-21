@@ -116,16 +116,30 @@ def _resolve_document_ids(
     return ids
 
 
-def _get_or_create_thread(db: Session, account_id: uuid.UUID | None, document_id: uuid.UUID) -> ChatThread:
+def _artifact_ref(doc: Document) -> tuple[uuid.UUID, datetime]:
+    return doc.artifact_id or doc.id, doc.artifact_captured_at or doc.created_at
+
+
+def _get_or_create_thread(db: Session, account_id: uuid.UUID | None, doc: Document) -> ChatThread:
+    artifact_id, captured_at = _artifact_ref(doc)
     thread = (
         db.query(ChatThread)
-        .filter(ChatThread.document_id == document_id, ChatThread.account_id == account_id)
+        .filter(
+            ChatThread.artifact_id == artifact_id,
+            ChatThread.artifact_captured_at == captured_at,
+            ChatThread.account_id == account_id,
+        )
         .order_by(ChatThread.version.desc())
         .first()
     )
     if thread:
         return thread
-    thread = ChatThread(account_id=account_id, document_id=document_id, version=1)
+    thread = ChatThread(
+        account_id=account_id,
+        artifact_id=artifact_id,
+        artifact_captured_at=captured_at,
+        version=1,
+    )
     db.add(thread)
     db.commit()
     db.refresh(thread)
@@ -142,7 +156,7 @@ def list_messages(
     doc = db.get(Document, document_id)
     if not doc or not can_access_document(doc, user, guest_id):
         raise HTTPException(status_code=404, detail="Document not found")
-    thread = _get_or_create_thread(db, user.id if user else None, document_id)
+    thread = _get_or_create_thread(db, user.id if user else None, doc)
     return (
         db.query(ChatMessage)
         .filter(ChatMessage.thread_id == thread.id)
@@ -161,9 +175,15 @@ def clear_thread(
     doc = db.get(Document, document_id)
     if not doc or not can_access_document(doc, user, guest_id):
         raise HTTPException(status_code=404, detail="Document not found")
-    current = _get_or_create_thread(db, user.id if user else None, document_id)
+    current = _get_or_create_thread(db, user.id if user else None, doc)
     new_version = current.version + 1
-    thread = ChatThread(account_id=user.id if user else None, document_id=document_id, version=new_version)
+    artifact_id, captured_at = _artifact_ref(doc)
+    thread = ChatThread(
+        account_id=user.id if user else None,
+        artifact_id=artifact_id,
+        artifact_captured_at=captured_at,
+        version=new_version,
+    )
     db.add(thread)
     db.commit()
     return {"version": new_version}
@@ -200,7 +220,7 @@ async def chat_stream(
 
     check_message_allowed(db, user=user, request=request, demo_cookie=guest_id)
 
-    thread = _get_or_create_thread(db, user.id if user else None, doc.id)
+    thread = _get_or_create_thread(db, user.id if user else None, doc)
     history = (
         db.query(ChatMessage)
         .filter(ChatMessage.thread_id == thread.id)
