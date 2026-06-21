@@ -119,10 +119,18 @@ class LlmResponseCache(Base):
     """
 
     __tablename__ = "llm_response_cache"
-    __table_args__ = (Index("ix_llm_response_cache_doc_scope", "document_id", "scope_hash"),)
+    __table_args__ = (
+        Index(
+            "llm_response_cache_artifact_scope_idx",
+            "artifact_id",
+            "artifact_captured_at",
+            "scope_hash",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False)
+    artifact_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    artifact_captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     scope_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     response_text: Mapped[str] = mapped_column(Text, nullable=False)
     citations: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)

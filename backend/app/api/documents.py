@@ -312,7 +312,8 @@ def delete_document(
     elif not document_owned_by_guest(doc, guest_id):
         raise HTTPException(status_code=404, detail="Not found")
 
-    thread_ids = [t.id for t in db.query(ChatThread.id).filter(ChatThread.document_id == document_id).all()]
+    artifact_id = doc.artifact_id or doc.id
+    thread_ids = [t.id for t in db.query(ChatThread.id).filter(ChatThread.artifact_id == artifact_id).all()]
     if thread_ids:
         db.query(ChatMessage).filter(ChatMessage.thread_id.in_(thread_ids)).delete(synchronize_session=False)
         db.query(ChatThread).filter(ChatThread.id.in_(thread_ids)).delete(synchronize_session=False)

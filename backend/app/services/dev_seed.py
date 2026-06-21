@@ -126,10 +126,18 @@ def seed_local_database(
 
     if demo_embeddings:
         try:
-            from app.services.demo_seed import embed_demo_chunks_if_needed
+            from app.services.demo_seed import embed_demo_chunks_if_needed, ensure_demo_document
 
+            ensure_demo_document(db)
             embed_demo_chunks_if_needed()
         except Exception as exc:
             report.warnings.append(f"Demo embeddings skipped: {exc}")
+    else:
+        try:
+            from app.services.demo_seed import ensure_demo_document
+
+            ensure_demo_document(db)
+        except Exception as exc:
+            report.warnings.append(f"Demo document skipped: {exc}")
 
     return report

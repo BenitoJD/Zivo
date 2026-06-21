@@ -146,7 +146,7 @@ def test_guest_upload_claimed_on_login(client: TestClient) -> None:
         db = SessionLocal()
         doc = db.get(Document, uuid.UUID(doc_id))
         assert doc is not None
-        assert doc.user_id == user_id
+        assert doc.account_id == user_id
         assert "guest_id" not in (doc.meta or {})
         db.close()
     finally:

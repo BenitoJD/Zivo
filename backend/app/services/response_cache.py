@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import uuid
+from datetime import datetime
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -28,10 +29,10 @@ logger = logging.getLogger(__name__)
 SIMILARITY_THRESHOLD = 0.92
 
 
-def _scope_hash(document_id: uuid.UUID, scope: dict) -> str:
-    """Stable hash of (document, scope) so scoping is part of the cache key."""
+def _scope_hash(artifact_id: uuid.UUID, scope: dict) -> str:
+    """Stable hash of (artifact, scope) so scoping is part of the cache key."""
     key = {
-        "document_id": str(document_id),
+        "artifact_id": str(artifact_id),
         "page_start": scope.get("page_start"),
         "page_end": scope.get("page_end"),
         "has_selection": bool(scope.get("selection_text")),
@@ -46,6 +47,7 @@ def get_cached_response(
     db: Session,
     *,
     document_id: uuid.UUID,
+    artifact_captured_at: datetime,
     scope: dict,
     query_embedding: list[float],
     threshold: float = SIMILARITY_THRESHOLD,
@@ -58,7 +60,8 @@ def get_cached_response(
             SELECT id, response_text, citations,
                    1 - (embedding <=> CAST(:vec AS vector)) AS similarity
             FROM llm_response_cache
-            WHERE document_id = CAST(:doc_id AS uuid)
+            WHERE artifact_id = CAST(:artifact_id AS uuid)
+              AND artifact_captured_at = :artifact_captured_at
               AND scope_hash = :scope_hash
               AND embedding IS NOT NULL
             ORDER BY embedding <=> CAST(:vec AS vector)
@@ -67,7 +70,8 @@ def get_cached_response(
         ),
         {
             "vec": vec_literal,
-            "doc_id": str(document_id),
+            "artifact_id": str(document_id),
+            "artifact_captured_at": artifact_captured_at,
             "scope_hash": _scope_hash(document_id, scope),
         },
     ).mappings().first()
@@ -76,7 +80,6 @@ def get_cached_response(
     similarity = float(row["similarity"])
     if similarity < threshold:
         return None
-    # Bump hit count asynchronously-best-effort; not worth failing the request.
     try:
         db.execute(
             text("UPDATE llm_response_cache SET hit_count = hit_count + 1 WHERE id = :id"),
@@ -97,6 +100,7 @@ def store_response(
     db: Session,
     *,
     document_id: uuid.UUID,
+    artifact_captured_at: datetime,
     scope: dict,
     query_embedding: list[float],
     response_text: str,
@@ -109,15 +113,16 @@ def store_response(
             text(
                 """
                 INSERT INTO llm_response_cache
-                    (id, document_id, scope_hash, embedding, response_text, citations)
+                    (id, artifact_id, artifact_captured_at, scope_hash, embedding, response_text, citations)
                 VALUES
-                    (:id, CAST(:doc_id AS uuid), :scope_hash,
+                    (:id, CAST(:artifact_id AS uuid), :artifact_captured_at, :scope_hash,
                      CAST(:embedding AS vector), :response_text, CAST(:citations AS jsonb))
                 """
             ),
             {
                 "id": str(uuid.uuid4()),
-                "doc_id": str(document_id),
+                "artifact_id": str(document_id),
+                "artifact_captured_at": artifact_captured_at,
                 "scope_hash": _scope_hash(document_id, scope),
                 "embedding": vec_literal,
                 "response_text": response_text,

@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import uuid
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -286,13 +287,15 @@ async def chat_stream(
         and bool(citations)
         and len(doc_ids) == 1
     )
+    artifact_id, artifact_captured_at = _artifact_ref(doc)
     cached: dict | None = None
     if cache_eligible:
         query_embedding = await asyncio.to_thread(embed_query, body.message)
         cached = await asyncio.to_thread(
             get_cached_response,
             db,
-            document_id=doc.id,
+            document_id=artifact_id,
+            artifact_captured_at=artifact_captured_at,
             scope=body.scope.model_dump(),
             query_embedding=query_embedding,
         )
@@ -351,7 +354,8 @@ async def chat_stream(
                 await asyncio.to_thread(
                     store_response,
                     db,
-                    document_id=doc.id,
+                    document_id=artifact_id,
+                    artifact_captured_at=artifact_captured_at,
                     scope=body.scope.model_dump(),
                     query_embedding=query_embedding,
                     response_text=full,

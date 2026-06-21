@@ -51,7 +51,7 @@ def claim_guest_documents(db: Session, account_id: uuid.UUID, guest_id: str | No
         claimed.append(doc.id)
 
         db.query(ChatThread).filter(
-            ChatThread.document_id == doc.id,
+            ChatThread.artifact_id == (doc.artifact_id or doc.id),
             ChatThread.account_id.is_(None),
         ).update({ChatThread.account_id: account_id}, synchronize_session=False)
 

@@ -23,7 +23,7 @@ def test_get_session_returns_csrf_for_valid_cookie() -> None:
     app.dependency_overrides[get_current_user] = lambda: fake_user
     try:
         client = TestClient(app)
-        client.cookies.set("citepage_session", token)
+        client.cookies.set("zivo_session", token)
         res = client.get("/api/auth/session")
         assert res.status_code == 200
         body = res.json()

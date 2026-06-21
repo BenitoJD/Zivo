@@ -9,7 +9,7 @@ from app.services.auth import require_csrf_or_guest
 
 
 def test_guest_upload_allowed_without_demo_cookie() -> None:
-    require_csrf_or_guest(x_csrf_token=None, citepage_session=None, citepage_demo_id=None)
+    require_csrf_or_guest(x_csrf_token=None, zivo_session=None, zivo_demo_id=None)
 
 
 def test_signed_in_user_requires_csrf_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -19,5 +19,5 @@ def test_signed_in_user_requires_csrf_in_production(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(settings, "environment", "production")
 
     with pytest.raises(HTTPException) as exc:
-        require_csrf_or_guest(x_csrf_token=None, citepage_session="fake-session", citepage_demo_id="guest-1")
+        require_csrf_or_guest(x_csrf_token=None, zivo_session="fake-session", zivo_demo_id="guest-1")
     assert exc.value.status_code == 403
