@@ -1,0 +1,45 @@
+{{- range $name, $wl := .Values.workloads }}
+{{- if $wl.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $.Chart.Name }}-{{ $name }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    {{- include "worker.labels" $ | nindent 4 }}
+    workload: {{ $name }}
+spec:
+  replicas: {{ $wl.replicaCount | default $.Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ $.Chart.Name }}-{{ $name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $.Chart.Name }}-{{ $name }}
+        workload: {{ $name }}
+    spec:
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          command: {{ $wl.command | toJson }}
+          envFrom:
+            - secretRef:
+                name: {{ $.Values.secretName }}
+          env:
+            {{- range $k, $v := $wl.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- with $wl.resources | default $.Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}
+{{- end }}

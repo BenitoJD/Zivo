@@ -11,10 +11,11 @@ Use for local development on the Zivo monorepo.
 
 ```bash
 ./scripts/dev.sh setup          # ~/.venv/zivo + pip install
-./scripts/dev.sh start          # deps + schema + API on :8200
+./scripts/dev.sh start          # deps + alembic migrate + API on :8200
 ./scripts/dev.sh stop
 ./scripts/dev.sh doctor
-./scripts/dev.sh db schema      # apply intel_foundation.sql
+./scripts/dev.sh db migrate     # alembic upgrade head
+./scripts/dev.sh db seed        # question vocab seeds
 
 cd frontend && npm install && npm run dev   # Next.js on :3000
 ```
@@ -25,7 +26,8 @@ cd frontend && npm install && npm run dev   # Next.js on :3000
 |------|---------|
 | `backend/app/api/` | FastAPI routes |
 | `backend/app/workers/` | Ingest / normalize jobs (add here) |
-| `backend/schema/intel_foundation.sql` | Postgres intel DDL (source of truth) |
+| `backend/schema/*.sql` | DDL source for baseline Alembic revisions |
+| `backend/alembic/versions/` | Alembic migration chain |
 | `frontend/app/` | Next.js App Router UI |
 | `infra/k8s/` | Helm charts + prod values |
 | `logs/zivo-dev/` | API logs from `dev.sh start` |
@@ -38,13 +40,16 @@ cd frontend && npm install && npm run dev   # Next.js on :3000
 
 ## Schema
 
-Zivo uses **SQL schema files**, not Alembic. Apply locally:
+Zivo uses **Alembic**. Baseline revisions execute `backend/schema/*.sql`; new changes add revisions under `backend/alembic/versions/`.
 
 ```bash
-./scripts/dev.sh db schema
+./scripts/dev.sh db migrate
+backend/scripts/test_alembic_migrations.sh   # upgrade / downgrade smoke test
 ```
 
-Production: K8s Job via `scripts/run-k8s-schema-migrate.sh` before API rollout.
+Production: K8s Job `alembic-migrate` via `scripts/run-k8s-schema-migrate.sh` before API rollout.
+
+If your local DB was created with the old `db schema` scripts and has no `qb.alembic_version` row, stamp once: `cd backend && alembic stamp head`.
 
 ## Docker deps
 

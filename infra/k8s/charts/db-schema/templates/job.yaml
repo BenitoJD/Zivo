@@ -24,7 +24,17 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["python"]
-          args: ["scripts/apply_intel_schema.py"]
+          args:
+            - scripts/run_alembic_with_lock.py
+            - --revision
+            - head
+            - --timeout-seconds
+            - {{ .Values.migration.timeoutSeconds | quote }}
+            - --lock-timeout-seconds
+            - {{ .Values.migration.lockTimeoutSeconds | quote }}
+            {{- if .Values.migration.verifyHead }}
+            - --verify-head
+            {{- end }}
           envFrom:
             - secretRef:
                 name: {{ .Values.secretName }}

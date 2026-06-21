@@ -10,6 +10,8 @@ export default function HomePage() {
         Help people master exams, skills, and ideas — not just memorize options.
       </p>
       <p style={{ marginTop: "2rem" }}>
+        <a href="/workspace">Open workspace</a>
+        {" · "}
         <a href="https://zivo.fyi">zivo.fyi</a>
       </p>
     </main>

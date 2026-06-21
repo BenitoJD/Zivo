@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 NAMESPACE="${NAMESPACE:-zivo}"
-JOB_NAME="${JOB_NAME:-intel-schema}"
+JOB_NAME="${JOB_NAME:-alembic-migrate}"
 IMAGE_REPOSITORY="${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}"
 IMAGE_TAG="${IMAGE_TAG:?IMAGE_TAG is required}"
 WAIT_TIMEOUT="${WAIT_TIMEOUT:-600s}"
@@ -33,4 +33,4 @@ if ! "${KUBECTL[@]}" -n "$NAMESPACE" wait --for=condition=complete "job/${JOB_NA
   exit 1
 fi
 
-echo "intel schema migration completed."
+echo "Alembic migration completed."

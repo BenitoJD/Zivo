@@ -1,23 +1,81 @@
+from functools import lru_cache
+
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEV_SECRET_KEYS = {"dev-secret-change-me"}
+_DEV_CSRF_SECRET = "dev-csrf-change-me"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=(".env", ".env.local"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     app_env: str = "development"
+    environment: str = "development"
     database_url: str = "postgresql+psycopg://zivo:zivo@localhost:5455/zivo"
+    secret_key: str = "dev-secret-change-me"
+    csrf_secret: str = "dev-csrf-change-me"
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+
     minio_endpoint: str = "localhost:9020"
     minio_access_key: str = "zivo"
     minio_secret_key: str = "zivo-secret"
     minio_bucket: str = "zivo-artifacts"
     minio_secure: bool = False
+    minio_public_endpoint: str = ""
+    minio_public_secure: bool | None = None
+
+    litellm_model: str = "openai/mimo-v2.5"
+    openai_api_base: str = ""
+    openai_api_key: str = ""
+    gemini_api_key: str = ""
+    anthropic_api_key: str = ""
+    embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embed_dimension: int = 384
+
+    session_days: int = 7
+    session_remember_days: int = 30
+    guest_document_limit: int = 1
+    guest_message_limit: int = 30
+    daily_message_limit: int = 100
+    storage_limit_bytes: int = 100 * 1024 * 1024
+
+    @field_validator("minio_public_secure", mode="before")
+    @classmethod
+    def _empty_public_secure_is_none(cls, value: object) -> object:
+        if value == "" or value is None:
+            return None
+        return value
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def minio_presign_endpoint(self) -> str:
+        return self.minio_public_endpoint.strip() or self.minio_endpoint
+
+    @property
+    def minio_presign_secure(self) -> bool:
+        if self.minio_public_secure is not None:
+            return self.minio_public_secure
+        return self.minio_secure
+
+    @model_validator(mode="after")
+    def _reject_dev_secrets_outside_development(self) -> "Settings":
+        if self.environment == "development":
+            return self
+        if self.secret_key in _DEV_SECRET_KEYS:
+            raise ValueError("SECRET_KEY must be set when ENVIRONMENT != 'development'")
+        if self.csrf_secret == _DEV_CSRF_SECRET:
+            raise ValueError("CSRF_SECRET must be set when ENVIRONMENT != 'development'")
+        return self
 
 
-_settings: Settings | None = None
-
-
+@lru_cache
 def get_settings() -> Settings:
-    global _settings
-    if _settings is None:
-        _settings = Settings()
-    return _settings
+    return Settings()

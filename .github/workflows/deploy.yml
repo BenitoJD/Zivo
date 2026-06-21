@@ -100,12 +100,28 @@ jobs:
           helm upgrade --install zivo-minio ./infra/k8s/charts/minio -n $NS \
             -f infra/k8s/environments/prod/minio-values.yaml --wait --timeout 10m
 
-      - name: Apply intel schema
+      - name: Alembic migrate
         run: |
           chmod +x scripts/run-k8s-schema-migrate.sh
           IMAGE_REPOSITORY="ghcr.io/${{ needs.build.outputs.image_owner }}/zivo-api" \
           IMAGE_TAG="${{ needs.build.outputs.image_tag }}" \
             ./scripts/run-k8s-schema-migrate.sh
+
+      - name: Helm upgrade workers
+        run: |
+          TAG="${{ needs.build.outputs.image_tag }}"
+          helm upgrade --install zivo-worker-io ./infra/k8s/charts/worker -n zivo \
+            -f infra/k8s/environments/prod/worker-values.yaml \
+            --set image.tag=${TAG} \
+            --set 'workloads.io.enabled=true' \
+            --set 'workloads.cpu.enabled=false' \
+            --wait --timeout 5m
+          helm upgrade --install zivo-worker-cpu ./infra/k8s/charts/worker -n zivo \
+            -f infra/k8s/environments/prod/worker-values.yaml \
+            --set image.tag=${TAG} \
+            --set 'workloads.io.enabled=false' \
+            --set 'workloads.cpu.enabled=true' \
+            --wait --timeout 5m
 
       - name: Helm upgrade API + web
         run: |

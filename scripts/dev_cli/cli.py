@@ -94,39 +94,89 @@ def start(args: argparse.Namespace) -> int:
     port = allocate_backend_port(args.port)
     start_deps()
     benv = backend_env()
-    apply_schema(benv)
+    from .db import run_alembic
+
+    run_alembic("upgrade", "head", env=benv)
+    subprocess.run(
+        [python_bin(), "scripts/seed_question_vocab.py"],
+        cwd=BACKEND_DIR,
+        env=benv,
+        check=False,
+    )
 
     log_path = LOG_ROOT / "api.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    py = python_bin()
     with log_path.open("ab") as log:
-        proc = subprocess.Popen(
-            [python_bin(), "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port), "--reload"],
+        api_proc = subprocess.Popen(
+            [py, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port), "--reload"],
             cwd=BACKEND_DIR,
             env=benv,
             stdout=log,
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
+        io_log = LOG_ROOT / "worker-io.log"
+        cpu_log = LOG_ROOT / "worker-cpu.log"
+        with io_log.open("ab") as io_out:
+            io_proc = subprocess.Popen(
+                [py, "run_eta_worker_async.py"],
+                cwd=BACKEND_DIR,
+                env={**benv, "ETA_WORKER_WORKLOADS": "io"},
+                stdout=io_out,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        with cpu_log.open("ab") as cpu_out:
+            cpu_proc = subprocess.Popen(
+                [py, "run_eta_worker_cpu.py"],
+                cwd=BACKEND_DIR,
+                env={**benv, "ETA_WORKER_WORKLOADS": "cpu"},
+                stdout=cpu_out,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
 
-    save_state({"api_pid": proc.pid, "api_port": port})
+    save_state({"api_pid": api_proc.pid, "api_port": port, "io_pid": io_proc.pid, "cpu_pid": cpu_proc.pid})
     print(f"API running at http://127.0.0.1:{port} (logs: {log_path.relative_to(ROOT)})")
+    print(f"Workers: IO pid {io_proc.pid}, CPU pid {cpu_proc.pid}")
+    print("Frontend: cd frontend && npm run dev")
     return 0
 
 
 def stop(_: argparse.Namespace) -> int:
     state = load_state()
-    pid = state.get("api_pid")
-    if pid_running(pid):
-        os.kill(pid, signal.SIGTERM)
-        print(f"Stopped API (pid {pid})")
+    for key in ("api_pid", "io_pid", "cpu_pid"):
+        pid = state.get(key)
+        if pid_running(pid):
+            os.kill(pid, signal.SIGTERM)
+            print(f"Stopped {key} (pid {pid})")
     save_state({})
     return 0
 
 
 def db_cmd(args: argparse.Namespace) -> int:
-    if args.db_command == "schema":
+    if args.db_command == "migrate":
+        start_deps()
+        from .db import run_alembic
+
+        run_alembic("upgrade", "head")
+    elif args.db_command == "schema":
         start_deps()
         apply_schema(backend_env())
+    elif args.db_command == "qb-schema":
+        start_deps()
+        from .db import apply_qb_schema
+
+        apply_qb_schema(backend_env())
+    elif args.db_command == "seed":
+        start_deps()
+        subprocess.run(
+            [python_bin(), "scripts/seed_question_vocab.py"],
+            cwd=BACKEND_DIR,
+            env=backend_env(),
+            check=True,
+        )
     else:
         raise RuntimeError(f"unknown db command: {args.db_command}")
     return 0
@@ -145,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
     start_p.set_defaults(func=start)
 
     db_p = sub.add_parser("db")
-    db_p.add_argument("db_command", choices=["schema"])
+    db_p.add_argument("db_command", choices=["migrate", "schema", "qb-schema", "seed"])
     db_p.set_defaults(func=db_cmd)
 
     args = parser.parse_args(argv)

@@ -1,5 +1,5 @@
 namespace: zivo
-jobName: intel-schema
+jobName: alembic-migrate
 ttlSecondsAfterFinished: 600
 backoffLimit: 2
 activeDeadlineSeconds: 900
@@ -13,6 +13,11 @@ imagePullSecrets:
   - name: ghcr-cred
 
 secretName: zivo-secrets
+
+migration:
+  timeoutSeconds: 600
+  lockTimeoutSeconds: 120
+  verifyHead: true
 
 resources:
   requests:

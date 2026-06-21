@@ -12,10 +12,11 @@ Same deployment model as [citepage](https://github.com/BenitoJD/citepage): **K3s
 |------|--------|-------|
 | **Repo structure** | Ready | Monolith: `backend/`, `frontend/`, `infra/k8s/`, `scripts/` |
 | **DB + extensions** | Ready | Postgres 16, pgvector — foundation for question graph |
-| **Legacy `intel` schema** | Present | `backend/schema/intel_foundation.sql` — prior scaffold; **replace with question-graph DDL next** |
-| **API skeleton** | Ready | FastAPI + `/health`, `/health/ready` |
-| **Frontend skeleton** | Ready | Next.js App Router, standalone Docker build |
-| **Local dev** | Ready | `./scripts/dev.sh` + `docker-compose.yml` (deps only) |
+| **Legacy `intel` schema** | Present | `intel_foundation.sql` unchanged; product data in `intel.*` |
+| **QB app schema** | Ready | `qb_app.sql` + `qb_infra.sql` via Alembic (`./scripts/dev.sh db migrate`) |
+| **API** | Ready | FastAPI — auth, sources, artifacts, activities, assertions, chat, mcq |
+| **Workers** | Ready | Citepage ETA IO+CPU — `backend/app/eta/`, `run_eta_worker_*.py` |
+| **Workspace UI** | Ready | `/workspace` — Learn/Test 3-panel layout |
 | **Helm / K8s** | Ready | postgres, minio, api, web, db-schema charts |
 | **CI** | Ready | `.github/workflows/ci.yml` |
 | **Deploy workflow** | Ready | `.github/workflows/deploy.yml` (needs push + workflow run) |
@@ -24,10 +25,7 @@ Same deployment model as [citepage](https://github.com/BenitoJD/citepage): **K3s
 | **Question generation** | **Next** | Upload source → MCQs + explanations + difficulty |
 | **Question evaluation** | Not started | Quality / ambiguity / discrimination scoring |
 | **Answer intelligence** | Not started | Capture responses → improve calibration |
-| **Question graph** | Not started | Concepts, prerequisites, item metadata |
-| **Workers** | Stub | `backend/app/workers/` — generation + eval jobs go here |
-
-**Start building the question engine.** Infrastructure scaffolding is in place.
+| **Question graph** | In progress | Concepts in `intel.*`; mastery via `qb.artifact_workspace` |
 
 ## Layout
 
@@ -73,7 +71,8 @@ Python 3.12+, Node.js 22+, Docker (for Postgres + MinIO).
 ```bash
 ./scripts/dev.sh setup
 ./scripts/dev.sh start              # API → http://127.0.0.1:8200
-./scripts/dev.sh db schema          # apply current schema SQL
+./scripts/dev.sh db migrate        # alembic upgrade head
+./scripts/dev.sh db seed           # question vocab seeds
 ./scripts/dev.sh doctor
 ./scripts/dev.sh stop
 
@@ -97,13 +96,16 @@ cd frontend && npm install && npm run dev   # → http://localhost:3000
 
 ## Schema
 
-DDL lives in `backend/schema/`. **No Alembic** — apply via:
+DDL source files live in `backend/schema/`. **Alembic** applies them:
 
 ```bash
-./scripts/dev.sh db schema
+./scripts/dev.sh db migrate
+./scripts/dev.sh db seed
 ```
 
-Next milestone: `question_graph.sql` (concepts, questions, items, attempts, calibration). Until then, `intel_foundation.sql` remains applied for infra compatibility.
+Migrations: `backend/alembic/versions/` (`001_intel_foundation` → `002_qb_schema`). New schema changes: add a revision with `cd backend && alembic revision --autogenerate -m "message"`, then run `backend/scripts/test_alembic_migrations.sh`.
+
+Product tables: `intel.*` (unchanged DDL) + additive `qb.*`. See [docs/WORKSPACE.md](docs/WORKSPACE.md) and [docs/CITEPAGE_PORT.md](docs/CITEPAGE_PORT.md).
 
 ## Production (VPS)
 
@@ -128,9 +130,9 @@ Deploy: GitHub → Actions → **Deploy Zivo** → Run workflow.
 - Business copy: root `README.md` only.
 - Product strategy: `docs/VISION.md`.
 - Table reference: `docs/DATA_MODEL.md`.
-- Schema changes: `backend/schema/` only.
+- Schema changes: `backend/alembic/versions/` (+ update `backend/schema/*.sql` when baselining raw SQL).
 - New routes: `backend/app/api/`.
-- Background jobs: `backend/app/workers/`.
+- Background jobs: `backend/app/eta/`.
 - UI: `frontend/app/`.
 
 ## Skills

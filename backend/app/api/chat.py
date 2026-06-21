@@ -1,0 +1,421 @@
+import asyncio
+import json
+import logging
+import re
+import uuid
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.orm import Session
+from sse_starlette.sse import EventSourceResponse
+
+from app.db import SessionLocal, get_db
+from app.graphs.chat_graph import run_retrieve
+from app.graphs.mcq_graph import grade_mcq_answer, try_grade_mcq_fast
+from app.models import Account, ChatMessage, ChatThread, Document, User
+from app.schemas.mcq import McqGradeRequest, McqGradeResponse
+from app.services.auth import get_optional_user, require_csrf_or_guest
+from app.services.embed import embed_query
+from app.services.llm_router import stream_chat_completion
+from app.services.prompts import get_prompt
+from app.services.guest import can_access_document
+from app.services.guest_session import guest_session_for_read, optional_guest_session
+from app.services.response_cache import get_cached_response, store_response
+from app.services.usage import check_message_allowed, increment_message_count
+from app.services.vision import build_user_message, is_image_document
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+# Recent turns kept in the LLM prefix. Lowering from 20 → 6 shrinks the
+# (cacheable) prefix and the per-turn input-token cost; recent context
+# dominates answer quality in a tutor chat.
+_HISTORY_LIMIT = 6
+
+# Matches messages that look like a quiz/test request. Only when this hits do
+# we inject the ~300-token mcq_format prompt — otherwise it's dead weight on
+# every turn and destabilizes the provider prefix cache.
+_QUIZ_RE = re.compile(
+    r"\b(quiz|quizzes|mcq|mcqs|multiple[- ]choice|practice question|test me|"
+    r"give me .* question|exam questions?)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_quiz(message: str) -> bool:
+    return bool(_QUIZ_RE.search(message or ""))
+
+
+def _stream_error_event(message: str) -> dict[str, str]:
+    return {"event": "error", "data": json.dumps({"message": message})}
+
+
+class ChatScope(BaseModel):
+    page_start: int | None = Field(default=None, ge=1)
+    page_end: int | None = Field(default=None, ge=1)
+    selection_text: str | None = Field(default=None, max_length=8000)
+    current_page: int | None = Field(default=None, ge=1)
+    mentions: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("mentions")
+    @classmethod
+    def cap_mention_length(cls, value: list[str]) -> list[str]:
+        return [m[:200] for m in value]
+
+
+class ChatRequest(BaseModel):
+    document_id: uuid.UUID
+    message: str = Field(min_length=1, max_length=4000)
+    scope: ChatScope = Field(default_factory=ChatScope)
+    use_vision: bool = False
+    model_id: uuid.UUID | None = None
+
+
+class MessageOut(BaseModel):
+    id: uuid.UUID
+    role: str
+    content: str
+    citations: dict | None = None
+
+    model_config = {"from_attributes": True}
+
+
+def _resolve_document_ids(
+    db: Session,
+    primary: uuid.UUID,
+    mentions: list[str],
+    user: Account | None,
+    guest_id: str | None,
+) -> list[uuid.UUID]:
+    """Map `@slug` mentions to document ids the caller can access."""
+    if not mentions:
+        return [primary]
+    slugs = []
+    seen = set()
+    for raw in mentions:
+        slug = raw.lstrip("@").strip()
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        slugs.append(slug)
+    if not slugs:
+        return [primary]
+    q = db.query(Document).filter(Document.slug.in_(slugs))
+    q = q.filter(Document.account_id.is_(None)) if not user else q.filter(
+        (Document.account_id == user.id) | (Document.account_id.is_(None))
+    )
+    docs = q.all()
+    ids = [primary]
+    for doc in docs:
+        if doc.id == primary:
+            continue
+        if can_access_document(doc, user, guest_id) and doc.id not in ids:
+            ids.append(doc.id)
+    return ids
+
+
+def _get_or_create_thread(db: Session, account_id: uuid.UUID | None, document_id: uuid.UUID) -> ChatThread:
+    thread = (
+        db.query(ChatThread)
+        .filter(ChatThread.document_id == document_id, ChatThread.account_id == account_id)
+        .order_by(ChatThread.version.desc())
+        .first()
+    )
+    if thread:
+        return thread
+    thread = ChatThread(account_id=account_id, document_id=document_id, version=1)
+    db.add(thread)
+    db.commit()
+    db.refresh(thread)
+    return thread
+
+
+@router.get("/threads/{document_id}/messages", response_model=list[MessageOut])
+def list_messages(
+    document_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> list[ChatMessage]:
+    doc = db.get(Document, document_id)
+    if not doc or not can_access_document(doc, user, guest_id):
+        raise HTTPException(status_code=404, detail="Document not found")
+    thread = _get_or_create_thread(db, user.id if user else None, document_id)
+    return (
+        db.query(ChatMessage)
+        .filter(ChatMessage.thread_id == thread.id)
+        .order_by(ChatMessage.created_at.asc())
+        .all()
+    )
+
+
+@router.post("/threads/{document_id}/clear", dependencies=[Depends(require_csrf_or_guest)])
+def clear_thread(
+    document_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict[str, int]:
+    doc = db.get(Document, document_id)
+    if not doc or not can_access_document(doc, user, guest_id):
+        raise HTTPException(status_code=404, detail="Document not found")
+    current = _get_or_create_thread(db, user.id if user else None, document_id)
+    new_version = current.version + 1
+    thread = ChatThread(account_id=user.id if user else None, document_id=document_id, version=new_version)
+    db.add(thread)
+    db.commit()
+    return {"version": new_version}
+
+
+@router.post("")
+async def chat_stream(
+    body: ChatRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(optional_guest_session),
+) -> EventSourceResponse:
+    doc = db.get(Document, body.document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not can_access_document(doc, user, guest_id):
+        raise HTTPException(status_code=404, detail="Document not found")
+    if doc.status != "ready":
+        raise HTTPException(status_code=409, detail="Document not ready")
+
+    # Surface an explicit 404/503 before persisting the user turn so the
+    # thread doesn't accumulate orphan user messages when the model is wrong.
+    include_image = body.use_vision or is_image_document(doc)
+    if body.model_id is not None:
+        from app.services.llm_registry import resolve_chat_model
+
+        try:
+            resolve_chat_model(db, model_id=body.model_id, require_vision=include_image)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="No chat model available") from exc
+
+    check_message_allowed(db, user=user, request=request, demo_cookie=guest_id)
+
+    thread = _get_or_create_thread(db, user.id if user else None, doc.id)
+    history = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.thread_id == thread.id)
+        .order_by(ChatMessage.created_at.asc())
+        .limit(_HISTORY_LIMIT)
+        .all()
+    )
+    prior = [{"role": m.role, "content": m.content} for m in history]
+
+    db.add(ChatMessage(thread_id=thread.id, role="user", content=body.message))
+    db.commit()
+
+    doc_ids = _resolve_document_ids(db, doc.id, body.scope.mentions, user, guest_id)
+    if is_image_document(doc):
+        retrieved = {"citations": [], "messages": prior, "context_block": "", "context_note": ""}
+    else:
+        # run_retrieve runs synchronous embed + pgvector work; keep it off the
+        # event loop so concurrent SSE streams aren't serialized by it.
+        retrieved = await asyncio.to_thread(
+            run_retrieve,
+            db,
+            document_ids=doc_ids,
+            query=body.message,
+            scope=body.scope.model_dump(),
+            mentions=body.scope.mentions,
+            prior_messages=prior,
+        )
+    citations = retrieved.get("citations", [])
+    # Build a byte-stable system prefix: tutor_system always; mcq_format only
+    # on quiz-looking turns. Provider prefix caching (MiMo/OpenAI) keys on the
+    # leading system+history being identical across turns.
+    system = get_prompt(db, "tutor_system")
+    if _looks_like_quiz(body.message):
+        system = system + "\n\n" + get_prompt(db, "mcq_format")
+    messages = [{"role": "system", "content": system}]
+    messages.extend(retrieved.get("messages") or prior)
+
+    # Fold retrieved context into the final user turn (not a mid-list system
+    # message) so the [system, ...history] prefix stays cacheable.
+    context_block = retrieved.get("context_block") or ""
+    user_content = build_user_message(
+        body.message,
+        doc,
+        include_image=include_image,
+        current_page=body.scope.current_page,
+    )
+    trailer_parts: list[str] = []
+    if context_block:
+        trailer_parts.append(
+            "Document excerpts (each block is labeled with its page number from the index):\n\n"
+            + context_block
+        )
+    if trailer_parts:
+        user_content = user_content + "\n\n" + "\n\n".join(trailer_parts)
+    messages.append({"role": "user", "content": user_content})
+
+    # Semantic response cache: only for non-vision turns with no ephemeral
+    # selection and where retrieval actually produced context. A hit streams
+    # the cached answer and skips the LLM call entirely.
+    cache_eligible = (
+        not include_image
+        and not body.scope.selection_text
+        and bool(citations)
+        and len(doc_ids) == 1
+    )
+    cached: dict | None = None
+    if cache_eligible:
+        query_embedding = await asyncio.to_thread(embed_query, body.message)
+        cached = await asyncio.to_thread(
+            get_cached_response,
+            db,
+            document_id=doc.id,
+            scope=body.scope.model_dump(),
+            query_embedding=query_embedding,
+        )
+
+    async def event_generator() -> Any:
+        if cached:
+            # Replay cached answer as tokens, then sources/done. No LLM call.
+            full = cached["response_text"]
+            cache_citations = (cached.get("citations") or {}).get("sources", citations)
+            try:
+                for i in range(0, len(full), 8):
+                    yield {"event": "token", "data": json.dumps({"text": full[i : i + 8]})}
+                db.add(
+                    ChatMessage(
+                        thread_id=thread.id,
+                        role="assistant",
+                        content=full,
+                        citations={"sources": cache_citations},
+                    )
+                )
+                db.commit()
+                increment_message_count(db, user=user, request=request, demo_cookie=guest_id)
+                yield {"event": "sources", "data": json.dumps({"citations": cache_citations})}
+                yield {"event": "done", "data": "{}"}
+            except Exception as exc:
+                logger.exception("cached chat replay failed: %s", exc)
+                yield _stream_error_event("Tutor is busy. Try again.")
+            return
+
+        full = ""
+        error_text: str | None = None
+        # The request-scoped `db` is closed once the route returns, so persistence
+        # uses a fresh session dedicated to this stream's lifecycle.
+        stream_db = SessionLocal()
+        try:
+            async for token in stream_chat_completion(
+                messages,
+                stream_db,
+                model_id=body.model_id,
+                require_vision=include_image,
+            ):
+                full += token
+                yield {"event": "token", "data": json.dumps({"text": token})}
+            stream_db.add(
+                ChatMessage(
+                    thread_id=thread.id,
+                    role="assistant",
+                    content=full,
+                    citations={"sources": citations},
+                )
+            )
+
+            increment_message_count(db, user=user, request=request, demo_cookie=guest_id)
+            # Store for future cache hits (best-effort, never fail the turn).
+            if cache_eligible:
+                await asyncio.to_thread(
+                    store_response,
+                    db,
+                    document_id=doc.id,
+                    scope=body.scope.model_dump(),
+                    query_embedding=query_embedding,
+                    response_text=full,
+                    citations=citations,
+                )
+            yield {"event": "sources", "data": json.dumps({"citations": citations})}
+            yield {"event": "done", "data": "{}"}
+        except Exception as exc:
+            error_text = "Tutor is busy. Try again."
+            logger.exception("chat stream failed: %s", exc)
+            try:
+                stream_db.add(
+                    ChatMessage(
+                        thread_id=thread.id,
+                        role="assistant",
+                        content=error_text,
+                        citations=None,
+                    )
+                )
+                stream_db.commit()
+            except Exception:
+                logger.exception("failed to persist assistant error message")
+            yield _stream_error_event(error_text)
+        finally:
+            stream_db.close()
+
+    return EventSourceResponse(event_generator())
+
+
+@router.post("/mcq/grade", response_model=McqGradeResponse)
+async def grade_mcq(
+    body: McqGradeRequest,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> McqGradeResponse:
+    doc = db.get(Document, body.document_id)
+    if not doc or not can_access_document(doc, user, guest_id):
+        raise HTTPException(status_code=404, detail="Document not found")
+    if body.correct_index >= len(body.options) or body.selected_index >= len(body.options):
+        raise HTTPException(status_code=400, detail="Invalid option index")
+
+    fast = try_grade_mcq_fast(
+        options=body.options,
+        correct_index=body.correct_index,
+        selected_index=body.selected_index,
+        explanation=body.explanation,
+    )
+    if fast is not None:
+        return McqGradeResponse(
+            is_correct=bool(fast["is_correct"]),
+            correct_index=body.correct_index,
+            selected_index=body.selected_index,
+            feedback=fast["feedback"],
+        )
+
+    context = ""
+    if not is_image_document(doc):
+        retrieved = await asyncio.to_thread(
+            run_retrieve,
+            db,
+            document_ids=[doc.id],
+            query=body.question,
+            scope={},
+            mentions=[],
+            prior_messages=[],
+        )
+        chunks = retrieved.get("retrieved_chunks") or []
+        context = "\n\n".join(
+            f"[p.{c['page_start']}]\n{c['text']}" for c in chunks[:4]
+        )
+
+    result = await grade_mcq_answer(
+        db,
+        question=body.question,
+        options=body.options,
+        correct_index=body.correct_index,
+        selected_index=body.selected_index,
+        explanation=body.explanation,
+        document_context=context,
+    )
+    return McqGradeResponse(
+        is_correct=result["is_correct"],
+        correct_index=body.correct_index,
+        selected_index=body.selected_index,
+        feedback=result["feedback"],
+    )

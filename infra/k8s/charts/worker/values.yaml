@@ -1,0 +1,17 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/benitojd/zivo-api
+  tag: latest
+
+workloads:
+  io:
+    enabled: true
+    command: ["python", "run_eta_worker_async.py"]
+    env:
+      ETA_WORKER_WORKLOADS: io
+  cpu:
+    enabled: true
+    command: ["python", "run_eta_worker_cpu.py"]
+    env:
+      ETA_WORKER_WORKLOADS: cpu

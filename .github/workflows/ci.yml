@@ -9,9 +9,24 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: zivo
+          POSTGRES_PASSWORD: zivo
+          POSTGRES_DB: zivo
+        ports:
+          - 5455:5432
+        options: >-
+          --health-cmd "pg_isready -U zivo"
+          --health-interval 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: backend
+    env:
+      DATABASE_URL: postgresql+psycopg://zivo:zivo@localhost:5455/zivo
     steps:
       - uses: actions/checkout@v4
 
@@ -24,6 +39,9 @@ jobs:
 
       - name: Import check
         run: python -c "from app.main import app; assert app.title == 'Zivo API'"
+
+      - name: Alembic migrations
+        run: bash scripts/test_alembic_migrations.sh
 
   frontend:
     runs-on: ubuntu-latest

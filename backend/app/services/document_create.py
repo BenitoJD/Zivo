@@ -1,0 +1,122 @@
+"""Shared helpers for creating documents from uploads and imports."""
+
+from __future__ import annotations
+
+from fastapi import HTTPException
+from sqlalchemy.orm import Session
+
+from app.config import get_settings
+from app.models import Account, Document, User
+from app.services.jobs import enqueue_ingest
+from app.services.storage import save_upload, slugify_filename
+
+
+def guest_document_count(db: Session, guest_id: str) -> int:
+    return (
+        db.query(Document)
+        .filter(Document.account_id.is_(None))
+        .filter(Document.meta["guest_id"].astext == guest_id)
+        .filter(~Document.content_type.like("image/%"))
+        .count()
+    )
+
+
+def guest_storage_used(db: Session, guest_id: str) -> int:
+    rows = (
+        db.query(Document.size_bytes)
+        .filter(Document.account_id.is_(None))
+        .filter(Document.meta["guest_id"].astext == guest_id)
+        .all()
+    )
+    return sum(row[0] for row in rows)
+
+
+def assert_storage_available(
+    db: Session,
+    *,
+    user: Account | None,
+    guest_id: str | None,
+    size_bytes: int,
+    counts_toward_guest_cap: bool,
+) -> str | None:
+    settings = get_settings()
+    doc_guest_id: str | None = None
+
+    if user:
+        # Row-lock the user's existing documents so concurrent uploads can't
+        # both pass the quota check before either commits.
+        rows = (
+            db.query(Document.size_bytes)
+            .filter(Document.account_id == user.id)
+            .with_for_update()
+            .all()
+        )
+        used = sum(row[0] for row in rows)
+    else:
+        assert guest_id is not None
+        doc_guest_id = guest_id
+        if counts_toward_guest_cap:
+            # Same race protection for guests: lock their existing rows
+            # before counting toward the per-guest cap.
+            existing = (
+                db.query(Document)
+                .filter(Document.account_id.is_(None))
+                .filter(Document.meta["guest_id"].astext == doc_guest_id)
+                .with_for_update()
+                .all()
+            )
+            non_image = [d for d in existing if not d.content_type.startswith("image/")]
+            if len(non_image) >= settings.guest_document_limit:
+                raise HTTPException(status_code=409, detail="Sign in to add more documents")
+        used = guest_storage_used(db, doc_guest_id)
+
+    if used + size_bytes > settings.storage_limit_bytes:
+        raise HTTPException(status_code=413, detail="Storage quota exceeded")
+
+    return doc_guest_id
+
+
+def create_document_record(
+    db: Session,
+    *,
+    user: Account | None,
+    guest_id: str | None,
+    filename: str,
+    content_type: str,
+    data: bytes,
+    meta: dict | None = None,
+) -> Document:
+    if len(data) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large (max 50MB)")
+
+    is_image = content_type.startswith("image/")
+    doc_guest_id = assert_storage_available(
+        db,
+        user=user,
+        guest_id=guest_id,
+        size_bytes=len(data),
+        counts_toward_guest_cap=not is_image,
+    )
+
+    slug = slugify_filename(filename)
+    storage_key = save_upload(user.id if user else None, filename, data, content_type)
+
+    doc_meta: dict = dict(meta or {})
+    if doc_guest_id:
+        doc_meta["guest_id"] = doc_guest_id
+
+    doc = Document(
+        account_id=user.id if user else None,
+        slug=slug,
+        filename=filename,
+        content_type=content_type,
+        size_bytes=len(data),
+        storage_key=storage_key,
+        status="indexing",
+        meta=doc_meta,
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    enqueue_ingest(db, doc.id)
+    return doc
