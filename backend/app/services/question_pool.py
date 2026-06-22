@@ -757,7 +757,9 @@ def ensure_question_pool(db: Session, document_id: uuid.UUID) -> Job | None:
 
     job: Job | None = None
     if not _has_active_generate_job(db, document_id):
-        job = _enqueue_pool_work(db, document_id, doc)
+        job = maybe_refill_pool(db, document_id)
+        if job is None:
+            job = _enqueue_pool_work(db, document_id, doc)
         kick_generation_sync(db, document_id)
 
     return job

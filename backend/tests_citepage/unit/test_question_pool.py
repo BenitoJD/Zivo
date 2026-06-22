@@ -152,6 +152,7 @@ def test_ensure_question_pool_requeues_triage_when_no_coverage() -> None:
         patch("app.services.question_pool.kick_generation_sync"),
         patch("app.services.question_pool.next_assertion_id", return_value=None),
         patch("app.services.question_pool._has_active_generate_job", return_value=False),
+        patch("app.services.question_pool.maybe_refill_pool", return_value=None),
         patch("app.services.question_pool.enqueue_page_triage") as triage,
     ):
         triage.return_value = MagicMock()
@@ -348,11 +349,44 @@ def test_ensure_question_pool_skips_enqueue_when_job_active() -> None:
         patch("app.services.question_pool.kick_generation_sync"),
         patch("app.services.question_pool.next_assertion_id", return_value=None),
         patch("app.services.question_pool._has_active_generate_job", return_value=True),
+        patch("app.services.question_pool.maybe_refill_pool") as refill,
         patch("app.services.question_pool.enqueue_page_triage") as triage,
     ):
         ensure_question_pool(db, doc_id)
 
+    refill.assert_not_called()
     triage.assert_not_called()
+
+
+def test_ensure_question_pool_refills_when_pool_exhausted() -> None:
+    doc_id = uuid.uuid4()
+    doc = MagicMock()
+    doc.id = doc_id
+    doc.status = "ready"
+    doc.account_id = None
+    doc.meta = {
+        "selected_range": {"from": 25, "to": 33},
+        "question_pool_initialized": True,
+        "question_progress": {"current_page": 25, "page_coverage": {"25": {"question_budget": 15}}},
+    }
+    db = MagicMock()
+    db.get.return_value = doc
+    refill_job = MagicMock()
+
+    with (
+        patch("app.services.question_pool.release_stuck_generation"),
+        patch("app.services.question_pool.kick_generation_sync") as kick,
+        patch("app.services.question_pool.next_assertion_id", return_value=None),
+        patch("app.services.question_pool._has_active_generate_job", return_value=False),
+        patch("app.services.question_pool.maybe_refill_pool", return_value=refill_job) as refill,
+        patch("app.services.question_pool._enqueue_pool_work") as enqueue_work,
+    ):
+        job = ensure_question_pool(db, doc_id)
+
+    assert job is refill_job
+    refill.assert_called_once_with(db, doc_id)
+    enqueue_work.assert_not_called()
+    kick.assert_called_once()
 
 
 def test_should_transition_prefetch_after_seventy_percent() -> None:

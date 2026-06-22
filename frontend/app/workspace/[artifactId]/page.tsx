@@ -54,7 +54,7 @@ import { apiFetchBytes, apiGet, apiPost, apiPostSSE, ensureGuestSession, isArtif
 import { BRAND_LOGO_SRC, ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import { AssistantMarkdown } from "@/lib/chatMarkdown";
 import { indexingStage } from "@/lib/constants";
-import { learnWaitPhase, rotatingLearnStatus } from "@/lib/learnStatus";
+import { learnWaitStatus } from "@/lib/learnStatus";
 import {
   cancelAllPdfRenders,
   clampPdfScroll,
@@ -751,6 +751,7 @@ export default function WorkspaceArtifactPage({
             feedback={feedback}
             mcqLoading={mcqLoading}
             artifactStatus={artifact.status}
+            indexProgress={artifact.index_progress}
             hasQuestion={Boolean(queue?.current_assertion_id)}
             queue={queue}
             mode={mode}
@@ -2103,6 +2104,7 @@ function McqHeroPanel({
   feedback,
   mcqLoading,
   artifactStatus,
+  indexProgress,
   hasQuestion,
   queue,
   mode,
@@ -2120,6 +2122,7 @@ function McqHeroPanel({
   feedback: string | null;
   mcqLoading: boolean;
   artifactStatus?: string;
+  indexProgress?: number;
   hasQuestion?: boolean;
   queue?: McqState | null;
   mode: "learn" | "test";
@@ -2148,26 +2151,32 @@ function McqHeroPanel({
       safeOptions.length === 0 &&
       (queue?.generation_pending || (queue?.questions_generated ?? 0) === 0));
 
-  const indexing = artifactStatus === "indexing";
-  const generating = Boolean(queue?.generation_pending);
-  const planning =
-    !indexing &&
-    !generating &&
-    (queue?.questions_generated ?? 0) === 0;
-  const waitPhase = learnWaitPhase({ indexing, planning, generating });
   const [statusTick, setStatusTick] = useState(0);
+  const waitStatus = learnWaitStatus(
+    {
+      artifactStatus,
+      indexProgress,
+      mcqLoading,
+      generationPending: queue?.generation_pending,
+      pageTriageComplete: queue?.page_triage_complete,
+      ragWindowReady: queue?.rag_window_ready,
+      questionsGenerated: queue?.questions_generated,
+      questionBudget: queue?.question_budget,
+      poolAvailable: queue?.pool_available,
+    },
+    statusTick,
+  );
   useInterval(() => {
     if (waiting) setStatusTick((t) => t + 1);
-  }, 2600);
+  }, 3200);
   useEffect(() => {
     setStatusTick(0);
-  }, [waitPhase]);
-  const statusLine = rotatingLearnStatus(waitPhase, statusTick);
+  }, [waitStatus.rotateKey]);
 
   if (waiting) {
     return (
       <Center py={compact ? "lg" : "xl"}>
-        <Stack align="center" gap="lg" maw={280}>
+        <Stack align="center" gap="sm" maw={320}>
           <Loader type="oval" size="sm" />
           <Text
             size="lg"
@@ -2176,7 +2185,10 @@ function McqHeroPanel({
             c={isDark ? "gray.2" : "dark.6"}
             style={{ letterSpacing: "-0.025em" }}
           >
-            {statusLine}
+            {waitStatus.title}
+          </Text>
+          <Text size="sm" c="dimmed" ta="center" lh={1.55} maw={280}>
+            {waitStatus.detail}
           </Text>
         </Stack>
       </Center>
