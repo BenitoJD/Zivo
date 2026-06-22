@@ -64,7 +64,7 @@ def enqueue_generate(
     db: Session,
     *,
     document_id: uuid.UUID,
-    account_id: uuid.UUID,
+    account_id: uuid.UUID | None,
     activity_id: uuid.UUID,
     options: dict,
 ) -> Job:

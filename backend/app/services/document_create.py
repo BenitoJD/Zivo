@@ -11,6 +11,8 @@ from app.services.jobs import enqueue_ingest
 from app.services.parse import count_pdf_pages
 from app.services.storage import save_upload, slugify_filename
 
+_GB = 1024 * 1024 * 1024
+
 
 def guest_document_count(db: Session, guest_id: str) -> int:
     return (
@@ -87,8 +89,10 @@ def create_document_record(
     data: bytes,
     meta: dict | None = None,
 ) -> Document:
-    if len(data) > 50 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="File too large (max 50MB)")
+    settings = get_settings()
+    if len(data) > settings.max_upload_bytes:
+        limit_gb = settings.max_upload_bytes // _GB
+        raise HTTPException(status_code=413, detail=f"File too large (max {limit_gb}GB)")
 
     is_image = content_type.startswith("image/")
     doc_guest_id = assert_storage_available(

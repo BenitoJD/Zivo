@@ -8,8 +8,8 @@ export default function WorkspaceIndexPage() {
   const { openAddSource } = useWorkspaceShell();
 
   return (
-    <Center mih="calc(100dvh - 2rem)">
-      <Paper withBorder p={{ base: "xl", sm: 48 }} radius="lg" maw={520} w="100%">
+    <Center flex={1} px="sm" py="md">
+      <Paper withBorder p={{ base: "lg", sm: "xl" }} radius="lg" maw={520} w="100%">
         <Stack align="center" gap="lg">
           <ThemeIcon size={56} radius="md" variant="light" color="gray">
             <IconFileText size={28} stroke={1.25} />

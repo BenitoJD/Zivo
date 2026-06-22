@@ -1,6 +1,15 @@
 "use client";
 
-import { DEFAULT_THEME, MantineProvider, createTheme, mergeMantineTheme } from "@mantine/core";
+import {
+  DEFAULT_THEME,
+  MantineProvider,
+  createTheme,
+  defaultVariantColorsResolver,
+  getPrimaryShade,
+  isLightColor,
+  mergeMantineTheme,
+  type VariantColorsResolver,
+} from "@mantine/core";
 import { Notifications } from "@mantine/notifications";
 
 /** Mantine default dark scale — borders, modals, inputs, and disabled states stay readable. */
@@ -17,15 +26,48 @@ const DARK_PALETTE = [
   "#101113",
 ] as const;
 
+function resolvedColorScheme(): "light" | "dark" {
+  if (typeof document === "undefined") return "dark";
+  const scheme = document.documentElement.getAttribute("data-mantine-color-scheme");
+  return scheme === "light" ? "light" : "dark";
+}
+
+/** Gray primary fills are light in dark mode — force dark text on those surfaces. */
+const variantColorResolver: VariantColorsResolver = (input) => {
+  const resolved = defaultVariantColorsResolver(input);
+  const autoContrast =
+    typeof input.autoContrast === "boolean" ? input.autoContrast : input.theme.autoContrast;
+  if (!autoContrast || (input.variant ?? "filled") !== "filled") return resolved;
+
+  const colorName = input.color || input.theme.primaryColor;
+  const palette = input.theme.colors[colorName];
+  if (!palette) return resolved;
+
+  const surface = palette[getPrimaryShade(input.theme, resolvedColorScheme())];
+  if (!isLightColor(surface, input.theme.luminanceThreshold ?? 0.3)) return resolved;
+
+  return {
+    ...resolved,
+    color: "var(--mantine-color-black)",
+    hoverColor: "var(--mantine-color-black)",
+  };
+};
+
 const theme = mergeMantineTheme(
   DEFAULT_THEME,
   createTheme({
-    fontFamily: "Inter, system-ui, sans-serif",
-    headings: { fontFamily: "Inter, system-ui, sans-serif" },
+    fontFamily:
+      '-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", Inter, system-ui, sans-serif',
+    headings: {
+      fontFamily:
+        '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", Inter, system-ui, sans-serif',
+      fontWeight: "600",
+    },
     primaryColor: "gray",
     primaryShade: { light: 6, dark: 4 },
     autoContrast: true,
-    defaultRadius: "md",
+    variantColorResolver,
+    defaultRadius: "lg",
     colors: {
       dark: [...DARK_PALETTE],
     },

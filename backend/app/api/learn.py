@@ -14,6 +14,14 @@ from app.repositories import workspace as workspace_repo
 from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.services.guest import can_access_document
 from app.services.guest_session import guest_session_for_read
+from app.services.question_pool import (
+    advance_to_next_page,
+    build_learn_queue_state,
+    ensure_question_pool,
+    get_progress,
+    is_page_complete,
+    page_range_bounds,
+)
 
 router = APIRouter()
 
@@ -35,17 +43,27 @@ def _workspace_state(
     }
 
 
-@router.get("/{artifact_id}/learn-queue")
-def learn_queue(
+def _learn_queue_payload(
+    db: Session,
     artifact_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    user: Account | None = Depends(get_optional_user),
-    guest_id: str | None = Depends(guest_session_for_read),
+    doc: Document,
+    user: Account | None,
 ) -> dict:
-    doc = db.get(Document, artifact_id)
-    if not doc or not can_access_document(doc, user, guest_id):
-        raise HTTPException(status_code=404, detail="Not found")
+    progress = get_progress(doc)
+    if is_page_complete(db, doc, progress):
+        page = int(progress.get("current_page") or 1)
+        _, page_to = page_range_bounds(doc)
+        if page < page_to:
+            advance_to_next_page(db, doc)
+            db.refresh(doc)
+            progress = get_progress(doc)
+            ensure_question_pool(db, artifact_id)
+            db.refresh(doc)
+            progress = get_progress(doc)
+
+    state = build_learn_queue_state(db, artifact_id, doc, progress)
     ws = _workspace_state(db, doc, user)
+
     concepts = db.execute(
         text(
             """
@@ -58,27 +76,32 @@ def learn_queue(
         ),
         {"aid": str(artifact_id)},
     ).mappings().all()
-    next_row = db.execute(
-        text(
-            """
-            SELECT id FROM intel.assertion
-            WHERE payload->>'artifact_id' = :aid AND status = 'active'
-            ORDER BY recorded_at ASC
-            LIMIT 1
-            """
-        ),
-        {"aid": str(artifact_id)},
-    ).first()
-    page_mastered = False
-    page_ready = ws.get("status") == "page_ready"
+
     return {
-        "current_page": ws.get("current_page") or (doc.meta or {}).get("selected_range", {}).get("from"),
-        "current_assertion_id": str(next_row[0]) if next_row else None,
+        **state,
         "concepts": [dict(c) for c in concepts],
-        "page_mastered": page_mastered,
-        "page_ready": page_ready,
-        "can_advance": page_mastered and not page_ready,
+        "page_mastered": state["page_complete"],
+        "page_ready": ws.get("status") == "page_ready",
+        "can_advance": state["page_complete"] and not ws.get("status") == "page_ready",
     }
+
+
+@router.get("/{artifact_id}/learn-queue")
+def learn_queue(
+    artifact_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    doc = db.get(Document, artifact_id)
+    if not doc or not can_access_document(doc, user, guest_id):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    if doc.status == "ready":
+        ensure_question_pool(db, artifact_id)
+        db.refresh(doc)
+
+    return _learn_queue_payload(db, artifact_id, doc, user)
 
 
 @router.get("/{artifact_id}/mastery")
@@ -108,6 +131,10 @@ def advance_page(
     doc = db.get(Document, artifact_id)
     if not doc or not can_access_document(doc, user, guest_id):
         raise HTTPException(status_code=404, detail="Not found")
+    progress = get_progress(doc)
+    if int(progress.get("current_page") or 0) == page and is_page_complete(db, doc, progress):
+        advance_to_next_page(db, doc)
+        ensure_question_pool(db, artifact_id)
     if user:
         captured = doc.artifact_captured_at or doc.created_at
         workspace_repo.upsert_workspace(

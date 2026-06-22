@@ -23,8 +23,13 @@ def test_replace_document_chunks_persists_rows() -> None:
     db.commit.assert_not_called()
 
 
-def test_finalize_image_document_marks_ready() -> None:
+def test_finalize_image_document_marks_ready(monkeypatch) -> None:
     from unittest.mock import MagicMock
+
+    monkeypatch.setattr(
+        "app.services.question_generation.enqueue_initial_pool",
+        lambda db, document_id: None,
+    )
 
     db = MagicMock()
     doc_id = uuid.uuid4()

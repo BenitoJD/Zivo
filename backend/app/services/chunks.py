@@ -95,3 +95,7 @@ def finalize_image_document(db: Session, document_id: uuid.UUID) -> None:
     doc.status = "ready"
     doc.index_progress = 100
     db.commit()
+
+    from app.services.question_generation import enqueue_generate_if_needed
+
+    enqueue_generate_if_needed(db, document_id)

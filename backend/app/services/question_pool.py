@@ -1,0 +1,745 @@
+"""Rolling per-page question pool — agent budget, prefetch batches, page advance."""
+
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from app.models import Document, Job
+from app.repositories.intel import create_activity
+from app.repositories import workspace as workspace_repo
+from app.services.jobs import enqueue_generate
+
+INITIAL_BATCH_SIZE = 5
+REFILL_BATCH_SIZE = 5
+REFILL_AFTER_ANSWERED = 3
+ABSOLUTE_MAX_QUESTIONS_PER_PAGE = 150
+# Backward-compatible alias for API consumers
+MAX_QUESTIONS_PER_PAGE = ABSOLUTE_MAX_QUESTIONS_PER_PAGE
+
+
+def default_progress(doc: Document) -> dict[str, Any]:
+    selected = (doc.meta or {}).get("selected_range") or {}
+    first_page = int(selected.get("from") or 1)
+    return {
+        "current_page": first_page,
+        "answered_ids": [],
+        "answered_on_page": 0,
+        "generated_on_page": 0,
+        "generation_pending": False,
+        "page_coverage": {},
+    }
+
+
+def get_progress(doc: Document) -> dict[str, Any]:
+    meta = dict(doc.meta or {})
+    progress = meta.get("question_progress")
+    if not isinstance(progress, dict):
+        progress = default_progress(doc)
+    progress.setdefault("current_page", default_progress(doc)["current_page"])
+    progress.setdefault("answered_ids", [])
+    progress.setdefault("answered_on_page", 0)
+    progress.setdefault("generated_on_page", 0)
+    progress.setdefault("generation_pending", False)
+    progress.setdefault("page_coverage", {})
+    return progress
+
+
+def save_progress(db: Session, doc: Document, progress: dict[str, Any]) -> None:
+    meta = dict(doc.meta or {})
+    meta["question_progress"] = progress
+    doc.meta = meta
+    user = doc.account_id
+    if user:
+        captured = doc.artifact_captured_at or doc.created_at
+        workspace_repo.upsert_workspace(
+            db,
+            account_id=user,
+            artifact_id=doc.id,
+            artifact_captured_at=captured,
+            current_page=progress.get("current_page"),
+            pool_available_count=_count_available(db, doc.id, progress),
+            pool_target=REFILL_BATCH_SIZE,
+        )
+
+
+def _page_key(page: int) -> str:
+    return str(page)
+
+
+def get_page_coverage(doc: Document, page: int) -> dict[str, Any]:
+    progress = get_progress(doc)
+    coverage = progress.get("page_coverage") or {}
+    entry = coverage.get(_page_key(page))
+    return entry if isinstance(entry, dict) else {}
+
+
+def save_page_coverage(
+    db: Session,
+    document_id: uuid.UUID,
+    *,
+    page: int,
+    question_budget: int,
+    aspects: list[dict[str, Any]],
+    rationale: str = "",
+    triage_activity_id: str | None = None,
+) -> None:
+    doc = db.get(Document, document_id)
+    if not doc:
+        return
+    progress = get_progress(doc)
+    coverage = dict(progress.get("page_coverage") or {})
+    coverage[_page_key(page)] = {
+        "question_budget": question_budget,
+        "aspects": aspects,
+        "coverage_complete": False,
+        "rationale": rationale,
+        "triage_activity_id": triage_activity_id,
+    }
+    progress["page_coverage"] = coverage
+    save_progress(db, doc, progress)
+
+
+def get_question_budget(doc: Document, page: int) -> int:
+    cov = get_page_coverage(doc, page)
+    budget = int(cov.get("question_budget") or INITIAL_BATCH_SIZE)
+    return max(INITIAL_BATCH_SIZE, min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, budget))
+
+
+def is_coverage_complete(doc: Document, page: int) -> bool:
+    cov = get_page_coverage(doc, page)
+    if cov.get("coverage_complete"):
+        return True
+    aspects = cov.get("aspects") or []
+    if not aspects:
+        return False
+    return all(a.get("asked") for a in aspects)
+
+
+def count_assertions_on_page(db: Session, document_id: uuid.UUID, page: int) -> int:
+    return int(
+        db.execute(
+            text(
+                """
+                SELECT COUNT(*)::int FROM intel.assertion
+                WHERE payload->>'artifact_id' = :artifact_id
+                  AND status = 'active'
+                  AND (payload->>'page_number')::int = :page
+                """
+            ),
+            {"artifact_id": str(document_id), "page": page},
+        ).scalar()
+        or 0
+    )
+
+
+def count_answered_on_page(
+    db: Session,
+    document_id: uuid.UUID,
+    page: int,
+    answered_ids: list[str],
+) -> int:
+    if not answered_ids:
+        return 0
+    return int(
+        db.execute(
+            text(
+                """
+                SELECT COUNT(*)::int FROM intel.assertion
+                WHERE payload->>'artifact_id' = :artifact_id
+                  AND status = 'active'
+                  AND (payload->>'page_number')::int = :page
+                  AND id::text = ANY(:answered)
+                """
+            ),
+            {"artifact_id": str(document_id), "page": page, "answered": answered_ids},
+        ).scalar()
+        or 0
+    )
+
+
+def _count_available(db: Session, document_id: uuid.UUID, progress: dict[str, Any]) -> int:
+    page = int(progress.get("current_page") or 1)
+    answered = {str(x) for x in progress.get("answered_ids") or []}
+    rows = db.execute(
+        text(
+            """
+            SELECT id::text FROM intel.assertion
+            WHERE payload->>'artifact_id' = :artifact_id
+              AND status = 'active'
+              AND (payload->>'page_number')::int = :page
+            ORDER BY (payload->>'sequence')::int ASC
+            """
+        ),
+        {"artifact_id": str(document_id), "page": page},
+    ).scalars().all()
+    return sum(1 for row_id in rows if row_id not in answered)
+
+
+def next_assertion_id(db: Session, document_id: uuid.UUID, progress: dict[str, Any]) -> str | None:
+    page = int(progress.get("current_page") or 1)
+    answered = {str(x) for x in progress.get("answered_ids") or []}
+    rows = db.execute(
+        text(
+            """
+            SELECT id::text FROM intel.assertion
+            WHERE payload->>'artifact_id' = :artifact_id
+              AND status = 'active'
+              AND (payload->>'page_number')::int = :page
+            ORDER BY (payload->>'sequence')::int ASC
+            """
+        ),
+        {"artifact_id": str(document_id), "page": page},
+    ).scalars().all()
+    for row_id in rows:
+        if row_id not in answered:
+            return row_id
+    return None
+
+
+def page_range_bounds(doc: Document) -> tuple[int, int]:
+    selected = (doc.meta or {}).get("selected_range") or {}
+    return int(selected.get("from") or 1), int(selected.get("to") or 1)
+
+
+def is_page_complete(db: Session, doc: Document, progress: dict[str, Any]) -> bool:
+    if progress.get("generation_pending"):
+        return False
+    if next_assertion_id(db, doc.id, progress):
+        return False
+    page = int(progress.get("current_page") or 1)
+    budget = get_question_budget(doc, page)
+    generated = count_assertions_on_page(db, doc.id, page)
+    if generated == 0:
+        return False
+    if is_coverage_complete(doc, page):
+        return True
+    return generated >= budget
+
+
+def build_learn_queue_state(
+    db: Session,
+    document_id: uuid.UUID,
+    doc: Document,
+    progress: dict[str, Any],
+) -> dict[str, Any]:
+    page = int(progress.get("current_page") or 1)
+    page_from, page_to = page_range_bounds(doc)
+    answered_ids = [str(x) for x in progress.get("answered_ids") or []]
+    questions_generated = count_assertions_on_page(db, document_id, page)
+    questions_answered = count_answered_on_page(db, document_id, page, answered_ids)
+    budget = get_question_budget(doc, page)
+    next_id = next_assertion_id(db, document_id, progress)
+    coverage_complete = is_coverage_complete(doc, page)
+    page_complete = is_page_complete(db, doc, progress)
+    document_complete = page_complete and page >= page_to
+
+    return {
+        "current_page": page,
+        "page_from": page_from,
+        "page_to": page_to,
+        "current_assertion_id": next_id,
+        "question_number": questions_answered + 1 if next_id else questions_answered,
+        "question_budget": budget,
+        "questions_answered": questions_answered,
+        "questions_generated": questions_generated,
+        "generation_pending": bool(progress.get("generation_pending")),
+        "coverage_complete": coverage_complete,
+        "page_complete": page_complete,
+        "document_complete": document_complete,
+        "pool_available": _count_available(db, document_id, progress),
+        "generated_on_page": int(progress.get("generated_on_page") or 0),
+        "answered_on_page": questions_answered,
+        "max_per_page": budget,
+    }
+
+
+def enqueue_page_triage(db: Session, doc: Document, *, page: int) -> Job:
+    progress = get_progress(doc)
+    progress["generation_pending"] = True
+    save_progress(db, doc, progress)
+
+    activity_id = create_activity(
+        db,
+        type_uri="/vocab/activity/generate_questions",
+        agent="question_pool.page_triage",
+        source_slug="user-upload",
+        stats={"artifact_id": str(doc.id), "page_number": page},
+    )
+    job = enqueue_generate(
+        db,
+        document_id=doc.id,
+        account_id=doc.account_id,
+        activity_id=activity_id,
+        options={
+            "mode": "page_triage",
+            "artifact_id": str(doc.id),
+            "page_number": page,
+        },
+    )
+    db.commit()
+    return job
+
+
+def enqueue_page_batch(
+    db: Session,
+    doc: Document,
+    *,
+    page: int,
+    batch_size: int,
+    start_sequence: int,
+) -> Job:
+    progress = get_progress(doc)
+    progress["generation_pending"] = True
+    save_progress(db, doc, progress)
+
+    activity_id = create_activity(
+        db,
+        type_uri="/vocab/activity/generate_questions",
+        agent="question_pool.page_batch",
+        source_slug="user-upload",
+        stats={
+            "artifact_id": str(doc.id),
+            "page_number": page,
+            "batch_size": batch_size,
+            "start_sequence": start_sequence,
+        },
+    )
+    job = enqueue_generate(
+        db,
+        document_id=doc.id,
+        account_id=doc.account_id,
+        activity_id=activity_id,
+        options={
+            "mode": "page_batch",
+            "artifact_id": str(doc.id),
+            "page_number": page,
+            "batch_size": batch_size,
+            "start_sequence": start_sequence,
+        },
+    )
+    db.commit()
+    return job
+
+
+def on_triage_completed(db: Session, document_id: uuid.UUID, *, page: int) -> Job | None:
+    doc = db.get(Document, document_id)
+    if not doc:
+        return None
+    progress = get_progress(doc)
+    if int(progress.get("current_page") or 0) != page:
+        progress["generation_pending"] = False
+        save_progress(db, doc, progress)
+        db.commit()
+        return None
+    progress["generation_pending"] = False
+    save_progress(db, doc, progress)
+    db.commit()
+
+    budget = get_question_budget(doc, page)
+    generated = count_assertions_on_page(db, document_id, page)
+    if generated > 0:
+        return None
+    batch = min(INITIAL_BATCH_SIZE, budget)
+    return enqueue_page_batch(db, doc, page=page, batch_size=batch, start_sequence=0)
+
+
+def enqueue_initial_pool(db: Session, document_id: uuid.UUID) -> Job | None:
+    doc = db.get(Document, document_id)
+    if not doc or doc.status != "ready":
+        return None
+
+    meta = dict(doc.meta or {})
+    if meta.get("no_searchable_text"):
+        return None
+    if meta.get("question_pool_initialized"):
+        return None
+
+    page_from, _ = page_range_bounds(doc)
+    progress = default_progress(doc)
+    progress["current_page"] = page_from
+    meta["question_pool_initialized"] = True
+    meta["question_progress"] = progress
+    doc.meta = meta
+    db.commit()
+
+    return enqueue_page_triage(db, doc, page=page_from)
+
+
+def reset_for_new_page_range(db: Session, doc: Document, selected: dict[str, int]) -> None:
+    """Clear study progress so a new page-range selection starts fresh."""
+    page_from = int(selected["from"])
+    progress = default_progress(doc)
+    progress["current_page"] = page_from
+    meta = dict(doc.meta or {})
+    meta["selected_range"] = {"from": page_from, "to": int(selected["to"])}
+    meta.pop("question_pool_initialized", None)
+    meta["question_progress"] = progress
+    doc.meta = meta
+    doc.index_progress = 0
+
+    db.execute(
+        text(
+            """
+            UPDATE qb.jobs
+            SET status = 'cancelled'
+            WHERE payload->>'document_id' = :document_id
+              AND status IN ('queued', 'running')
+            """
+        ),
+        {"document_id": str(doc.id)},
+    )
+
+    if doc.account_id:
+        captured = doc.artifact_captured_at or doc.created_at
+        workspace_repo.upsert_workspace(
+            db,
+            account_id=doc.account_id,
+            artifact_id=doc.id,
+            artifact_captured_at=captured,
+            current_page=page_from,
+            status="indexing",
+            selected_range=meta["selected_range"],
+            pool_available_count=0,
+            pool_target=REFILL_BATCH_SIZE,
+        )
+
+
+def on_batch_completed(db: Session, document_id: uuid.UUID, *, page: int, saved: int) -> None:
+    doc = db.get(Document, document_id)
+    if not doc:
+        return
+    progress = get_progress(doc)
+    if int(progress.get("current_page") or 0) == page:
+        progress["generated_on_page"] = count_assertions_on_page(db, document_id, page)
+    progress["generation_pending"] = False
+    save_progress(db, doc, progress)
+    db.commit()
+
+
+def on_batch_failed(db: Session, document_id: uuid.UUID, *, page: int) -> None:
+    doc = db.get(Document, document_id)
+    if not doc:
+        return
+    progress = get_progress(doc)
+    if page and int(progress.get("current_page") or 0) == page:
+        progress["generation_pending"] = False
+        save_progress(db, doc, progress)
+        db.commit()
+
+
+def mark_aspect_asked(db: Session, document_id: uuid.UUID, page: int, aspect_key: str) -> None:
+    doc = db.get(Document, document_id)
+    if not doc:
+        return
+    progress = get_progress(doc)
+    coverage = dict(progress.get("page_coverage") or {})
+    entry = dict(coverage.get(_page_key(page)) or {})
+    aspects = list(entry.get("aspects") or [])
+    for aspect in aspects:
+        if aspect.get("key") == aspect_key:
+            aspect["asked"] = True
+    entry["aspects"] = aspects
+    coverage[_page_key(page)] = entry
+    progress["page_coverage"] = coverage
+    save_progress(db, doc, progress)
+
+
+def set_coverage_complete(db: Session, document_id: uuid.UUID, page: int) -> None:
+    doc = db.get(Document, document_id)
+    if not doc:
+        return
+    progress = get_progress(doc)
+    coverage = dict(progress.get("page_coverage") or {})
+    entry = dict(coverage.get(_page_key(page)) or {})
+    entry["coverage_complete"] = True
+    coverage[_page_key(page)] = entry
+    progress["page_coverage"] = coverage
+    save_progress(db, doc, progress)
+
+
+def _has_running_generate_job(db: Session, document_id: uuid.UUID) -> bool:
+    running = db.execute(
+        text(
+            """
+            SELECT 1 FROM jobs
+            WHERE name = 'generate.questions'
+              AND payload->>'document_id' = :document_id
+              AND status = 'running'
+            LIMIT 1
+            """
+        ),
+        {"document_id": str(document_id)},
+    ).scalar()
+    return running is not None
+
+
+def _has_active_generate_job(db: Session, document_id: uuid.UUID) -> bool:
+    active = db.execute(
+        text(
+            """
+            SELECT 1 FROM jobs
+            WHERE name = 'generate.questions'
+              AND payload->>'document_id' = :document_id
+              AND status IN ('queued', 'running')
+            LIMIT 1
+            """
+        ),
+        {"document_id": str(document_id)},
+    ).scalar()
+    return active is not None
+
+
+def _cancel_queued_generate_jobs(db: Session, document_id: uuid.UUID) -> None:
+    db.execute(
+        text(
+            """
+            UPDATE jobs
+            SET status = 'cancelled'
+            WHERE name = 'generate.questions'
+              AND payload->>'document_id' = :document_id
+              AND status = 'queued'
+            """
+        ),
+        {"document_id": str(document_id)},
+    )
+
+
+def release_stuck_generation(db: Session, document_id: uuid.UUID) -> None:
+    """Drop a stale pending flag and orphan queued jobs when nothing is running."""
+    if _has_running_generate_job(db, document_id):
+        return
+    _cancel_queued_generate_jobs(db, document_id)
+    doc = db.get(Document, document_id)
+    if not doc:
+        return
+    progress = get_progress(doc)
+    if not progress.get("generation_pending"):
+        return
+    progress["generation_pending"] = False
+    save_progress(db, doc, progress)
+    db.commit()
+
+
+def kick_generation_sync(db: Session, document_id: uuid.UUID) -> None:
+    """Run triage + first batch inline when the pool is empty (workers optional)."""
+    if _has_running_generate_job(db, document_id):
+        return
+
+    doc = db.get(Document, document_id)
+    if not doc or doc.status != "ready":
+        return
+
+    release_stuck_generation(db, document_id)
+    db.refresh(doc)
+
+    progress = get_progress(doc)
+    if next_assertion_id(db, document_id, progress):
+        return
+
+    page = int(progress.get("current_page") or page_range_bounds(doc)[0])
+
+    from app.graphs.generation_graph import run_generation
+
+    if not get_page_coverage(doc, page):
+        run_generation(
+            db,
+            document_id,
+            {"mode": "page_triage", "page_number": page},
+        )
+        db.refresh(doc)
+        release_stuck_generation(db, document_id)
+        db.refresh(doc)
+
+    if count_assertions_on_page(db, document_id, page) == 0:
+        _cancel_queued_generate_jobs(db, document_id)
+        doc = db.get(Document, document_id)
+        if doc:
+            progress = get_progress(doc)
+            progress["generation_pending"] = False
+            save_progress(db, doc, progress)
+            db.commit()
+        budget = get_question_budget(doc, page) if doc else INITIAL_BATCH_SIZE
+        run_generation(
+            db,
+            document_id,
+            {
+                "mode": "page_batch",
+                "page_number": page,
+                "batch_size": min(INITIAL_BATCH_SIZE, budget),
+                "start_sequence": 0,
+            },
+        )
+
+
+def _enqueue_pool_work(db: Session, document_id: uuid.UUID, doc: Document) -> Job | None:
+    meta = dict(doc.meta or {})
+    progress = get_progress(doc)
+    if not meta.get("question_pool_initialized"):
+        return enqueue_initial_pool(db, document_id)
+
+    page = int(progress.get("current_page") or page_range_bounds(doc)[0])
+    if not get_page_coverage(doc, page):
+        return enqueue_page_triage(db, doc, page=page)
+
+    generated = count_assertions_on_page(db, document_id, page)
+    if generated == 0:
+        budget = get_question_budget(doc, page)
+        return enqueue_page_batch(
+            db,
+            doc,
+            page=page,
+            batch_size=min(INITIAL_BATCH_SIZE, budget),
+            start_sequence=0,
+        )
+    return None
+
+
+def clear_stale_generation_pending(db: Session, doc: Document) -> None:
+    release_stuck_generation(db, doc.id)
+
+
+def advance_to_next_page(db: Session, doc: Document) -> Job | None:
+    progress = get_progress(doc)
+    page = int(progress.get("current_page") or 1)
+    _, page_to = page_range_bounds(doc)
+    if page >= page_to:
+        return None
+
+    progress["current_page"] = page + 1
+    progress["answered_on_page"] = 0
+    progress["generated_on_page"] = 0
+    progress["generation_pending"] = False
+    save_progress(db, doc, progress)
+    db.commit()
+
+    new_page = page + 1
+    if not get_page_coverage(doc, new_page):
+        return enqueue_page_triage(db, doc, page=new_page)
+    generated = count_assertions_on_page(db, doc.id, new_page)
+    if generated == 0:
+        budget = get_question_budget(doc, new_page)
+        return enqueue_page_batch(
+            db,
+            doc,
+            page=new_page,
+            batch_size=min(INITIAL_BATCH_SIZE, budget),
+            start_sequence=0,
+        )
+    return None
+
+
+def ensure_question_pool(db: Session, document_id: uuid.UUID) -> Job | None:
+    """Kick off or recover question generation for ready documents."""
+    doc = db.get(Document, document_id)
+    if not doc or doc.status != "ready":
+        return None
+
+    meta = dict(doc.meta or {})
+    if meta.get("no_searchable_text"):
+        return None
+
+    release_stuck_generation(db, document_id)
+    db.refresh(doc)
+
+    progress = get_progress(doc)
+    if next_assertion_id(db, document_id, progress):
+        return None
+
+    job: Job | None = None
+    if not _has_running_generate_job(db, document_id):
+        job = _enqueue_pool_work(db, document_id, doc)
+        kick_generation_sync(db, document_id)
+
+    return job
+
+
+def record_answer(db: Session, document_id: uuid.UUID, assertion_id: uuid.UUID) -> None:
+    doc = db.get(Document, document_id)
+    if not doc:
+        return
+    progress = get_progress(doc)
+    aid = str(assertion_id)
+    answered = [str(x) for x in progress.get("answered_ids") or []]
+    if aid not in answered:
+        answered.append(aid)
+        progress["answered_on_page"] = int(progress.get("answered_on_page") or 0) + 1
+        # Mark aspect answered if present
+        row = db.execute(
+            text(
+                """
+                SELECT payload->>'primary_concept_key' AS key,
+                       (payload->>'page_number')::int AS page
+                FROM intel.assertion WHERE id = :id
+                """
+            ),
+            {"id": assertion_id},
+        ).mappings().first()
+        if row and row.get("key") and row.get("page"):
+            coverage = dict(progress.get("page_coverage") or {})
+            entry = dict(coverage.get(_page_key(int(row["page"]))) or {})
+            aspects = list(entry.get("aspects") or [])
+            for aspect in aspects:
+                if aspect.get("key") == row["key"]:
+                    aspect["answered"] = True
+            entry["aspects"] = aspects
+            coverage[_page_key(int(row["page"]))] = entry
+            progress["page_coverage"] = coverage
+    progress["answered_ids"] = answered
+    save_progress(db, doc, progress)
+    db.commit()
+    maybe_refill_pool(db, document_id)
+
+
+def maybe_refill_pool(db: Session, document_id: uuid.UUID) -> Job | None:
+    doc = db.get(Document, document_id)
+    if not doc or doc.status != "ready":
+        return None
+
+    progress = get_progress(doc)
+    if progress.get("generation_pending"):
+        return None
+
+    page = int(progress.get("current_page") or 1)
+    budget = get_question_budget(doc, page)
+    generated_on_page = count_assertions_on_page(db, document_id, page)
+    answered_ids = [str(x) for x in progress.get("answered_ids") or []]
+    answered_on_page = count_answered_on_page(db, document_id, page, answered_ids)
+    available = _count_available(db, doc.id, progress)
+
+    if is_coverage_complete(doc, page) or generated_on_page >= budget:
+        return None
+
+    if (
+        answered_on_page > 0
+        and answered_on_page % REFILL_AFTER_ANSWERED == 0
+        and generated_on_page < budget
+    ):
+        remaining = budget - generated_on_page
+        batch = min(REFILL_BATCH_SIZE, remaining)
+        if batch > 0:
+            return enqueue_page_batch(
+                db,
+                doc,
+                page=page,
+                batch_size=batch,
+                start_sequence=generated_on_page,
+            )
+
+    if available == 0 and generated_on_page < budget:
+        remaining = budget - generated_on_page
+        batch = min(REFILL_BATCH_SIZE, remaining)
+        if batch <= 0:
+            return None
+        return enqueue_page_batch(
+            db,
+            doc,
+            page=page,
+            batch_size=batch,
+            start_sequence=generated_on_page,
+        )
+
+    return None

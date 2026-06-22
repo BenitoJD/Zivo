@@ -11,8 +11,9 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.graphs.mcq_graph import grade_mcq
-from app.models import Account, User
+from app.models import Account
 from app.services.auth import get_optional_user, require_csrf_or_guest
+from app.services.question_pool import record_answer
 
 router = APIRouter()
 
@@ -20,8 +21,28 @@ router = APIRouter()
 class GradeIn(BaseModel):
     assertion_id: uuid.UUID
     choice_index: int
+    mode: str = "learn"
     latency_ms: int | None = None
     confidence: int | None = None
+
+
+class AckIn(BaseModel):
+    assertion_id: uuid.UUID
+
+
+@router.post("/acknowledge", dependencies=[Depends(require_csrf_or_guest)])
+def acknowledge(
+    body: AckIn,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Mark a question answered so learn-queue advances (idempotent)."""
+    row = db.execute(
+        text("SELECT payload->>'artifact_id' AS artifact_id FROM intel.assertion WHERE id = :id"),
+        {"id": body.assertion_id},
+    ).first()
+    if row and row[0]:
+        record_answer(db, uuid.UUID(str(row[0])), body.assertion_id)
+    return {"ok": True}
 
 
 @router.post("/grade", dependencies=[Depends(require_csrf_or_guest)])
@@ -31,6 +52,7 @@ def grade(
     user: Account | None = Depends(get_optional_user),
 ) -> dict:
     result = grade_mcq(db, body.assertion_id, body.choice_index)
+
     if user:
         db.execute(
             text(
@@ -53,5 +75,13 @@ def grade(
                 "payload": '{"choice_index": %d}' % body.choice_index,
             },
         )
-    db.commit()
+        db.commit()
+
+    row = db.execute(
+        text("SELECT payload->>'artifact_id' AS artifact_id FROM intel.assertion WHERE id = :id"),
+        {"id": body.assertion_id},
+    ).first()
+    if row and row[0]:
+        record_answer(db, uuid.UUID(str(row[0])), body.assertion_id)
+
     return result

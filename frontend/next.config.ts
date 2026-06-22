@@ -6,6 +6,8 @@ const nextConfig: NextConfig = {
   output: "standalone",
   experimental: {
     optimizePackageImports: ["@mantine/core", "@mantine/hooks"],
+    // Dev rewrites proxy /api/* to FastAPI; default 10MB truncates uploads.
+    proxyClientMaxBodySize: "1024mb",
   },
   async rewrites() {
     return [

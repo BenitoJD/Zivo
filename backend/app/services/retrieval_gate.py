@@ -51,6 +51,8 @@ def needs_retrieval(
     scope = scope or {}
     if scope.get("page_start") is not None or scope.get("page_end") is not None:
         return True
+    if scope.get("current_page") is not None:
+        return True
     if scope.get("selection_text"):
         return True
     return not _NO_RETRIEVE_RE.match(message)

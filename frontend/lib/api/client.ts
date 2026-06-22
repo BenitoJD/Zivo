@@ -36,6 +36,10 @@ async function readApiError(res: Response): Promise<string> {
   return text;
 }
 
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 120_000): Promise<Response> {
+  return fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+}
+
 function captureResponseMeta(res: Response) {
   const headerGuest = res.headers.get(GUEST_HEADER);
   if (headerGuest) guestId = headerGuest;
@@ -99,15 +103,29 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
 }
 
 export async function apiPostForm<T>(path: string, form: FormData): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    credentials: "include",
-    headers: buildHeaders(),
-    body: form,
-  });
+  const res = await fetchWithTimeout(
+    `${API_BASE}${path}`,
+    {
+      method: "POST",
+      credentials: "include",
+      headers: buildHeaders(),
+      body: form,
+    },
+    30 * 60 * 1000,
+  );
   captureResponseMeta(res);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json() as Promise<T>;
+}
+
+export async function apiDelete(path: string): Promise<void> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "DELETE",
+    credentials: "include",
+    headers: buildHeaders(),
+  });
+  captureResponseMeta(res);
+  if (!res.ok) throw new Error(await readApiError(res));
 }
 
 export async function apiPostSSE(

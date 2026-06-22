@@ -83,6 +83,10 @@ def embed_chunks_job(payload: dict) -> dict:
             db.commit()
         count = persist_document_index(db, document_id, chunks, vectors)
 
+        from app.services.question_generation import enqueue_generate_if_needed
+
+        enqueue_generate_if_needed(db, document_id)
+
     for suffix in ("pages", "chunks"):
         try:
             delete_object(ingest_tmp_key(document_id, suffix))
@@ -95,8 +99,13 @@ def embed_chunks_job(payload: dict) -> dict:
 @eta(name="generate.questions", workload=JobWorkload.cpu)
 def generate_questions_job(payload: dict) -> dict:
     from app.graphs.generation_graph import run_generation
+    from app.services.question_pool import on_batch_failed
 
     document_id = UUID(payload["document_id"])
+    page_number = int(payload.get("page_number") or 0)
     with SessionLocal() as db:
-        result = run_generation(db, document_id, payload)
-    return result
+        try:
+            return run_generation(db, document_id, payload)
+        except Exception:
+            on_batch_failed(db, document_id, page=page_number)
+            raise

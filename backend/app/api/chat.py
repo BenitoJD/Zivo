@@ -17,6 +17,7 @@ from app.graphs.mcq_graph import grade_mcq_answer, try_grade_mcq_fast
 from app.models import Account, ChatMessage, ChatThread, Document, User
 from app.schemas.mcq import McqGradeRequest, McqGradeResponse
 from app.services.auth import get_optional_user, require_csrf_or_guest
+from app.services.chat_scope import normalize_chat_scope
 from app.services.embed import embed_query
 from app.services.llm_router import stream_chat_completion
 from app.services.prompts import get_prompt
@@ -190,7 +191,7 @@ def clear_thread(
     return {"version": new_version}
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_csrf_or_guest)])
 async def chat_stream(
     body: ChatRequest,
     request: Request,
@@ -229,12 +230,17 @@ async def chat_stream(
         .limit(_HISTORY_LIMIT)
         .all()
     )
-    prior = [{"role": m.role, "content": m.content} for m in history]
+    prior = [
+        {"role": m.role, "content": m.content}
+        for m in history
+        if (m.content or "").strip()
+    ]
 
     db.add(ChatMessage(thread_id=thread.id, role="user", content=body.message))
     db.commit()
 
-    doc_ids = _resolve_document_ids(db, doc.id, body.scope.mentions, user, guest_id)
+    scope = normalize_chat_scope(body.scope.model_dump(), doc)
+    doc_ids = _resolve_document_ids(db, doc.id, scope.get("mentions") or [], user, guest_id)
     if is_image_document(doc):
         retrieved = {"citations": [], "messages": prior, "context_block": "", "context_note": ""}
     else:
@@ -245,8 +251,8 @@ async def chat_stream(
             db,
             document_ids=doc_ids,
             query=body.message,
-            scope=body.scope.model_dump(),
-            mentions=body.scope.mentions,
+            scope=scope,
+            mentions=scope.get("mentions") or [],
             prior_messages=prior,
         )
     citations = retrieved.get("citations", [])
@@ -266,7 +272,9 @@ async def chat_stream(
         body.message,
         doc,
         include_image=include_image,
-        current_page=body.scope.current_page,
+        current_page=scope.get("current_page"),
+        page_start=scope.get("page_start"),
+        page_end=scope.get("page_end"),
     )
     trailer_parts: list[str] = []
     if context_block:
@@ -283,7 +291,7 @@ async def chat_stream(
     # the cached answer and skips the LLM call entirely.
     cache_eligible = (
         not include_image
-        and not body.scope.selection_text
+        and not scope.get("selection_text")
         and bool(citations)
         and len(doc_ids) == 1
     )
@@ -296,89 +304,94 @@ async def chat_stream(
             db,
             document_id=artifact_id,
             artifact_captured_at=artifact_captured_at,
-            scope=body.scope.model_dump(),
+            scope=scope,
             query_embedding=query_embedding,
         )
 
     async def event_generator() -> Any:
-        if cached:
-            # Replay cached answer as tokens, then sources/done. No LLM call.
-            full = cached["response_text"]
-            cache_citations = (cached.get("citations") or {}).get("sources", citations)
-            try:
-                for i in range(0, len(full), 8):
-                    yield {"event": "token", "data": json.dumps({"text": full[i : i + 8]})}
-                db.add(
-                    ChatMessage(
-                        thread_id=thread.id,
-                        role="assistant",
-                        content=full,
-                        citations={"sources": cache_citations},
-                    )
-                )
-                db.commit()
-                increment_message_count(db, user=user, request=request, demo_cookie=guest_id)
-                yield {"event": "sources", "data": json.dumps({"citations": cache_citations})}
-                yield {"event": "done", "data": "{}"}
-            except Exception as exc:
-                logger.exception("cached chat replay failed: %s", exc)
-                yield _stream_error_event("Tutor is busy. Try again.")
-            return
-
-        full = ""
-        error_text: str | None = None
-        # The request-scoped `db` is closed once the route returns, so persistence
-        # uses a fresh session dedicated to this stream's lifecycle.
+        # Request-scoped `db` may close before this generator finishes; use a
+        # dedicated session for all post-stream persistence.
         stream_db = SessionLocal()
         try:
-            async for token in stream_chat_completion(
-                messages,
-                stream_db,
-                model_id=body.model_id,
-                require_vision=include_image,
-            ):
-                full += token
-                yield {"event": "token", "data": json.dumps({"text": token})}
-            stream_db.add(
-                ChatMessage(
-                    thread_id=thread.id,
-                    role="assistant",
-                    content=full,
-                    citations={"sources": citations},
-                )
-            )
+            if cached:
+                full = cached["response_text"]
+                cache_citations = (cached.get("citations") or {}).get("sources", citations)
+                try:
+                    for i in range(0, len(full), 8):
+                        yield {"event": "token", "data": json.dumps({"text": full[i : i + 8]})}
+                    stream_db.add(
+                        ChatMessage(
+                            thread_id=thread.id,
+                            role="assistant",
+                            content=full,
+                            citations={"sources": cache_citations},
+                        )
+                    )
+                    stream_db.commit()
+                    increment_message_count(
+                        stream_db, user=user, request=request, demo_cookie=guest_id
+                    )
+                    yield {"event": "sources", "data": json.dumps({"citations": cache_citations})}
+                    yield {"event": "done", "data": "{}"}
+                except Exception as exc:
+                    logger.exception("cached chat replay failed: %s", exc)
+                    yield _stream_error_event("Tutor is busy. Try again.")
+                return
 
-            increment_message_count(db, user=user, request=request, demo_cookie=guest_id)
-            # Store for future cache hits (best-effort, never fail the turn).
-            if cache_eligible:
-                await asyncio.to_thread(
-                    store_response,
-                    db,
-                    document_id=artifact_id,
-                    artifact_captured_at=artifact_captured_at,
-                    scope=body.scope.model_dump(),
-                    query_embedding=query_embedding,
-                    response_text=full,
-                    citations=citations,
-                )
-            yield {"event": "sources", "data": json.dumps({"citations": citations})}
-            yield {"event": "done", "data": "{}"}
-        except Exception as exc:
-            error_text = "Tutor is busy. Try again."
-            logger.exception("chat stream failed: %s", exc)
+            full = ""
+            error_text: str | None = None
             try:
+                async for token in stream_chat_completion(
+                    messages,
+                    stream_db,
+                    model_id=body.model_id,
+                    require_vision=include_image,
+                ):
+                    full += token
+                    yield {"event": "token", "data": json.dumps({"text": token})}
+                if not full.strip():
+                    raise RuntimeError("empty model response")
                 stream_db.add(
                     ChatMessage(
                         thread_id=thread.id,
                         role="assistant",
-                        content=error_text,
-                        citations=None,
+                        content=full,
+                        citations={"sources": citations},
                     )
                 )
                 stream_db.commit()
-            except Exception:
-                logger.exception("failed to persist assistant error message")
-            yield _stream_error_event(error_text)
+                increment_message_count(
+                    stream_db, user=user, request=request, demo_cookie=guest_id
+                )
+                if cache_eligible:
+                    await asyncio.to_thread(
+                        store_response,
+                        stream_db,
+                        document_id=artifact_id,
+                        artifact_captured_at=artifact_captured_at,
+                        scope=scope,
+                        query_embedding=query_embedding,
+                        response_text=full,
+                        citations=citations,
+                    )
+                yield {"event": "sources", "data": json.dumps({"citations": citations})}
+                yield {"event": "done", "data": "{}"}
+            except Exception as exc:
+                error_text = "Tutor is busy. Try again."
+                logger.exception("chat stream failed: %s", exc)
+                try:
+                    stream_db.add(
+                        ChatMessage(
+                            thread_id=thread.id,
+                            role="assistant",
+                            content=error_text,
+                            citations=None,
+                        )
+                    )
+                    stream_db.commit()
+                except Exception:
+                    logger.exception("failed to persist assistant error message")
+                yield _stream_error_event(error_text)
         finally:
             stream_db.close()
 

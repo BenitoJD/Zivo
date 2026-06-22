@@ -1,0 +1,176 @@
+"""Page triage — agent estimates question budget and testable aspects."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import re
+import uuid
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from app.repositories.intel import update_activity
+from app.services.llm_router import complete_chat
+from app.services.prompts import get_prompt
+from app.services.question_pool import (
+    ABSOLUTE_MAX_QUESTIONS_PER_PAGE,
+    INITIAL_BATCH_SIZE,
+    on_triage_completed,
+    save_page_coverage,
+)
+from app.services.retrieval import fetch_chunks_for_page_range
+
+
+def run_page_triage(
+    db: Session,
+    document_id: uuid.UUID,
+    *,
+    page_number: int,
+    activity_id: str | None = None,
+) -> dict[str, Any]:
+    chunks = fetch_chunks_for_page_range(
+        db,
+        document_ids=[document_id],
+        page_start=page_number,
+        page_end=page_number,
+    )
+    page_text = "\n\n".join(c["text"] for c in chunks if c.get("text")).strip()
+    result = _triage_page(db, page_text=page_text, page_number=page_number)
+
+    save_page_coverage(
+        db,
+        document_id,
+        page=page_number,
+        question_budget=result["question_budget"],
+        aspects=result["aspects"],
+        rationale=result.get("rationale", ""),
+        triage_activity_id=activity_id,
+    )
+    on_triage_completed(db, document_id, page=page_number)
+
+    if activity_id:
+        update_activity(
+            db,
+            uuid.UUID(str(activity_id)),
+            status="succeeded",
+            stats={
+                "question_budget": result["question_budget"],
+                "aspects_count": len(result["aspects"]),
+                "page_number": page_number,
+            },
+            finished=True,
+        )
+    db.commit()
+    return result
+
+
+def _complete_chat_sync(db: Session, messages: list[dict]) -> str:
+    return asyncio.run(complete_chat(messages, db, log_tag="page_triage"))
+
+
+def _parse_triage_json(raw: str) -> dict[str, Any] | None:
+    if not raw or not raw.strip():
+        return None
+    text_block = raw.strip()
+    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text_block, re.DOTALL)
+    if fence:
+        text_block = fence.group(1)
+    else:
+        start = text_block.find("{")
+        end = text_block.rfind("}")
+        if start >= 0 and end > start:
+            text_block = text_block[start : end + 1]
+        else:
+            return None
+    try:
+        return json.loads(text_block)
+    except json.JSONDecodeError:
+        return None
+
+
+def _normalize_aspect(item: Any, index: int, page_number: int) -> dict[str, Any] | None:
+    if isinstance(item, str) and item.strip():
+        key = re.sub(r"[^a-z0-9]+", "-", item.strip().lower())[:48].strip("-") or f"aspect-{index}"
+        return {"key": key, "label": item.strip(), "asked": False, "answered": False}
+    if isinstance(item, dict):
+        label = (item.get("label") or item.get("name") or "").strip()
+        if not label:
+            return None
+        key = (item.get("key") or "").strip()
+        if not key:
+            key = re.sub(r"[^a-z0-9]+", "-", label.lower())[:48].strip("-") or f"aspect-{index}"
+        return {"key": key, "label": label, "asked": False, "answered": False}
+    return None
+
+
+def _fallback_triage(page_text: str, page_number: int) -> dict[str, Any]:
+    words = len(page_text.split()) if page_text else 0
+    paragraphs = [p.strip() for p in page_text.split("\n\n") if p.strip()] if page_text else []
+    aspect_count = max(3, min(50, len(paragraphs) or max(3, words // 120)))
+    budget = max(INITIAL_BATCH_SIZE, min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, aspect_count))
+    aspects = []
+    for i, para in enumerate(paragraphs[:budget]):
+        label = para[:120].replace("\n", " ")
+        aspects.append(
+            {
+                "key": f"page-{page_number}-p{i + 1}",
+                "label": label,
+                "asked": False,
+                "answered": False,
+            }
+        )
+    if not aspects:
+        aspects = [
+            {
+                "key": f"page-{page_number}-main",
+                "label": f"Main ideas on page {page_number}",
+                "asked": False,
+                "answered": False,
+            }
+        ]
+        budget = INITIAL_BATCH_SIZE
+    return {
+        "question_budget": budget,
+        "aspects": aspects,
+        "rationale": "Heuristic triage from page length.",
+    }
+
+
+def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, Any]:
+    excerpt = page_text[:14_000] if page_text else ""
+    if excerpt:
+        try:
+            system = get_prompt(db, "page_triage_system")
+            user = get_prompt(
+                db,
+                "page_triage_format",
+                page_number=page_number,
+                page_text=excerpt,
+            )
+            raw = _complete_chat_sync(
+                db,
+                [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            )
+            parsed = _parse_triage_json(raw)
+            if parsed:
+                budget = int(parsed.get("question_budget") or INITIAL_BATCH_SIZE)
+                budget = max(INITIAL_BATCH_SIZE, min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, budget))
+                aspects_raw = parsed.get("aspects") or []
+                aspects: list[dict[str, Any]] = []
+                for i, item in enumerate(aspects_raw):
+                    norm = _normalize_aspect(item, i + 1, page_number)
+                    if norm:
+                        aspects.append(norm)
+                if not aspects:
+                    return _fallback_triage(page_text, page_number)
+                if budget < len(aspects):
+                    budget = min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, len(aspects))
+                return {
+                    "question_budget": budget,
+                    "aspects": aspects[:budget],
+                    "rationale": (parsed.get("rationale") or "").strip(),
+                }
+        except Exception:
+            pass
+    return _fallback_triage(page_text, page_number)

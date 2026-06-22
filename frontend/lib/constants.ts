@@ -1,4 +1,6 @@
-export const STORAGE_LIMIT_BYTES = 100 * 1024 * 1024;
+export const GB_BYTES = 1024 * 1024 * 1024;
+export const STORAGE_LIMIT_BYTES = GB_BYTES;
+export const MAX_UPLOAD_BYTES = GB_BYTES;
 
 export const INDEXING_STAGES = [
   { min: 0, title: "Starting", detail: "Queuing your page range for processing" },

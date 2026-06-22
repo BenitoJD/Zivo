@@ -7,9 +7,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Account, ChatMessage, ChatThread, Document, DocumentChunk, Job, User
+from app.models import Account, Document, DocumentChunk, User
 from app.services.auth import get_current_user, get_optional_user, require_csrf, require_csrf_or_guest
 from app.services.document_create import create_document_record
+from app.services.document_purge import purge_document, purge_ingest_tmp
 from app.services.guest import can_access_document, document_owned_by_guest
 from app.services.guest_session import guest_session_for_read, optional_guest_session
 from app.services.jobs import enqueue_summarize
@@ -173,8 +174,6 @@ async def upload_document(
     data = await file.read()
     from app.services.document_create import create_document_record
 
-    if len(data) > 50 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="File too large (max 50MB)")
     ct = (file.content_type or "application/octet-stream").lower()
     if ct not in ALLOWED_TYPES:
         # Allow common raster image types only; reject SVG (script vector).
@@ -315,23 +314,16 @@ def delete_document(
     elif not document_owned_by_guest(doc, guest_id):
         raise HTTPException(status_code=404, detail="Not found")
 
-    artifact_id = doc.artifact_id or doc.id
-    thread_ids = [t.id for t in db.query(ChatThread.id).filter(ChatThread.artifact_id == artifact_id).all()]
-    if thread_ids:
-        db.query(ChatMessage).filter(ChatMessage.thread_id.in_(thread_ids)).delete(synchronize_session=False)
-        db.query(ChatThread).filter(ChatThread.id.in_(thread_ids)).delete(synchronize_session=False)
-    db.query(DocumentChunk).filter(DocumentChunk.document_id == document_id).delete(synchronize_session=False)
-    db.query(Job).filter(Job.payload["document_id"].astext == str(document_id)).delete(synchronize_session=False)
-    db.delete(doc)
+    storage_key = purge_document(db, doc)
     db.commit()
 
-    # Storage delete is best-effort — the DB row is already gone, so the
-    # user-visible operation succeeded. Log the failure so ops can clean up.
+    purge_ingest_tmp(document_id)
+
     try:
-        delete_object(doc.storage_key)
+        delete_object(storage_key)
     except Exception:
         logger.exception(
-            "failed to delete storage object for document %s (%s)", document_id, doc.storage_key
+            "failed to delete storage object for document %s (%s)", document_id, storage_key
         )
 
     return Response(status_code=204)

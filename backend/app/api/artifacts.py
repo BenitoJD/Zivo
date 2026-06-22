@@ -17,6 +17,7 @@ from app.services.auth import get_current_user, get_optional_user, require_csrf,
 from app.services.guest import can_access_document
 from app.services.guest_session import optional_guest_session
 from app.services.jobs import enqueue_ingest
+from app.services.question_pool import reset_for_new_page_range
 from app.services.storage import presigned_get_url
 
 router = APIRouter()
@@ -104,9 +105,7 @@ def confirm_page_range(
     if body.to_page > page_count:
         raise HTTPException(status_code=400, detail="Page range exceeds document")
     selected = {"from": body.from_page, "to": body.to_page}
-    meta = dict(doc.meta or {})
-    meta["selected_range"] = selected
-    doc.meta = meta
+    reset_for_new_page_range(db, doc, selected)
     doc.status = "indexing"
     captured = doc.artifact_captured_at or doc.created_at
     workspace_repo.upsert_workspace(

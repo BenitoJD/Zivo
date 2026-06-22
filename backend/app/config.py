@@ -7,6 +7,9 @@ _DEV_SECRET_KEYS = {"dev-secret-change-me"}
 _DEV_CSRF_SECRET = "dev-csrf-change-me"
 
 
+_GB = 1024 * 1024 * 1024
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=(".env", ".env.local"),
@@ -42,7 +45,8 @@ class Settings(BaseSettings):
     guest_document_limit: int = 1
     guest_message_limit: int = 30
     daily_message_limit: int = 100
-    storage_limit_bytes: int = 100 * 1024 * 1024
+    max_upload_bytes: int = _GB
+    storage_limit_bytes: int = _GB
 
     @field_validator("minio_public_secure", mode="before")
     @classmethod

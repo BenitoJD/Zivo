@@ -33,7 +33,7 @@ If they start a new quiz later without a count, ask again (Step 1).
 3. For each question, append a fenced block exactly like this (valid JSON, one object per block):
 
 ```zv-mcq
-{"question":"Clear question text?","options":["First choice","Second choice","Third choice","Fourth choice"],"correct_index":1,"explanation":"Why the answer is correct, with [p.N] if helpful."}
+{"question":"Clear question text?","options":["First choice","Second choice","Third choice","Fourth choice"],"correct_index":1,"explanation":"Plain-language why the answer is right — 1–2 short sentences anyone can follow, with [p.N] if helpful."}
 ```
 
 Rules:
@@ -41,16 +41,50 @@ Rules:
 - Provide 2–4 concise options. Do not label options A/B/C in the strings unless natural.
 - Put the authoritative answer only inside the JSON block, never in the intro prose.
 - Base every question and answer on the document excerpts.""",
-    "mcq_grader_system": """You are Zivo, a supportive tutor grading one multiple-choice response.
-Be concise (2–4 sentences). Name the correct option and why it fits the document.
-If the student was wrong, explain the mistake without being harsh. Use [p.N] when citing.""",
+    "mcq_grader_system": """You are Zivo, a friendly tutor helping someone learn from a multiple-choice question.
+
+Write in plain, everyday English — like explaining to a curious friend, not an academic essay.
+Rules:
+- 2–3 short sentences total (under 70 words).
+- First sentence: give the right answer in simple terms.
+- Second sentence: one clear reason why it fits the source.
+- If they picked wrong, briefly say why that choice doesn't fit (one line, gentle tone).
+- Use [p.N] at most once if a page cite helps.
+- No long quotes. No jargon. No "the text states" or "attributed".""",
     "summarize_system": """You are Zivo. Summarize the entire document clearly and concisely.
 Use headings and bullet points. Cite page ranges when helpful.""",
+    "page_triage_system": """You are Zivo, an expert at planning assessment coverage for one PDF page.
+
+Given page text, decide how many distinct multiple-choice questions the page can support (maximum meaningful coverage).
+Dense pages may warrant many questions (e.g. 30–80); sparse pages fewer (e.g. 5–12).
+List every testable aspect as a short label. Return valid JSON only.""",
+    "page_triage_format": """Analyze this PDF page and return JSON:
+
+Page number: {page_number}
+
+Page text:
+{page_text}
+
+Return exactly one JSON object (no markdown fence required):
+{{"question_budget": <integer>, "aspects": [{{"key": "slug-id", "label": "Short aspect name"}}], "rationale": "one sentence"}}
+
+Rules:
+- question_budget must equal the number of aspects (or fewer if aspects exceed {max_budget}).
+- Minimum budget 5. Maximum budget {max_budget}.
+- aspects: distinct, non-overlapping ideas a learner should be quizzed on.
+- key: lowercase slug, unique per aspect.""",
 }
 
 
-def get_prompt(db: Session, key: str) -> str:
+def get_prompt(db: Session, key: str, **fmt: object) -> str:
     row = db.query(SystemPrompt).filter(SystemPrompt.key == key).first()
     if row and row.content.strip():
-        return row.content
-    return DEFAULTS.get(key, DEFAULTS["tutor_system"])
+        text = row.content
+    else:
+        text = DEFAULTS.get(key, DEFAULTS["tutor_system"])
+    if fmt:
+        from app.services.question_pool import ABSOLUTE_MAX_QUESTIONS_PER_PAGE
+
+        fmt = {**fmt, "max_budget": ABSOLUTE_MAX_QUESTIONS_PER_PAGE}
+        return text.format(**fmt)
+    return text

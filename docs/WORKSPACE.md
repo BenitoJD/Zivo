@@ -5,9 +5,14 @@ UI is implemented with **Mantine** in `frontend/app/workspace/` — no custom co
 ## Learn mode (mobile-first)
 
 - **MCQ** hero fills the viewport
+- Meta bar: **Page N · Question X of Y** (Y = agent `question_budget` for that page)
 - Bottom tabs: MCQ · Source · Chat
 - Source/Chat open as full-height sheets
-- Mastery gate + **"I'm ready for the next page"** CTA
+- **Page = study unit** — triage agent sets how many questions the page supports (5–150)
+- Rolling prefetch: 5 questions initially, +5 when the learner finishes question 3 (and every 3rd answer until budget/coverage)
+- **Server resume** — `GET learn-queue` restores page, question number, and next assertion after reload
+- **Page complete** — brief interstitial, then auto-advance to the next page in the selected range
+- **Range complete** — after the last page in a range, choose the next page span from the same book (progress resets server-side)
 
 ## Desktop (`lg+`)
 

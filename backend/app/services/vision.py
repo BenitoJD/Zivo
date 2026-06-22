@@ -24,10 +24,18 @@ def build_user_message(
     *,
     include_image: bool,
     current_page: int | None = None,
+    page_start: int | None = None,
+    page_end: int | None = None,
 ) -> str | list[dict]:
     page_context = ""
     if current_page is not None and current_page > 0:
-        page_context = f"[The user is currently viewing page {current_page}.]\n\n"
+        if page_start is not None and page_end is not None and page_end != page_start:
+            page_context = (
+                f"[The user is studying page {current_page}. "
+                f"Use only pages {page_start}–{page_end} from the source.]\n\n"
+            )
+        else:
+            page_context = f"[The user is studying page {current_page}.]\n\n"
     if not include_image or not is_image_document(doc):
         return f"{page_context}{text}"
     return [
