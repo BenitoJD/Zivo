@@ -11,13 +11,11 @@ Use for local development on the Zivo monorepo.
 
 ```bash
 ./scripts/dev.sh setup          # ~/.venv/zivo + pip install
-./scripts/dev.sh start          # deps + alembic migrate + API on :8200
+./scripts/dev.sh start          # deps + migrate + API :8200 + Next.js :3000
 ./scripts/dev.sh stop
 ./scripts/dev.sh doctor
 ./scripts/dev.sh db migrate     # alembic upgrade head
 ./scripts/dev.sh db seed        # question vocab seeds
-
-cd frontend && npm install && npm run dev   # Next.js on :3000
 ```
 
 ## Layout
@@ -31,7 +29,7 @@ cd frontend && npm install && npm run dev   # Next.js on :3000
 | `frontend/app/` | Next.js App Router UI — **Mantine only** (no `components/`) |
 | `frontend/lib/` | API client, types, constants (not UI) |
 | `infra/k8s/` | Helm charts + prod values |
-| `logs/zivo-dev/` | API logs from `dev.sh start` |
+| `logs/zivo-dev/` | API, worker, and frontend logs from `dev.sh start` |
 
 ## Environment
 
@@ -61,7 +59,7 @@ If your local DB was created with the old `db schema` scripts and has no `alembi
 | postgres (pgvector) | `5455` |
 | minio | `9020` / `9021` |
 
-API and Next.js run **on the host**, not in compose.
+API, workers, and Next.js run **on the host** via `dev.sh start` (not in compose).
 
 ## Frontend UI
 

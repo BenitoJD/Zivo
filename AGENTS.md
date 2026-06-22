@@ -70,13 +70,13 @@ Python 3.12+, Node.js 22+, Docker (for Postgres + MinIO).
 
 ```bash
 ./scripts/dev.sh setup
-./scripts/dev.sh start              # API → http://127.0.0.1:8200
+./scripts/dev.sh start              # API + workers + Next.js (:8200, :3000)
 ./scripts/dev.sh db migrate        # alembic upgrade head
 ./scripts/dev.sh db seed           # question vocab seeds
 ./scripts/dev.sh doctor
 ./scripts/dev.sh stop
 
-cd frontend && npm install && npm run dev   # → http://localhost:3000
+cd frontend && npm run build && npm run lint
 ```
 
 ### Ports (local)
@@ -144,7 +144,6 @@ Workspace routes:
 - Shared shell (sidebar, add-source modal, auth modal) — `app/workspace/layout.tsx`
 
 ```bash
-cd frontend && npm install && npm run dev   # http://localhost:3000
 cd frontend && npm run build && npm run lint
 ```
 

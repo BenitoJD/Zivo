@@ -11,8 +11,10 @@ from pathlib import Path
 
 from .db import apply_schema, backend_env, python_bin
 from .deps import deps_status, start_deps
-from .env import BACKEND_DEFAULTS, BACKEND_DIR, ROOT, require_defaults
+from .env import BACKEND_DEFAULTS, BACKEND_DIR, FRONTEND_DIR, ROOT, require_defaults
 from .ports import allocate_backend_port
+
+FRONTEND_PORT = 3000
 
 VENV = Path.home() / ".venv" / "zivo"
 LOG_ROOT = ROOT / "logs" / "zivo-dev"
@@ -82,14 +84,29 @@ def pid_running(pid: int | None) -> bool:
         return False
 
 
+def _require_npm() -> str:
+    npm = shutil.which("npm")
+    if not npm:
+        raise RuntimeError("npm is required for the frontend. Install Node.js 22+.")
+    return npm
+
+
+def _ensure_frontend_deps(npm: str) -> None:
+    if not FRONTEND_DIR.is_dir():
+        raise RuntimeError(f"Missing frontend directory: {FRONTEND_DIR.relative_to(ROOT)}")
+    if not (FRONTEND_DIR / "node_modules").exists():
+        print("Installing frontend dependencies…")
+        run([npm, "install"], cwd=FRONTEND_DIR)
+
+
 def start(args: argparse.Namespace) -> int:
     require_defaults()
     if not (VENV / "bin" / "python").exists():
         raise RuntimeError("Run ./scripts/dev.sh setup first.")
 
     state = load_state()
-    if pid_running(state.get("api_pid")):
-        raise RuntimeError("API already running. Use ./scripts/dev.sh stop first.")
+    if pid_running(state.get("api_pid")) or pid_running(state.get("frontend_pid")):
+        raise RuntimeError("Dev stack already running. Use ./scripts/dev.sh stop first.")
 
     port = allocate_backend_port(args.port)
     start_deps()
@@ -143,16 +160,45 @@ def start(args: argparse.Namespace) -> int:
                 start_new_session=True,
             )
 
-    save_state({"api_pid": api_proc.pid, "api_port": port, "io_pid": io_proc.pid, "cpu_pid": cpu_proc.pid})
+    npm = _require_npm()
+    _ensure_frontend_deps(npm)
+    frontend_log = LOG_ROOT / "frontend.log"
+    frontend_env = {
+        **os.environ,
+        "API_PROXY_URL": f"http://127.0.0.1:{port}",
+    }
+    with frontend_log.open("ab") as fe_out:
+        frontend_proc = subprocess.Popen(
+            [npm, "run", "dev"],
+            cwd=FRONTEND_DIR,
+            env=frontend_env,
+            stdout=fe_out,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+    save_state(
+        {
+            "api_pid": api_proc.pid,
+            "api_port": port,
+            "io_pid": io_proc.pid,
+            "cpu_pid": cpu_proc.pid,
+            "frontend_pid": frontend_proc.pid,
+            "frontend_port": FRONTEND_PORT,
+        }
+    )
     print(f"API running at http://127.0.0.1:{port} (logs: {log_path.relative_to(ROOT)})")
     print(f"Workers: IO pid {io_proc.pid}, CPU pid {cpu_proc.pid}")
-    print("Frontend: cd frontend && npm run dev")
+    print(
+        f"Frontend at http://localhost:{FRONTEND_PORT} "
+        f"(logs: {frontend_log.relative_to(ROOT)}, proxy → :{port})"
+    )
     return 0
 
 
 def stop(_: argparse.Namespace) -> int:
     state = load_state()
-    for key in ("api_pid", "io_pid", "cpu_pid"):
+    for key in ("frontend_pid", "api_pid", "io_pid", "cpu_pid"):
         pid = state.get(key)
         if pid_running(pid):
             os.kill(pid, signal.SIGTERM)
