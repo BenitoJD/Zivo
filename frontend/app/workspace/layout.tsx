@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import {
   ActionIcon,
-  Anchor,
   AppShell,
   Burger,
   Button,
@@ -208,26 +207,28 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
           <AppShell.Section p="md" visibleFrom="sm">
             <Title order={4}>Question Better.</Title>
           </AppShell.Section>
-          <AppShell.Section grow component={ScrollArea} p="xs">
-            {documents.length === 0 ? (
-              <Text size="sm" c="dimmed" px="sm">
-                No sources yet. Add a PDF or article to start.
-              </Text>
-            ) : (
-              documents.map((d) => (
-                <NavLink
-                  key={d.id}
-                  label={d.filename.replace(/\.[^.]+$/, "")}
-                  description={d.status === "indexing" ? `Indexing ${d.index_progress}%` : d.status}
-                  leftSection={<IconFileText size={16} />}
-                  active={artifactId === d.id}
-                  onClick={() => {
-                    router.push(`/workspace/${d.id}`);
-                    if (isMobile) toggle();
-                  }}
-                />
-              ))
-            )}
+          <AppShell.Section grow p="xs">
+            <ScrollArea h="100%" type="auto">
+              {documents.length === 0 ? (
+                <Text size="sm" c="dimmed" px="sm">
+                  No sources yet. Add a PDF or article to start.
+                </Text>
+              ) : (
+                documents.map((d) => (
+                  <NavLink
+                    key={d.id}
+                    label={d.filename.replace(/\.[^.]+$/, "")}
+                    description={d.status === "indexing" ? `Indexing ${d.index_progress}%` : d.status}
+                    leftSection={<IconFileText size={16} />}
+                    active={artifactId === d.id}
+                    onClick={() => {
+                      router.push(`/workspace/${d.id}`);
+                      if (isMobile) toggle();
+                    }}
+                  />
+                ))
+              )}
+            </ScrollArea>
           </AppShell.Section>
           <AppShell.Section p="md">
             {username && (
@@ -295,15 +296,13 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
               loading={importBusy}
               maxFiles={1}
             >
-              <Group justify="center" gap="xs" mih={120} style={{ pointerEvents: "none" }}>
+              <Stack align="center" justify="center" gap="xs" mih={120}>
                 <IconUpload size={32} stroke={1.5} />
-                <Stack gap={0} align="center">
-                  <Text size="sm">Drop a file here or click to browse</Text>
-                  <Text size="xs" c="dimmed">
-                    PDF, Word, text, or image
-                  </Text>
-                </Stack>
-              </Group>
+                <Text size="sm">Drop a file here or click to browse</Text>
+                <Text size="xs" c="dimmed">
+                  PDF, Word, text, or image
+                </Text>
+              </Stack>
             </Dropzone>
           </Tabs.Panel>
           <Tabs.Panel value="url">
@@ -358,32 +357,31 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
         title={authMode === "login" ? "Sign in" : "Create account"}
         size="sm"
       >
-        <form onSubmit={authForm.onSubmit(submitAuth)}>
-          <Stack>
-            <TextInput label="Username" autoComplete="username" {...authForm.getInputProps("username")} />
-            <PasswordInput
-              label="Password"
-              autoComplete={authMode === "login" ? "current-password" : "new-password"}
-              {...authForm.getInputProps("password")}
-            />
-            {authError && (
-              <Text size="sm" c="red">
-                {authError}
-              </Text>
-            )}
-            <Button type="submit" loading={authSubmitting}>
-              {authMode === "login" ? "Sign in" : "Sign up"}
-            </Button>
-            <Anchor
-              component="button"
-              type="button"
-              size="sm"
-              onClick={() => setAuthMode(authMode === "login" ? "signup" : "login")}
-            >
-              {authMode === "login" ? "Need an account? Sign up" : "Have an account? Sign in"}
-            </Anchor>
-          </Stack>
-        </form>
+        <Stack>
+          <TextInput label="Username" autoComplete="username" {...authForm.getInputProps("username")} />
+          <PasswordInput
+            label="Password"
+            autoComplete={authMode === "login" ? "current-password" : "new-password"}
+            {...authForm.getInputProps("password")}
+          />
+          {authError && (
+            <Text size="sm" c="red">
+              {authError}
+            </Text>
+          )}
+          <Button
+            loading={authSubmitting}
+            onClick={() => {
+              if (authForm.validate().hasErrors) return;
+              void submitAuth(authForm.getValues());
+            }}
+          >
+            {authMode === "login" ? "Sign in" : "Sign up"}
+          </Button>
+          <Button variant="subtle" size="compact-sm" onClick={() => setAuthMode(authMode === "login" ? "signup" : "login")}>
+            {authMode === "login" ? "Need an account? Sign up" : "Have an account? Sign in"}
+          </Button>
+        </Stack>
       </Modal>
     </>
   );

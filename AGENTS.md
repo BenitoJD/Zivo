@@ -132,7 +132,7 @@ Deploy: GitHub → Actions → **Deploy Zivo** → Run workflow.
 | Rule | Detail |
 |------|--------|
 | **Where UI lives** | `frontend/app/` — pages and layouts (`layout.tsx`, `page.tsx`, `providers.tsx`) |
-| **Forbidden** | `frontend/components/`, custom CSS files, Tailwind, shadcn, hand-rolled UI primitives |
+| **Forbidden** | `frontend/components/`, custom CSS files, inline `style={}`, native HTML UI (`<form>`, `<button>`, etc.), Tailwind, shadcn |
 | **Allowed imports** | `@mantine/*`, `@tabler/icons-react` (Mantine’s icon set), `next/*`, `react` |
 | **Non-UI code** | `frontend/lib/` — API client, types, constants only |
 | **Theming** | `createTheme` in `app/providers.tsx` — Mantine theme API, not custom stylesheets |

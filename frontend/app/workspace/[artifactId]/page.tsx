@@ -4,9 +4,9 @@ import { use, useEffect, useState } from "react";
 import {
   Alert,
   Badge,
-  Box,
   Button,
   Center,
+  Grid,
   Group,
   Loader,
   NumberInput,
@@ -56,6 +56,13 @@ export default function WorkspaceArtifactPage({
   const pageCount = pages?.page_count ?? artifact?.meta?.page_count ?? 1;
   const safeTo = Math.min(pageTo, pageCount || 1);
   const safeFrom = Math.min(pageFrom, safeTo);
+
+  const stem =
+    mcqLoading
+      ? "Loading questions…"
+      : queue && !queue.current_assertion_id
+        ? "Questions will appear once indexing finishes."
+        : question;
 
   useEffect(() => {
     void ensureGuestSession();
@@ -164,123 +171,6 @@ export default function WorkspaceArtifactPage({
     }
   }
 
-  const stem =
-    mcqLoading
-      ? "Loading questions…"
-      : queue && !queue.current_assertion_id
-        ? "Questions will appear once indexing finishes."
-        : question;
-
-  const mcqBlock = (
-    <Paper p="md" withBorder h="100%">
-      <Stack gap="md">
-        {mode === "learn" && queue && (
-          <Group gap="xs">
-            <Badge variant="light">Concepts: {queue.concepts.length}</Badge>
-            <Badge variant="light" color={queue.page_mastered ? "green" : "gray"}>
-              Page mastered: {queue.page_mastered ? "yes" : "no"}
-            </Badge>
-          </Group>
-        )}
-        <Title order={4}>{stem}</Title>
-        <Radio.Group value={selected} onChange={setSelected}>
-          <Stack gap="xs">
-            {options.map((opt, i) => (
-              <Radio
-                key={i}
-                value={String(i)}
-                label={
-                  <Text size="sm">
-                    <Text span fw={600} mr="xs">
-                      {i + 1}.
-                    </Text>
-                    {opt}
-                  </Text>
-                }
-              />
-            ))}
-          </Stack>
-        </Radio.Group>
-        {feedback && (
-          <Alert variant="light" color={feedback.includes("Correct") ? "green" : "blue"}>
-            {feedback}
-          </Alert>
-        )}
-        <Group>
-          <Button onClick={() => void submitMcq()} disabled={selected === null}>
-            Submit
-          </Button>
-          {queue?.page_mastered && !queue.page_ready && (
-            <Button
-              variant="light"
-              onClick={() =>
-                apiPost(`/api/artifacts/${artifactId}/pages/1/advance`, {}).then(() =>
-                  apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`).then(setQueue),
-                )
-              }
-            >
-              I&apos;m ready for the next page
-            </Button>
-          )}
-        </Group>
-      </Stack>
-    </Paper>
-  );
-
-  const sourceBlock = (
-    <Paper p="md" withBorder h="100%">
-      <Title order={5} mb="sm">
-        Source
-      </Title>
-      <Text size="sm" c="dimmed">
-        Artifact {artifactId} — PDF / code viewer mounts here.
-      </Text>
-    </Paper>
-  );
-
-  const chatBlock = (
-    <Paper p="md" withBorder h="100%" style={{ display: "flex", flexDirection: "column" }}>
-      <Title order={5} mb="sm">
-        Tutor
-      </Title>
-      <ScrollArea style={{ flex: 1 }} offsetScrollbars>
-        <Stack gap="sm" pb="sm">
-          {chatMessages.length === 0 && (
-            <Text size="sm" c="dimmed">
-              Ask about the current page or question.
-            </Text>
-          )}
-          {chatMessages.map((m, i) => (
-            <Paper key={i} p="sm" radius="md" bg={m.role === "user" ? "blue.9" : "dark.6"}>
-              <Text size="sm">{m.content}</Text>
-            </Paper>
-          ))}
-        </Stack>
-      </ScrollArea>
-      <Group align="flex-end" mt="sm" gap="xs">
-        <Textarea
-          placeholder="Ask about the current question…"
-          value={chatInput}
-          onChange={(e) => setChatInput(e.currentTarget.value)}
-          disabled={chatBusy}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              void sendChat();
-            }
-          }}
-          autosize
-          minRows={1}
-          maxRows={4}
-          style={{ flex: 1 }}
-        />
-        <Button onClick={() => void sendChat()} disabled={chatBusy || !chatInput.trim()}>
-          Send
-        </Button>
-      </Group>
-    </Paper>
-  );
-
   if (setupError && !artifact) {
     return (
       <Center mih="50vh">
@@ -309,21 +199,18 @@ export default function WorkspaceArtifactPage({
             </Text>
             <SimpleGrid cols={{ base: 6, sm: 8, md: 10 }} spacing="xs">
               {Array.from({ length: pageCount }, (_, i) => i + 1).map((p) => (
-                <Paper
+                <Button
                   key={p}
-                  component="button"
-                  type="button"
-                  p="xs"
-                  withBorder
-                  bg={p >= safeFrom && p <= safeTo ? "blue.9" : undefined}
-                  style={{ cursor: "pointer", textAlign: "center" }}
+                  variant={p >= safeFrom && p <= safeTo ? "filled" : "light"}
+                  size="compact-sm"
+                  fullWidth
                   onClick={() => {
                     if (p < safeFrom) setPageFrom(p);
                     else setPageTo(p);
                   }}
                 >
                   {p}
-                </Paper>
+                </Button>
               ))}
             </SimpleGrid>
             <Group grow>
@@ -355,60 +242,279 @@ export default function WorkspaceArtifactPage({
     );
   }
 
-  const modeControl = (
-    <SegmentedControl
-      value={mode}
-      onChange={(v) => setMode(v as "learn" | "test")}
-      data={[
-        { label: "Learn", value: "learn" },
-        { label: "Test", value: "test" },
-      ]}
-    />
-  );
-
-  if (mode === "test") {
-    return (
-      <Stack gap="md" h="100%">
-        {modeControl}
-        {mcqBlock}
-      </Stack>
-    );
-  }
-
-  if (isLg) {
-    return (
-      <Stack gap="md" h="calc(100dvh - 2rem)">
-        <Group>{modeControl}</Group>
-        <Group align="stretch" gap="md" style={{ flex: 1, minHeight: 0 }}>
-          <Box style={{ flex: 1, minWidth: 0, overflow: "auto" }}>{mcqBlock}</Box>
-          <Stack gap="md" style={{ flex: 1, minWidth: 0, minHeight: 0 }}>
-            <Box style={{ flex: 1, minHeight: 0, overflow: "auto" }}>{sourceBlock}</Box>
-            <Box style={{ flex: 1, minHeight: 0, overflow: "auto" }}>{chatBlock}</Box>
-          </Stack>
-        </Group>
-      </Stack>
-    );
-  }
-
   return (
     <Stack gap="md" h="calc(100dvh - 2rem)">
-      {modeControl}
-      <Tabs defaultValue="mcq" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
-        <Tabs.List grow>
-          <Tabs.Tab value="mcq">MCQ</Tabs.Tab>
-          <Tabs.Tab value="source">Source</Tabs.Tab>
-          <Tabs.Tab value="chat">Chat</Tabs.Tab>
-        </Tabs.List>
-        <Tabs.Panel value="mcq" pt="md" style={{ flex: 1, overflow: "auto" }}>
-          {mcqBlock}
-        </Tabs.Panel>
-        <Tabs.Panel value="source" pt="md" style={{ flex: 1, overflow: "auto" }}>
-          {sourceBlock}
-        </Tabs.Panel>
-        <Tabs.Panel value="chat" pt="md" style={{ flex: 1, overflow: "auto" }}>
-          {chatBlock}
-        </Tabs.Panel>
-      </Tabs>
+      <SegmentedControl
+        value={mode}
+        onChange={(v) => setMode(v as "learn" | "test")}
+        data={[
+          { label: "Learn", value: "learn" },
+          { label: "Test", value: "test" },
+        ]}
+      />
+
+      {mode === "test" && (
+        <Paper p="md" withBorder h="100%">
+          <Stack gap="md">
+            <Title order={4}>{stem}</Title>
+            <Radio.Group value={selected} onChange={setSelected}>
+              <Stack gap="xs">
+                {options.map((opt, i) => (
+                  <Radio
+                    key={i}
+                    value={String(i)}
+                    label={
+                      <Text size="sm">
+                        <Text span fw={600} mr="xs">
+                          {i + 1}.
+                        </Text>
+                        {opt}
+                      </Text>
+                    }
+                  />
+                ))}
+              </Stack>
+            </Radio.Group>
+            {feedback && (
+              <Alert variant="light" color={feedback.includes("Correct") ? "green" : "blue"}>
+                {feedback}
+              </Alert>
+            )}
+            <Button onClick={() => void submitMcq()} disabled={selected === null}>
+              Submit
+            </Button>
+          </Stack>
+        </Paper>
+      )}
+
+      {mode === "learn" && isLg && (
+        <Grid flex={1} mih={0} gap="md">
+          <Grid.Col span={6}>
+            <Paper p="md" withBorder h="100%">
+              <Stack gap="md">
+                {queue && (
+                  <Group gap="xs">
+                    <Badge variant="light">Concepts: {queue.concepts.length}</Badge>
+                    <Badge variant="light" color={queue.page_mastered ? "green" : "gray"}>
+                      Page mastered: {queue.page_mastered ? "yes" : "no"}
+                    </Badge>
+                  </Group>
+                )}
+                <Title order={4}>{stem}</Title>
+                <Radio.Group value={selected} onChange={setSelected}>
+                  <Stack gap="xs">
+                    {options.map((opt, i) => (
+                      <Radio
+                        key={i}
+                        value={String(i)}
+                        label={
+                          <Text size="sm">
+                            <Text span fw={600} mr="xs">
+                              {i + 1}.
+                            </Text>
+                            {opt}
+                          </Text>
+                        }
+                      />
+                    ))}
+                  </Stack>
+                </Radio.Group>
+                {feedback && (
+                  <Alert variant="light" color={feedback.includes("Correct") ? "green" : "blue"}>
+                    {feedback}
+                  </Alert>
+                )}
+                <Group>
+                  <Button onClick={() => void submitMcq()} disabled={selected === null}>
+                    Submit
+                  </Button>
+                  {queue?.page_mastered && !queue.page_ready && (
+                    <Button
+                      variant="light"
+                      onClick={() =>
+                        apiPost(`/api/artifacts/${artifactId}/pages/1/advance`, {}).then(() =>
+                          apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`).then(setQueue),
+                        )
+                      }
+                    >
+                      I&apos;m ready for the next page
+                    </Button>
+                  )}
+                </Group>
+              </Stack>
+            </Paper>
+          </Grid.Col>
+          <Grid.Col span={6}>
+            <Stack h="100%" gap="md">
+              <Paper p="md" withBorder flex={1}>
+                <Title order={5} mb="sm">
+                  Source
+                </Title>
+                <Text size="sm" c="dimmed">
+                  Artifact {artifactId} — PDF / code viewer mounts here.
+                </Text>
+              </Paper>
+              <Paper p="md" withBorder flex={1}>
+                <Stack h="100%" gap="sm">
+                  <Title order={5}>Tutor</Title>
+                  <ScrollArea flex={1} offsetScrollbars>
+                    <Stack gap="sm" pb="sm">
+                      {chatMessages.length === 0 && (
+                        <Text size="sm" c="dimmed">
+                          Ask about the current page or question.
+                        </Text>
+                      )}
+                      {chatMessages.map((m, i) => (
+                        <Paper key={i} p="sm" radius="md" bg={m.role === "user" ? "blue.9" : "dark.6"}>
+                          <Text size="sm">{m.content}</Text>
+                        </Paper>
+                      ))}
+                    </Stack>
+                  </ScrollArea>
+                  <Group align="flex-end" wrap="nowrap" gap="xs">
+                    <Textarea
+                      flex={1}
+                      placeholder="Ask about the current question…"
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.currentTarget.value)}
+                      disabled={chatBusy}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          void sendChat();
+                        }
+                      }}
+                      autosize
+                      minRows={1}
+                      maxRows={4}
+                    />
+                    <Button onClick={() => void sendChat()} disabled={chatBusy || !chatInput.trim()}>
+                      Send
+                    </Button>
+                  </Group>
+                </Stack>
+              </Paper>
+            </Stack>
+          </Grid.Col>
+        </Grid>
+      )}
+
+      {mode === "learn" && !isLg && (
+        <Tabs defaultValue="mcq" flex={1} mih={0}>
+          <Tabs.List grow>
+            <Tabs.Tab value="mcq">MCQ</Tabs.Tab>
+            <Tabs.Tab value="source">Source</Tabs.Tab>
+            <Tabs.Tab value="chat">Chat</Tabs.Tab>
+          </Tabs.List>
+          <Tabs.Panel value="mcq" pt="md">
+            <Paper p="md" withBorder>
+              <Stack gap="md">
+                {queue && (
+                  <Group gap="xs">
+                    <Badge variant="light">Concepts: {queue.concepts.length}</Badge>
+                    <Badge variant="light" color={queue.page_mastered ? "green" : "gray"}>
+                      Page mastered: {queue.page_mastered ? "yes" : "no"}
+                    </Badge>
+                  </Group>
+                )}
+                <Title order={4}>{stem}</Title>
+                <Radio.Group value={selected} onChange={setSelected}>
+                  <Stack gap="xs">
+                    {options.map((opt, i) => (
+                      <Radio
+                        key={i}
+                        value={String(i)}
+                        label={
+                          <Text size="sm">
+                            <Text span fw={600} mr="xs">
+                              {i + 1}.
+                            </Text>
+                            {opt}
+                          </Text>
+                        }
+                      />
+                    ))}
+                  </Stack>
+                </Radio.Group>
+                {feedback && (
+                  <Alert variant="light" color={feedback.includes("Correct") ? "green" : "blue"}>
+                    {feedback}
+                  </Alert>
+                )}
+                <Group>
+                  <Button onClick={() => void submitMcq()} disabled={selected === null}>
+                    Submit
+                  </Button>
+                  {queue?.page_mastered && !queue.page_ready && (
+                    <Button
+                      variant="light"
+                      onClick={() =>
+                        apiPost(`/api/artifacts/${artifactId}/pages/1/advance`, {}).then(() =>
+                          apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`).then(setQueue),
+                        )
+                      }
+                    >
+                      I&apos;m ready for the next page
+                    </Button>
+                  )}
+                </Group>
+              </Stack>
+            </Paper>
+          </Tabs.Panel>
+          <Tabs.Panel value="source" pt="md">
+            <Paper p="md" withBorder>
+              <Title order={5} mb="sm">
+                Source
+              </Title>
+              <Text size="sm" c="dimmed">
+                Artifact {artifactId} — PDF / code viewer mounts here.
+              </Text>
+            </Paper>
+          </Tabs.Panel>
+          <Tabs.Panel value="chat" pt="md">
+            <Paper p="md" withBorder>
+              <Stack gap="sm">
+                <Title order={5}>Tutor</Title>
+                <ScrollArea h={280} offsetScrollbars>
+                  <Stack gap="sm" pb="sm">
+                    {chatMessages.length === 0 && (
+                      <Text size="sm" c="dimmed">
+                        Ask about the current page or question.
+                      </Text>
+                    )}
+                    {chatMessages.map((m, i) => (
+                      <Paper key={i} p="sm" radius="md" bg={m.role === "user" ? "blue.9" : "dark.6"}>
+                        <Text size="sm">{m.content}</Text>
+                      </Paper>
+                    ))}
+                  </Stack>
+                </ScrollArea>
+                <Group align="flex-end" wrap="nowrap" gap="xs">
+                  <Textarea
+                    flex={1}
+                    placeholder="Ask about the current question…"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.currentTarget.value)}
+                    disabled={chatBusy}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        void sendChat();
+                      }
+                    }}
+                    autosize
+                    minRows={1}
+                    maxRows={4}
+                  />
+                  <Button onClick={() => void sendChat()} disabled={chatBusy || !chatInput.trim()}>
+                    Send
+                  </Button>
+                </Group>
+              </Stack>
+            </Paper>
+          </Tabs.Panel>
+        </Tabs>
+      )}
     </Stack>
   );
 }
