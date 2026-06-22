@@ -36,6 +36,16 @@ export function setCsrfToken(token: string | null) {
   csrfToken = token;
 }
 
+export async function apiFetchBytes(path: string): Promise<ArrayBuffer> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
+    headers: buildHeaders(),
+  });
+  captureResponseMeta(res);
+  if (!res.ok) throw new Error(await res.text());
+  return res.arrayBuffer();
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     credentials: "include",

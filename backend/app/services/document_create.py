@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.models import Account, Document, User
 from app.services.jobs import enqueue_ingest
+from app.services.parse import count_pdf_pages
 from app.services.storage import save_upload, slugify_filename
 
 
@@ -104,6 +105,10 @@ def create_document_record(
     doc_meta: dict = dict(meta or {})
     if doc_guest_id:
         doc_meta["guest_id"] = doc_guest_id
+
+    ct_lower = (content_type or "").lower()
+    if "pdf" in ct_lower or data[:4] == b"%PDF":
+        doc_meta["page_count"] = count_pdf_pages(data)
 
     doc = Document(
         account_id=user.id if user else None,

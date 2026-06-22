@@ -29,6 +29,11 @@ def _parse_pdf(data: bytes) -> list[dict]:
     return pages or [{"page": 1, "text": ""}]
 
 
+def count_pdf_pages(data: bytes) -> int:
+    with fitz.open(stream=data, filetype="pdf") as doc:
+        return max(1, doc.page_count)
+
+
 def _parse_docx(data: bytes) -> list[dict]:
     doc = DocxDocument(io.BytesIO(data))
     paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]

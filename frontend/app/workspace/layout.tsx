@@ -1,9 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  ActionIcon,
   AppShell,
   Burger,
   Button,
@@ -14,6 +13,7 @@ import {
   Progress,
   ScrollArea,
   Stack,
+  Switch,
   Tabs,
   Text,
   Textarea,
@@ -23,12 +23,33 @@ import {
 } from "@mantine/core";
 import { Dropzone, MIME_TYPES } from "@mantine/dropzone";
 import { useForm } from "@mantine/form";
-import { useDisclosure, useMediaQuery } from "@mantine/hooks";
+import { useDisclosure, useMediaQuery, useMounted } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
 import { IconFileText, IconLink, IconLogin, IconMoon, IconSun, IconUpload } from "@tabler/icons-react";
 import { apiGet, apiPost, apiPostForm, ensureGuestSession, setCsrfToken } from "@/lib/api/client";
 import { STORAGE_LIMIT_BYTES } from "@/lib/constants";
 import type { SourceDocument } from "@/lib/types";
+
+/** Frosted backdrop: blurred content behind modal + dark tint (premium, not flat opaque). */
+const MODAL_OVERLAY_PROPS = {
+  color: "#000",
+  backgroundOpacity: 0.65,
+  blur: 6,
+} as const;
+
+type WorkspaceShellContextValue = {
+  openAddSource: () => void;
+};
+
+const WorkspaceShellContext = createContext<WorkspaceShellContextValue | null>(null);
+
+export function useWorkspaceShell() {
+  const ctx = useContext(WorkspaceShellContext);
+  if (!ctx) {
+    throw new Error("useWorkspaceShell must be used within WorkspaceLayout");
+  }
+  return ctx;
+}
 
 export default function WorkspaceLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -36,7 +57,9 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   const artifactId = pathname.startsWith("/workspace/") ? pathname.split("/")[2] : undefined;
   const [opened, { toggle }] = useDisclosure();
   const isMobile = useMediaQuery("(max-width: 48em)");
+  const mounted = useMounted();
   const { colorScheme, toggleColorScheme } = useMantineColorScheme();
+  const isDark = mounted ? colorScheme === "dark" : true;
 
   const [addOpen, setAddOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
@@ -191,7 +214,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <>
+    <WorkspaceShellContext.Provider value={{ openAddSource: () => setAddOpen(true) }}>
       <AppShell
         header={{ height: { base: 48, sm: 0 } }}
         navbar={{ width: 280, breakpoint: "sm", collapsed: { mobile: !opened } }}
@@ -242,22 +265,33 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
                 <Progress value={storagePct} size="sm" />
               </Stack>
             )}
+            <Switch
+              size="md"
+              checked={isDark}
+              onChange={() => toggleColorScheme()}
+              onLabel={<IconMoon size={14} stroke={2.5} />}
+              offLabel={<IconSun size={14} stroke={2.5} />}
+              label={isDark ? "Dark mode" : "Light mode"}
+              labelPosition="left"
+              aria-label={isDark ? "Dark mode on. Switch to light mode" : "Light mode on. Switch to dark mode"}
+              mb="sm"
+              styles={{
+                body: { justifyContent: "space-between", width: "100%" },
+              }}
+            />
             <Button
               fullWidth
+              variant="white"
+              c="dark.9"
               leftSection={<IconUpload size={16} />}
               onClick={() => setAddOpen(true)}
               mb="sm"
             >
               Add source
             </Button>
-            <Group>
-              <ActionIcon variant="default" onClick={() => toggleColorScheme()} aria-label="Toggle theme">
-                {colorScheme === "dark" ? <IconSun size={16} /> : <IconMoon size={16} />}
-              </ActionIcon>
-              <Button variant="subtle" leftSection={<IconLogin size={16} />} onClick={() => setAuthOpen(true)}>
-                {username ? `@${username}` : "Sign in"}
-              </Button>
-            </Group>
+            <Button variant="subtle" fullWidth leftSection={<IconLogin size={16} />} onClick={() => setAuthOpen(true)}>
+              {username ? `@${username}` : "Sign in"}
+            </Button>
           </AppShell.Section>
         </AppShell.Navbar>
         <AppShell.Main>{children}</AppShell.Main>
@@ -268,6 +302,8 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
         onClose={() => !importBusy && setAddOpen(false)}
         title="Add to library"
         size="lg"
+        centered
+        overlayProps={MODAL_OVERLAY_PROPS}
         closeOnClickOutside={!importBusy}
         closeOnEscape={!importBusy}
       >
@@ -356,6 +392,8 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
         onClose={() => setAuthOpen(false)}
         title={authMode === "login" ? "Sign in" : "Create account"}
         size="sm"
+        centered
+        overlayProps={MODAL_OVERLAY_PROPS}
       >
         <Stack>
           <TextInput label="Username" autoComplete="username" {...authForm.getInputProps("username")} />
@@ -383,6 +421,6 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
           </Button>
         </Stack>
       </Modal>
-    </>
+    </WorkspaceShellContext.Provider>
   );
 }

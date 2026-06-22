@@ -35,6 +35,7 @@ class ArtifactOut(BaseModel):
     filename: str
     content_type: str
     status: str
+    index_progress: int = 0
     meta: dict = {}
     ingest_kind: str | None = None
 
@@ -65,6 +66,7 @@ def get_artifact(
         filename=doc.filename,
         content_type=doc.content_type,
         status=doc.status,
+        index_progress=doc.index_progress or 0,
         meta=doc.meta or {},
         ingest_kind=(doc.meta or {}).get("ingest_kind"),
     )

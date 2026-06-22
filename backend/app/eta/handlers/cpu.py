@@ -26,6 +26,9 @@ def parse_document_job(payload: dict) -> dict:
             return {"document_id": str(document_id), "image": True}
 
         pages = parse_document(doc.content_type, raw)
+        meta = dict(doc.meta or {})
+        meta["page_count"] = len(pages)
+        doc.meta = meta
         put_json(ingest_tmp_key(document_id, "pages"), {"pages": pages})
         doc.index_progress = 30
         db.commit()

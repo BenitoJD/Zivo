@@ -11,12 +11,16 @@ export type SourceDocument = {
 export type ArtifactMeta = {
   id: string;
   status: string;
+  index_progress?: number;
+  filename?: string;
+  content_type?: string;
   meta?: { selected_range?: { from: number; to: number }; page_count?: number };
 };
 
 export type PagesInfo = {
   page_count: number;
   status: string;
+  presigned_url?: string | null;
 };
 
 export type McqState = {
