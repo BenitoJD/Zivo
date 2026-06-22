@@ -58,8 +58,11 @@ def persist_document_index(
     if not chunks:
         doc = db.get(Document, document_id)
         if doc:
-            doc.status = "failed"
-            doc.index_progress = 0
+            meta = dict(doc.meta or {})
+            meta["no_searchable_text"] = True
+            doc.meta = meta
+            doc.status = "ready"
+            doc.index_progress = 100
         db.commit()
         return 0
 

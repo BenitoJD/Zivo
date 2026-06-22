@@ -26,6 +26,11 @@ def parse_document_job(payload: dict) -> dict:
             return {"document_id": str(document_id), "image": True}
 
         pages = parse_document(doc.content_type, raw)
+        selected = (doc.meta or {}).get("selected_range")
+        if selected:
+            page_from = int(selected.get("from", 1))
+            page_to = int(selected.get("to", page_from))
+            pages = [p for p in pages if page_from <= int(p.get("page", 0)) <= page_to]
         meta = dict(doc.meta or {})
         meta["page_count"] = len(pages)
         doc.meta = meta

@@ -1,10 +1,40 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8200";
+/** Same-origin in dev (Next rewrites → API). Set NEXT_PUBLIC_API_URL in production. */
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 const GUEST_HEADER = "X-Zivo-Guest-Id";
 const CSRF_HEADER = "X-CSRF-Token";
 
 let csrfToken: string | null = null;
 let guestId: string | null = null;
+
+const ARTIFACT_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function isArtifactId(value: string | undefined | null): value is string {
+  return typeof value === "string" && value !== "undefined" && ARTIFACT_ID_RE.test(value);
+}
+
+async function readApiError(res: Response): Promise<string> {
+  const text = await res.text();
+  try {
+    const body = JSON.parse(text) as { detail?: unknown };
+    if (typeof body.detail === "string") return body.detail;
+    if (Array.isArray(body.detail)) {
+      const messages = body.detail
+        .map((item) => {
+          if (typeof item === "object" && item !== null && "msg" in item) {
+            return String((item as { msg?: string }).msg ?? "");
+          }
+          return "";
+        })
+        .filter(Boolean);
+      if (messages.length) return messages.join("; ");
+    }
+  } catch {
+    /* keep raw text */
+  }
+  return text;
+}
 
 function captureResponseMeta(res: Response) {
   const headerGuest = res.headers.get(GUEST_HEADER);
@@ -42,7 +72,7 @@ export async function apiFetchBytes(path: string): Promise<ArrayBuffer> {
     headers: buildHeaders(),
   });
   captureResponseMeta(res);
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw new Error(await readApiError(res));
   return res.arrayBuffer();
 }
 
@@ -52,7 +82,7 @@ export async function apiGet<T>(path: string): Promise<T> {
     headers: buildHeaders(),
   });
   captureResponseMeta(res);
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw new Error(await readApiError(res));
   return res.json() as Promise<T>;
 }
 
@@ -64,7 +94,7 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   captureResponseMeta(res);
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw new Error(await readApiError(res));
   return res.json() as Promise<T>;
 }
 
@@ -76,7 +106,7 @@ export async function apiPostForm<T>(path: string, form: FormData): Promise<T> {
     body: form,
   });
   captureResponseMeta(res);
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw new Error(await readApiError(res));
   return res.json() as Promise<T>;
 }
 
@@ -95,7 +125,7 @@ export async function apiPostSSE(
     body: JSON.stringify(body),
   });
   captureResponseMeta(res);
-  if (!res.ok || !res.body) throw new Error(await res.text().catch(() => "SSE failed"));
+  if (!res.ok || !res.body) throw new Error(await readApiError(res).catch(() => "SSE failed"));
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();

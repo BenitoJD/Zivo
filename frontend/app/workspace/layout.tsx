@@ -25,17 +25,18 @@ import { Dropzone, MIME_TYPES } from "@mantine/dropzone";
 import { useForm } from "@mantine/form";
 import { useDisclosure, useMediaQuery, useMounted } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
-import { IconFileText, IconLink, IconLogin, IconMoon, IconSun, IconUpload } from "@tabler/icons-react";
-import { apiGet, apiPost, apiPostForm, ensureGuestSession, setCsrfToken } from "@/lib/api/client";
+import { IconFileText, IconLink, IconLogin, IconMoon, IconSun, IconUpload, IconX } from "@tabler/icons-react";
+import { apiGet, apiPost, apiPostForm, ensureGuestSession, isArtifactId, setCsrfToken } from "@/lib/api/client";
 import { STORAGE_LIMIT_BYTES } from "@/lib/constants";
 import type { SourceDocument } from "@/lib/types";
 
-/** Frosted backdrop: blurred content behind modal + dark tint (premium, not flat opaque). */
+/** Frosted backdrop for modals. */
 const MODAL_OVERLAY_PROPS = {
-  color: "#000",
-  backgroundOpacity: 0.65,
-  blur: 6,
+  backgroundOpacity: 0.55,
+  blur: 4,
 } as const;
+
+type AddSourceTab = "file" | "url" | "paste" | "github";
 
 type WorkspaceShellContextValue = {
   openAddSource: () => void;
@@ -70,6 +71,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   const [importPaste, setImportPaste] = useState("");
   const [importGithub, setImportGithub] = useState("");
   const [importBusy, setImportBusy] = useState(false);
+  const [addSourceTab, setAddSourceTab] = useState<AddSourceTab>("file");
 
   const [authMode, setAuthMode] = useState<"login" | "signup">("login");
   const [authError, setAuthError] = useState("");
@@ -124,7 +126,15 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
     Math.round((documents.reduce((s, d) => s + d.size_bytes, 0) / STORAGE_LIMIT_BYTES) * 100),
   );
 
-  function onUploaded(id: string) {
+  function onUploaded(id: string | undefined) {
+    if (!isArtifactId(id)) {
+      notifications.show({
+        title: "Could not open source",
+        message: "Upload finished without a valid document id. Try again from the library.",
+        color: "red",
+      });
+      return;
+    }
     void loadDocs();
     router.push(`/workspace/${id}`);
   }
@@ -241,7 +251,13 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
                   <NavLink
                     key={d.id}
                     label={d.filename.replace(/\.[^.]+$/, "")}
-                    description={d.status === "indexing" ? `Indexing ${d.index_progress}%` : d.status}
+                    description={
+                      d.status === "indexing"
+                        ? `Indexing ${d.index_progress}%`
+                        : d.status === "pending"
+                          ? "Choose pages"
+                          : d.status
+                    }
                     leftSection={<IconFileText size={16} />}
                     active={artifactId === d.id}
                     onClick={() => {
@@ -307,41 +323,60 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
         closeOnClickOutside={!importBusy}
         closeOnEscape={!importBusy}
       >
-        <Text size="sm" c="dimmed" mb="md">
+        <Text size="sm" c="dimmed" mb="lg">
           Upload a file, import a link, or paste notes to generate practice questions.
         </Text>
-        <Tabs defaultValue="file">
-          <Tabs.List mb="md">
-            <Tabs.Tab value="file" leftSection={<IconUpload size={14} />}>
+        <Tabs
+          value={addSourceTab}
+          onChange={(value) => value && setAddSourceTab(value as AddSourceTab)}
+          keepMounted={false}
+        >
+          <Tabs.List grow mb="md">
+            <Tabs.Tab value="file" leftSection={<IconUpload size={16} />}>
               File
             </Tabs.Tab>
-            <Tabs.Tab value="url" leftSection={<IconLink size={14} />}>
+            <Tabs.Tab value="url" leftSection={<IconLink size={16} />}>
               Link
             </Tabs.Tab>
-            <Tabs.Tab value="paste" leftSection={<IconFileText size={14} />}>
+            <Tabs.Tab value="paste" leftSection={<IconFileText size={16} />}>
               Paste
             </Tabs.Tab>
-            <Tabs.Tab value="github" leftSection={<IconLink size={14} />}>
+            <Tabs.Tab value="github" leftSection={<IconLink size={16} />}>
               GitHub
             </Tabs.Tab>
           </Tabs.List>
-          <Tabs.Panel value="file">
+
+          <Tabs.Panel value="file" pt="md">
             <Dropzone
               onDrop={(files) => files[0] && void uploadFile(files[0])}
               accept={[MIME_TYPES.pdf, MIME_TYPES.doc, MIME_TYPES.docx, "text/plain", "text/markdown", "image/*"]}
               loading={importBusy}
               maxFiles={1}
+              radius="md"
             >
-              <Stack align="center" justify="center" gap="xs" mih={120}>
-                <IconUpload size={32} stroke={1.5} />
-                <Text size="sm">Drop a file here or click to browse</Text>
-                <Text size="xs" c="dimmed">
-                  PDF, Word, text, or image
-                </Text>
-              </Stack>
+              <Group justify="center" gap="xl" mih={220} style={{ pointerEvents: "none" }}>
+                <Dropzone.Accept>
+                  <IconUpload size={52} stroke={1.5} />
+                </Dropzone.Accept>
+                <Dropzone.Reject>
+                  <IconX size={52} stroke={1.5} />
+                </Dropzone.Reject>
+                <Dropzone.Idle>
+                  <Stack align="center" gap="xs">
+                    <IconUpload size={52} stroke={1.5} />
+                    <Text size="sm" fw={500}>
+                      Drop a file here or click to browse
+                    </Text>
+                    <Text size="xs" c="dimmed">
+                      PDF, Word, text, or image
+                    </Text>
+                  </Stack>
+                </Dropzone.Idle>
+              </Group>
             </Dropzone>
           </Tabs.Panel>
-          <Tabs.Panel value="url">
+
+          <Tabs.Panel value="url" pt="md">
             <Stack>
               <TextInput
                 label="Public URL"
@@ -350,12 +385,18 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
                 onChange={(e) => setImportUrl(e.currentTarget.value)}
                 disabled={importBusy}
               />
-              <Button disabled={importBusy || !importUrl} onClick={() => void runImport("url")}>
+              <Button
+                fullWidth
+                loading={importBusy}
+                disabled={!importUrl.trim()}
+                onClick={() => void runImport("url")}
+              >
                 Import URL
               </Button>
             </Stack>
           </Tabs.Panel>
-          <Tabs.Panel value="paste">
+
+          <Tabs.Panel value="paste" pt="md">
             <Stack>
               <Textarea
                 label="Pasted text"
@@ -365,12 +406,18 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
                 disabled={importBusy}
                 minRows={6}
               />
-              <Button disabled={importBusy || !importPaste.trim()} onClick={() => void runImport("paste")}>
+              <Button
+                fullWidth
+                loading={importBusy}
+                disabled={!importPaste.trim()}
+                onClick={() => void runImport("paste")}
+              >
                 Use pasted text
               </Button>
             </Stack>
           </Tabs.Panel>
-          <Tabs.Panel value="github">
+
+          <Tabs.Panel value="github" pt="md">
             <Stack>
               <TextInput
                 label="GitHub repository"
@@ -379,7 +426,12 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
                 onChange={(e) => setImportGithub(e.currentTarget.value)}
                 disabled={importBusy}
               />
-              <Button disabled={importBusy || !importGithub} onClick={() => void runImport("github")}>
+              <Button
+                fullWidth
+                loading={importBusy}
+                disabled={!importGithub.trim()}
+                onClick={() => void runImport("github")}
+              >
                 Import repository
               </Button>
             </Stack>

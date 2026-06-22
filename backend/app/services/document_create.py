@@ -110,6 +110,8 @@ def create_document_record(
     if "pdf" in ct_lower or data[:4] == b"%PDF":
         doc_meta["page_count"] = count_pdf_pages(data)
 
+    is_image = content_type.startswith("image/")
+
     doc = Document(
         account_id=user.id if user else None,
         slug=slug,
@@ -117,11 +119,12 @@ def create_document_record(
         content_type=content_type,
         size_bytes=len(data),
         storage_key=storage_key,
-        status="indexing",
+        status="indexing" if is_image else "pending",
         meta=doc_meta,
     )
     db.add(doc)
     db.commit()
     db.refresh(doc)
-    enqueue_ingest(db, doc.id)
+    if is_image:
+        enqueue_ingest(db, doc.id)
     return doc

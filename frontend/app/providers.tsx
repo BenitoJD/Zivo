@@ -3,18 +3,18 @@
 import { DEFAULT_THEME, MantineProvider, createTheme, mergeMantineTheme } from "@mantine/core";
 import { Notifications } from "@mantine/notifications";
 
-/** OLED-style dark palette: body and surfaces use true #000. */
-const DARK_BLACK = [
-  "#E8E8E8",
-  "#D4D4D4",
-  "#A3A3A3",
-  "#737373",
-  "#333333",
-  "#1A1A1A",
-  "#000000",
-  "#000000",
-  "#000000",
-  "#000000",
+/** Mantine default dark scale — borders, modals, inputs, and disabled states stay readable. */
+const DARK_PALETTE = [
+  "#C1C2C5",
+  "#A6A7AB",
+  "#909296",
+  "#5C5F66",
+  "#373A40",
+  "#2C2E33",
+  "#25262B",
+  "#1A1B1E",
+  "#141517",
+  "#101113",
 ] as const;
 
 const theme = mergeMantineTheme(
@@ -23,13 +23,11 @@ const theme = mergeMantineTheme(
     fontFamily: "Inter, system-ui, sans-serif",
     headings: { fontFamily: "Inter, system-ui, sans-serif" },
     primaryColor: "gray",
-    primaryShade: { light: 6, dark: 7 },
+    primaryShade: { light: 6, dark: 4 },
     autoContrast: true,
     defaultRadius: "md",
-    black: "#000000",
-    white: "#ffffff",
     colors: {
-      dark: [...DARK_BLACK],
+      dark: [...DARK_PALETTE],
     },
   }),
 );

@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import {
   Alert,
   Badge,
@@ -26,7 +27,7 @@ import {
 import { useMediaQuery } from "@mantine/hooks";
 import { IconGripVertical, IconPoint } from "@tabler/icons-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import { apiFetchBytes, apiGet, apiPost, apiPostSSE, ensureGuestSession } from "@/lib/api/client";
+import { apiFetchBytes, apiGet, apiPost, apiPostSSE, ensureGuestSession, isArtifactId } from "@/lib/api/client";
 import { indexingStage } from "@/lib/constants";
 import { cancelAllPdfRenders, loadPdfDocument, renderPdfPageToCanvas } from "@/lib/pdf";
 import type { ArtifactMeta, AssertionPayload, McqState, PagesInfo } from "@/lib/types";
@@ -36,7 +37,9 @@ export default function WorkspaceArtifactPage({
 }: {
   params: Promise<{ artifactId: string }>;
 }) {
+  const router = useRouter();
   const { artifactId } = use(params);
+  const invalidArtifactId = !isArtifactId(artifactId);
   const isLg = useMediaQuery("(min-width: 62em)");
   const [mode, setMode] = useState<"learn" | "test">("learn");
 
@@ -77,6 +80,13 @@ export default function WorkspaceArtifactPage({
         : question;
 
   useEffect(() => {
+    if (invalidArtifactId) {
+      router.replace("/workspace");
+    }
+  }, [invalidArtifactId, router]);
+
+  useEffect(() => {
+    if (invalidArtifactId) return;
     void ensureGuestSession();
     let cancelled = false;
     Promise.all([
@@ -97,10 +107,10 @@ export default function WorkspaceArtifactPage({
     return () => {
       cancelled = true;
     };
-  }, [artifactId]);
+  }, [artifactId, invalidArtifactId]);
 
   useEffect(() => {
-    if (artifact?.status !== "indexing") return;
+    if (invalidArtifactId || artifact?.status !== "indexing") return;
     let cancelled = false;
     const poll = () => {
       apiGet<ArtifactMeta>(`/api/artifacts/${artifactId}`)
@@ -115,12 +125,12 @@ export default function WorkspaceArtifactPage({
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [artifact?.status, artifactId]);
+  }, [artifact?.status, artifactId, invalidArtifactId]);
 
   const isPdf = artifact?.content_type === "application/pdf";
 
   useEffect(() => {
-    if (!artifact || selectedRange || !isPdf) return;
+    if (invalidArtifactId || !artifact || selectedRange || !isPdf) return;
     let cancelled = false;
     setPdfLoading(true);
     setPdfError(null);
@@ -140,7 +150,7 @@ export default function WorkspaceArtifactPage({
     return () => {
       cancelled = true;
     };
-  }, [artifact, artifactId, isPdf, selectedRange]);
+  }, [artifact, artifactId, invalidArtifactId, isPdf, selectedRange]);
 
   useEffect(() => {
     if (!pdfDoc?.numPages || pdfDoc.numPages <= 1) return;
@@ -183,7 +193,7 @@ export default function WorkspaceArtifactPage({
   }, [pdfDoc, previewPages, isPdf, selectedRange]);
 
   useEffect(() => {
-    if (!selectedRange || artifact?.status === "indexing") return;
+    if (invalidArtifactId || !selectedRange || artifact?.status === "indexing") return;
     let cancelled = false;
     apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`)
       .then((data) => {
@@ -198,10 +208,10 @@ export default function WorkspaceArtifactPage({
     return () => {
       cancelled = true;
     };
-  }, [artifactId, selectedRange, artifact?.status]);
+  }, [artifactId, invalidArtifactId, selectedRange, artifact?.status]);
 
   useEffect(() => {
-    if (!queue?.current_assertion_id) return;
+    if (invalidArtifactId || !queue?.current_assertion_id) return;
     apiGet<{ payload: AssertionPayload; title?: string }>(`/api/assertions/${queue.current_assertion_id}`)
       .then((row) => {
         const p = row.payload ?? {};
@@ -267,10 +277,25 @@ export default function WorkspaceArtifactPage({
     }
   }
 
+  if (invalidArtifactId) {
+    return (
+      <Center mih="50vh">
+        <Loader />
+      </Center>
+    );
+  }
+
   if (setupError && !artifact) {
     return (
       <Center mih="50vh">
-        <Text c="red">{setupError}</Text>
+        <Stack align="center" gap="md" maw={420}>
+          <Alert color="red" title="Could not load source" variant="light">
+            {setupError}
+          </Alert>
+          <Button variant="white" c="dark.9" onClick={() => router.push("/workspace")}>
+            Back to library
+          </Button>
+        </Stack>
       </Center>
     );
   }
