@@ -207,6 +207,13 @@ async def chat_stream(
     if doc.status != "ready":
         raise HTTPException(status_code=409, detail="Document not ready")
 
+    scope_preview = body.scope.model_dump() if body.scope else {}
+    if scope_preview.get("current_page") is not None:
+        from app.services.rag_window import is_rag_window_ready
+
+        if not is_rag_window_ready(db, doc.id, doc):
+            raise HTTPException(status_code=409, detail="Preparing chat context…")
+
     # Surface an explicit 404/503 before persisting the user turn so the
     # thread doesn't accumulate orphan user messages when the model is wrong.
     include_image = body.use_vision or is_image_document(doc)

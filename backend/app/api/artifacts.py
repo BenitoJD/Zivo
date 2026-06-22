@@ -16,7 +16,7 @@ from app.repositories import workspace as workspace_repo
 from app.services.auth import get_current_user, get_optional_user, require_csrf, require_csrf_or_guest
 from app.services.guest import can_access_document
 from app.services.guest_session import optional_guest_session
-from app.services.jobs import enqueue_ingest
+from app.services.jobs import enqueue_rag_window
 from app.services.question_pool import reset_for_new_page_range
 from app.services.storage import presigned_get_url
 
@@ -116,6 +116,10 @@ def confirm_page_range(
             raise HTTPException(status_code=400, detail="Page range exceeds document")
         selected = {"from": body.from_page, "to": body.to_page}
     reset_for_new_page_range(db, doc, selected)
+    study_pages = selected.get("pages") or list(
+        range(int(selected["from"]), int(selected["to"]) + 1)
+    )
+    page_from = int(study_pages[0]) if study_pages else int(selected["from"])
     doc.status = "indexing"
     captured = doc.artifact_captured_at or doc.created_at
     workspace_repo.upsert_workspace(
@@ -127,11 +131,11 @@ def confirm_page_range(
         page_count=page_count,
         selected_range=selected,
     )
-    job = enqueue_ingest(
+    job = enqueue_rag_window(
         db,
         document_id=doc.id,
         account_id=user.id if user else None,
-        page_range=selected,
+        current_page=page_from,
     )
     db.commit()
     return {"activity_id": str(job.payload.get("activity_id", job.id)), "job_id": str(job.id)}

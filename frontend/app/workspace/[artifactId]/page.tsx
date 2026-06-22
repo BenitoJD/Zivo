@@ -51,6 +51,7 @@ import {
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { apiFetchBytes, apiGet, apiPost, apiPostSSE, ensureGuestSession, isArtifactId } from "@/lib/api/client";
 import { ZIVO_ASSISTANT_NAME } from "@/lib/brand";
+import { AssistantMarkdown } from "@/lib/chatMarkdown";
 import { indexingStage } from "@/lib/constants";
 import { learnRangeLabel, learnWaitPhase, rotatingLearnStatus } from "@/lib/learnStatus";
 import {
@@ -491,7 +492,7 @@ export default function WorkspaceArtifactPage({
   }
 
   async function sendChat() {
-    if (!chatInput.trim() || chatBusy) return;
+    if (!chatInput.trim() || chatBusy || !chatContextReady) return;
     const userMsg = chatInput.trim();
     setChatInput("");
     setChatBusy(true);
@@ -499,14 +500,7 @@ export default function WorkspaceArtifactPage({
     try {
       await ensureGuestSession();
       const currentPage = queue?.current_page;
-      const scope =
-        currentPage && currentPage > 0
-          ? {
-              current_page: currentPage,
-              page_start: Math.max(1, currentPage - 1),
-              page_end: pageCount ? Math.min(pageCount, currentPage + 1) : currentPage + 1,
-            }
-          : {};
+      const scope = currentPage && currentPage > 0 ? { current_page: currentPage } : {};
       const stemForTutor =
         queue?.current_assertion_id && question && !question.toLowerCase().includes("loading")
           ? question
@@ -664,7 +658,9 @@ export default function WorkspaceArtifactPage({
                 {stage.detail}
               </Text>
               <Text size="sm" c="dimmed">
-                Pages {selectedRange.from}–{selectedRange.to}
+                {queue?.rag_window_pages && queue.rag_window_pages.length > 0
+                  ? `Chat context: pages ${queue.rag_window_pages[0]}–${queue.rag_window_pages[queue.rag_window_pages.length - 1]}`
+                  : `Study range: pages ${selectedRange.from}–${selectedRange.to}`}
                 {artifact.filename ? ` · ${artifact.filename}` : ""}
               </Text>
             </Stack>
@@ -691,6 +687,7 @@ export default function WorkspaceArtifactPage({
   const showPageComplete =
     Boolean(queue?.page_complete) && !queue?.current_assertion_id && !queue?.document_complete;
   const showDocumentComplete = Boolean(queue?.document_complete) && !reselectOpen;
+  const chatContextReady = queue?.rag_window_ready !== false;
   const completedRange = selectedRange;
   const nextRangeSuggestion = completedRange
     ? suggestNextPageRange(completedRange, pageCount)
@@ -861,6 +858,7 @@ export default function WorkspaceArtifactPage({
                 messages={chatMessages}
                 input={chatInput}
                 busy={chatBusy}
+                contextReady={chatContextReady}
                 onInputChange={setChatInput}
                 onSend={() => void sendChat()}
               />
@@ -888,6 +886,7 @@ export default function WorkspaceArtifactPage({
               messages={chatMessages}
               input={chatInput}
               busy={chatBusy}
+              contextReady={chatContextReady}
               onInputChange={setChatInput}
               onSend={() => void sendChat()}
             />
@@ -2173,7 +2172,9 @@ function McqHeroPanel({
       (!queue?.generation_pending && (queue?.questions_generated ?? 0) === 0));
   const waitPhase = learnWaitPhase({ indexing, planning, generating });
   const [statusTick, setStatusTick] = useState(0);
-  useInterval(() => setStatusTick((t) => t + 1), waiting ? 2600 : null);
+  useInterval(() => {
+    if (waiting) setStatusTick((t) => t + 1);
+  }, 2600);
   useEffect(() => {
     setStatusTick(0);
   }, [waitPhase, page]);
@@ -2301,7 +2302,7 @@ function McqHeroPanel({
             w="100%"
             onClick={onSubmit}
             loading={submitting}
-            disabled={selected === null || (graded && mode === "learn" && gradeState?.correct)}
+            disabled={selected === null}
           >
             Check answer
           </Button>
@@ -2320,19 +2321,21 @@ function TutorPanel({
   messages,
   input,
   busy,
+  contextReady = true,
   onInputChange,
   onSend,
 }: {
   messages: { role: string; content: string }[];
   input: string;
   busy: boolean;
+  contextReady?: boolean;
   onInputChange: (value: string) => void;
   onSend: () => void;
 }) {
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
   const scrollRef = useRef<HTMLDivElement>(null);
-  const canSend = Boolean(input.trim()) && !busy;
+  const canSend = Boolean(input.trim()) && !busy && contextReady;
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -2447,10 +2450,12 @@ function TutorPanel({
               autosize
               minRows={1}
               maxRows={5}
-              placeholder={`Message ${ZIVO_ASSISTANT_NAME}`}
+              placeholder={
+                contextReady ? `Message ${ZIVO_ASSISTANT_NAME}` : "Preparing chat context…"
+              }
               value={input}
               onChange={(e) => onInputChange(e.currentTarget.value)}
-              disabled={busy}
+              disabled={busy || !contextReady}
               styles={{
                 input: {
                   paddingTop: 6,
@@ -2565,15 +2570,11 @@ function ChatMessage({
         {streaming && !message.content ? (
           <Loader type="dots" size="sm" />
         ) : (
-          <Text size="sm" lh={1.7} style={{ whiteSpace: "pre-wrap" }}>
-            {message.content}
-            {streaming && message.content ? (
-              <Text span inherit c="dimmed">
-                {" "}
-                ▍
-              </Text>
-            ) : null}
-          </Text>
+          <AssistantMarkdown
+            content={message.content}
+            isDark={isDark}
+            streaming={streaming}
+          />
         )}
       </Box>
     </Group>

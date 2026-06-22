@@ -29,6 +29,30 @@ def _parse_pdf(data: bytes) -> list[dict]:
     return pages or [{"page": 1, "text": ""}]
 
 
+def parse_pdf_page(data: bytes, page_number: int) -> dict:
+    """Extract text for a single 1-indexed PDF page."""
+    page_number = max(1, int(page_number))
+    with fitz.open(stream=data, filetype="pdf") as doc:
+        if page_number > doc.page_count:
+            return {"page": page_number, "text": ""}
+        text = doc[page_number - 1].get_text("text").strip()
+        return {"page": page_number, "text": text}
+
+
+def parse_document_page(content_type: str, data: bytes, page_number: int) -> dict:
+    """Return {page, text} for one page (PDF) or the whole doc for single-page formats."""
+    ct = (content_type or "").lower()
+    if "pdf" in ct or data[:4] == b"%PDF":
+        return parse_pdf_page(data, page_number)
+    pages = parse_document(content_type, data)
+    if len(pages) == 1:
+        return pages[0]
+    for item in pages:
+        if int(item.get("page", 0)) == int(page_number):
+            return item
+    return {"page": page_number, "text": ""}
+
+
 def count_pdf_pages(data: bytes) -> int:
     with fitz.open(stream=data, filetype="pdf") as doc:
         return max(1, doc.page_count)

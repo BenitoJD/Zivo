@@ -100,7 +100,11 @@ def _normalize_aspect(item: Any, index: int, page_number: int) -> dict[str, Any]
         key = (item.get("key") or "").strip()
         if not key:
             key = re.sub(r"[^a-z0-9]+", "-", label.lower())[:48].strip("-") or f"aspect-{index}"
-        return {"key": key, "label": label, "asked": False, "answered": False}
+        aspect: dict[str, Any] = {"key": key, "label": label, "asked": False, "answered": False}
+        angle = (item.get("cognitive_angle") or "").strip()
+        if angle:
+            aspect["cognitive_angle"] = angle
+        return aspect
     return None
 
 

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-import re
 import uuid
 from typing import Any
 
@@ -14,8 +12,7 @@ from sqlalchemy.orm import Session
 from app.graphs.page_triage_graph import run_page_triage
 from app.models import Document
 from app.repositories.intel import update_activity
-from app.services.llm_router import complete_chat
-from app.services.prompts import get_prompt
+from app.services.mcq_quality import generate_quality_mcq
 from app.services.question_pool import (
     get_page_coverage,
     get_question_budget,
@@ -96,6 +93,8 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
             target_aspect=target,
             asked_labels=_asked_aspect_labels(doc, page_number),
         )
+        if payload is None:
+            break
         _persist_assertion(db, document_id, payload, page_number=page_number, sequence=sequence)
         mark_aspect_asked(db, document_id, page_number, str(target["key"]))
         db.refresh(doc)
@@ -141,6 +140,8 @@ def _run_legacy_pool(db: Session, document_id: uuid.UUID, options: dict[str, Any
             sequence=i + 1,
             document_id=document_id,
         )
+        if payload is None:
+            continue
         _persist_assertion(db, document_id, payload, page_number=1, sequence=i + 1)
         saved += 1
     if activity_id:
@@ -155,50 +156,6 @@ def _run_legacy_pool(db: Session, document_id: uuid.UUID, options: dict[str, Any
     return {"questions_saved": saved}
 
 
-def _complete_chat_sync(db: Session, messages: list[dict]) -> str:
-    return asyncio.run(complete_chat(messages, db, log_tag="generate_mcq"))
-
-
-def _parse_mcq_json(raw: str) -> dict[str, Any] | None:
-    if not raw or not raw.strip():
-        return None
-    text_block = raw.strip()
-    fence = re.search(r"```(?:zv-mcq|json)?\s*(\{.*?\})\s*```", text_block, re.DOTALL)
-    if fence:
-        text_block = fence.group(1)
-    elif text_block.startswith("{"):
-        pass
-    else:
-        start = text_block.find("{")
-        end = text_block.rfind("}")
-        if start >= 0 and end > start:
-            text_block = text_block[start : end + 1]
-        else:
-            return None
-    try:
-        return json.loads(text_block)
-    except json.JSONDecodeError:
-        return None
-
-
-def _normalize_mcq_payload(data: dict[str, Any], target_aspect: dict[str, Any] | None) -> dict[str, Any]:
-    question = data.get("question") or data.get("stem") or ""
-    options = data.get("options") or data.get("choices") or []
-    if not question or len(options) < 2:
-        raise ValueError("invalid mcq")
-    key = data.get("primary_concept_key") or (target_aspect or {}).get("key") or "page-concept"
-    label = data.get("primary_concept") or (target_aspect or {}).get("label") or "Page concept"
-    return {
-        "question": question,
-        "options": options,
-        "correct_index": int(data.get("correct_index", 0)),
-        "explanation": data.get("explanation") or "",
-        "primary_concept_key": key,
-        "primary_concept": label,
-        "tags": data.get("tags") or ["auto"],
-    }
-
-
 def _generate_one_for_page(
     db: Session,
     *,
@@ -208,57 +165,20 @@ def _generate_one_for_page(
     document_id: uuid.UUID,
     target_aspect: dict[str, Any] | None = None,
     asked_labels: list[str] | None = None,
-) -> dict[str, Any]:
-    excerpt = page_text[:12_000] if page_text else ""
-    aspect_line = ""
-    if target_aspect:
-        aspect_line = (
-            f"\nTarget this aspect only: {target_aspect.get('label')} "
-            f"(key: {target_aspect.get('key')}).\n"
-        )
-    if asked_labels:
-        aspect_line += f"\nAlready asked (do not repeat): {', '.join(asked_labels[:20])}.\n"
-
-    if excerpt:
-        try:
-            system = get_prompt(db, "mcq_format")
-            user = (
-                f"Generate exactly one multiple-choice question from this PDF page.\n"
-                f"Page number: {page_number}\n"
-                f"Question index on this page: {sequence}\n"
-                f"{aspect_line}\n"
-                f"Page text:\n{excerpt}\n\n"
-                "Return only one ```zv-mcq``` JSON block. Include primary_concept_key matching the target aspect."
-            )
-            raw = _complete_chat_sync(db, [{"role": "system", "content": system}, {"role": "user", "content": user}])
-            parsed = _parse_mcq_json(raw)
-            if parsed:
-                payload = _normalize_mcq_payload(parsed, target_aspect)
-                payload["page_number"] = page_number
-                payload["sequence"] = sequence
-                return payload
-        except Exception:
-            pass
-
-    preview = excerpt[:240].replace("\n", " ").strip() if excerpt else "the selected page"
-    label = (target_aspect or {}).get("label") or f"Page {page_number}"
-    key = (target_aspect or {}).get("key") or f"page-{page_number}"
-    return {
-        "question": f"According to page {page_number}, which statement best reflects: {label}?",
-        "options": [
-            f"A key idea about {label}",
-            "An unrelated detail from another section",
-            "The opposite of what the page states",
-            "A plausible but unsupported claim",
-        ],
-        "correct_index": 0,
-        "explanation": f"Review page {page_number}: {preview}…",
-        "primary_concept_key": key,
-        "primary_concept": label,
-        "tags": ["fallback"],
-        "page_number": page_number,
-        "sequence": sequence,
-    }
+) -> dict[str, Any] | None:
+    payload = generate_quality_mcq(
+        db,
+        page_text=page_text,
+        page_number=page_number,
+        sequence=sequence,
+        target_aspect=target_aspect,
+        asked_labels=asked_labels,
+    )
+    if payload is None:
+        return None
+    payload["page_number"] = page_number
+    payload["sequence"] = sequence
+    return payload
 
 
 def _persist_assertion(

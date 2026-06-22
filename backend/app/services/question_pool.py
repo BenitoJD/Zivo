@@ -12,11 +12,12 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.models import Document, Job
 from app.repositories.intel import create_activity
 from app.repositories import workspace as workspace_repo
-from app.services.jobs import enqueue_generate
+from app.services.jobs import enqueue_generate, enqueue_rag_window, enqueue_transition_prep
 
 INITIAL_BATCH_SIZE = 5
 REFILL_BATCH_SIZE = 5
 REFILL_AFTER_ANSWERED = 3
+TRANSITION_PREFETCH_RATIO = 0.70
 ABSOLUTE_MAX_QUESTIONS_PER_PAGE = 150
 # Backward-compatible alias for API consumers
 MAX_QUESTIONS_PER_PAGE = ABSOLUTE_MAX_QUESTIONS_PER_PAGE
@@ -32,6 +33,7 @@ def default_progress(doc: Document) -> dict[str, Any]:
         "generated_on_page": 0,
         "generation_pending": False,
         "page_coverage": {},
+        "transition_prep_done": {},
     }
 
 
@@ -46,6 +48,7 @@ def get_progress(doc: Document) -> dict[str, Any]:
     progress.setdefault("generated_on_page", 0)
     progress.setdefault("generation_pending", False)
     progress.setdefault("page_coverage", {})
+    progress.setdefault("transition_prep_done", {})
     return progress
 
 
@@ -268,6 +271,11 @@ def build_learn_queue_state(
     last_study_page = study_pages[-1] if study_pages else page_to
     document_complete = page_complete and page == last_study_page
 
+    from app.services.rag_window import get_rag_window, is_rag_window_ready
+
+    rag_pages = get_rag_window(doc)
+    rag_ready = is_rag_window_ready(db, document_id, doc)
+
     return {
         "current_page": page,
         "page_from": page_from,
@@ -286,6 +294,8 @@ def build_learn_queue_state(
         "generated_on_page": questions_generated,
         "answered_on_page": questions_answered,
         "max_per_page": budget,
+        "rag_window_pages": rag_pages,
+        "rag_window_ready": rag_ready,
     }
 
 
@@ -413,6 +423,8 @@ def reset_for_new_page_range(db: Session, doc: Document, selected: dict[str, Any
     meta = dict(doc.meta or {})
     meta["selected_range"] = range_meta
     meta.pop("question_pool_initialized", None)
+    meta.pop("rag_window", None)
+    meta.pop("rag_window_ready", None)
     meta["question_progress"] = progress
     doc.meta = meta
     flag_modified(doc, "meta")
@@ -661,6 +673,15 @@ def advance_to_next_page(db: Session, doc: Document) -> Job | None:
             batch_size=min(INITIAL_BATCH_SIZE, budget),
             start_sequence=0,
         )
+    from app.services.rag_window import is_rag_window_ready
+
+    if not is_rag_window_ready(db, doc.id, doc):
+        return enqueue_rag_window(
+            db,
+            doc.id,
+            account_id=doc.account_id,
+            current_page=new_page,
+        )
     return None
 
 
@@ -688,6 +709,44 @@ def ensure_question_pool(db: Session, document_id: uuid.UUID) -> Job | None:
         kick_generation_sync(db, document_id)
 
     return job
+
+
+def is_transition_prep_done(doc: Document, page: int) -> bool:
+    progress = get_progress(doc)
+    done = progress.get("transition_prep_done") or {}
+    return bool(done.get(_page_key(page)))
+
+
+def mark_transition_prep_done(db: Session, doc: Document, page: int) -> None:
+    done = dict(get_progress(doc).get("transition_prep_done") or {})
+    done[_page_key(page)] = True
+    save_progress(db, doc, {"transition_prep_done": done})
+
+
+def should_transition_prefetch(answered_on_page: int, budget: int) -> bool:
+    if budget <= 0:
+        return False
+    return answered_on_page / budget > TRANSITION_PREFETCH_RATIO
+
+
+def maybe_transition_prefetch(db: Session, document_id: uuid.UUID) -> Job | None:
+    doc = db.get(Document, document_id)
+    if not doc or doc.status != "ready":
+        return None
+    progress = get_progress(doc)
+    page = int(progress.get("current_page") or 1)
+    if is_transition_prep_done(doc, page):
+        return None
+    budget = get_question_budget(doc, page)
+    answered_on_page = int(progress.get("answered_on_page") or 0)
+    if not should_transition_prefetch(answered_on_page, budget):
+        return None
+    return enqueue_transition_prep(
+        db,
+        document_id,
+        current_page=page,
+        account_id=doc.account_id,
+    )
 
 
 def record_answer(db: Session, document_id: uuid.UUID, assertion_id: uuid.UUID) -> None:
@@ -726,6 +785,7 @@ def record_answer(db: Session, document_id: uuid.UUID, assertion_id: uuid.UUID) 
     save_progress(db, doc, patch)
     db.commit()
     maybe_refill_pool(db, document_id)
+    maybe_transition_prefetch(db, document_id)
 
 
 def maybe_refill_pool(db: Session, document_id: uuid.UUID) -> Job | None:

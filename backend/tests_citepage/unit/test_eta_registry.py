@@ -98,6 +98,9 @@ def test_existing_handlers_registered() -> None:
         "ingest.chunk_pages",
         "ingest.embed_chunks",
         "ingest.write_chunks",
+        "ingest.page",
+        "ingest.rag_window",
+        "learn.transition_prep",
         "summarize.start",
         "summarize.generate",
     }

@@ -21,6 +21,84 @@ _INSERT_CHUNK_SQL = text(
     """
 )
 
+_DELETE_PAGE_CHUNKS_SQL = text(
+    """
+    DELETE FROM document_chunks
+    WHERE document_id = :document_id
+      AND page_start = :page
+      AND page_end = :page
+    """
+)
+
+_DELETE_OUTSIDE_PAGES_SQL = text(
+    """
+    DELETE FROM document_chunks
+    WHERE document_id = :document_id
+      AND NOT (page_start = ANY(CAST(:allowed AS int[])))
+    """
+)
+
+_INDEXED_PAGES_SQL = text(
+    """
+    SELECT DISTINCT page_start
+    FROM document_chunks
+    WHERE document_id = :document_id
+      AND embedding IS NOT NULL
+    ORDER BY page_start
+    """
+)
+
+
+def indexed_pages_for_document(db: Session, document_id: uuid.UUID) -> set[int]:
+    rows = db.execute(_INDEXED_PAGES_SQL, {"document_id": str(document_id)}).scalars().all()
+    return {int(p) for p in rows}
+
+
+def delete_chunks_outside_pages(
+    db: Session,
+    document_id: uuid.UUID,
+    allowed_pages: set[int],
+) -> int:
+    if not allowed_pages:
+        db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
+        return 0
+    result = db.execute(
+        _DELETE_OUTSIDE_PAGES_SQL,
+        {
+            "document_id": str(document_id),
+            "allowed": [int(p) for p in sorted(allowed_pages)],
+        },
+    )
+    return result.rowcount or 0
+
+
+def upsert_page_chunks(
+    db: Session,
+    document_id: uuid.UUID,
+    page: int,
+    chunks: list[dict],
+    embeddings: list[list[float]],
+) -> int:
+    db.execute(
+        _DELETE_PAGE_CHUNKS_SQL,
+        {"document_id": str(document_id), "page": int(page)},
+    )
+    rows = [
+        {
+            "id": str(uuid.uuid4()),
+            "document_id": str(document_id),
+            "page_start": chunk["page_start"],
+            "page_end": chunk["page_end"],
+            "text": chunk["text"],
+            "embedding": "[" + ",".join(str(x) for x in embedding) + "]",
+            "meta": json.dumps(chunk.get("meta") or {}),
+        }
+        for chunk, embedding in zip(chunks, embeddings, strict=True)
+    ]
+    if rows:
+        db.execute(_INSERT_CHUNK_SQL, rows)
+    return len(rows)
+
 
 def replace_document_chunks(
     db: Session,

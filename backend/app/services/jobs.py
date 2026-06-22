@@ -84,6 +84,41 @@ def enqueue_generate(
     return job
 
 
+def enqueue_rag_window(
+    db: Session,
+    document_id: uuid.UUID,
+    *,
+    account_id: uuid.UUID | None = None,
+    current_page: int | None = None,
+) -> Job:
+    payload: dict = {"document_id": str(document_id)}
+    if current_page is not None:
+        payload["current_page"] = int(current_page)
+    return enqueue_job(
+        db,
+        name="ingest.rag_window",
+        workload=JobWorkload.cpu,
+        payload=payload,
+        account_id=account_id,
+    )
+
+
+def enqueue_transition_prep(
+    db: Session,
+    document_id: uuid.UUID,
+    *,
+    current_page: int,
+    account_id: uuid.UUID | None = None,
+) -> Job:
+    return enqueue_job(
+        db,
+        name="learn.transition_prep",
+        workload=JobWorkload.cpu,
+        payload={"document_id": str(document_id), "current_page": int(current_page)},
+        account_id=account_id,
+    )
+
+
 def enqueue_summarize(db: Session, document_id: uuid.UUID, account_id: uuid.UUID) -> Job:
     return enqueue_job(
         db,

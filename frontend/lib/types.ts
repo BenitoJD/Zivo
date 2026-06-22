@@ -44,6 +44,8 @@ export type McqState = {
   page_complete?: boolean;
   document_complete?: boolean;
   pool_available?: number;
+  rag_window_pages?: number[];
+  rag_window_ready?: boolean;
 };
 
 export type McqGradeResponse = {

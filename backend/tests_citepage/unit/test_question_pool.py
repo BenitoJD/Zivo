@@ -13,8 +13,10 @@ from app.services.question_pool import (
     get_progress,
     get_question_budget,
     maybe_refill_pool,
+    maybe_transition_prefetch,
     record_answer,
     release_stuck_generation,
+    should_transition_prefetch,
 )
 
 
@@ -341,3 +343,32 @@ def test_ensure_question_pool_skips_enqueue_when_job_active() -> None:
         ensure_question_pool(db, doc_id)
 
     triage.assert_not_called()
+
+
+def test_should_transition_prefetch_after_seventy_percent() -> None:
+    assert should_transition_prefetch(10, 15) is False
+    assert should_transition_prefetch(11, 15) is True
+
+
+def test_maybe_transition_prefetch_enqueues_once() -> None:
+    doc_id = uuid.uuid4()
+    doc = MagicMock()
+    doc.id = doc_id
+    doc.status = "ready"
+    doc.account_id = None
+    doc.meta = {
+        "question_progress": {
+            "current_page": 1,
+            "answered_on_page": 11,
+            "transition_prep_done": {},
+            "page_coverage": {"1": {"question_budget": 15, "aspects": []}},
+        }
+    }
+    db = MagicMock()
+    db.get.return_value = doc
+
+    with patch("app.services.question_pool.enqueue_transition_prep") as enqueue:
+        enqueue.return_value = MagicMock()
+        maybe_transition_prefetch(db, doc_id)
+
+    enqueue.assert_called_once()
