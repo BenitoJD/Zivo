@@ -927,6 +927,9 @@ def maybe_refill_pool(db: Session, document_id: uuid.UUID) -> Job | None:
         return None
 
     page = int(progress.get("current_page") or 1)
+    # Triage must populate page_coverage before batch generation can run.
+    if not get_page_coverage(doc, page):
+        return None
     budget = get_question_budget(doc, page)
     generated_on_page = count_assertions_on_page(db, document_id, page)
     answered_ids = [str(x) for x in progress.get("answered_ids") or []]
