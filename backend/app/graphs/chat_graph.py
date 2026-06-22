@@ -1,4 +1,4 @@
-"""LangGraph cited-chat — retrieve_context → tutor_reply."""
+"""LangGraph scoped-chat — retrieve_context → tutor_reply."""
 
 from __future__ import annotations
 
@@ -21,12 +21,6 @@ class ChatState(TypedDict, total=False):
     retrieved_chunks: list[dict]
     citations: list[dict]
     answer: str
-
-
-def _format_page_label(page_start: int, page_end: int) -> str:
-    if page_start == page_end:
-        return f"p.{page_start}"
-    return f"p.{page_start}-{page_end}"
 
 
 def _snippet_for_chunk(text: str, limit: int = 240) -> str:
@@ -56,17 +50,13 @@ def retrieve_context(state: ChatState, *, db: Session) -> dict[str, Any]:
     citations = [
         {
             "document_id": c["document_id"],
-            "page": c["page_start"],
-            "page_end": c.get("page_end", c["page_start"]),
             "snippet": _snippet_for_chunk(c.get("text", "")),
         }
         for c in chunks
     ]
     parts: list[str] = []
     for c in chunks:
-        ps, pe = c["page_start"], c.get("page_end", c["page_start"])
-        label = _format_page_label(ps, pe)
-        parts.append(f"[{label}]\n{c['text']}")
+        parts.append(c["text"])
     context_block = "\n\n".join(parts)
     # Context is returned separately rather than injected as a mid-list system
     # message. The caller folds it into the final user turn so the leading

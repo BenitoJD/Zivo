@@ -178,9 +178,17 @@ def _parse_critic_json(raw: str) -> dict[str, Any] | None:
         return None
 
 
+def _coerce_options(raw: Any) -> list[str]:
+    if isinstance(raw, list):
+        return [str(o).strip() for o in raw if str(o).strip()]
+    if isinstance(raw, dict):
+        return [str(v).strip() for v in raw.values() if str(v).strip()]
+    return []
+
+
 def _normalize_mcq_payload(data: dict[str, Any], target_aspect: dict[str, Any] | None) -> dict[str, Any]:
     question = data.get("question") or data.get("stem") or ""
-    options = data.get("options") or data.get("choices") or []
+    options = _coerce_options(data.get("options") or data.get("choices"))
     if not question or len(options) < 2:
         raise ValueError("invalid mcq")
     key = data.get("primary_concept_key") or (target_aspect or {}).get("key") or "page-concept"
@@ -253,8 +261,7 @@ def _generate_draft_mcq(
 
     system = get_prompt(db, "mcq_page_generate_system")
     user = (
-        f"Generate exactly one multiple-choice question from this PDF page.\n"
-        f"Page number: {page_number}\n"
+        f"Generate exactly one multiple-choice question from this page excerpt.\n"
         f"Question index on this page: {sequence}\n"
         f"{aspect_line}{cognitive_line}\n"
         f"{prior_block}"
@@ -293,7 +300,7 @@ def _rewrite_mcq(
 
     system = get_prompt(db, "mcq_rewrite_system")
     user = (
-        f"Rewrite this MCQ for page {page_number}, aspect: {aspect_label}.\n\n"
+        f"Rewrite this MCQ for aspect: {aspect_label}.\n\n"
         f"Flaws to fix:\n{flaws_json}\n\n"
         f"Hints:\n{hints}\n\n"
         f"{prior_block}"
@@ -334,7 +341,6 @@ def critique_mcq(
     user = get_prompt(
         db,
         "mcq_critic_format",
-        page_number=page_number,
         aspect_label=aspect.get("label") or mcq.get("primary_concept") or "aspect",
         aspect_key=aspect.get("key") or mcq.get("primary_concept_key") or "aspect",
         cognitive_angle_line=cognitive_angle_line,

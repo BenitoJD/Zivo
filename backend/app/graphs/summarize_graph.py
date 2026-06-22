@@ -22,7 +22,7 @@ async def generate_whole_doc_summary(db: Session, document_id: uuid.UUID) -> str
         .limit(200)
         .all()
     )
-    body = "\n\n".join(f"[p.{r.page_start}]\n{r.text}" for r in rows)
+    body = "\n\n".join(r.text for r in rows if r.text)
     system = get_prompt(db, "summarize_system")
     messages = [
         {"role": "system", "content": system},

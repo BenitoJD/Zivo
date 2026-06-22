@@ -137,7 +137,7 @@ def get_document_file(
             .order_by(DocumentChunk.page_start.asc())
             .all()
         )
-        text = "\n\n".join(f"--- Page {c.page_start} ---\n{c.text}" for c in chunks)
+        text = "\n\n".join(c.text for c in chunks if c.text)
         return Response(content=text.encode("utf-8"), media_type="text/plain")
     url = presigned_get_url(doc.storage_key)
     return RedirectResponse(url)

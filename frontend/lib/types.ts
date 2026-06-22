@@ -57,7 +57,21 @@ export type McqGradeResponse = {
 export type AssertionPayload = {
   question?: string;
   stem?: string;
-  options?: string[];
-  choices?: string[];
+  options?: string[] | unknown;
+  choices?: string[] | unknown;
   sequence?: number;
 };
+
+/** Coerce assertion payload options into a string array for the MCQ UI. */
+export function normalizeMcqOptions(options?: unknown, choices?: unknown): string[] {
+  const raw = options ?? choices;
+  if (Array.isArray(raw)) {
+    return raw.map((item) => String(item).trim()).filter((item) => item.length > 0);
+  }
+  if (raw && typeof raw === "object") {
+    return Object.values(raw as Record<string, unknown>)
+      .map((item) => String(item).trim())
+      .filter((item) => item.length > 0);
+  }
+  return [];
+}

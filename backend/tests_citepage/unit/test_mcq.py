@@ -59,7 +59,7 @@ def test_try_grade_mcq_fast_wrong_with_explanation() -> None:
         options=["A", "B"],
         correct_index=1,
         selected_index=0,
-        explanation="B fits the text on [p.2].",
+        explanation="B fits the text.",
     )
     assert out is not None
     assert out["is_correct"] is False

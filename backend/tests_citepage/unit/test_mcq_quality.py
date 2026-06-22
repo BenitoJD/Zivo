@@ -24,7 +24,7 @@ def _good_mcq() -> dict:
             "It transports water",
         ],
         "correct_index": 0,
-        "explanation": "Chlorophyll captures light for the reaction [p.3].",
+        "explanation": "Chlorophyll captures light for the reaction.",
     }
 
 
@@ -225,7 +225,7 @@ def test_generate_quality_mcq_embedding_gate_retries() -> None:
         "question": "Where in the cell does the Calvin cycle occur?",
         "options": ["Stroma", "Thylakoid", "Nucleus", "Cytoplasm"],
         "correct_index": 0,
-        "explanation": "Calvin cycle runs in the stroma [p.3].",
+        "explanation": "Calvin cycle runs in the stroma.",
         "primary_concept_key": "calvin",
     }
     critic_pass = json.dumps(

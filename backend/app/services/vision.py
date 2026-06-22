@@ -27,18 +27,11 @@ def build_user_message(
     page_start: int | None = None,
     page_end: int | None = None,
 ) -> str | list[dict]:
-    page_context = ""
-    if current_page is not None and current_page > 0:
-        if page_start is not None and page_end is not None and page_end != page_start:
-            page_context = (
-                f"[The user is studying page {current_page}. "
-                f"Use only pages {page_start}–{page_end} from the source.]\n\n"
-            )
-        else:
-            page_context = f"[The user is studying page {current_page}.]\n\n"
+    # Page scope is enforced by retrieval — the model only sees scoped excerpts.
+    _ = (current_page, page_start, page_end)
     if not include_image or not is_image_document(doc):
-        return f"{page_context}{text}"
+        return text
     return [
-        {"type": "text", "text": f"{page_context}{text}"},
+        {"type": "text", "text": text},
         {"type": "image_url", "image_url": {"url": document_image_data_url(doc)}},
     ]

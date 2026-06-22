@@ -1,4 +1,4 @@
-"""Build retrieval chunk lists for cited chat."""
+"""Build retrieval chunk lists for scoped tutor chat."""
 
 from __future__ import annotations
 
@@ -12,13 +12,10 @@ from app.services.rerank import rerank_chunks
 from app.services.retrieval import fetch_chunks_for_page_range, merge_chunks, search_chunks
 
 _PAGE_REF_RE = re.compile(
-    r"\[p\.\s*(\d+)(?:\s*[-–]\s*(\d+))?\]"
-    r"|\b(?:on|at)\s+page\s+(\d+)(?:\s*[-–]\s*(\d+))?\b"
+    r"\b(?:on|at)\s+page\s+(\d+)(?:\s*[-–]\s*(\d+))?\b"
     r"|\bpages?\s+(\d+)\s*(?:to|through|and)\s*(\d+)\b"
     r"|\bpage\s+(\d+)\s*[-–]\s*(\d+)\b"
-    r"|\bpage\s+(\d+)\b"
-    r"|\bp\.\s*(\d+)(?:\s*[-–]\s*(\d+))?\b"
-    r"|\bp\s+(\d+)\b",
+    r"|\bpage\s+(\d+)\b",
     re.IGNORECASE,
 )
 

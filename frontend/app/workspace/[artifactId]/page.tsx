@@ -11,6 +11,7 @@ import {
   type WheelEvent,
 } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import {
   ActionIcon,
   Alert,
@@ -50,7 +51,7 @@ import {
 } from "@tabler/icons-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { apiFetchBytes, apiGet, apiPost, apiPostSSE, ensureGuestSession, isArtifactId } from "@/lib/api/client";
-import { ZIVO_ASSISTANT_NAME } from "@/lib/brand";
+import { BRAND_LOGO_SRC, ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import { AssistantMarkdown } from "@/lib/chatMarkdown";
 import { indexingStage } from "@/lib/constants";
 import { learnRangeLabel, learnWaitPhase, rotatingLearnStatus } from "@/lib/learnStatus";
@@ -65,7 +66,14 @@ import {
   snapPdfZoom,
   PDF_ZOOM_PRESETS,
 } from "@/lib/pdf";
-import type { ArtifactMeta, AssertionPayload, McqGradeResponse, McqState, PagesInfo } from "@/lib/types";
+import {
+  normalizeMcqOptions,
+  type ArtifactMeta,
+  type AssertionPayload,
+  type McqGradeResponse,
+  type McqState,
+  type PagesInfo,
+} from "@/lib/types";
 
 const SOURCE_PANEL_DEFAULT = 360;
 const SOURCE_PANEL_MIN = 280;
@@ -354,7 +362,7 @@ export default function WorkspaceArtifactPage({
       .then((row) => {
         const p = row.payload ?? {};
         setQuestion(p.question ?? p.stem ?? row.title ?? "Question");
-        setOptions(p.options ?? p.choices ?? []);
+        setOptions(normalizeMcqOptions(p.options, p.choices));
         setQuestionSequence(typeof p.sequence === "number" ? p.sequence : null);
         setSelected(null);
         setFeedback(null);
@@ -1626,6 +1634,13 @@ function StudySourcePanel({
     scrollTop: number;
   } | null>(null);
 
+  const displayPages = useMemo(() => {
+    if (currentPage && currentPage >= 1) {
+      return [currentPage];
+    }
+    return studyPages;
+  }, [currentPage, studyPages]);
+
   const zoomMin = PDF_ZOOM_PRESETS[0];
   const zoomMax = PDF_ZOOM_PRESETS[PDF_ZOOM_PRESETS.length - 1];
   const canPan = zoom > 1.01;
@@ -1649,7 +1664,7 @@ function StudySourcePanel({
     let cancelled = false;
     void (async () => {
       const aspects: Record<number, number> = {};
-      for (const p of studyPages) {
+      for (const p of displayPages) {
         if (cancelled) return;
         aspects[p] = await pdfPageAspectRatio(pdfDoc, p);
       }
@@ -1658,7 +1673,7 @@ function StudySourcePanel({
     return () => {
       cancelled = true;
     };
-  }, [pdfDoc, studyPages, open]);
+  }, [pdfDoc, displayPages, open]);
 
   const pageDisplayWidth = viewerWidth > 0 ? Math.round(viewerWidth * zoom) : 0;
 
@@ -1671,7 +1686,7 @@ function StudySourcePanel({
         requestAnimationFrame(() => resolve());
       });
       if (cancelled) return;
-      for (const p of studyPages) {
+      for (const p of displayPages) {
         if (cancelled) return;
         const canvas = canvasRefs.current[p];
         if (!canvas) continue;
@@ -1693,23 +1708,21 @@ function StudySourcePanel({
       cancelled = true;
       cancelAllPdfRenders(Object.values(canvasRefs.current));
     };
-  }, [pdfDoc, studyPages, isPdf, open, viewerWidth, zoom, pageDisplayWidth]);
+  }, [pdfDoc, displayPages, isPdf, open, viewerWidth, zoom, pageDisplayWidth]);
 
   useEffect(() => {
     const el = viewportRef.current;
     if (!el) return;
     clampPdfScroll(el);
-  }, [pageDisplayWidth, studyPages, pageAspects]);
+  }, [pageDisplayWidth, displayPages, pageAspects]);
 
   useEffect(() => {
-    if (!open || !currentPage) return;
-    const id = window.setTimeout(() => {
-      pageRefs.current[currentPage]?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
-      const el = viewportRef.current;
-      if (el) clampPdfScroll(el);
-    }, 120);
-    return () => window.clearTimeout(id);
-  }, [open, currentPage, studyPages, pageDisplayWidth]);
+    if (!open) return;
+    const el = viewportRef.current;
+    if (!el) return;
+    el.scrollLeft = 0;
+    el.scrollTop = 0;
+  }, [open, currentPage, displayPages]);
 
   function zoomIn() {
     setZoom((z) => snapPdfZoom(z, 1));
@@ -1808,7 +1821,8 @@ function StudySourcePanel({
   }
 
   const pageSurface = isDark ? "white" : "white";
-  const pageGap = studyPages.length > 1 ? 8 : 0;
+  const pageGap = displayPages.length > 1 ? 8 : 0;
+  const activePage = displayPages[0];
 
   return (
     <Stack gap={0} h="100%" mih={0}>
@@ -1839,10 +1853,11 @@ function StudySourcePanel({
         >
           <Stack gap={pageGap} align="center">
             {pdfDoc &&
-              studyPages.map((p) => {
+              displayPages.map((p) => {
                 const aspect = pageAspects[p] ?? 0;
                 const displayHeight =
                   pageDisplayWidth > 0 && aspect > 0 ? pdfDisplayHeight(pageDisplayWidth, aspect) : undefined;
+                const isActivePage = p === activePage;
                 return (
                   <Paper
                     key={p}
@@ -1859,12 +1874,12 @@ function StudySourcePanel({
                       width: pageDisplayWidth > 0 ? pageDisplayWidth : "100%",
                       maxWidth: "100%",
                       lineHeight: 0,
-                      outline: currentPage === p ? "3px solid var(--mantine-color-blue-filled)" : undefined,
+                      outline: isActivePage ? "3px solid var(--mantine-color-blue-filled)" : undefined,
                       outlineOffset: 2,
                       overflow: "hidden",
                     }}
                   >
-                    {currentPage === p && (
+                    {isActivePage && (
                       <Box
                         pos="absolute"
                         top={0}
@@ -1881,7 +1896,7 @@ function StudySourcePanel({
                           bg="rgba(255,255,255,0.92)"
                           style={{ borderBottom: "1px solid var(--mantine-color-gray-2)" }}
                         >
-                          Studying this page
+                          {currentPage ? `Page ${currentPage}` : "Studying this page"}
                         </Text>
                       </Box>
                     )}
@@ -2148,6 +2163,7 @@ function McqHeroPanel({
 }) {
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
+  const safeOptions = normalizeMcqOptions(options);
   const graded = gradeState !== null;
   const showNextQuestion = graded;
   const optionsLocked = graded && (mode === "test" || gradeState.correct);
@@ -2160,7 +2176,7 @@ function McqHeroPanel({
     (Boolean(queue?.generation_pending) && !queue?.current_assertion_id) ||
     (!queue?.current_assertion_id &&
       artifactStatus === "ready" &&
-      options.length === 0 &&
+      safeOptions.length === 0 &&
       (queue?.generation_pending || (queue?.questions_generated ?? 0) === 0));
 
   const indexing = artifactStatus === "indexing";
@@ -2220,7 +2236,7 @@ function McqHeroPanel({
       </Title>
 
       <Stack gap={compact ? 6 : 8} mih={0} style={{ flexShrink: 1, overflow: "hidden" }}>
-        {options.map((opt, i) => {
+        {safeOptions.map((opt, i) => {
           const value = String(i);
           const isSelected = selected === value;
           const isCorrectOption = graded && gradeState.correctIndex === i;
@@ -2317,6 +2333,25 @@ function McqHeroPanel({
   );
 }
 
+function AssistantLogo({ size }: { size: number }) {
+  return (
+    <Image
+      src={BRAND_LOGO_SRC}
+      alt={ZIVO_ASSISTANT_NAME}
+      width={size}
+      height={size}
+      unoptimized
+      style={{
+        width: size,
+        height: size,
+        flexShrink: 0,
+        objectFit: "contain",
+        display: "block",
+      }}
+    />
+  );
+}
+
 function TutorPanel({
   messages,
   input,
@@ -2361,11 +2396,7 @@ function TutorPanel({
         {messages.length === 0 ? (
           <Center mih="100%" px="sm" py="md">
             <Stack gap="sm" align="center" maw={280} w="100%">
-              <ThemeIcon size={36} radius="xl" variant="filled" color={isDark ? "gray" : "dark"}>
-                <Text size="xs" fw={700} c={isDark ? "dark.8" : "white"}>
-                  Z
-                </Text>
-              </ThemeIcon>
+              <AssistantLogo size={44} />
               <Stack gap={4} align="center">
                 <Title order={5} fw={600} ta="center" style={{ letterSpacing: "-0.02em" }}>
                   Ask {ZIVO_ASSISTANT_NAME}
@@ -2561,11 +2592,7 @@ function ChatMessage({
 
   return (
     <Group align="flex-start" gap="sm" wrap="nowrap" maw="100%">
-      <ThemeIcon size={28} radius="xl" variant="filled" color={isDark ? "gray" : "dark"} style={{ flexShrink: 0 }}>
-        <Text size="10px" fw={700} c={isDark ? "dark.8" : "white"} tt="uppercase">
-          Z
-        </Text>
-      </ThemeIcon>
+      <AssistantLogo size={28} />
       <Box pt={4} style={{ flex: 1, minWidth: 0 }}>
         {streaming && !message.content ? (
           <Loader type="dots" size="sm" />

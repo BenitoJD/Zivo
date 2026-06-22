@@ -130,7 +130,7 @@ def _fallback_triage(page_text: str, page_number: int) -> dict[str, Any]:
         aspects = [
             {
                 "key": f"page-{page_number}-main",
-                "label": f"Main ideas on page {page_number}",
+                "label": "Main ideas on this page",
                 "asked": False,
                 "answered": False,
             }
@@ -172,7 +172,6 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
             user = get_prompt(
                 db,
                 "page_triage_format",
-                page_number=page_number,
                 page_text=excerpt,
             )
             raw = _complete_chat_sync(

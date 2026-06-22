@@ -21,7 +21,6 @@ from app.services.chat_scope import normalize_chat_scope
 from app.services.embed import embed_query
 from app.services.llm_router import stream_chat_completion
 from app.services.prompts import get_prompt
-from app.services.guest import can_access_document
 from app.services.guest_session import guest_session_for_read, optional_guest_session
 from app.services.response_cache import get_cached_response, store_response
 from app.services.usage import check_message_allowed, increment_message_count
@@ -285,10 +284,7 @@ async def chat_stream(
     )
     trailer_parts: list[str] = []
     if context_block:
-        trailer_parts.append(
-            "Document excerpts (each block is labeled with its page number from the index):\n\n"
-            + context_block
-        )
+        trailer_parts.append("Document excerpts:\n\n" + context_block)
     if trailer_parts:
         user_content = user_content + "\n\n" + "\n\n".join(trailer_parts)
     messages.append({"role": "user", "content": user_content})
@@ -444,9 +440,7 @@ async def grade_mcq(
             prior_messages=[],
         )
         chunks = retrieved.get("retrieved_chunks") or []
-        context = "\n\n".join(
-            f"[p.{c['page_start']}]\n{c['text']}" for c in chunks[:4]
-        )
+        context = "\n\n".join(c["text"] for c in chunks[:4])
 
     result = await grade_mcq_answer(
         db,
