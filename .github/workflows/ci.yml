@@ -43,6 +43,9 @@ jobs:
       - name: Alembic migrations
         run: bash scripts/test_alembic_migrations.sh
 
+      - name: Apply schema to CI database
+        run: python -m alembic upgrade head
+
       - name: Unit tests
         run: python -m pytest tests/unit/ tests_citepage/unit/ -q --tb=no
 
