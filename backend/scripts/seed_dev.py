@@ -4,6 +4,10 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+
+# Allow `python scripts/seed_dev.py` from repo root or /app in containers.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.db import SessionLocal
 from app.services.dev_seed import seed_local_database
