@@ -107,6 +107,9 @@ def main() -> int:
         aspects = triage.get("aspects") or []
         budget = triage.get("question_budget", len(aspects))
         print(f"  question_budget={budget}, aspects={len(aspects)}")
+        if triage.get("aspect_dedup"):
+            dedup = triage["aspect_dedup"]
+            print(f"  aspect dedup: {dedup.get('deduped_count')} unique ({dedup.get('raw_count')} raw)")
         if triage.get("rationale"):
             print(f"  rationale: {triage['rationale']}")
 
@@ -118,9 +121,9 @@ def main() -> int:
 
         max_n = min(args.aspects, len(aspects))
         results: list[dict] = []
-        asked_labels: list[str] = []
+        prior_mcqs: list[dict] = []
 
-        print(f"\nGenerating {max_n} quality-gated MCQs (real LLM + critic)…\n")
+        print(f"\nGenerating {max_n} quality-gated MCQs (real LLM + critic + dedup)…\n")
         for i, aspect in enumerate(aspects[:max_n], start=1):
             label = aspect.get("label") or aspect.get("key")
             print(f"[{i}/{max_n}] aspect: {label}")
@@ -130,7 +133,7 @@ def main() -> int:
                 page_number=1,
                 sequence=i,
                 target_aspect=aspect,
-                asked_labels=asked_labels,
+                prior_mcqs=prior_mcqs,
             )
             if payload is None:
                 print("  → REJECTED (exhausted 3 attempts)")
@@ -140,6 +143,8 @@ def main() -> int:
                 attempts = q.get("attempts", "?")
                 print(f"  → PASSED on attempt {attempts}")
                 print(f"     cognitive_level={q.get('cognitive_level')}, flaw_count={q.get('flaw_count')}")
+                if q.get("max_similarity_to_prior") is not None:
+                    print(f"     max_similarity_to_prior={q.get('max_similarity_to_prior')}")
                 print(f"     Q: {(payload.get('question') or '')[:90]}…")
                 results.append(
                     {
@@ -149,9 +154,12 @@ def main() -> int:
                         "cognitive_level": q.get("cognitive_level"),
                         "flaw_count": q.get("flaw_count"),
                         "provokes_understanding": q.get("provokes_understanding"),
+                        "max_similarity_to_prior": q.get("max_similarity_to_prior"),
                     }
                 )
-                asked_labels.append(label)
+                from app.services.mcq_dedup import prior_mcq_from_payload
+
+                prior_mcqs.append(prior_mcq_from_payload(payload))
 
         passed = [r for r in results if r["status"] == "passed"]
         rejected = [r for r in results if r["status"] == "rejected"]

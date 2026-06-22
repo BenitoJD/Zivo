@@ -93,6 +93,7 @@ Rules:
 - Match cognitive demand to the aspect (definitions→recall, mechanisms→reasoning, edge cases→exception).
 - Prefer questions that make the learner think, not copy-paste a phrase from the page.
 - No "all/none of the above", no double negatives, no length giveaway on the correct option.
+- Do NOT paraphrase or retest any fact from prior questions on this page (see user message).
 - Include primary_concept_key matching the target aspect key.
 - explanation: 1–2 plain sentences with [p.N] when helpful.
 
@@ -111,6 +112,7 @@ Fatal flaws (always fail):
 - longest_option_correct — correct answer much longer than distractors
 - negative_wording — double negatives or "which is NOT" tricks
 - not_grounded — answer not supported by the page excerpt
+- too_similar_to_prior — same fact, paraphrased stem, or overlapping correct answer vs a prior question on this page
 
 Also judge:
 - cognitive_level: recall | comprehension | application | analysis
@@ -130,11 +132,13 @@ Page excerpt:
 MCQ JSON:
 {mcq_json}
 
+{prior_mcqs_block}
 Return exactly one JSON object:
 {{"pass": <bool>, "flaw_count": <int>, "fatal_flaws": ["<slug>"], "flaws": [{{"code": "<slug>", "message": "<short>"}}], "cognitive_level": "<level>", "matches_aspect": <bool>, "provokes_understanding": <bool>, "rewrite_hints": "<concrete fixes if fail, else empty>"}}""",
     "mcq_rewrite_system": """You rewrite a multiple-choice question to fix item-writing flaws while keeping the same target aspect and page grounding.
 
 Apply the rewrite hints. Keep one best answer, plausible distractors, and a clear stem.
+Do not paraphrase or retest facts from prior questions on this page.
 Return only one ```zv-mcq``` JSON block with question, options, correct_index, explanation, primary_concept_key.""",
 }
 

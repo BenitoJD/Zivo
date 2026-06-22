@@ -106,17 +106,20 @@ def save_page_coverage(
     aspects: list[dict[str, Any]],
     rationale: str = "",
     triage_activity_id: str | None = None,
+    aspect_dedup: dict[str, Any] | None = None,
 ) -> None:
     doc = db.get(Document, document_id)
     if not doc:
         return
-    entry = {
+    entry: dict[str, Any] = {
         "question_budget": question_budget,
         "aspects": aspects,
         "coverage_complete": False,
         "rationale": rationale,
         "triage_activity_id": triage_activity_id,
     }
+    if aspect_dedup:
+        entry["aspect_dedup"] = aspect_dedup
     save_progress(db, doc, {"page_coverage": {_page_key(page): entry}})
     db.commit()
     db.refresh(doc)

@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.services.llm_router import complete_chat
+from app.services.mcq_dedup import format_prior_mcqs_block, is_mcq_too_similar, stems_match
 from app.services.prompts import get_prompt
 
 MAX_GENERATION_ATTEMPTS = 3
@@ -25,6 +26,7 @@ FATAL_FLAW_CODES = frozenset(
         "negative_wording",
         "not_grounded",
         "invalid_structure",
+        "too_similar_to_prior",
     }
 )
 
@@ -44,7 +46,11 @@ class McqQualityError(Exception):
     """Raised when an MCQ cannot pass the quality gate."""
 
 
-def run_heuristic_checks(mcq: dict[str, Any]) -> list[dict[str, str]]:
+def run_heuristic_checks(
+    mcq: dict[str, Any],
+    *,
+    prior_mcqs: list[dict[str, Any]] | None = None,
+) -> list[dict[str, str]]:
     """Fast rule-based IWF checks before the LLM critic."""
     flaws: list[dict[str, str]] = []
 
@@ -109,6 +115,17 @@ def run_heuristic_checks(mcq: dict[str, Any]) -> list[dict[str, str]]:
 
     if not question.endswith("?"):
         flaws.append({"code": "unfocused_stem", "message": "Stem should be a clear question ending with ?"})
+
+    if prior_mcqs:
+        for prior in prior_mcqs:
+            if stems_match(question, str(prior.get("question") or "")):
+                flaws.append(
+                    {
+                        "code": "too_similar_to_prior",
+                        "message": "Stem matches a prior question on this page",
+                    }
+                )
+                break
 
     return flaws
 
@@ -219,7 +236,7 @@ def _generate_draft_mcq(
     page_number: int,
     sequence: int,
     target_aspect: dict[str, Any] | None,
-    asked_labels: list[str] | None,
+    prior_mcqs: list[dict[str, Any]] | None,
 ) -> dict[str, Any] | None:
     excerpt = page_text[:12_000]
     aspect_line = ""
@@ -232,8 +249,7 @@ def _generate_draft_mcq(
         angle = (target_aspect.get("cognitive_angle") or "").strip()
         if angle:
             cognitive_line = f"Cognitive angle for this aspect: {angle}.\n"
-    if asked_labels:
-        aspect_line += f"\nAlready asked (do not repeat): {', '.join(asked_labels[:20])}.\n"
+    prior_block = format_prior_mcqs_block(prior_mcqs)
 
     system = get_prompt(db, "mcq_page_generate_system")
     user = (
@@ -241,6 +257,7 @@ def _generate_draft_mcq(
         f"Page number: {page_number}\n"
         f"Question index on this page: {sequence}\n"
         f"{aspect_line}{cognitive_line}\n"
+        f"{prior_block}"
         f"Page text:\n{excerpt}\n\n"
         "Return only one ```zv-mcq``` JSON block. Include primary_concept_key matching the target aspect."
     )
@@ -266,17 +283,20 @@ def _rewrite_mcq(
     page_number: int,
     target_aspect: dict[str, Any] | None,
     critique_bundle: dict[str, Any],
+    prior_mcqs: list[dict[str, Any]] | None,
 ) -> dict[str, Any] | None:
     excerpt = page_text[:12_000]
     aspect_label = (target_aspect or {}).get("label") or draft.get("primary_concept") or "aspect"
     flaws_json = json.dumps(critique_bundle.get("flaws") or [], ensure_ascii=False)
     hints = critique_bundle.get("rewrite_hints") or ""
+    prior_block = format_prior_mcqs_block(prior_mcqs)
 
     system = get_prompt(db, "mcq_rewrite_system")
     user = (
         f"Rewrite this MCQ for page {page_number}, aspect: {aspect_label}.\n\n"
         f"Flaws to fix:\n{flaws_json}\n\n"
         f"Hints:\n{hints}\n\n"
+        f"{prior_block}"
         f"Page text:\n{excerpt}\n\n"
         f"Current MCQ:\n{json.dumps(draft, ensure_ascii=False)}\n\n"
         "Return only one ```zv-mcq``` JSON block."
@@ -302,11 +322,13 @@ def critique_mcq(
     page_text: str,
     page_number: int,
     target_aspect: dict[str, Any] | None,
+    prior_mcqs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     excerpt = page_text[:8_000]
     aspect = target_aspect or {}
     angle = (aspect.get("cognitive_angle") or "").strip()
     cognitive_angle_line = f"Cognitive angle: {angle}." if angle else ""
+    prior_block = format_prior_mcqs_block(prior_mcqs) or "(none yet)"
 
     system = get_prompt(db, "mcq_critic_system")
     user = get_prompt(
@@ -317,6 +339,7 @@ def critique_mcq(
         aspect_key=aspect.get("key") or mcq.get("primary_concept_key") or "aspect",
         cognitive_angle_line=cognitive_angle_line,
         page_excerpt=excerpt,
+        prior_mcqs_block=f"Prior questions on this page:\n{prior_block}",
         mcq_json=json.dumps(
             {
                 "question": mcq.get("question"),
@@ -351,12 +374,16 @@ def generate_quality_mcq(
     page_number: int,
     sequence: int,
     target_aspect: dict[str, Any] | None = None,
+    prior_mcqs: list[dict[str, Any]] | None = None,
     asked_labels: list[str] | None = None,
     max_attempts: int = MAX_GENERATION_ATTEMPTS,
 ) -> dict[str, Any] | None:
-    """Generate → heuristic check → LLM critic → rewrite until pass or attempts exhausted."""
+    """Generate → heuristic check → LLM critic → embedding gate → rewrite until pass or exhausted."""
     if not page_text or not page_text.strip():
         return None
+
+    if prior_mcqs is None and asked_labels:
+        prior_mcqs = [{"aspect_label": label, "question": "", "correct_answer": ""} for label in asked_labels]
 
     draft: dict[str, Any] | None = None
     last_critique_bundle: dict[str, Any] = {"flaws": [], "rewrite_hints": ""}
@@ -369,7 +396,7 @@ def generate_quality_mcq(
                 page_number=page_number,
                 sequence=sequence,
                 target_aspect=target_aspect,
-                asked_labels=asked_labels,
+                prior_mcqs=prior_mcqs,
             )
         else:
             if draft is None:
@@ -379,7 +406,7 @@ def generate_quality_mcq(
                     page_number=page_number,
                     sequence=sequence,
                     target_aspect=target_aspect,
-                    asked_labels=asked_labels,
+                    prior_mcqs=prior_mcqs,
                 )
             elif last_critique_bundle.get("flaws") or last_critique_bundle.get("rewrite_hints"):
                 draft = _rewrite_mcq(
@@ -389,6 +416,7 @@ def generate_quality_mcq(
                     page_number=page_number,
                     target_aspect=target_aspect,
                     critique_bundle=last_critique_bundle,
+                    prior_mcqs=prior_mcqs,
                 )
             else:
                 draft = _generate_draft_mcq(
@@ -397,7 +425,7 @@ def generate_quality_mcq(
                     page_number=page_number,
                     sequence=sequence,
                     target_aspect=target_aspect,
-                    asked_labels=asked_labels,
+                    prior_mcqs=prior_mcqs,
                 )
 
         if draft is None:
@@ -407,7 +435,7 @@ def generate_quality_mcq(
             }
             continue
 
-        heuristic_flaws = run_heuristic_checks(draft)
+        heuristic_flaws = run_heuristic_checks(draft, prior_mcqs=prior_mcqs)
         if has_fatal_heuristic_flaws(heuristic_flaws):
             last_critique_bundle = _merge_critique_for_rewrite(heuristic_flaws, None)
             continue
@@ -418,12 +446,27 @@ def generate_quality_mcq(
             page_text=page_text,
             page_number=page_number,
             target_aspect=target_aspect,
+            prior_mcqs=prior_mcqs,
         )
         extra_flaws = [f for f in (critique.get("flaws") or []) if f.get("code") not in FATAL_FLAW_CODES]
         combined_count = len(heuristic_flaws) + len(extra_flaws) + len(critique.get("fatal_flaws") or [])
         critique = {**critique, "flaw_count": max(int(critique.get("flaw_count") or 0), combined_count)}
 
         if _critique_passes(critique):
+            too_similar, max_sim = is_mcq_too_similar(draft, prior_mcqs)
+            if too_similar:
+                last_critique_bundle = {
+                    "flaws": [
+                        {
+                            "code": "too_similar_to_prior",
+                            "message": f"Embedding similarity {max_sim:.2f} to a prior question",
+                        }
+                    ],
+                    "rewrite_hints": "Test a different fact and use a clearly different stem from all prior questions.",
+                    "fatal_flaws": ["too_similar_to_prior"],
+                }
+                continue
+
             draft["quality"] = {
                 "pass": True,
                 "flaw_count": critique.get("flaw_count", 0),
@@ -432,6 +475,7 @@ def generate_quality_mcq(
                 "provokes_understanding": critique.get("provokes_understanding"),
                 "attempts": attempt + 1,
                 "heuristic_flaws": heuristic_flaws,
+                "max_similarity_to_prior": max_sim,
             }
             if target_aspect and target_aspect.get("cognitive_angle"):
                 draft["cognitive_angle"] = target_aspect["cognitive_angle"]

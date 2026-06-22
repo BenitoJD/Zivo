@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.repositories.intel import update_activity
 from app.services.llm_router import complete_chat
+from app.services.mcq_dedup import dedupe_aspects
 from app.services.prompts import get_prompt
 from app.services.question_pool import (
     ABSOLUTE_MAX_QUESTIONS_PER_PAGE,
@@ -46,6 +47,7 @@ def run_page_triage(
         aspects=result["aspects"],
         rationale=result.get("rationale", ""),
         triage_activity_id=activity_id,
+        aspect_dedup=result.get("aspect_dedup"),
     )
     on_triage_completed(db, document_id, page=page_number)
 
@@ -134,10 +136,31 @@ def _fallback_triage(page_text: str, page_number: int) -> dict[str, Any]:
             }
         ]
         budget = INITIAL_BATCH_SIZE
+    return _finalize_triage(
+        aspects=aspects,
+        budget=budget,
+        rationale="Heuristic triage from page length.",
+    )
+
+
+def _finalize_triage(
+    *,
+    aspects: list[dict[str, Any]],
+    budget: int,
+    rationale: str,
+) -> dict[str, Any]:
+    deduped, meta = dedupe_aspects(aspects)
+    new_budget = min(budget, len(deduped)) if deduped else 0
+    if new_budget == 0 and deduped:
+        new_budget = len(deduped)
+    dedup_note = ""
+    if meta["raw_count"] != meta["deduped_count"]:
+        dedup_note = f" {meta['deduped_count']} unique aspects after dedup ({meta['raw_count']} raw)."
     return {
-        "question_budget": budget,
-        "aspects": aspects,
-        "rationale": "Heuristic triage from page length.",
+        "question_budget": new_budget,
+        "aspects": deduped[:new_budget] if new_budget else deduped,
+        "rationale": (rationale + dedup_note).strip(),
+        "aspect_dedup": meta,
     }
 
 
@@ -170,11 +193,11 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
                     return _fallback_triage(page_text, page_number)
                 if budget < len(aspects):
                     budget = min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, len(aspects))
-                return {
-                    "question_budget": budget,
-                    "aspects": aspects[:budget],
-                    "rationale": (parsed.get("rationale") or "").strip(),
-                }
+                return _finalize_triage(
+                    aspects=aspects[:budget],
+                    budget=budget,
+                    rationale=(parsed.get("rationale") or "").strip(),
+                )
         except Exception:
             pass
     return _fallback_triage(page_text, page_number)

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.graphs.page_triage_graph import run_page_triage
 from app.models import Document
 from app.repositories.intel import update_activity
+from app.services.mcq_dedup import prior_mcq_from_payload
 from app.services.mcq_quality import generate_quality_mcq
 from app.services.question_pool import (
     get_page_coverage,
@@ -45,12 +46,28 @@ def _next_aspect(doc: Document, page_number: int) -> dict[str, Any] | None:
     return None
 
 
-def _asked_aspect_labels(doc: Document, page_number: int) -> list[str]:
-    labels: list[str] = []
-    for aspect in get_page_coverage(doc, page_number).get("aspects") or []:
-        if aspect.get("asked"):
-            labels.append(str(aspect.get("label") or aspect.get("key")))
-    return labels
+def _prior_mcqs_on_page(
+    db: Session,
+    document_id: uuid.UUID,
+    page_number: int,
+) -> list[dict[str, Any]]:
+    rows = db.execute(
+        text(
+            """
+            SELECT payload FROM intel.assertion
+            WHERE payload->>'artifact_id' = :artifact_id
+              AND status = 'active'
+              AND (payload->>'page_number')::int = :page
+            ORDER BY (payload->>'sequence')::int ASC
+            """
+        ),
+        {"artifact_id": str(document_id), "page": page_number},
+    ).scalars().all()
+    prior: list[dict[str, Any]] = []
+    for raw in rows:
+        payload = raw if isinstance(raw, dict) else json.loads(raw)
+        prior.append(prior_mcq_from_payload(payload))
+    return prior
 
 
 def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]) -> dict[str, Any]:
@@ -84,6 +101,7 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
             set_coverage_complete(db, document_id, page_number)
             break
 
+        prior_mcqs = _prior_mcqs_on_page(db, document_id, page_number)
         payload = _generate_one_for_page(
             db,
             page_text=page_text,
@@ -91,7 +109,7 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
             sequence=sequence,
             document_id=document_id,
             target_aspect=target,
-            asked_labels=_asked_aspect_labels(doc, page_number),
+            prior_mcqs=prior_mcqs,
         )
         if payload is None:
             break
@@ -164,7 +182,7 @@ def _generate_one_for_page(
     sequence: int,
     document_id: uuid.UUID,
     target_aspect: dict[str, Any] | None = None,
-    asked_labels: list[str] | None = None,
+    prior_mcqs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     payload = generate_quality_mcq(
         db,
@@ -172,7 +190,7 @@ def _generate_one_for_page(
         page_number=page_number,
         sequence=sequence,
         target_aspect=target_aspect,
-        asked_labels=asked_labels,
+        prior_mcqs=prior_mcqs,
     )
     if payload is None:
         return None

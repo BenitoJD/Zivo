@@ -1,0 +1,85 @@
+"""Unit tests for per-page MCQ dedup helpers."""
+
+from __future__ import annotations
+
+from unittest.mock import patch
+
+import pytest
+
+from app.services.mcq_dedup import (
+    cosine_similarity,
+    dedupe_aspects,
+    format_prior_mcqs_block,
+    is_mcq_too_similar,
+    normalize_stem,
+    stems_match,
+)
+
+
+def test_cosine_similarity_identical() -> None:
+    vec = [1.0, 0.0, 1.0]
+    assert cosine_similarity(vec, vec) == pytest.approx(1.0)
+
+
+def test_cosine_similarity_orthogonal() -> None:
+    assert cosine_similarity([1.0, 0.0], [0.0, 1.0]) == 0.0
+
+
+def test_normalize_stem_strips_punctuation() -> None:
+    assert normalize_stem("Which wavelengths?") == normalize_stem("which wavelengths")
+
+
+def test_stems_match() -> None:
+    assert stems_match("What is photosynthesis?", "what is photosynthesis")
+
+
+def test_format_prior_mcqs_block_empty() -> None:
+    assert format_prior_mcqs_block([]) == ""
+
+
+def test_format_prior_mcqs_block_lists_prior() -> None:
+    block = format_prior_mcqs_block(
+        [{"aspect_label": "Chlorophyll", "question": "Q?", "correct_answer": "A"}]
+    )
+    assert "Chlorophyll" in block
+    assert "do NOT repeat" in block
+
+
+def test_dedupe_aspects_clusters_near_duplicates() -> None:
+    aspects = [
+        {"key": "a", "label": "chlorophyll light absorption"},
+        {"key": "b", "label": "chlorophyll absorbs light wavelengths"},
+        {"key": "c", "label": "Calvin cycle location"},
+    ]
+
+    def fake_embed(texts: list[str]) -> list[list[float]]:
+        # First two texts map to nearly identical vectors; third is different.
+        out: list[list[float]] = []
+        for t in texts:
+            if "calvin" in t.lower():
+                out.append([0.0, 1.0])
+            else:
+                out.append([1.0, 0.0])
+        return out
+
+    with patch("app.services.mcq_dedup.embed_texts", side_effect=fake_embed):
+        deduped, meta = dedupe_aspects(aspects, threshold=0.99)
+
+    assert len(deduped) == 2
+    assert meta["raw_count"] == 3
+    assert meta["deduped_count"] == 2
+    assert meta["merged_keys"]
+
+
+def test_is_mcq_too_similar_detects_high_cosine() -> None:
+    mcq = {"question": "What is ATP?", "options": ["Energy", "Water"], "correct_index": 0}
+    prior = [{"question": "What is ATP used for?", "correct_answer": "Energy carrier"}]
+
+    def fake_embed(texts: list[str]) -> list[list[float]]:
+        return [[1.0, 0.0] for _ in texts]
+
+    with patch("app.services.mcq_dedup.embed_texts", side_effect=fake_embed):
+        too_similar, max_sim = is_mcq_too_similar(mcq, prior, threshold=0.92)
+
+    assert too_similar is True
+    assert max_sim == 1.0
