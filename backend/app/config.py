@@ -56,6 +56,10 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @property
+    def is_production(self) -> bool:
+        return self.app_env == "production" or self.environment == "production"
+
+    @property
     def minio_presign_endpoint(self) -> str:
         return self.minio_public_endpoint.strip() or self.minio_endpoint
 

@@ -45,7 +45,7 @@ def ensure_demo_cookie(response: Response | None, cookie_id: str | None) -> str:
             key=DEMO_COOKIE,
             value=new_id,
             httponly=True,
-            secure=settings.environment != "development",
+            secure=settings.is_production,
             samesite="lax",
             max_age=86400 * 30,
             path="/",

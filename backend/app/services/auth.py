@@ -54,7 +54,7 @@ def set_session_cookie(response: Response, token: str, remember: bool) -> None:
         key="zivo_session",
         value=token,
         httponly=True,
-        secure=settings.environment != "development",
+        secure=settings.is_production,
         samesite="lax",
         max_age=max_age,
         path="/",
