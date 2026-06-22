@@ -1,0 +1,32 @@
+---
+description: Frontend UI must use Mantine only — no custom components or styling
+globs: frontend/**/*
+alwaysApply: true
+---
+
+# Mantine-only frontend
+
+All UI/UX in `frontend/` is built **only** from Mantine and its official ecosystem.
+
+## Allowed
+
+- `@mantine/core`, `@mantine/hooks`, `@mantine/form`, `@mantine/dropzone`, `@mantine/notifications`
+- `@tabler/icons-react` (Mantine’s standard icons)
+- `app/providers.tsx` — `MantineProvider` + `createTheme` only
+- `frontend/lib/` — API client, types, constants (no UI)
+- Mantine style props (`p`, `m`, `flex`, `gap`, `c`, `bg`, `h`, `mih`, etc.)
+
+## Forbidden
+
+- `frontend/components/` or any reusable UI component files
+- Custom `.css` files (only `@mantine/*/styles.css` in root layout)
+- Tailwind, shadcn, Radix, MUI, or any other UI library
+- Inline `style={{ ... }}`
+- Native HTML for UI (`<form>`, `<button>`, `<div>` layouts, `component="button"` on non-Mantine elements)
+- `className` for custom styling
+
+## Where to put UI
+
+Compose screens in `frontend/app/` — `page.tsx`, `layout.tsx` — using Mantine primitives directly.
+
+See [AGENTS.md](../../AGENTS.md#frontend-ui).
