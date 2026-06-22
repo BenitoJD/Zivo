@@ -16,7 +16,7 @@ Same deployment model as [citepage](https://github.com/BenitoJD/citepage): **K3s
 | **QB app schema** | Ready | `qb_app.sql` + `qb_infra.sql` via Alembic (`./scripts/dev.sh db migrate`) |
 | **API** | Ready | FastAPI — auth, sources, artifacts, activities, assertions, chat, mcq |
 | **Workers** | Ready | Citepage ETA IO+CPU — `backend/app/eta/`, `run_eta_worker_*.py` |
-| **Workspace UI** | Ready | `/workspace` — Learn/Test 3-panel layout |
+| **Workspace UI** | Ready | `/workspace` — Mantine `AppShell`, Learn/Test layout in `app/` routes |
 | **Helm / K8s** | Ready | postgres, minio, api, web, db-schema charts |
 | **CI** | Ready | `.github/workflows/ci.yml` — self-hosted `zivo` runner on VPS |
 | **Deploy workflow** | Ready | `.github/workflows/deploy.yml` (needs push + workflow run) |
@@ -42,7 +42,7 @@ zivo/
 │   │   └── workers/      # generation, evaluation, embedding jobs
 │   ├── schema/           # SQL DDL (question graph next)
 │   └── scripts/
-├── frontend/             # Next.js App Router
+├── frontend/             # Next.js App Router — Mantine-only UI in app/
 ├── infra/k8s/            # Helm charts + prod values
 ├── scripts/              # dev.sh, bootstrap-vps.sh, deploy helpers
 ├── docker-compose.yml    # local postgres + minio only
@@ -56,7 +56,7 @@ zivo/
 | API | FastAPI, SQLAlchemy, psycopg |
 | DB | PostgreSQL 16 + pgvector |
 | Object storage | MinIO (S3-compatible) — source uploads (PDFs, transcripts) |
-| UI | Next.js 15 (App Router) |
+| UI | Next.js 16 (App Router) + **Mantine 9** (`@mantine/core`, `hooks`, `form`, `dropzone`, `notifications`) |
 | Local deps | Docker Compose (`postgres`, `minio`) |
 | Deploy | K3s, Helm, Traefik, cert-manager, GHCR, GitHub Actions |
 
@@ -125,6 +125,29 @@ ssh zivo-vps "RUNNER_TOKEN=$RUNNER_TOKEN bash -s" < scripts/bootstrap-vps.sh
 
 Deploy: GitHub → Actions → **Deploy Zivo** → Run workflow.
 
+## Frontend UI
+
+**Mantine only. No custom components.**
+
+| Rule | Detail |
+|------|--------|
+| **Where UI lives** | `frontend/app/` — pages and layouts (`layout.tsx`, `page.tsx`, `providers.tsx`) |
+| **Forbidden** | `frontend/components/`, custom CSS files, Tailwind, shadcn, hand-rolled UI primitives |
+| **Allowed imports** | `@mantine/*`, `@tabler/icons-react` (Mantine’s icon set), `next/*`, `react` |
+| **Non-UI code** | `frontend/lib/` — API client, types, constants only |
+| **Theming** | `createTheme` in `app/providers.tsx` — Mantine theme API, not custom stylesheets |
+
+Workspace routes:
+
+- `/workspace` — empty library (`app/workspace/page.tsx`)
+- `/workspace/[artifactId]` — setup, MCQ, source stub, tutor chat (`app/workspace/[artifactId]/page.tsx`)
+- Shared shell (sidebar, add-source modal, auth modal) — `app/workspace/layout.tsx`
+
+```bash
+cd frontend && npm install && npm run dev   # http://localhost:3000
+cd frontend && npm run build && npm run lint
+```
+
 ## Conventions
 
 - Business copy: root `README.md` only.
@@ -133,7 +156,7 @@ Deploy: GitHub → Actions → **Deploy Zivo** → Run workflow.
 - Schema changes: `backend/alembic/versions/` (+ update `backend/schema/*.sql` when baselining raw SQL).
 - New routes: `backend/app/api/`.
 - Background jobs: `backend/app/eta/`.
-- UI: `frontend/app/`.
+- UI: **`frontend/app/` only** — see [Frontend UI](#frontend-ui) above.
 
 ## Skills
 

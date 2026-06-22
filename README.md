@@ -55,9 +55,10 @@ Those can come later. First we earn the right to own **Question Better.**
 | | |
 |---|---|
 | **Repo** | [github.com/BenitoJD/Zivo](https://github.com/BenitoJD/Zivo) — `Zivo` is the engineering codename; **Question Better.** is the product brand |
-| **Stack** | FastAPI · Next.js · Postgres · MinIO · K3s |
+| **Stack** | FastAPI · Next.js 16 · Mantine 9 · Postgres · MinIO · K3s |
 | **Quick start** | `./scripts/dev.sh setup && ./scripts/dev.sh start` → API at http://127.0.0.1:8200 |
 | **Frontend** | `cd frontend && npm install && npm run dev` → http://localhost:3000 |
+| **UI rule** | Mantine components only in `frontend/app/` — no `components/` folder, no custom CSS |
 | **Agent guide** | [AGENTS.md](AGENTS.md) |
 | **Infrastructure** | [infra/k8s/README.md](infra/k8s/README.md) |
 

@@ -1,15 +1,32 @@
 # Question Better. — frontend
 
-Next.js App Router UI for [zivo.fyi](https://zivo.fyi).
+Next.js 16 App Router UI for [zivo.fyi](https://zivo.fyi).
 
-## Status
+## UI policy
 
-Scaffold ready — branded placeholder home page. Build product screens in `app/`:
+**Mantine only. No custom components.**
 
-- Source upload (PDF, paste, URL)
-- Generated question review
-- Practice / quiz flow
-- Weakness and progress views
+All screens are built from `@mantine/*` primitives directly in `app/` routes. There is no `components/` directory and no custom CSS.
+
+| Allowed | Forbidden |
+|---------|-----------|
+| `@mantine/core`, `@mantine/hooks`, `@mantine/form`, `@mantine/dropzone`, `@mantine/notifications` | `frontend/components/` |
+| `@tabler/icons-react` | Tailwind, shadcn, custom `.css` files |
+| `app/providers.tsx` (`MantineProvider` only) | Hand-rolled buttons, modals, layouts |
+| `lib/` for API client, types, constants | UI abstractions in `lib/` |
+
+## Structure
+
+```
+frontend/app/
+├── layout.tsx                    # root layout + Mantine styles
+├── providers.tsx                 # MantineProvider + Notifications
+├── page.tsx                      # redirect → /workspace
+└── workspace/
+    ├── layout.tsx                # AppShell, sidebar, add-source + auth modals
+    ├── page.tsx                  # empty library
+    └── [artifactId]/page.tsx     # page setup, MCQ, source, tutor chat
+```
 
 ## Local development
 
@@ -22,13 +39,15 @@ Open http://localhost:3000.
 
 Set `NEXT_PUBLIC_API_URL=http://127.0.0.1:8200` in `.env.local` when calling the API from the browser.
 
+```bash
+npm run build
+npm run lint
+```
+
 ## Production
 
 - **Dockerfile** — standalone Next.js build, port 3000
 - **Helm** — `infra/k8s/charts/web`
 - **Hosts** — `zivo.fyi`, `www.zivo.fyi`
 
-```bash
-npm run build
-npm run start
-```
+Agent conventions: [AGENTS.md](../AGENTS.md#frontend-ui).

@@ -28,7 +28,8 @@ cd frontend && npm install && npm run dev   # Next.js on :3000
 | `backend/app/workers/` | Ingest / normalize jobs (add here) |
 | `backend/schema/*.sql` | DDL source for baseline Alembic revisions |
 | `backend/alembic/versions/` | Alembic migration chain |
-| `frontend/app/` | Next.js App Router UI |
+| `frontend/app/` | Next.js App Router UI — **Mantine only** (no `components/`) |
+| `frontend/lib/` | API client, types, constants (not UI) |
 | `infra/k8s/` | Helm charts + prod values |
 | `logs/zivo-dev/` | API logs from `dev.sh start` |
 
@@ -61,6 +62,13 @@ If your local DB was created with the old `db schema` scripts and has no `alembi
 | minio | `9020` / `9021` |
 
 API and Next.js run **on the host**, not in compose.
+
+## Frontend UI
+
+- **Mantine only** — compose screens in `frontend/app/` from `@mantine/*` imports.
+- **Never add** `frontend/components/`, custom CSS, or non-Mantine UI libraries.
+- Icons: `@tabler/icons-react` only.
+- Details: [AGENTS.md](../../AGENTS.md#frontend-ui).
 
 ## VPS
 

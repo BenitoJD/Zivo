@@ -1,5 +1,7 @@
 # Workspace
 
+UI is implemented with **Mantine** in `frontend/app/workspace/` — no custom components. See [AGENTS.md](../AGENTS.md#frontend-ui).
+
 ## Learn mode (mobile-first)
 
 - **MCQ** hero fills the viewport
