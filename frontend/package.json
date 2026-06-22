@@ -6,22 +6,28 @@
     "dev": "next dev --port 3000",
     "build": "next build",
     "start": "next start --port 3000",
-    "lint": "next lint"
+    "lint": "eslint ."
   },
   "dependencies": {
-    "next": "^15.3.4",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "react-resizable-panels": "^2.1.7",
-    "lucide-react": "^0.511.0",
-    "pdfjs-dist": "^4.10.38"
+    "@mantine/core": "^9.3.2",
+    "@mantine/dropzone": "^9.3.2",
+    "@mantine/form": "^9.3.2",
+    "@mantine/hooks": "^9.3.2",
+    "@mantine/notifications": "^9.3.2",
+    "@tabler/icons-react": "^3.44.0",
+    "next": "^16.2.9",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
   },
   "devDependencies": {
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "^15.3.4",
+    "eslint-config-next": "^16.2.9",
+    "postcss": "^8.5.15",
+    "postcss-preset-mantine": "^1.18.0",
+    "postcss-simple-vars": "^7.0.1",
     "typescript": "^5"
   }
 }
