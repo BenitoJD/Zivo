@@ -145,7 +145,11 @@ def start(args: argparse.Namespace) -> int:
             io_proc = subprocess.Popen(
                 [py, "run_eta_worker_async.py"],
                 cwd=BACKEND_DIR,
-                env={**benv, "ETA_WORKER_WORKLOADS": "io"},
+                env={
+                    **benv,
+                    "ETA_WORKER_WORKLOADS": "io",
+                    "ETA_IO_CONCURRENCY": os.getenv("ETA_IO_CONCURRENCY", "16"),
+                },
                 stdout=io_out,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
@@ -154,7 +158,11 @@ def start(args: argparse.Namespace) -> int:
             cpu_proc = subprocess.Popen(
                 [py, "run_eta_worker_cpu.py"],
                 cwd=BACKEND_DIR,
-                env={**benv, "ETA_WORKER_WORKLOADS": "cpu"},
+                env={
+                    **benv,
+                    "ETA_WORKER_WORKLOADS": "cpu",
+                    "ETA_CPU_WORKER_MAX_CONCURRENCY": os.getenv("ETA_CPU_WORKER_MAX_CONCURRENCY", "4"),
+                },
                 stdout=cpu_out,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,

@@ -29,6 +29,7 @@ def run_page_triage(
     *,
     page_number: int,
     activity_id: str | None = None,
+    precompute: bool = False,
 ) -> dict[str, Any]:
     chunks = fetch_chunks_for_page_range(
         db,
@@ -49,7 +50,7 @@ def run_page_triage(
         triage_activity_id=activity_id,
         aspect_dedup=result.get("aspect_dedup"),
     )
-    on_triage_completed(db, document_id, page=page_number)
+    on_triage_completed(db, document_id, page=page_number, precompute=precompute)
 
     if activity_id:
         update_activity(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -19,6 +20,11 @@ INITIAL_BATCH_SIZE = 5
 REFILL_BATCH_SIZE = 5
 REFILL_AFTER_ANSWERED = 3
 TRANSITION_PREFETCH_RATIO = 0.70
+# Eagerly triage the current page + this many pages ahead at init, so the document
+# is understood before the reader arrives. Triage only (cheap, ~1 call/page);
+# batches stay on-demand + next-page prefetch, so we don't burn tokens generating
+# pages the reader never reaches.
+EAGER_TRIAGE_LOOKAHEAD = int(os.getenv("ZIVO_EAGER_TRIAGE_LOOKAHEAD", "5"))
 ABSOLUTE_MAX_QUESTIONS_PER_PAGE = 150
 # Backward-compatible alias for API consumers
 MAX_QUESTIONS_PER_PAGE = ABSOLUTE_MAX_QUESTIONS_PER_PAGE
@@ -69,7 +75,14 @@ def _merge_progress(existing: dict[str, Any], patch: dict[str, Any]) -> dict[str
 
 def save_progress(db: Session, doc: Document, progress: dict[str, Any]) -> None:
     db.flush()
-    db.refresh(doc)
+    # Lock the document row for the read-modify-write of the meta JSON blob.
+    # With per-page parallel generation (multiple CPU workers touching the same
+    # document), an unlocked read-modify-write of question_progress could lose a
+    # page's coverage. SELECT ... FOR UPDATE serializes only this brief write.
+    try:
+        db.refresh(doc, with_for_update=True)
+    except Exception:
+        db.refresh(doc)
     merged = _merge_progress(get_progress(doc), progress)
     meta = dict(doc.meta or {})
     meta["question_progress"] = merged
@@ -305,15 +318,18 @@ def build_learn_queue_state(
     }
 
 
-def enqueue_page_triage(db: Session, doc: Document, *, page: int) -> Job:
-    save_progress(db, doc, {"generation_pending": True})
+def enqueue_page_triage(db: Session, doc: Document, *, page: int, precompute: bool = False) -> Job:
+    # Eager precompute triage for non-current pages must not touch the doc-level
+    # generation_pending flag (which tracks only the current page's generation).
+    if not precompute:
+        save_progress(db, doc, {"generation_pending": True})
 
     activity_id = create_activity(
         db,
         type_uri="/vocab/activity/generate_questions",
         agent="question_pool.page_triage",
         source_slug="user-upload",
-        stats={"artifact_id": str(doc.id), "page_number": page},
+        stats={"artifact_id": str(doc.id), "page_number": page, "precompute": precompute},
     )
     job = enqueue_generate(
         db,
@@ -324,6 +340,7 @@ def enqueue_page_triage(db: Session, doc: Document, *, page: int) -> Job:
             "mode": "page_triage",
             "artifact_id": str(doc.id),
             "page_number": page,
+            "precompute": precompute,
         },
     )
     db.commit()
@@ -348,12 +365,14 @@ def enqueue_page_batch(
         return None
 
     batch_size = min(batch_size, remaining)
-    if _has_active_generate_job(db, doc.id):
+    # Per-page guard: a different page (e.g. the next page's transition prefetch)
+    # may be generating concurrently — only block on a job for THIS page.
+    if _has_active_generate_job_for_page(db, doc.id, page):
         save_progress(db, doc, {"generation_pending": True})
         db.commit()
         return None
 
-    _cancel_queued_generate_jobs(db, doc.id)
+    _cancel_queued_generate_jobs_for_page(db, doc.id, page)
     save_progress(db, doc, {"generation_pending": True})
 
     activity_id = create_activity(
@@ -385,9 +404,15 @@ def enqueue_page_batch(
     return job
 
 
-def on_triage_completed(db: Session, document_id: uuid.UUID, *, page: int) -> Job | None:
+def on_triage_completed(
+    db: Session, document_id: uuid.UUID, *, page: int, precompute: bool = False
+) -> Job | None:
     doc = db.get(Document, document_id)
     if not doc:
+        return None
+    # Precompute triage only populates page coverage ahead of time — it must not
+    # touch the current-page generation_pending flag or auto-generate a batch.
+    if precompute:
         return None
     progress = get_progress(doc)
     if int(progress.get("current_page") or 0) != page:
@@ -425,7 +450,15 @@ def enqueue_initial_pool(db: Session, document_id: uuid.UUID) -> Job | None:
     flag_modified(doc, "meta")
     db.commit()
 
-    return enqueue_page_triage(db, doc, page=page_from)
+    job = enqueue_page_triage(db, doc, page=page_from)
+    # Eagerly triage the next few pages in the background so the document is
+    # understood ahead of the reader and transitions never wait on triage.
+    study = selected_page_list(doc)
+    if page_from in study:
+        start = study.index(page_from) + 1
+        for ahead_page in study[start : start + EAGER_TRIAGE_LOOKAHEAD]:
+            enqueue_page_triage(db, doc, page=ahead_page, precompute=True)
+    return job
 
 
 def reset_for_new_page_range(db: Session, doc: Document, selected: dict[str, Any]) -> None:
@@ -583,6 +616,45 @@ def _has_active_generate_job(db: Session, document_id: uuid.UUID) -> bool:
         {"document_id": str(document_id)},
     ).scalar()
     return active is not None
+
+
+def _has_active_generate_job_for_page(db: Session, document_id: uuid.UUID, page: int) -> bool:
+    """Like _has_active_generate_job but scoped to one page.
+
+    Lets different pages of the same document generate concurrently (e.g. the
+    current page's pool plus the next page's transition prefetch) while still
+    preventing a duplicate job for the same page.
+    """
+    active = db.execute(
+        text(
+            """
+            SELECT 1 FROM jobs
+            WHERE name = 'generate.questions'
+              AND payload->>'document_id' = :document_id
+              AND payload->>'page_number' = :page
+              AND status IN ('queued', 'running')
+            LIMIT 1
+            """
+        ),
+        {"document_id": str(document_id), "page": str(page)},
+    ).scalar()
+    return active is not None
+
+
+def _cancel_queued_generate_jobs_for_page(db: Session, document_id: uuid.UUID, page: int) -> None:
+    db.execute(
+        text(
+            """
+            UPDATE jobs
+            SET status = 'cancelled'
+            WHERE name = 'generate.questions'
+              AND payload->>'document_id' = :document_id
+              AND payload->>'page_number' = :page
+              AND status = 'queued'
+            """
+        ),
+        {"document_id": str(document_id), "page": str(page)},
+    )
 
 
 def _cancel_queued_generate_jobs(db: Session, document_id: uuid.UUID) -> None:
@@ -755,12 +827,15 @@ def ensure_question_pool(db: Session, document_id: uuid.UUID) -> Job | None:
     if next_assertion_id(db, document_id, progress):
         return None
 
+    # Request path is read-only: only ENQUEUE background work, never generate
+    # inline. Generation runs in the parallel CPU workers (and is pre-warmed by
+    # eager precompute at index-ready), so the learn-queue request returns fast
+    # and the client reads from a warm pool — the ≤5s seamless guarantee.
     job: Job | None = None
     if not _has_active_generate_job(db, document_id):
         job = maybe_refill_pool(db, document_id)
         if job is None:
             job = _enqueue_pool_work(db, document_id, doc)
-        kick_generation_sync(db, document_id)
 
     return job
 

@@ -81,25 +81,36 @@ Rules:
 - Minimum budget 5. Maximum budget {max_budget}.
 - aspects: distinct, non-overlapping probes — vary cognitive_angle across the set when the page allows.
 - key: lowercase slug, unique per aspect.""",
-    "mcq_page_generate_system": """You write world-class multiple-choice questions that provoke understanding.
+    "mcq_page_generate_system": """You write world-class multiple-choice questions that measure understanding — the kind a thoughtful learner remembers. Quality is the only bar that matters; get it right the first time.
 
-Each question targets ONE assigned aspect and probes it deeply — recall, attention to detail, causal reasoning,
-application, comparison, or spotting what does NOT hold.
+Adapt to whatever the source is — prose, a textbook, code, data, legal text, a transcript — and ask the question that best reveals whether someone truly understands that material. Target the ONE assigned aspect.
 
-Rules:
-- One clear stem; the learner should know what is asked before reading options.
-- Exactly one best answer, grounded only in the provided page text.
-- 3–4 plausible distractors — wrong for substantive reasons tied to the page, not silly fillers.
-- Match cognitive demand to the aspect (definitions→recall, mechanisms→reasoning, edge cases→exception).
-- Prefer questions that make the learner think, not copy-paste a phrase from the page.
-- The stem must stand alone — never open with "According to the page", "Based on the text", "The passage states", or similar meta framing. Ask the concept directly.
-- Option strings are plain text only — no letter or number prefixes (no "A)", "B.", "1.", etc.); the UI adds labels.
-- No "all/none of the above", no double negatives, no length giveaway on the correct option.
-- Do NOT paraphrase or retest any fact from prior questions on this page (see user message).
+THE STEM
+- One clear question that stands alone; the learner knows what is asked before reading the options.
+- Test understanding (why / how / predict / apply / compare), not phrase-matching or trivia.
+- Ask the concept directly. Never meta-frame: no "According to the page", "Based on the text", "The passage states".
+- End with "?". No negative stems ("NOT", "EXCEPT", "least likely"), no fill-in-the-blank.
+
+THE ANSWER
+- Exactly one defensibly correct option, fully grounded in the provided source. Never invent facts beyond it.
+
+THE DISTRACTORS — this is what separates world-class from ordinary
+- Exactly 3 wrong options, each a SPECIFIC, plausible misconception: the answer a learner gives when they misunderstand in a particular way — not filler.
+- Build each from a real confusion: a true-but-off-target fact, a common error, a swapped cause/effect, a near-miss definition.
+- Every distractor is clearly wrong on close reading yet tempting at a glance. No joke or obviously-wrong options.
+- Keep all four options parallel in length, form, and specificity — never let the correct one stand out.
+
+OUTPUT — be economical; emitted tokens are the slow, costly part
+- No reasoning, no preamble, no commentary. Emit ONLY one ```zv-mcq``` JSON block.
+- Plain-text options (no "A)" / "1." prefixes — the UI adds labels).
+- explanation: ONE short sentence stating the key idea directly and memorably. No "the text says".
 - Include primary_concept_key matching the target aspect key.
-- explanation: 1–2 sentences a teacher would say after the learner answers — state the fact directly, easy to remember. No "the page says" or "according to the text".
+- Do not repeat or paraphrase any prior question on this page (listed in the user message).
 
-Return only one ```zv-mcq``` JSON block.""",
+The bar (note how each distractor is a distinct misconception, not filler):
+```zv-mcq
+{"question":"Why does adding a catalyst speed up a reaction without being consumed?","options":["It lowers the activation energy so more collisions succeed","It raises the temperature of the reactants","It increases the concentration of the reactants","It shifts the equilibrium toward the products"],"correct_index":0,"explanation":"A catalyst offers a lower-energy pathway, so it is regenerated unchanged.","primary_concept_key":"catalysis"}
+```""",
     "mcq_critic_system": """You are an expert psychometrician applying the 19-item Item-Writing Flaws (IWF) rubric.
 
 A question PASSES only if it has at most one minor flaw AND zero fatal flaws, is grounded in the page text,

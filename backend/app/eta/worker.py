@@ -23,7 +23,13 @@ logger = logging.getLogger(__name__)
 WORKER_ID = os.getenv("ETA_WORKER_ID", str(uuid.uuid4()))
 POLL_INTERVAL = float(os.getenv("ETA_WORKER_POLL_INTERVAL", "2.0"))
 RETRY_DELAY_SECONDS = float(os.getenv("ETA_WORKER_RETRY_DELAY_SECONDS", "5.0"))
-MAX_CONCURRENCY = max(1, int(os.getenv("ETA_CPU_WORKER_MAX_CONCURRENCY", "1")))
+# CPU-workload jobs (incl. generate.questions) run concurrently in a thread pool.
+# generate.questions is LLM-I/O-bound — threads overlap on network waits — and the
+# reservation uses SELECT ... FOR UPDATE SKIP LOCKED so parallel slots never collide.
+# Default to parallel now that the model is a concurrent hosted API. Total concurrent
+# LLM calls ≈ this × the per-batch GENERATION_CONCURRENCY; keep the product under the
+# provider's rate limit (override via env).
+MAX_CONCURRENCY = max(1, int(os.getenv("ETA_CPU_WORKER_MAX_CONCURRENCY", "4")))
 
 
 def _parse_workloads(value: str) -> Sequence[JobWorkload]:
