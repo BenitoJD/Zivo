@@ -386,7 +386,9 @@ def test_ensure_question_pool_refills_when_pool_exhausted() -> None:
     assert job is refill_job
     refill.assert_called_once_with(db, doc_id)
     enqueue_work.assert_not_called()
-    kick.assert_called_once()
+    # Request path is read-only now — generation runs in the background workers,
+    # never inline in the request.
+    kick.assert_not_called()
 
 
 def test_should_transition_prefetch_after_seventy_percent() -> None:

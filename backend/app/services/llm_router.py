@@ -8,6 +8,7 @@ gating, semantic cache).
 
 from collections.abc import AsyncIterator
 import logging
+import os
 import time
 import uuid
 
@@ -16,6 +17,11 @@ from sqlalchemy.orm import Session
 from app.services.llm_registry import ResolvedLlmModel, configure_litellm, resolve_chat_model
 
 logger = logging.getLogger(__name__)
+
+# Retry transient provider errors (esp. 429 rate limits) with exponential backoff
+# so a concurrency spike degrades into a brief wait instead of a wasted/failed
+# call — protects both reliability and token spend. LiteLLM handles the backoff.
+LLM_NUM_RETRIES = int(os.getenv("ZIVO_LLM_NUM_RETRIES", "4"))
 
 
 def _extract_usage(usage: object) -> dict:
@@ -83,6 +89,7 @@ async def stream_chat_completion(
         messages=messages,
         stream=True,
         stream_options={"include_usage": True},
+        num_retries=LLM_NUM_RETRIES,
     )
     final_usage: object = None
     async for chunk in response:
@@ -114,6 +121,7 @@ async def complete_chat(
         model=resolved.litellm_model,
         messages=messages,
         stream=False,
+        num_retries=LLM_NUM_RETRIES,
     )
     _log_usage(log_tag, resolved.litellm_model, getattr(response, "usage", None), started)
     return response.choices[0].message.content or ""
