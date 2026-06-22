@@ -11,6 +11,15 @@ ASPECT_CLUSTER_THRESHOLD = 0.88
 MCQ_SIMILARITY_THRESHOLD = 0.92
 
 _NON_WORD_RE = re.compile(r"[^\w\s]+", re.UNICODE)
+_OPTION_LETTER_PREFIX = re.compile(r"^(?:[A-Da-d]|[1-4])[.)]\s+")
+_PAGE_REFERENCE_STEM = re.compile(
+    r"^(?:(?:according|based)\s+to\s+(?:the\s+)?(?:page|text|passage|source|excerpt)"
+    r"|from\s+(?:the\s+)?(?:page|text|passage|source)"
+    r"|in\s+(?:the\s+)?(?:passage|text|excerpt)"
+    r"|(?:the\s+)?(?:page|text|passage|source)\s+(?:states|says|indicates|describes|explains)(?:\s+that)?)"
+    r"[,:]?\s+",
+    re.IGNORECASE,
+)
 
 
 def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
@@ -40,7 +49,7 @@ def aspect_signature(aspect: dict[str, Any]) -> str:
 
 def mcq_signature(mcq: dict[str, Any]) -> str:
     question = str(mcq.get("question") or mcq.get("stem") or "").strip()
-    options = mcq.get("options") or mcq.get("choices") or []
+    options = coerce_mcq_options(mcq.get("options") or mcq.get("choices"))
     try:
         ci = int(mcq.get("correct_index", 0))
     except (TypeError, ValueError):
@@ -51,8 +60,40 @@ def mcq_signature(mcq: dict[str, Any]) -> str:
     return f"question: {question} | answer: {correct}"
 
 
+def sanitize_mcq_option(text: str) -> str:
+    """Strip leading A)/B. style prefixes — the UI renders letter labels."""
+    return _OPTION_LETTER_PREFIX.sub("", (text or "").strip()).strip()
+
+
+def sanitize_mcq_stem(text: str) -> str:
+    """Remove meta framing like 'According to the page,' so the stem stands alone."""
+    cleaned = (text or "").strip()
+    while True:
+        match = _PAGE_REFERENCE_STEM.match(cleaned)
+        if not match:
+            break
+        cleaned = cleaned[match.end() :].strip()
+    if cleaned and cleaned[0].islower():
+        cleaned = cleaned[0].upper() + cleaned[1:]
+    return cleaned
+
+
+def has_page_reference_stem(text: str) -> bool:
+    return bool(_PAGE_REFERENCE_STEM.match((text or "").strip()))
+
+
+def coerce_mcq_options(raw: Any) -> list[str]:
+    """Normalize MCQ options whether stored as a list or object-shaped JSON."""
+    if isinstance(raw, list):
+        return [sanitize_mcq_option(str(o)) for o in raw if sanitize_mcq_option(str(o))]
+    if isinstance(raw, dict):
+        items = sorted(raw.items(), key=lambda kv: kv[0])
+        return [sanitize_mcq_option(str(v)) for _, v in items if sanitize_mcq_option(str(v))]
+    return []
+
+
 def prior_mcq_from_payload(payload: dict[str, Any]) -> dict[str, str]:
-    options = payload.get("options") or []
+    options = coerce_mcq_options(payload.get("options") or payload.get("choices"))
     try:
         ci = int(payload.get("correct_index", 0))
     except (TypeError, ValueError):

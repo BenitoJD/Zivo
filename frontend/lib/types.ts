@@ -62,15 +62,39 @@ export type AssertionPayload = {
   sequence?: number;
 };
 
+const OPTION_LETTER_PREFIX = /^(?:[A-Da-d]|[1-4])[.)]\s+/;
+const PAGE_REFERENCE_STEM =
+  /^(?:(?:according|based)\s+to\s+(?:the\s+)?(?:page|text|passage|source|excerpt)|from\s+(?:the\s+)?(?:page|text|passage|source)|in\s+(?:the\s+)?(?:passage|text|excerpt)|(?:the\s+)?(?:page|text|passage|source)\s+(?:states|says|indicates|describes|explains)(?:\s+that)?)[,:]?\s+/i;
+
+/** Strip leading A)/B. prefixes — the UI renders letter labels. */
+export function sanitizeMcqOption(text: string): string {
+  return String(text || "")
+    .trim()
+    .replace(OPTION_LETTER_PREFIX, "")
+    .trim();
+}
+
+/** Remove meta framing like "According to the page," so the stem stands alone. */
+export function sanitizeMcqStem(text: string): string {
+  let cleaned = String(text || "").trim();
+  while (PAGE_REFERENCE_STEM.test(cleaned)) {
+    cleaned = cleaned.replace(PAGE_REFERENCE_STEM, "").trim();
+  }
+  if (cleaned && cleaned[0] === cleaned[0].toLowerCase()) {
+    cleaned = cleaned[0].toUpperCase() + cleaned.slice(1);
+  }
+  return cleaned;
+}
+
 /** Coerce assertion payload options into a string array for the MCQ UI. */
 export function normalizeMcqOptions(options?: unknown, choices?: unknown): string[] {
   const raw = options ?? choices;
   if (Array.isArray(raw)) {
-    return raw.map((item) => String(item).trim()).filter((item) => item.length > 0);
+    return raw.map((item) => sanitizeMcqOption(String(item))).filter((item) => item.length > 0);
   }
   if (raw && typeof raw === "object") {
     return Object.values(raw as Record<string, unknown>)
-      .map((item) => String(item).trim())
+      .map((item) => sanitizeMcqOption(String(item)))
       .filter((item) => item.length > 0);
   }
   return [];

@@ -21,6 +21,7 @@ from app.services.chat_scope import normalize_chat_scope
 from app.services.embed import embed_query
 from app.services.llm_router import stream_chat_completion
 from app.services.prompts import get_prompt
+from app.services.guest import can_access_document
 from app.services.guest_session import guest_session_for_read, optional_guest_session
 from app.services.response_cache import get_cached_response, store_response
 from app.services.usage import check_message_allowed, increment_message_count

@@ -5,7 +5,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.graphs.mcq_graph import _check_answer, grade_mcq_answer, try_grade_mcq_fast
+from app.graphs.mcq_graph import (
+    _check_answer,
+    _learnify_explanation,
+    grade_mcq_answer,
+    try_grade_mcq_fast,
+)
 from app.schemas.mcq import McqQuestion
 
 
@@ -39,7 +44,28 @@ def test_check_answer_correct() -> None:
         }
     )
     assert out["is_correct"] is True
+    assert out["feedback_ready"] is True
     assert "Because B" in out["feedback"]
+
+
+def test_learnify_strips_page_text_framing() -> None:
+    raw = "The page text specifies that Bernier's account was translated into four languages."
+    cleaned = _learnify_explanation(raw)
+    assert "page text" not in cleaned.lower()
+    assert "Bernier" in cleaned
+
+
+def test_try_grade_mcq_fast_strips_formal_correct_explanation() -> None:
+    out = try_grade_mcq_fast(
+        options=["A", "B"],
+        correct_index=1,
+        selected_index=1,
+        explanation="The page text specifies that B is correct.",
+    )
+    assert out is not None
+    assert out["is_correct"] is True
+    assert "page text" not in out["feedback"].lower()
+    assert "B is correct" in out["feedback"]
 
 
 def test_try_grade_mcq_fast_correct() -> None:
@@ -59,11 +85,12 @@ def test_try_grade_mcq_fast_wrong_with_explanation() -> None:
         options=["A", "B"],
         correct_index=1,
         selected_index=0,
-        explanation="B fits the text.",
+        explanation="B fits because it matches how European accounts spread through print.",
     )
     assert out is not None
     assert out["is_correct"] is False
     assert "B fits" in out["feedback"]
+    assert "You chose A" in out["feedback"]
 
 
 def test_try_grade_mcq_fast_wrong_without_explanation() -> None:

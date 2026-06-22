@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import text
@@ -21,6 +22,8 @@ TRANSITION_PREFETCH_RATIO = 0.70
 ABSOLUTE_MAX_QUESTIONS_PER_PAGE = 150
 # Backward-compatible alias for API consumers
 MAX_QUESTIONS_PER_PAGE = ABSOLUTE_MAX_QUESTIONS_PER_PAGE
+# A generate job left in 'running' after a worker crash blocks recovery until reclaimed.
+GENERATE_JOB_STALE_SECONDS = 180
 
 
 def default_progress(doc: Document) -> dict[str, Any]:
@@ -334,7 +337,23 @@ def enqueue_page_batch(
     page: int,
     batch_size: int,
     start_sequence: int,
-) -> Job:
+) -> Job | None:
+    generated = count_assertions_on_page(db, doc.id, page)
+    start_sequence = max(start_sequence, generated)
+    budget = get_question_budget(doc, page)
+    remaining = budget - generated
+    if remaining <= 0:
+        save_progress(db, doc, {"generation_pending": False})
+        db.commit()
+        return None
+
+    batch_size = min(batch_size, remaining)
+    if _has_active_generate_job(db, doc.id):
+        save_progress(db, doc, {"generation_pending": True})
+        db.commit()
+        return None
+
+    _cancel_queued_generate_jobs(db, doc.id)
     save_progress(db, doc, {"generation_pending": True})
 
     activity_id = create_activity(
@@ -504,6 +523,36 @@ def set_coverage_complete(db: Session, document_id: uuid.UUID, page: int) -> Non
     save_progress(db, doc, {"page_coverage": {_page_key(page): entry}})
 
 
+def _reclaim_stale_generate_jobs(db: Session, document_id: uuid.UUID | None = None) -> int:
+    """Re-queue orphaned generate.questions jobs so learn mode can recover."""
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=GENERATE_JOB_STALE_SECONDS)
+    doc_filter = ""
+    params: dict[str, Any] = {"cutoff": cutoff}
+    if document_id is not None:
+        doc_filter = "AND payload->>'document_id' = :document_id"
+        params["document_id"] = str(document_id)
+    result = db.execute(
+        text(
+            f"""
+            UPDATE jobs
+            SET status = 'queued',
+                locked_by = NULL,
+                locked_at = NULL,
+                error = NULL,
+                updated_at = NOW()
+            WHERE name = 'generate.questions'
+              AND status = 'running'
+              AND locked_at IS NOT NULL
+              AND locked_at < :cutoff
+              {doc_filter}
+            """
+        ),
+        params,
+    )
+    db.commit()
+    return int(result.rowcount or 0)
+
+
 def _has_running_generate_job(db: Session, document_id: uuid.UUID) -> bool:
     running = db.execute(
         text(
@@ -552,8 +601,9 @@ def _cancel_queued_generate_jobs(db: Session, document_id: uuid.UUID) -> None:
 
 
 def release_stuck_generation(db: Session, document_id: uuid.UUID) -> None:
-    """Clear a stale generation_pending flag when no job is actually running."""
-    if _has_running_generate_job(db, document_id):
+    """Clear a stale generation_pending flag when no job is queued or running."""
+    _reclaim_stale_generate_jobs(db, document_id)
+    if _has_active_generate_job(db, document_id):
         return
     doc = db.get(Document, document_id)
     if not doc:
@@ -562,7 +612,6 @@ def release_stuck_generation(db: Session, document_id: uuid.UUID) -> None:
     progress = get_progress(doc)
     if not progress.get("generation_pending"):
         return
-    _cancel_queued_generate_jobs(db, document_id)
     save_progress(db, doc, {"generation_pending": False})
     db.commit()
 

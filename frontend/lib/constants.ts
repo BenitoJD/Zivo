@@ -3,12 +3,12 @@ export const STORAGE_LIMIT_BYTES = GB_BYTES;
 export const MAX_UPLOAD_BYTES = GB_BYTES;
 
 export const INDEXING_STAGES = [
-  { min: 0, title: "Starting", detail: "Queuing chat context for your first pages" },
-  { min: 10, title: "Reading pages", detail: "Extracting text from the active study window" },
-  { min: 30, title: "Building chunks", detail: "Organizing passages for tutor search" },
-  { min: 50, title: "Embedding", detail: "Indexing only the pages needed for chat" },
-  { min: 80, title: "Almost ready", detail: "Finishing the sliding context window" },
-  { min: 100, title: "Finishing", detail: "Study mode opens next" },
+  { min: 0, title: "Starting", detail: "Setting up your study session" },
+  { min: 10, title: "Reading", detail: "Pulling text from your source" },
+  { min: 30, title: "Organizing", detail: "Structuring passages for search" },
+  { min: 50, title: "Indexing", detail: "Making the material searchable" },
+  { min: 80, title: "Almost ready", detail: "Finishing the context window" },
+  { min: 100, title: "Ready", detail: "Opening study mode" },
 ] as const;
 
 export type IndexingStage = (typeof INDEXING_STAGES)[number];

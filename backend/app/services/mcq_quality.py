@@ -10,7 +10,14 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.services.llm_router import complete_chat
-from app.services.mcq_dedup import format_prior_mcqs_block, is_mcq_too_similar, stems_match
+from app.services.mcq_dedup import (
+    coerce_mcq_options,
+    format_prior_mcqs_block,
+    has_page_reference_stem,
+    is_mcq_too_similar,
+    sanitize_mcq_stem,
+    stems_match,
+)
 from app.services.prompts import get_prompt
 
 MAX_GENERATION_ATTEMPTS = 3
@@ -27,6 +34,7 @@ FATAL_FLAW_CODES = frozenset(
         "not_grounded",
         "invalid_structure",
         "too_similar_to_prior",
+        "meta_page_reference",
     }
 )
 
@@ -83,6 +91,14 @@ def run_heuristic_checks(
 
     if _NONE_ALL_RE.search(question):
         flaws.append({"code": "none_or_all_of_above", "message": "Stem references none/all of the above"})
+
+    if has_page_reference_stem(question):
+        flaws.append(
+            {
+                "code": "meta_page_reference",
+                "message": "Stem frames the question around the page instead of testing knowledge directly",
+            }
+        )
 
     if _FILL_BLANK_RE.search(question):
         flaws.append({"code": "unfocused_stem", "message": "Fill-in-the-blank style stem"})
@@ -178,17 +194,9 @@ def _parse_critic_json(raw: str) -> dict[str, Any] | None:
         return None
 
 
-def _coerce_options(raw: Any) -> list[str]:
-    if isinstance(raw, list):
-        return [str(o).strip() for o in raw if str(o).strip()]
-    if isinstance(raw, dict):
-        return [str(v).strip() for v in raw.values() if str(v).strip()]
-    return []
-
-
 def _normalize_mcq_payload(data: dict[str, Any], target_aspect: dict[str, Any] | None) -> dict[str, Any]:
-    question = data.get("question") or data.get("stem") or ""
-    options = _coerce_options(data.get("options") or data.get("choices"))
+    question = sanitize_mcq_stem(str(data.get("question") or data.get("stem") or ""))
+    options = coerce_mcq_options(data.get("options") or data.get("choices"))
     if not question or len(options) < 2:
         raise ValueError("invalid mcq")
     key = data.get("primary_concept_key") or (target_aspect or {}).get("key") or "page-concept"

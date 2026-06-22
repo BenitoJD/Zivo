@@ -54,7 +54,7 @@ import { apiFetchBytes, apiGet, apiPost, apiPostSSE, ensureGuestSession, isArtif
 import { BRAND_LOGO_SRC, ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import { AssistantMarkdown } from "@/lib/chatMarkdown";
 import { indexingStage } from "@/lib/constants";
-import { learnRangeLabel, learnWaitPhase, rotatingLearnStatus } from "@/lib/learnStatus";
+import { learnWaitPhase, rotatingLearnStatus } from "@/lib/learnStatus";
 import {
   cancelAllPdfRenders,
   clampPdfScroll,
@@ -68,6 +68,7 @@ import {
 } from "@/lib/pdf";
 import {
   normalizeMcqOptions,
+  sanitizeMcqStem,
   type ArtifactMeta,
   type AssertionPayload,
   type McqGradeResponse,
@@ -361,7 +362,7 @@ export default function WorkspaceArtifactPage({
     apiGet<{ payload: AssertionPayload; title?: string }>(`/api/assertions/${queue.current_assertion_id}`)
       .then((row) => {
         const p = row.payload ?? {};
-        setQuestion(p.question ?? p.stem ?? row.title ?? "Question");
+        setQuestion(sanitizeMcqStem(p.question ?? p.stem ?? row.title ?? "Question"));
         setOptions(normalizeMcqOptions(p.options, p.choices));
         setQuestionSequence(typeof p.sequence === "number" ? p.sequence : null);
         setSelected(null);
@@ -658,19 +659,18 @@ export default function WorkspaceArtifactPage({
         <Paper withBorder p={{ base: "lg", sm: "xl" }} maw={520} w="100%">
           <Stack gap="lg">
             <Stack gap="xs" align="center">
-              <Loader type="bars" />
-              <Title order={3} ta="center">
+              <Loader type="oval" size="sm" />
+              <Text size="lg" fw={500} ta="center" style={{ letterSpacing: "-0.02em" }}>
                 {stage.title}
-              </Title>
+              </Text>
               <Text c="dimmed" ta="center" size="sm">
                 {stage.detail}
               </Text>
-              <Text size="sm" c="dimmed">
-                {queue?.rag_window_pages && queue.rag_window_pages.length > 0
-                  ? `Chat context: pages ${queue.rag_window_pages[0]}–${queue.rag_window_pages[queue.rag_window_pages.length - 1]}`
-                  : `Study range: pages ${selectedRange.from}–${selectedRange.to}`}
-                {artifact.filename ? ` · ${artifact.filename}` : ""}
-              </Text>
+              {artifact.filename ? (
+                <Text size="xs" c="dimmed" ta="center" opacity={0.7}>
+                  {artifact.filename}
+                </Text>
+              ) : null}
             </Stack>
             <Stack gap="xs">
               <Group justify="space-between">
@@ -704,7 +704,6 @@ export default function WorkspaceArtifactPage({
   const questionColumn = (
     <Box flex={1} mih={0} h="100%" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <StudyMetaBar
-        currentPage={queue?.current_page}
         questionIndex={questionIndex}
         questionTotal={questionTotal}
         mode={mode}
@@ -1151,7 +1150,6 @@ function StudyRangeReselectOverlay({
 }
 
 function PageCompleteInterstitial({
-  page,
   compact,
   generating,
 }: {
@@ -1161,15 +1159,13 @@ function PageCompleteInterstitial({
 }) {
   return (
     <Center py={compact ? "md" : "xl"}>
-      <Stack align="center" gap="md" maw={400}>
-        <Loader type="dots" size="sm" />
-        <Title order={3} ta="center" fw={600} style={{ letterSpacing: "-0.03em" }}>
-          Page {page} complete
-        </Title>
+      <Stack align="center" gap="md" maw={320}>
+        <Loader type="oval" size="sm" />
+        <Text size="lg" fw={500} ta="center" style={{ letterSpacing: "-0.02em" }}>
+          Well done
+        </Text>
         <Text size="sm" c="dimmed" ta="center" lh={1.55}>
-          {generating
-            ? "Preparing questions for the next page…"
-            : "Moving to the next page…"}
+          {generating ? "Preparing what's next…" : "Continuing…"}
         </Text>
       </Stack>
     </Center>
@@ -1177,7 +1173,6 @@ function PageCompleteInterstitial({
 }
 
 function StudyMetaBar({
-  currentPage,
   questionIndex,
   questionTotal,
   mode,
@@ -1185,7 +1180,6 @@ function StudyMetaBar({
   showProgress = true,
   compact = false,
 }: {
-  currentPage?: number;
   questionIndex: number;
   questionTotal: number;
   mode: "learn" | "test";
@@ -1194,11 +1188,7 @@ function StudyMetaBar({
   compact?: boolean;
 }) {
   const progressLabel =
-    showProgress && questionTotal > 0
-      ? currentPage
-        ? `Page ${currentPage} · Question ${questionIndex} of ${questionTotal}`
-        : `Question ${questionIndex} of ${questionTotal}`
-      : null;
+    showProgress && questionTotal > 0 ? `Question ${questionIndex} of ${questionTotal}` : null;
 
   return (
     <Group
@@ -1879,27 +1869,6 @@ function StudySourcePanel({
                       overflow: "hidden",
                     }}
                   >
-                    {isActivePage && (
-                      <Box
-                        pos="absolute"
-                        top={0}
-                        left={0}
-                        right={0}
-                        style={{ zIndex: 2, lineHeight: 1.4 }}
-                      >
-                        <Text
-                          size="xs"
-                          fw={600}
-                          c="blue"
-                          px="sm"
-                          py={4}
-                          bg="rgba(255,255,255,0.92)"
-                          style={{ borderBottom: "1px solid var(--mantine-color-gray-2)" }}
-                        >
-                          {currentPage ? `Page ${currentPage}` : "Studying this page"}
-                        </Text>
-                      </Box>
-                    )}
                     <canvas
                       ref={(el) => {
                         canvasRefs.current[p] = el;
@@ -2107,7 +2076,7 @@ function McqFeedbackCard({
         style={{ whiteSpace: "pre-wrap", fontSize: compact ? undefined : "1.0625rem" }}
       >
         <Text component="span" fw={600} inherit>
-          {isCorrect ? "Got it. " : "Not quite. "}
+          {isCorrect ? "Exactly — " : "Not quite — "}
         </Text>
         {lead}
       </Text>
@@ -2180,12 +2149,11 @@ function McqHeroPanel({
       (queue?.generation_pending || (queue?.questions_generated ?? 0) === 0));
 
   const indexing = artifactStatus === "indexing";
-  const page = queue?.current_page;
-  const generating = Boolean(queue?.generation_pending) && Boolean(queue?.page_triage_complete);
+  const generating = Boolean(queue?.generation_pending);
   const planning =
     !indexing &&
-    ((Boolean(queue?.generation_pending) && !queue?.page_triage_complete) ||
-      (!queue?.generation_pending && (queue?.questions_generated ?? 0) === 0));
+    !generating &&
+    (queue?.questions_generated ?? 0) === 0;
   const waitPhase = learnWaitPhase({ indexing, planning, generating });
   const [statusTick, setStatusTick] = useState(0);
   useInterval(() => {
@@ -2193,28 +2161,25 @@ function McqHeroPanel({
   }, 2600);
   useEffect(() => {
     setStatusTick(0);
-  }, [waitPhase, page]);
-  const status = rotatingLearnStatus(waitPhase, statusTick, page);
-  const rangeLabel = learnRangeLabel(queue?.page_from, queue?.page_to, indexing ? undefined : page);
+  }, [waitPhase]);
+  const statusLine = rotatingLearnStatus(waitPhase, statusTick);
 
   if (waiting) {
     return (
-      <Stack align="center" gap="lg" py="md">
-        <Loader type="dots" size="sm" />
-        <Stack gap={6} align="center" maw={440}>
-          <Title order={3} ta="center" fw={600} style={{ letterSpacing: "-0.03em" }}>
-            {status.title}
-          </Title>
-          {rangeLabel && (
-            <Text size="sm" c="dimmed" ta="center">
-              {rangeLabel}
-            </Text>
-          )}
-          <Text size="sm" c="dimmed" ta="center" lh={1.5}>
-            {status.detail}
+      <Center py={compact ? "lg" : "xl"}>
+        <Stack align="center" gap="lg" maw={280}>
+          <Loader type="oval" size="sm" />
+          <Text
+            size="lg"
+            fw={500}
+            ta="center"
+            c={isDark ? "gray.2" : "dark.6"}
+            style={{ letterSpacing: "-0.025em" }}
+          >
+            {statusLine}
           </Text>
         </Stack>
-      </Stack>
+      </Center>
     );
   }
 

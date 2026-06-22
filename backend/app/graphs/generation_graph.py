@@ -38,6 +38,32 @@ def run_generation(db: Session, document_id: uuid.UUID, options: dict[str, Any])
     return _run_legacy_pool(db, document_id, options)
 
 
+def _assertion_sequence_exists(
+    db: Session,
+    document_id: uuid.UUID,
+    page_number: int,
+    sequence: int,
+) -> bool:
+    exists = db.execute(
+        text(
+            """
+            SELECT 1 FROM intel.assertion
+            WHERE payload->>'artifact_id' = :artifact_id
+              AND status = 'active'
+              AND (payload->>'page_number')::int = :page
+              AND (payload->>'sequence')::int = :sequence
+            LIMIT 1
+            """
+        ),
+        {
+            "artifact_id": str(document_id),
+            "page": page_number,
+            "sequence": sequence,
+        },
+    ).scalar()
+    return exists is not None
+
+
 def _next_aspect(doc: Document, page_number: int) -> dict[str, Any] | None:
     cov = get_page_coverage(doc, page_number)
     for aspect in cov.get("aspects") or []:
@@ -95,6 +121,9 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
         if sequence > budget:
             set_coverage_complete(db, document_id, page_number)
             break
+
+        if _assertion_sequence_exists(db, document_id, page_number, sequence):
+            continue
 
         target = _next_aspect(doc, page_number)
         if not target:

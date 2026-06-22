@@ -12,42 +12,75 @@ from sqlalchemy.orm import Session
 from app.services.llm_router import complete_chat
 from app.services.prompts import get_prompt
 
-_LEARN_FEEDBACK_MAX = 300
+_LEARN_FEEDBACK_MAX = 280
+
+_FORMAL_META_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"^(?:(?:according|based)\s+to\s+(?:the\s+)?(?:page|text|passage|source|excerpt)"
+        r"|from\s+(?:the\s+)?(?:page|text|passage|source)"
+        r"|in\s+(?:the\s+)?(?:passage|text|excerpt)"
+        r"|(?:the\s+)?(?:page|text|passage|source)\s+(?:text\s+)?"
+        r"(?:specifies|states|says|indicates|describes|explains|mentions)(?:\s+that)?)[,:]?\s+",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^as\s+(?:the\s+)?(?:page|text|passage)\s+(?:states|says)[,:]?\s+", re.IGNORECASE),
+    re.compile(r"^the\s+text\s+states:\s*['\"]?", re.IGNORECASE),
+)
+
+_FORMAL_RESIDUE_RE = re.compile(
+    r"\b(?:page\s+text|the\s+text\s+states|according\s+to\s+the|passage\s+states|text\s+specifies|document\s+says)\b",
+    re.IGNORECASE,
+)
 
 
-def _learnify_explanation(text: str) -> str:
-    """Trim and simplify stored explanations for learner-facing feedback."""
+def _strip_formal_meta(text: str) -> str:
     cleaned = re.sub(r"\s+", " ", (text or "").strip())
     if not cleaned:
         return ""
+    for _ in range(6):
+        changed = False
+        for pattern in _FORMAL_META_PATTERNS:
+            updated = pattern.sub("", cleaned).strip()
+            if updated != cleaned:
+                cleaned = updated
+                changed = True
+        if not changed:
+            break
+    cleaned = re.sub(r"\s*The text states:.*$", "", cleaned, flags=re.IGNORECASE).strip()
+    return cleaned
 
-    cleaned = re.sub(
-        r"\s*The text states:\s*['\"].*?['\"]\s*",
-        " ",
-        cleaned,
-        flags=re.IGNORECASE,
-    )
-    cleaned = re.sub(r"\s*The text states:.*$", "", cleaned, flags=re.IGNORECASE)
-    cleaned = cleaned.strip()
+
+def _learnify_explanation(text: str) -> str:
+    """Turn stored explanations into short, memorable teacher voice."""
+    cleaned = _strip_formal_meta(text)
+    if not cleaned:
+        return ""
 
     sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", cleaned) if s.strip()]
     summary = " ".join(sentences[:2])
     if len(summary) > _LEARN_FEEDBACK_MAX:
         summary = summary[: _LEARN_FEEDBACK_MAX - 1].rstrip() + "…"
+    if summary and summary[0].islower():
+        summary = summary[0].upper() + summary[1:]
     return summary
 
 
+def _has_formal_residue(text: str) -> bool:
+    return bool(_FORMAL_RESIDUE_RE.search(text or ""))
+
+
 def _wrong_feedback(*, chosen: str, correct: str, explanation: str) -> str:
-    plain = _learnify_explanation(explanation)
-    intro = f'The answer is "{correct}". You picked "{chosen}".'
-    if plain:
-        return f"{intro}\n\n{plain}"
-    return intro
+    takeaway = _learnify_explanation(explanation)
+    if takeaway:
+        return (
+            f"The answer is {correct}. {takeaway}\n\n"
+            f"You chose {chosen} — close, but that misses the main point here."
+        )
+    return f"The answer is {correct}. You chose {chosen} — look for the option that matches that idea."
 
 
 def _correct_feedback(explanation: str) -> str:
-    plain = _learnify_explanation(explanation)
-    return plain or "Nice work — you got it."
+    return _learnify_explanation(explanation)
 
 
 class McqGradeState(TypedDict, total=False):
@@ -62,12 +95,22 @@ class McqGradeState(TypedDict, total=False):
 
 
 def _check_answer(state: McqGradeState) -> dict[str, Any]:
-    correct = state["selected_index"] == state["correct_index"]
-    if correct:
-        base = (state.get("explanation") or "").strip()
-        feedback = _correct_feedback(base) if base else "Nice work — you got it."
-        return {"is_correct": True, "feedback": feedback}
-    return {"is_correct": False}
+    fast = try_grade_mcq_fast(
+        options=state.get("options") or [],
+        correct_index=int(state["correct_index"]),
+        selected_index=int(state["selected_index"]),
+        explanation=(state.get("explanation") or ""),
+    )
+    if fast is not None:
+        return {
+            "is_correct": bool(fast["is_correct"]),
+            "feedback": (fast.get("feedback") or "").strip(),
+            "feedback_ready": True,
+        }
+    return {
+        "is_correct": state["selected_index"] == state["correct_index"],
+        "feedback_ready": False,
+    }
 
 
 def try_grade_mcq_fast(
@@ -77,67 +120,78 @@ def try_grade_mcq_fast(
     selected_index: int,
     explanation: str = "",
 ) -> dict[str, Any] | None:
-    """Return grading result without retrieval/LLM when possible."""
-    if selected_index == correct_index:
-        base = (explanation or "").strip()
-        return {
-            "is_correct": True,
-            "feedback": _correct_feedback(base),
-        }
-
+    """Return grading result without retrieval/LLM when the explanation is already learner-ready."""
     exp = (explanation or "").strip()
+    correct = options[correct_index] if correct_index < len(options) else ""
+    chosen = options[selected_index] if selected_index < len(options) else ""
+
+    if selected_index == correct_index:
+        plain = _correct_feedback(exp)
+        if plain and not _has_formal_residue(plain):
+            return {"is_correct": True, "feedback": plain}
+        if not exp:
+            return {"is_correct": True, "feedback": ""}
+        return None
+
     if not exp:
         return None
 
-    correct = options[correct_index] if correct_index < len(options) else ""
-    chosen = options[selected_index] if selected_index < len(options) else ""
-    return {
-        "is_correct": False,
-        "feedback": _wrong_feedback(chosen=chosen, correct=correct, explanation=exp),
-    }
+    plain = _learnify_explanation(exp)
+    if plain and not _has_formal_residue(plain):
+        return {
+            "is_correct": False,
+            "feedback": _wrong_feedback(chosen=chosen, correct=correct, explanation=exp),
+        }
+    return None
 
 
-async def _explain_wrong(state: McqGradeState, *, db: Session) -> dict[str, Any]:
+async def _teach_feedback(state: McqGradeState, *, db: Session) -> dict[str, Any]:
     options = state.get("options") or []
     correct = options[state["correct_index"]] if state["correct_index"] < len(options) else ""
     chosen = options[state["selected_index"]] if state["selected_index"] < len(options) else ""
+    is_correct = bool(state.get("is_correct"))
     system = get_prompt(db, "mcq_grader_system")
+    outcome = "The learner answered correctly." if is_correct else "The learner answered incorrectly."
     user = (
         f"Question: {state.get('question', '')}\n"
         f"Options:\n"
         + "\n".join(f"{i}. {opt}" for i, opt in enumerate(options))
-        + f"\nStudent chose: {chosen}\n"
+        + f"\n{outcome}\n"
+        f"Student chose: {chosen}\n"
         f"Correct answer: {correct}\n"
         f"Author explanation: {(state.get('explanation') or '').strip() or '(none)'}\n"
     )
     if state.get("document_context"):
         user += f"\nDocument context:\n{state['document_context'][:6000]}\n"
-    user += "\nExplain in plain English for a learner. Short and friendly."
+    user += "\nWrite teacher feedback only — no labels like 'Feedback:' or markdown."
 
     feedback = await complete_chat(
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         db,
+        log_tag="grade_mcq",
     )
-    return {"feedback": feedback.strip()}
+    return {"feedback": _learnify_explanation(feedback.strip()) or feedback.strip()}
 
 
 def build_mcq_grade_graph():
     graph = StateGraph(McqGradeState)
 
-    async def explain_node(state: McqGradeState, config) -> dict[str, Any]:
+    async def teach_node(state: McqGradeState, config) -> dict[str, Any]:
         configurable = config.get("configurable", {}) if isinstance(config, dict) else {}
         db: Session = configurable["db"]
-        return await _explain_wrong(state, db=db)
+        return await _teach_feedback(state, db=db)
 
     graph.add_node("check", _check_answer)
-    graph.add_node("explain", explain_node)
+    graph.add_node("teach", teach_node)
 
-    def route(state: McqGradeState) -> Literal["done", "explain"]:
-        return "done" if state.get("is_correct") else "explain"
+    def route(state: McqGradeState) -> Literal["done", "teach"]:
+        if state.get("feedback_ready"):
+            return "done"
+        return "teach"
 
     graph.add_edge(START, "check")
-    graph.add_conditional_edges("check", route, {"done": END, "explain": "explain"})
-    graph.add_edge("explain", END)
+    graph.add_conditional_edges("check", route, {"done": END, "teach": "teach"})
+    graph.add_edge("teach", END)
     return graph.compile()
 
 
@@ -170,7 +224,7 @@ async def grade_mcq_answer(
     if fast is not None:
         return {
             "is_correct": bool(fast["is_correct"]),
-            "feedback": (fast.get("feedback") or "").strip() or "Review the explanation and try again.",
+            "feedback": (fast.get("feedback") or "").strip(),
         }
 
     graph = get_mcq_grade_graph()
@@ -181,11 +235,18 @@ async def grade_mcq_answer(
         "selected_index": selected_index,
         "explanation": explanation,
         "document_context": document_context,
+        "is_correct": selected_index == correct_index,
     }
     result = await graph.ainvoke(state, config={"configurable": {"db": db}})
+    is_correct = selected_index == correct_index
+    feedback = (result.get("feedback") or "").strip()
+    if not feedback and is_correct:
+        feedback = ""
+    elif not feedback:
+        feedback = "Let's look at this again — the right answer fits the idea we were testing."
     return {
-        "is_correct": bool(result.get("is_correct")),
-        "feedback": (result.get("feedback") or "").strip() or "Review the explanation and try again.",
+        "is_correct": is_correct,
+        "feedback": feedback,
     }
 
 
