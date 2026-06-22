@@ -37,6 +37,8 @@ def _scope_hash(artifact_id: uuid.UUID, scope: dict) -> str:
         "page_end": scope.get("page_end"),
         "has_selection": bool(scope.get("selection_text")),
         "current_page": scope.get("current_page"),
+        "question_number": scope.get("question_number"),
+        "current_assertion_id": scope.get("current_assertion_id"),
         "mentions": sorted(scope.get("mentions") or []),
     }
     raw = json.dumps(key, sort_keys=True, default=str)

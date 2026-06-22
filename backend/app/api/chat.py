@@ -18,6 +18,7 @@ from app.models import Account, ChatMessage, ChatThread, Document, User
 from app.schemas.mcq import McqGradeRequest, McqGradeResponse
 from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.services.chat_scope import normalize_chat_scope
+from app.services.learn_chat_context import build_learn_chat_context, learn_scope_fields
 from app.services.embed import embed_query
 from app.services.llm_router import stream_chat_completion
 from app.services.prompts import get_prompt
@@ -247,6 +248,7 @@ async def chat_stream(
     db.commit()
 
     scope = normalize_chat_scope(body.scope.model_dump(), doc)
+    scope.update(learn_scope_fields(db, doc.id, doc))
     doc_ids = _resolve_document_ids(db, doc.id, scope.get("mentions") or [], user, guest_id)
     if is_image_document(doc):
         retrieved = {"citations": [], "messages": prior, "context_block": "", "context_note": ""}
@@ -284,6 +286,9 @@ async def chat_stream(
         page_end=scope.get("page_end"),
     )
     trailer_parts: list[str] = []
+    learn_context = build_learn_chat_context(db, doc.id, doc)
+    if learn_context:
+        trailer_parts.append(learn_context)
     if context_block:
         trailer_parts.append("Document excerpts:\n\n" + context_block)
     if trailer_parts:

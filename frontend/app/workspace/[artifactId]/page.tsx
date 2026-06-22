@@ -510,21 +510,13 @@ export default function WorkspaceArtifactPage({
       await ensureGuestSession();
       const currentPage = queue?.current_page;
       const scope = currentPage && currentPage > 0 ? { current_page: currentPage } : {};
-      const stemForTutor =
-        queue?.current_assertion_id && question && !question.toLowerCase().includes("loading")
-          ? question
-          : null;
-      const message =
-        stemForTutor && /hint/i.test(userMsg)
-          ? `${userMsg}\n\nCurrent question: ${stemForTutor}`
-          : userMsg;
       let assistant = "";
       let gotToken = false;
       await apiPostSSE(
         "/api/chat",
         {
           document_id: artifactId,
-          message,
+          message: userMsg,
           scope,
         },
         (chunk) => {
