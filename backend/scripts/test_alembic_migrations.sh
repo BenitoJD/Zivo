@@ -6,12 +6,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BACKEND="${ROOT}/backend"
 VENV="${HOME}/.venv/zivo"
 
-if [[ ! -x "${VENV}/bin/python" ]]; then
-  echo "Missing ${VENV}. Run ./scripts/dev.sh setup first." >&2
-  exit 1
+if [[ -x "${VENV}/bin/python" ]]; then
+  PY="${VENV}/bin/python"
+elif command -v python >/dev/null 2>&1; then
+  PY="python"
+else
+  PY="python3"
 fi
 
-PY="${VENV}/bin/python"
 BASE_URL="${DATABASE_URL:-postgresql+psycopg://zivo:zivo@localhost:5455/zivo}"
 TEST_DB="zivo_alembic_test_$$"
 export DATABASE_URL="${BASE_URL%/*}/${TEST_DB}"
