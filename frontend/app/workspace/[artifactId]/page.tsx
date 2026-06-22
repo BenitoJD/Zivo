@@ -34,10 +34,11 @@ import {
   UnstyledButton,
   useMantineColorScheme,
 } from "@mantine/core";
-import { useDisclosure, useLocalStorage, useMediaQuery, useMounted } from "@mantine/hooks";
+import { useDisclosure, useInterval, useLocalStorage, useMediaQuery, useMounted } from "@mantine/hooks";
 import {
   IconArrowUp,
   IconArrowsMaximize,
+  IconCheck,
   IconClipboardList,
   IconFileText,
   IconGripVertical,
@@ -51,6 +52,7 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
 import { apiFetchBytes, apiGet, apiPost, apiPostSSE, ensureGuestSession, isArtifactId } from "@/lib/api/client";
 import { ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import { indexingStage } from "@/lib/constants";
+import { learnRangeLabel, learnWaitPhase, rotatingLearnStatus } from "@/lib/learnStatus";
 import {
   cancelAllPdfRenders,
   clampPdfScroll,
@@ -64,7 +66,6 @@ import {
 } from "@/lib/pdf";
 import type { ArtifactMeta, AssertionPayload, McqGradeResponse, McqState, PagesInfo } from "@/lib/types";
 
-const PAGE_RANGE_PANEL_WIDTH = 300;
 const SOURCE_PANEL_DEFAULT = 360;
 const SOURCE_PANEL_MIN = 280;
 const SOURCE_PANEL_MAX = 720;
@@ -76,6 +77,22 @@ const PANEL_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
 const PANEL_MS = 280;
 const STUDY_DESKTOP_BP = "(min-width: 62em)";
 const STUDY_COMPACT_BP = "(max-width: 47.99em)";
+const THUMB_GAP = 20;
+const THUMB_MIN_WIDTH = 188;
+const SELECTION_PAD_X = 20;
+const SELECTION_PAD_Y = 12;
+
+function shellBleedPx(compact: boolean): number {
+  return compact ? 10 : 16;
+}
+
+function computeGridLayout(gridWidth: number, minThumbWidth: number, gap: number) {
+  if (gridWidth < 1) return { cols: 2, thumbWidth: minThumbWidth };
+  const cols = Math.max(1, Math.floor((gridWidth + gap) / (minThumbWidth + gap)));
+  const totalGap = gap * Math.max(0, cols - 1);
+  const thumbWidth = Math.floor((gridWidth - totalGap) / cols);
+  return { cols, thumbWidth };
+}
 
 export default function WorkspaceArtifactPage({
   params,
@@ -96,15 +113,12 @@ export default function WorkspaceArtifactPage({
   const [pages, setPages] = useState<PagesInfo | null>(null);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
-  const [pageFrom, setPageFrom] = useState(1);
-  const [pageTo, setPageTo] = useState(1);
+  const [selectedPages, setSelectedPages] = useState<number[]>([]);
+  const [lastClickedPage, setLastClickedPage] = useState<number | null>(null);
   const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
-  const canvasRefs = useRef<Record<number, HTMLCanvasElement | null>>({});
-  const pdfViewerRef = useRef<HTMLDivElement>(null);
-  const [viewerWidth, setViewerWidth] = useState(0);
-  const [panelPos, setPanelPos] = useState<{ x: number; y: number } | null>(null);
+  const thumbCanvasRefs = useRef<Record<number, HTMLCanvasElement | null>>({});
 
   const [queue, setQueue] = useState<McqState | null>(null);
   const [question, setQuestion] = useState("Loading questions…");
@@ -134,13 +148,19 @@ export default function WorkspaceArtifactPage({
   const [resizingSource, setResizingSource] = useState(false);
   const [resizingTutor, setResizingTutor] = useState(false);
   const [reselectOpen, setReselectOpen] = useState(false);
-  const advanceTimerRef = useRef<number | null>(null);
 
   const selectedRange = artifact?.meta?.selected_range;
   const apiPageCount = pages?.page_count ?? artifact?.meta?.page_count ?? 1;
   const pageCount = Math.max(apiPageCount, pdfDoc?.numPages ?? 0, 1);
-  const safeTo = Math.min(pageTo, pageCount);
-  const safeFrom = Math.min(pageFrom, safeTo);
+  const sortedSelection = useMemo(
+    () => [...selectedPages].filter((p) => p >= 1 && p <= pageCount).sort((a, b) => a - b),
+    [selectedPages, pageCount],
+  );
+  const sliderFrom = sortedSelection[0] ?? 1;
+  const sliderTo =
+    sortedSelection.length > 0
+      ? sortedSelection[sortedSelection.length - 1]
+      : Math.min(5, pageCount);
   const sliderMarks = useMemo(() => buildPageSliderMarks(pageCount), [pageCount]);
 
   const stem =
@@ -169,7 +189,8 @@ export default function WorkspaceArtifactPage({
           setArtifact(art);
           setPages(pg);
           const count = pg.page_count || art.meta?.page_count || 1;
-          setPageTo(Math.min(5, count));
+          setSelectedPages(defaultInitialPages(count));
+          setLastClickedPage(1);
         }
       })
       .catch((e) => {
@@ -231,18 +252,17 @@ export default function WorkspaceArtifactPage({
   useEffect(() => {
     if (!pdfDoc?.numPages || pdfDoc.numPages <= 1) return;
     const n = pdfDoc.numPages;
-    setPageFrom((from) => Math.min(from, n));
-    setPageTo((to) => (to <= 1 ? Math.min(5, n) : Math.min(to, n)));
+    setSelectedPages((prev) => {
+      const filtered = prev.filter((p) => p <= n);
+      return filtered.length > 0 ? filtered : defaultInitialPages(n);
+    });
   }, [pdfDoc]);
-
-  const previewPages = useMemo(() => {
-    const pages: number[] = [];
-    for (let p = safeFrom; p <= safeTo; p += 1) pages.push(p);
-    return pages;
-  }, [safeFrom, safeTo]);
 
   const studyPages = useMemo(() => {
     if (!selectedRange) return [];
+    if (selectedRange.pages?.length) {
+      return [...selectedRange.pages].sort((a, b) => a - b);
+    }
     const pages: number[] = [];
     for (let p = selectedRange.from; p <= selectedRange.to; p += 1) pages.push(p);
     return pages;
@@ -289,61 +309,6 @@ export default function WorkspaceArtifactPage({
       setTutorPanelWidth(tutorPanelMax);
     }
   }, [tutorPanelMax, tutorPanelWidth, setTutorPanelWidth]);
-
-  useEffect(() => {
-    if (!pdfDoc || !isPdf || selectedRange) return;
-    let cancelled = false;
-
-    void (async () => {
-      await new Promise<void>((resolve) => {
-        requestAnimationFrame(() => resolve());
-      });
-      if (cancelled || viewerWidth < 1) return;
-      for (const p of previewPages) {
-        if (cancelled) return;
-        const canvas = canvasRefs.current[p];
-        if (!canvas) continue;
-        try {
-          const scale = await pdfPageFitScale(pdfDoc, p, viewerWidth);
-          if (cancelled) return;
-          await renderPdfPageToCanvas(pdfDoc, p, canvas, scale);
-        } catch {
-          if (cancelled) return;
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      cancelAllPdfRenders(Object.values(canvasRefs.current));
-    };
-  }, [pdfDoc, previewPages, isPdf, selectedRange, viewerWidth]);
-
-  useEffect(() => {
-    if (selectedRange) return;
-    const el = pdfViewerRef.current;
-    if (!el) return;
-    const update = () => setViewerWidth(el.clientWidth);
-    update();
-    const ro = new ResizeObserver(() => update());
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [selectedRange, artifact?.id]);
-
-  useEffect(() => {
-    if (selectedRange || panelPos !== null || isCompact) return;
-    const x = Math.max(16, window.innerWidth - PAGE_RANGE_PANEL_WIDTH - 24);
-    setPanelPos({ x, y: 72 });
-  }, [panelPos, selectedRange, isCompact]);
-
-  useEffect(() => {
-    if (!panelPos) return;
-    const onResize = () => {
-      setPanelPos((pos) => (pos ? clampPanelPosition(pos, null) : pos));
-    };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [panelPos]);
 
   useEffect(() => {
     if (invalidArtifactId || !selectedRange || artifact?.status === "indexing") return;
@@ -404,7 +369,6 @@ export default function WorkspaceArtifactPage({
   useEffect(() => {
     setGradeState(null);
     setFeedback(null);
-    clearAdvanceTimer();
   }, [mode]);
 
   useEffect(() => {
@@ -414,13 +378,6 @@ export default function WorkspaceArtifactPage({
     }, 1500);
     return () => window.clearTimeout(id);
   }, [queue?.page_complete, queue?.current_assertion_id, queue?.document_complete]);
-
-  function clearAdvanceTimer() {
-    if (advanceTimerRef.current !== null) {
-      window.clearTimeout(advanceTimerRef.current);
-      advanceTimerRef.current = null;
-    }
-  }
 
   async function refreshQueue() {
     const data = await apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`);
@@ -436,7 +393,6 @@ export default function WorkspaceArtifactPage({
   }
 
   async function advanceMcq() {
-    clearAdvanceTimer();
     setSubmitting(true);
     try {
       await refreshQueue();
@@ -463,12 +419,6 @@ export default function WorkspaceArtifactPage({
       const correctIndex = res.correct_index ?? Number(selected);
       setFeedback(res.feedback ?? (correct ? "Correct!" : "Try again."));
       setGradeState({ correct, correctIndex });
-
-      if (mode === "test") {
-        await advanceMcq();
-      } else {
-        advanceTimerRef.current = window.setTimeout(() => void advanceMcq(), 1400);
-      }
     } catch {
       setFeedback("Could not grade answer — try again.");
     } finally {
@@ -477,10 +427,20 @@ export default function WorkspaceArtifactPage({
   }
 
   async function confirmRange() {
+    if (sortedSelection.length === 0) {
+      setSetupError("Select at least one page to study.");
+      return;
+    }
     setConfirming(true);
     setSetupError(null);
     try {
-      await apiPost(`/api/artifacts/${artifactId}/page-range`, { from: safeFrom, to: safeTo });
+      const from = sortedSelection[0];
+      const to = sortedSelection[sortedSelection.length - 1];
+      await apiPost(`/api/artifacts/${artifactId}/page-range`, {
+        from,
+        to,
+        pages: sortedSelection,
+      });
       setReselectOpen(false);
       setQueue(null);
       setMcqLoading(true);
@@ -500,10 +460,34 @@ export default function WorkspaceArtifactPage({
   function openReselectPages() {
     if (!selectedRange) return;
     const suggestion = suggestNextPageRange(selectedRange, pageCount);
-    setPageFrom(suggestion.from);
-    setPageTo(suggestion.to);
+    setSelectedPages(pagesInRange(suggestion.from, suggestion.to));
+    setLastClickedPage(suggestion.from);
     setSetupError(null);
     setReselectOpen(true);
+  }
+
+  function handleRangeChange(from: number, to: number) {
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    setSelectedPages(pagesInRange(lo, hi));
+    setLastClickedPage(lo);
+  }
+
+  function handlePageToggle(page: number, shiftKey: boolean) {
+    setSelectedPages((prev) => {
+      const next = new Set(prev);
+      if (shiftKey && lastClickedPage !== null) {
+        const lo = Math.min(lastClickedPage, page);
+        const hi = Math.max(lastClickedPage, page);
+        for (let p = lo; p <= hi; p += 1) next.add(p);
+      } else if (next.has(page)) {
+        next.delete(page);
+      } else {
+        next.add(page);
+      }
+      return [...next].sort((a, b) => a - b);
+    });
+    setLastClickedPage(page);
   }
 
   async function sendChat() {
@@ -523,13 +507,21 @@ export default function WorkspaceArtifactPage({
               page_end: pageCount ? Math.min(pageCount, currentPage + 1) : currentPage + 1,
             }
           : {};
+      const stemForTutor =
+        queue?.current_assertion_id && question && !question.toLowerCase().includes("loading")
+          ? question
+          : null;
+      const message =
+        stemForTutor && /hint/i.test(userMsg)
+          ? `${userMsg}\n\nCurrent question: ${stemForTutor}`
+          : userMsg;
       let assistant = "";
       let gotToken = false;
       await apiPostSSE(
         "/api/chat",
         {
           document_id: artifactId,
-          message: userMsg,
+          message,
           scope,
         },
         (chunk) => {
@@ -547,11 +539,15 @@ export default function WorkspaceArtifactPage({
       if (!gotToken || !assistant.trim()) {
         throw new Error("empty response");
       }
-    } catch {
+    } catch (e) {
+      const detail = e instanceof Error && e.message ? e.message : null;
       setChatMessages((m) => {
         const copy = [...m];
         const last = copy[copy.length - 1];
-        const fallback = `${ZIVO_ASSISTANT_NAME} could not reply right now. Try again in a moment.`;
+        const fallback =
+          detail && detail !== "empty response"
+            ? detail
+            : `${ZIVO_ASSISTANT_NAME} could not reply right now. Try again in a moment.`;
         if (last?.role === "assistant") {
           last.content = fallback;
         } else {
@@ -596,107 +592,39 @@ export default function WorkspaceArtifactPage({
   }
 
   if (!selectedRange) {
-    const sliderColor = isDark ? "blue.4" : "blue.6";
-    const thumbBg = isDark ? "var(--mantine-color-dark-6)" : "var(--mantine-color-white)";
-    const thumbBorder = isDark ? "var(--mantine-color-blue-4)" : "var(--mantine-color-blue-7)";
-    const trackBg = isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-3)";
+    const shortName = artifact.filename?.replace(/\.[^.]+$/, "") ?? "Source";
 
     return (
-      <Box
-        flex={1}
-        mih={0}
-        h="100%"
-        style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}
-      >
-        <ScrollArea flex={1} mih={0} offsetScrollbars type="auto">
-          <Box ref={pdfViewerRef} w="100%">
-            {pdfLoading && (
-              <Center mih="40vh">
-                <Loader />
-              </Center>
-            )}
-            {pdfError && (
-              <Text c="red" size="sm" ta="center" p="md">
-                {pdfError}
-              </Text>
-            )}
-            {!isPdf && !pdfLoading && (
-              <Center mih="40vh">
-                <Text c="dimmed" size="sm" ta="center" maw={420} px="md">
-                  Preview is available for PDF sources. Use the page range panel to pick pages ({pageCount}{" "}
-                  pages).
-                </Text>
-              </Center>
-            )}
-            {isPdf && pdfDoc && (
-              <Stack gap={0}>
-                {previewPages.map((p) => (
-                  <Box key={p} w="100%">
-                    <canvas
-                      ref={(el) => {
-                        canvasRefs.current[p] = el;
-                      }}
-                      style={{ width: "100%", height: "auto", display: "block" }}
-                    />
-                  </Box>
-                ))}
-              </Stack>
-            )}
-          </Box>
-        </ScrollArea>
-
-        {isCompact ? (
-          <PageRangeBottomSheet>
-            <PageRangeControls
-              safeFrom={safeFrom}
-              safeTo={safeTo}
-              pageCount={pageCount}
-              previewCount={previewPages.length}
-              sliderMarks={sliderMarks}
-              isDark={isDark}
-              sliderColor={sliderColor}
-              thumbBg={thumbBg}
-              thumbBorder={thumbBorder}
-              trackBg={trackBg}
-              confirming={confirming}
-              setupError={setupError}
-              onRangeChange={(from, to) => {
-                setPageFrom(from);
-                setPageTo(to);
-              }}
-              onFromChange={setPageFrom}
-              onToChange={setPageTo}
-              onConfirm={() => void confirmRange()}
-            />
-          </PageRangeBottomSheet>
-        ) : (
-          panelPos && (
-            <DraggablePageRangePanel position={panelPos} onPositionChange={setPanelPos}>
-              <PageRangeControls
-                safeFrom={safeFrom}
-                safeTo={safeTo}
-                pageCount={pageCount}
-                previewCount={previewPages.length}
-                sliderMarks={sliderMarks}
-                isDark={isDark}
-                sliderColor={sliderColor}
-                thumbBg={thumbBg}
-                thumbBorder={thumbBorder}
-                trackBg={trackBg}
-                confirming={confirming}
-                setupError={setupError}
-                onRangeChange={(from, to) => {
-                  setPageFrom(from);
-                  setPageTo(to);
-                }}
-                onFromChange={setPageFrom}
-                onToChange={setPageTo}
-                onConfirm={() => void confirmRange()}
-              />
-            </DraggablePageRangePanel>
-          )
-        )}
-      </Box>
+      <PageSelectionScreen
+        title="Choose pages to study"
+        subtitle={`${shortName} · ${pageCount} pages`}
+        pageCount={pageCount}
+        sliderFrom={sliderFrom}
+        sliderTo={sliderTo}
+        sliderMarks={sliderMarks}
+        selectedPages={sortedSelection}
+        isDark={isDark}
+        isPdf={isPdf}
+        pdfDoc={pdfDoc}
+        pdfLoading={pdfLoading}
+        pdfError={pdfError}
+        thumbCanvasRefs={thumbCanvasRefs}
+        confirming={confirming}
+        setupError={setupError}
+        confirmLabel="Start studying"
+        isCompact={isCompact}
+        onRangeChange={handleRangeChange}
+        onPageToggle={handlePageToggle}
+        onSelectAll={() => {
+          setSelectedPages(pagesInRange(1, pageCount));
+          setLastClickedPage(1);
+        }}
+        onClearAll={() => {
+          setSelectedPages([]);
+          setLastClickedPage(null);
+        }}
+        onConfirm={() => void confirmRange()}
+      />
     );
   }
 
@@ -971,21 +899,28 @@ export default function WorkspaceArtifactPage({
           filename={shortFilename}
           pageCount={pageCount}
           completedRange={completedRange}
-          safeFrom={safeFrom}
-          safeTo={safeTo}
-          previewCount={previewPages.length}
+          sliderFrom={sliderFrom}
+          sliderTo={sliderTo}
           sliderMarks={sliderMarks}
+          selectedPages={sortedSelection}
           isDark={isDark}
           isCompact={isCompact}
+          isPdf={isPdf}
+          pdfDoc={pdfDoc}
+          thumbCanvasRefs={thumbCanvasRefs}
           confirming={confirming}
           setupError={setupError}
           bookFinished={nextRangeSuggestion?.bookFinished ?? false}
-          onRangeChange={(from, to) => {
-            setPageFrom(from);
-            setPageTo(to);
+          onRangeChange={handleRangeChange}
+          onPageToggle={handlePageToggle}
+          onSelectAll={() => {
+            setSelectedPages(pagesInRange(1, pageCount));
+            setLastClickedPage(1);
           }}
-          onFromChange={setPageFrom}
-          onToChange={setPageTo}
+          onClearAll={() => {
+            setSelectedPages([]);
+            setLastClickedPage(null);
+          }}
           onClose={() => setReselectOpen(false)}
           onConfirm={() => void confirmRange()}
         />
@@ -1085,49 +1020,53 @@ function StudyRangeReselectOverlay({
   filename,
   pageCount,
   completedRange,
-  safeFrom,
-  safeTo,
-  previewCount,
+  sliderFrom,
+  sliderTo,
   sliderMarks,
+  selectedPages,
   isDark,
   isCompact,
+  isPdf,
+  pdfDoc,
+  thumbCanvasRefs,
   confirming,
   setupError,
   bookFinished,
   onRangeChange,
-  onFromChange,
-  onToChange,
+  onPageToggle,
+  onSelectAll,
+  onClearAll,
   onClose,
   onConfirm,
 }: {
   filename: string;
   pageCount: number;
   completedRange?: { from: number; to: number };
-  safeFrom: number;
-  safeTo: number;
-  previewCount: number;
+  sliderFrom: number;
+  sliderTo: number;
   sliderMarks: { value: number; label?: ReactNode }[];
+  selectedPages: number[];
   isDark: boolean;
   isCompact: boolean;
+  isPdf: boolean;
+  pdfDoc: PDFDocumentProxy | null;
+  thumbCanvasRefs: React.MutableRefObject<Record<number, HTMLCanvasElement | null>>;
   confirming: boolean;
   setupError: string | null;
   bookFinished: boolean;
   onRangeChange: (from: number, to: number) => void;
-  onFromChange: (value: number) => void;
-  onToChange: (value: number) => void;
+  onPageToggle: (page: number, shiftKey: boolean) => void;
+  onSelectAll: () => void;
+  onClearAll: () => void;
   onClose: () => void;
   onConfirm: () => void;
 }) {
-  const sliderColor = isDark ? "blue.4" : "blue.6";
-  const thumbBg = isDark ? "var(--mantine-color-dark-6)" : "var(--mantine-color-white)";
-  const thumbBorder = isDark ? "var(--mantine-color-blue-4)" : "var(--mantine-color-blue-7)";
-  const trackBg = isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-3)";
   const completedLabel =
     completedRange && completedRange.from === completedRange.to
       ? `page ${completedRange.from}`
       : completedRange
         ? `pages ${completedRange.from}–${completedRange.to}`
-        : "your last range";
+        : "your last selection";
 
   return (
     <Box
@@ -1147,11 +1086,14 @@ function StudyRangeReselectOverlay({
       <Paper
         shadow="xl"
         radius={isCompact ? 0 : "lg"}
-        p="lg"
+        p={isCompact ? "md" : "xl"}
         w="100%"
-        maw={isCompact ? "100%" : 440}
+        maw={isCompact ? "100%" : 900}
+        mih={isCompact ? "85vh" : "min(88vh, 760px)"}
         onClick={(e) => e.stopPropagation()}
         style={{
+          display: "flex",
+          flexDirection: "column",
           borderBottomLeftRadius: isCompact ? 0 : undefined,
           borderBottomRightRadius: isCompact ? 0 : undefined,
           paddingBottom: isCompact ? "max(20px, env(safe-area-inset-bottom))" : undefined,
@@ -1167,33 +1109,35 @@ function StudyRangeReselectOverlay({
             </Title>
             <Text size="sm" c="dimmed" lh={1.5}>
               {bookFinished
-                ? `You finished ${completedLabel}. Select any ${pageCount}-page range to continue.`
-                : `You finished ${completedLabel}. Choose how many pages to study next.`}
+                ? `You finished ${completedLabel}. Tap any pages in this ${pageCount}-page book.`
+                : `You finished ${completedLabel}. Choose the pages you want to study next.`}
             </Text>
           </Stack>
           <ActionIcon variant="subtle" color="gray" onClick={onClose} aria-label="Close">
             <IconX size={18} />
           </ActionIcon>
         </Group>
-        <PageRangeControls
-          safeFrom={safeFrom}
-          safeTo={safeTo}
-          pageCount={pageCount}
-          previewCount={previewCount}
-          sliderMarks={sliderMarks}
-          isDark={isDark}
-          sliderColor={sliderColor}
-          thumbBg={thumbBg}
-          thumbBorder={thumbBorder}
-          trackBg={trackBg}
-          confirming={confirming}
-          setupError={setupError}
-          confirmLabel="Start studying"
-          onRangeChange={onRangeChange}
-          onFromChange={onFromChange}
-          onToChange={onToChange}
-          onConfirm={onConfirm}
-        />
+        <Box flex={1} mih={0} style={{ display: "flex", flexDirection: "column" }}>
+          <PageSelectionBody
+            pageCount={pageCount}
+            sliderFrom={sliderFrom}
+            sliderTo={sliderTo}
+            sliderMarks={sliderMarks}
+            selectedPages={selectedPages}
+            isDark={isDark}
+            isPdf={isPdf}
+            pdfDoc={pdfDoc}
+            thumbCanvasRefs={thumbCanvasRefs}
+            confirming={confirming}
+            setupError={setupError}
+            confirmLabel="Start studying"
+            onRangeChange={onRangeChange}
+            onPageToggle={onPageToggle}
+            onSelectAll={onSelectAll}
+            onClearAll={onClearAll}
+            onConfirm={onConfirm}
+          />
+        </Box>
       </Paper>
     </Box>
   );
@@ -2206,7 +2150,7 @@ function McqHeroPanel({
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
   const graded = gradeState !== null;
-  const showNextQuestion = mode === "learn" && graded;
+  const showNextQuestion = graded;
   const optionsLocked = graded && (mode === "test" || gradeState.correct);
   const waiting =
     mcqLoading ||
@@ -2218,43 +2162,39 @@ function McqHeroPanel({
     (!queue?.current_assertion_id &&
       artifactStatus === "ready" &&
       options.length === 0 &&
-      (queue?.generation_pending || (queue?.generated_on_page ?? 0) === 0));
+      (queue?.generation_pending || (queue?.questions_generated ?? 0) === 0));
+
+  const indexing = artifactStatus === "indexing";
+  const page = queue?.current_page;
+  const generating = Boolean(queue?.generation_pending) && Boolean(queue?.page_triage_complete);
+  const planning =
+    !indexing &&
+    ((Boolean(queue?.generation_pending) && !queue?.page_triage_complete) ||
+      (!queue?.generation_pending && (queue?.questions_generated ?? 0) === 0));
+  const waitPhase = learnWaitPhase({ indexing, planning, generating });
+  const [statusTick, setStatusTick] = useState(0);
+  useInterval(() => setStatusTick((t) => t + 1), waiting ? 2600 : null);
+  useEffect(() => {
+    setStatusTick(0);
+  }, [waitPhase, page]);
+  const status = rotatingLearnStatus(waitPhase, statusTick, page);
+  const rangeLabel = learnRangeLabel(queue?.page_from, queue?.page_to, indexing ? undefined : page);
 
   if (waiting) {
-    const indexing = artifactStatus === "indexing";
-    const page = queue?.current_page;
-    const generating = Boolean(queue?.generation_pending);
-    const planning = !indexing && !generating && (queue?.questions_generated ?? 0) === 0;
-    const rangeLabel =
-      queue?.page_from && queue?.page_to
-        ? `Studying pages ${queue.page_from}–${queue.page_to}`
-        : null;
     return (
       <Stack align="center" gap="lg" py="md">
         <Loader type="dots" size="sm" />
         <Stack gap={6} align="center" maw={440}>
           <Title order={3} ta="center" fw={600} style={{ letterSpacing: "-0.03em" }}>
-            {indexing
-              ? "Reading your source"
-              : generating
-                ? "Writing your questions"
-                : planning
-                  ? "Planning this page"
-                  : "Almost ready"}
+            {status.title}
           </Title>
-          {page && !indexing && (
+          {rangeLabel && (
             <Text size="sm" c="dimmed" ta="center">
-              {rangeLabel ? `${rangeLabel} · now on page ${page}` : `Page ${page}`}
+              {rangeLabel}
             </Text>
           )}
           <Text size="sm" c="dimmed" ta="center" lh={1.5}>
-            {indexing
-              ? "Zivo is indexing the pages you selected so questions stay scoped to what matters."
-              : generating
-                ? `${ZIVO_ASSISTANT_NAME} is writing questions for this page — a few at a time, as you go.`
-                : planning
-                  ? "Figuring out what this page can test, then writing your first questions."
-                  : "Finishing up — your first question will appear in a moment."}
+            {status.detail}
           </Text>
         </Stack>
       </Stack>
@@ -2644,103 +2584,281 @@ function clampPanel(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function clampPanelPosition(
-  pos: { x: number; y: number },
-  panelEl: HTMLDivElement | null,
-): { x: number; y: number } {
-  const w = panelEl?.offsetWidth ?? PAGE_RANGE_PANEL_WIDTH;
-  const h = panelEl?.offsetHeight ?? 280;
-  const edge = 8;
-  return {
-    x: clampPanel(pos.x, edge, Math.max(edge, window.innerWidth - w - edge)),
-    y: clampPanel(pos.y, edge, Math.max(edge, window.innerHeight - h - edge)),
-  };
+function defaultInitialPages(count: number): number[] {
+  return pagesInRange(1, Math.min(5, count));
 }
 
-function PageRangeBottomSheet({ children }: { children: React.ReactNode }) {
+function pagesInRange(from: number, to: number): number[] {
+  const lo = Math.min(from, to);
+  const hi = Math.max(from, to);
+  const pages: number[] = [];
+  for (let p = lo; p <= hi; p += 1) pages.push(p);
+  return pages;
+}
+
+function formatSelectionSummary(selectedPages: number[], pageCount: number): string {
+  if (selectedPages.length === 0) return `No pages selected · ${pageCount} total`;
+  if (selectedPages.length === 1) return `1 page selected · page ${selectedPages[0]}`;
+  if (selectedPages.length === pageCount) return `All ${pageCount} pages selected`;
+  const first = selectedPages[0];
+  const last = selectedPages[selectedPages.length - 1];
+  const contiguous = selectedPages.length === last - first + 1;
+  if (contiguous) return `${selectedPages.length} pages selected · ${first}–${last}`;
+  return `${selectedPages.length} pages selected`;
+}
+
+function PageSelectionScreen({
+  title,
+  subtitle,
+  pageCount,
+  sliderFrom,
+  sliderTo,
+  sliderMarks,
+  selectedPages,
+  isDark,
+  isPdf,
+  pdfDoc,
+  pdfLoading,
+  pdfError,
+  thumbCanvasRefs,
+  confirming,
+  setupError,
+  confirmLabel,
+  isCompact,
+  onRangeChange,
+  onPageToggle,
+  onSelectAll,
+  onClearAll,
+  onConfirm,
+}: {
+  title: string;
+  subtitle: string;
+  pageCount: number;
+  sliderFrom: number;
+  sliderTo: number;
+  sliderMarks: { value: number; label?: ReactNode }[];
+  selectedPages: number[];
+  isDark: boolean;
+  isPdf: boolean;
+  pdfDoc: PDFDocumentProxy | null;
+  pdfLoading: boolean;
+  pdfError: string | null;
+  thumbCanvasRefs: React.MutableRefObject<Record<number, HTMLCanvasElement | null>>;
+  confirming: boolean;
+  setupError: string | null;
+  confirmLabel: string;
+  isCompact: boolean;
+  onRangeChange: (from: number, to: number) => void;
+  onPageToggle: (page: number, shiftKey: boolean) => void;
+  onSelectAll: () => void;
+  onClearAll: () => void;
+  onConfirm: () => void;
+}) {
+  const bleed = shellBleedPx(isCompact);
+
   return (
-    <Paper
-      pos="fixed"
-      left={0}
-      right={0}
-      bottom={0}
-      w="100%"
-      shadow="xl"
-      withBorder
-      p="md"
-      radius={0}
+    <Box
+      flex={1}
+      mih={0}
+      h="100%"
       bg="var(--mantine-color-body)"
       style={{
-        zIndex: 200,
-        borderTopLeftRadius: 16,
-        borderTopRightRadius: 16,
-        maxHeight: "min(52vh, 420px)",
-        overflow: "auto",
-        paddingBottom: "max(12px, env(safe-area-inset-bottom))",
+        display: "flex",
+        flexDirection: "column",
+        margin: -bleed,
+        width: `calc(100% + ${bleed * 2}px)`,
+        height: `calc(100% + ${bleed * 2}px)`,
+        boxSizing: "border-box",
       }}
     >
-      <Box mb="sm">
-        <Text size="sm" fw={600}>
-          Page range
+      <Group
+        justify="space-between"
+        align="flex-end"
+        wrap="nowrap"
+        gap="lg"
+        px={SELECTION_PAD_X}
+        py={SELECTION_PAD_Y}
+        style={{ flexShrink: 0, borderBottom: "1px solid var(--mantine-color-default-border)" }}
+      >
+        <Stack gap={2} style={{ minWidth: 0 }}>
+          <Title order={isCompact ? 4 : 3} style={{ letterSpacing: "-0.04em" }} lineClamp={1}>
+            {title}
+          </Title>
+          <Text size="sm" c="dimmed" lineClamp={1}>
+            {subtitle}
+          </Text>
+        </Stack>
+        <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
+          {pdfLoading && <Loader size="xs" />}
+          <Text size="sm" fw={600}>
+            {formatSelectionSummary(selectedPages, pageCount)}
+          </Text>
+        </Group>
+      </Group>
+
+      {pdfError && (
+        <Text c="red" size="sm" px="md" pt="xs">
+          {pdfError}
         </Text>
-        <Text size="xs" c="dimmed">
-          Choose which pages to study
+      )}
+      {!isPdf && !pdfLoading && (
+        <Text c="dimmed" size="sm" px="md" pt="xs">
+          PDF thumbnails load automatically. Use the slider below ({pageCount} pages).
         </Text>
+      )}
+
+      <Box
+        flex={1}
+        mih={0}
+        px={SELECTION_PAD_X}
+        py={SELECTION_PAD_Y}
+        style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}
+      >
+        <PageSelectionBody
+          pageCount={pageCount}
+          sliderFrom={sliderFrom}
+          sliderTo={sliderTo}
+          sliderMarks={sliderMarks}
+          selectedPages={selectedPages}
+          isDark={isDark}
+          isPdf={isPdf}
+          pdfDoc={pdfDoc}
+          thumbCanvasRefs={thumbCanvasRefs}
+          confirming={confirming}
+          setupError={setupError}
+          confirmLabel={confirmLabel}
+          onRangeChange={onRangeChange}
+          onPageToggle={onPageToggle}
+          onSelectAll={onSelectAll}
+          onClearAll={onClearAll}
+          onConfirm={onConfirm}
+        />
       </Box>
-      {children}
-    </Paper>
+    </Box>
   );
 }
 
-function PageRangeControls({
-  safeFrom,
-  safeTo,
+function PageSelectionBody({
   pageCount,
-  previewCount,
+  sliderFrom,
+  sliderTo,
+  sliderMarks,
+  selectedPages,
+  isDark,
+  isPdf,
+  pdfDoc,
+  thumbCanvasRefs,
+  confirming,
+  setupError,
+  confirmLabel,
+  onRangeChange,
+  onPageToggle,
+  onSelectAll,
+  onClearAll,
+  onConfirm,
+}: {
+  pageCount: number;
+  sliderFrom: number;
+  sliderTo: number;
+  sliderMarks: { value: number; label?: ReactNode }[];
+  selectedPages: number[];
+  isDark: boolean;
+  isPdf: boolean;
+  pdfDoc: PDFDocumentProxy | null;
+  thumbCanvasRefs: React.MutableRefObject<Record<number, HTMLCanvasElement | null>>;
+  confirming: boolean;
+  setupError: string | null;
+  confirmLabel: string;
+  onRangeChange: (from: number, to: number) => void;
+  onPageToggle: (page: number, shiftKey: boolean) => void;
+  onSelectAll: () => void;
+  onClearAll: () => void;
+  onConfirm: () => void;
+}) {
+  const sliderColor = isDark ? "blue.4" : "blue.6";
+  const thumbBg = isDark ? "var(--mantine-color-dark-6)" : "var(--mantine-color-white)";
+  const thumbBorder = isDark ? "var(--mantine-color-blue-4)" : "var(--mantine-color-blue-7)";
+  const trackBg = isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-3)";
+
+  return (
+    <Stack gap="md" flex={1} mih={0} h="100%" style={{ minHeight: 0, overflow: "hidden" }}>
+      <Box style={{ flexShrink: 0, paddingInline: 14 }}>
+        <PageRangeQuickSelect
+          sliderFrom={sliderFrom}
+          sliderTo={sliderTo}
+          pageCount={pageCount}
+          sliderMarks={sliderMarks}
+          isDark={isDark}
+          sliderColor={sliderColor}
+          thumbBg={thumbBg}
+          thumbBorder={thumbBorder}
+          trackBg={trackBg}
+          onRangeChange={onRangeChange}
+        />
+      </Box>
+      <PageThumbnailGrid
+        pageCount={pageCount}
+        selectedPages={selectedPages}
+        isDark={isDark}
+        isPdf={isPdf}
+        pdfDoc={pdfDoc}
+        thumbCanvasRefs={thumbCanvasRefs}
+        onPageToggle={onPageToggle}
+      />
+      <Box
+        py={8}
+        style={{
+          flexShrink: 0,
+          borderTop: "1px solid var(--mantine-color-default-border)",
+        }}
+      >
+        <PageSelectionControls
+          selectedPages={selectedPages}
+          pageCount={pageCount}
+          confirming={confirming}
+          setupError={setupError}
+          confirmLabel={confirmLabel}
+          onSelectAll={onSelectAll}
+          onClearAll={onClearAll}
+          onConfirm={onConfirm}
+        />
+      </Box>
+    </Stack>
+  );
+}
+
+function PageRangeQuickSelect({
+  sliderFrom,
+  sliderTo,
+  pageCount,
   sliderMarks,
   isDark,
   sliderColor,
   thumbBg,
   thumbBorder,
   trackBg,
-  confirming,
-  setupError,
-  confirmLabel = "Confirm range",
   onRangeChange,
-  onFromChange,
-  onToChange,
-  onConfirm,
 }: {
-  safeFrom: number;
-  safeTo: number;
+  sliderFrom: number;
+  sliderTo: number;
   pageCount: number;
-  previewCount: number;
   sliderMarks: { value: number; label?: ReactNode }[];
   isDark: boolean;
   sliderColor: string;
   thumbBg: string;
   thumbBorder: string;
   trackBg: string;
-  confirming: boolean;
-  setupError: string | null;
-  confirmLabel?: string;
   onRangeChange: (from: number, to: number) => void;
-  onFromChange: (value: number) => void;
-  onToChange: (value: number) => void;
-  onConfirm: () => void;
 }) {
   return (
     <Stack gap="md">
-      <Text size="xs" c="dimmed">
-        {safeFrom}–{safeTo} of {pageCount} pages · previewing {previewCount}
-      </Text>
       <RangeSlider
         color={sliderColor}
         min={1}
         max={pageCount}
         minRange={1}
         step={1}
-        value={[safeFrom, safeTo]}
+        value={[sliderFrom, sliderTo]}
         onChange={([from, to]) => onRangeChange(from, to)}
         marks={sliderMarks}
         label={(v) => `Page ${v}`}
@@ -2750,7 +2868,9 @@ function PageRangeControls({
         thumbToLabel="End page"
         thumbValueText={(v) => `Page ${v}`}
         restrictToMarks={pageCount <= 12}
+        mb={4}
         styles={{
+          root: { paddingTop: 8, paddingBottom: 32, overflow: "visible" },
           track: { backgroundColor: trackBg },
           bar: {
             backgroundColor: isDark ? "var(--mantine-color-blue-4)" : "var(--mantine-color-blue-6)",
@@ -2766,30 +2886,76 @@ function PageRangeControls({
           },
           markLabel: {
             color: "var(--mantine-color-dimmed)",
+            marginTop: 10,
           },
         }}
       />
-      <Group grow>
+      <Group grow gap="md">
         <NumberInput
           label="From"
-          size="xs"
+          size="sm"
           min={1}
           max={pageCount}
-          value={safeFrom}
-          onChange={(v) => onFromChange(typeof v === "number" ? v : 1)}
+          value={sliderFrom}
+          onChange={(v) => onRangeChange(typeof v === "number" ? v : 1, sliderTo)}
         />
         <NumberInput
           label="To"
-          size="xs"
-          min={safeFrom}
+          size="sm"
+          min={sliderFrom}
           max={pageCount}
-          value={safeTo}
-          onChange={(v) => onToChange(typeof v === "number" ? v : safeFrom)}
+          value={sliderTo}
+          onChange={(v) => onRangeChange(sliderFrom, typeof v === "number" ? v : sliderFrom)}
         />
       </Group>
-      <Button fullWidth size="md" variant="filled" color="blue" onClick={onConfirm} loading={confirming}>
-        {confirmLabel}
-      </Button>
+    </Stack>
+  );
+}
+
+function PageSelectionControls({
+  selectedPages,
+  confirming,
+  setupError,
+  confirmLabel,
+  onSelectAll,
+  onClearAll,
+  onConfirm,
+}: {
+  selectedPages: number[];
+  pageCount: number;
+  confirming: boolean;
+  setupError: string | null;
+  confirmLabel: string;
+  onSelectAll: () => void;
+  onClearAll: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Stack gap={4} w="100%" maw="100%">
+      <Group justify="space-between" align="center" wrap="nowrap" gap="sm" w="100%" maw="100%">
+        <Text size="xs" c="dimmed" lineClamp={1} style={{ flex: 1, minWidth: 0 }}>
+          Slider for range · tap to toggle · Shift+tap to extend
+        </Text>
+        <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
+          <Button variant="subtle" size="compact-xs" onClick={onSelectAll}>
+            All
+          </Button>
+          <Button variant="subtle" size="compact-xs" onClick={onClearAll}>
+            Clear
+          </Button>
+          <Button
+            size="compact-sm"
+            variant="filled"
+            color="blue"
+            radius="md"
+            onClick={onConfirm}
+            loading={confirming}
+            disabled={selectedPages.length === 0}
+          >
+            {confirmLabel}
+          </Button>
+        </Group>
+      </Group>
       {setupError && (
         <Text size="xs" c="red">
           {setupError}
@@ -2799,94 +2965,185 @@ function PageRangeControls({
   );
 }
 
-function DraggablePageRangePanel({
-  children,
-  position,
-  onPositionChange,
+function PageThumbnailGrid({
+  pageCount,
+  selectedPages,
+  isDark,
+  isPdf,
+  pdfDoc,
+  thumbCanvasRefs,
+  onPageToggle,
 }: {
-  children: React.ReactNode;
-  position: { x: number; y: number };
-  onPositionChange: (pos: { x: number; y: number }) => void;
+  pageCount: number;
+  selectedPages: number[];
+  isDark: boolean;
+  isPdf: boolean;
+  pdfDoc: PDFDocumentProxy | null;
+  thumbCanvasRefs: React.MutableRefObject<Record<number, HTMLCanvasElement | null>>;
+  onPageToggle: (page: number, shiftKey: boolean) => void;
 }) {
-  const panelRef = useRef<HTMLDivElement>(null);
-  const dragState = useRef<{
-    pointerX: number;
-    pointerY: number;
-    originX: number;
-    originY: number;
-  } | null>(null);
+  const selectedSet = useMemo(() => new Set(selectedPages), [selectedPages]);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [gridWidth, setGridWidth] = useState(0);
 
-  function onHandlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
-    e.preventDefault();
-    e.currentTarget.setPointerCapture(e.pointerId);
-    dragState.current = {
-      pointerX: e.clientX,
-      pointerY: e.clientY,
-      originX: position.x,
-      originY: position.y,
+  const { cols, thumbWidth } = computeGridLayout(gridWidth, THUMB_MIN_WIDTH, THUMB_GAP);
+
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+    const update = () => setGridWidth(el.clientWidth);
+    update();
+    const ro = new ResizeObserver(() => update());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!pdfDoc || !isPdf || thumbWidth < 1) return;
+    let cancelled = false;
+    const renderScale = Math.min(0.5, Math.max(0.22, thumbWidth / 320));
+
+    void (async () => {
+      for (let p = 1; p <= pageCount; p += 1) {
+        if (cancelled) return;
+        const canvas = thumbCanvasRefs.current[p];
+        if (!canvas) continue;
+        try {
+          await renderPdfPageToCanvas(pdfDoc, p, canvas, renderScale, thumbWidth);
+        } catch {
+          if (cancelled) return;
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      cancelAllPdfRenders(Object.values(thumbCanvasRefs.current));
     };
-  }
+  }, [pdfDoc, isPdf, pageCount, thumbCanvasRefs, thumbWidth]);
 
-  function onHandlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
-    if (!dragState.current) return;
-    const dx = e.clientX - dragState.current.pointerX;
-    const dy = e.clientY - dragState.current.pointerY;
-    onPositionChange(
-      clampPanelPosition(
-        {
-          x: dragState.current.originX + dx,
-          y: dragState.current.originY + dy,
-        },
-        panelRef.current,
-      ),
-    );
-  }
-
-  function endDrag(e: React.PointerEvent<HTMLDivElement>) {
-    if (!dragState.current) return;
-    dragState.current = null;
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    }
-  }
+  const pageNumbers = useMemo(
+    () => Array.from({ length: pageCount }, (_, index) => index + 1),
+    [pageCount],
+  );
 
   return (
-    <Paper
-      ref={panelRef}
-      pos="fixed"
-      w={PAGE_RANGE_PANEL_WIDTH}
-      shadow="xl"
-      withBorder
-      p="md"
-      bg="var(--mantine-color-body)"
-      style={{
-        left: position.x,
-        top: position.y,
-        zIndex: 200,
-      }}
+    <Box ref={gridRef} flex={1} mih={0} h="100%" w="100%" style={{ overflow: "hidden" }}>
+      <ScrollArea h="100%" flex={1} mih={0} w="100%" offsetScrollbars type="auto" scrollbarSize={8} pt={4}>
+        <Box
+          w="100%"
+          pb={SELECTION_PAD_Y}
+          style={{
+            display: "grid",
+            gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+            gap: THUMB_GAP,
+          }}
+        >
+          {pageNumbers.map((page) => (
+            <PageThumbnailCell
+              key={page}
+              page={page}
+              selected={selectedSet.has(page)}
+              isDark={isDark}
+              isPdf={isPdf}
+              thumbWidth={thumbWidth}
+              thumbCanvasRefs={thumbCanvasRefs}
+              onToggle={onPageToggle}
+            />
+          ))}
+        </Box>
+      </ScrollArea>
+    </Box>
+  );
+}
+
+function PageThumbnailCell({
+  page,
+  selected,
+  isDark,
+  isPdf,
+  thumbWidth,
+  thumbCanvasRefs,
+  onToggle,
+}: {
+  page: number;
+  selected: boolean;
+  isDark: boolean;
+  isPdf: boolean;
+  thumbWidth: number;
+  thumbCanvasRefs: React.MutableRefObject<Record<number, HTMLCanvasElement | null>>;
+  onToggle: (page: number, shiftKey: boolean) => void;
+}) {
+  const placeholderHeight = Math.round(thumbWidth * 1.35);
+  const ringColor = isDark ? "var(--mantine-color-blue-4)" : "var(--mantine-color-blue-6)";
+  const idleRing = isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-4)";
+
+  return (
+    <UnstyledButton
+      onClick={(event) => onToggle(page, event.shiftKey)}
+      aria-label={`Page ${page}${selected ? ", selected" : ""}`}
+      aria-pressed={selected}
+      w="100%"
     >
-      <Box
-        mb="sm"
-        py={4}
-        style={{ cursor: "grab", touchAction: "none" }}
-        onPointerDown={onHandlePointerDown}
-        onPointerMove={onHandlePointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-        aria-label="Drag page range panel"
-      >
-        <Group gap="xs" wrap="nowrap">
-          <IconGripVertical size={16} stroke={1.5} />
-          <Text size="sm" fw={600} style={{ flex: 1 }}>
-            Page range
-          </Text>
-          <Text size="xs" c="dimmed">
-            drag
-          </Text>
-        </Group>
+      <Box pos="relative" w="100%">
+        <Box
+          bg={isDark ? "dark.7" : "gray.1"}
+          p={2}
+          style={{
+            borderRadius: 10,
+            lineHeight: 0,
+            boxShadow: selected
+              ? `0 0 0 2px ${ringColor}, 0 8px 20px rgba(0, 0, 0, 0.22)`
+              : `0 0 0 1px ${idleRing}`,
+            opacity: selected ? 1 : 0.88,
+            transition: "box-shadow 160ms ease, opacity 160ms ease",
+          }}
+        >
+          {isPdf ? (
+            <canvas
+              ref={(el) => {
+                thumbCanvasRefs.current[page] = el;
+              }}
+              style={{
+                width: "100%",
+                height: "auto",
+                display: "block",
+                borderRadius: 8,
+                verticalAlign: "top",
+              }}
+            />
+          ) : (
+            <Center h={placeholderHeight} w="100%">
+              <IconFileText size={32} stroke={1.25} color="var(--mantine-color-dimmed)" />
+            </Center>
+          )}
+        </Box>
+        <Text
+          size="sm"
+          ta="center"
+          mt={10}
+          fw={selected ? 700 : 500}
+          c={selected ? "blue" : "dimmed"}
+          lh={1}
+        >
+          {page}
+        </Text>
+        {selected && (
+          <ThemeIcon
+            pos="absolute"
+            top={8}
+            right={8}
+            size={24}
+            radius="xl"
+            color="blue"
+            variant="filled"
+            style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.3)" }}
+          >
+            <IconCheck size={14} stroke={3} />
+          </ThemeIcon>
+        )}
       </Box>
-      {children}
-    </Paper>
+    </UnstyledButton>
   );
 }
 

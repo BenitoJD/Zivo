@@ -128,20 +128,36 @@ export async function apiDelete(path: string): Promise<void> {
   if (!res.ok) throw new Error(await readApiError(res));
 }
 
+function stripCr(value: string): string {
+  return value.replace(/\r$/, "");
+}
+
+function parseSseEventBlock(part: string): { event: string; data: string } | null {
+  const lines = part.split(/\n/).map(stripCr);
+  const dataLine = lines.find((l) => l.startsWith("data:"))?.replace(/^data:\s*/, "");
+  if (!dataLine) return null;
+  const event = stripCr(lines.find((l) => l.startsWith("event:"))?.replace(/^event:\s*/, "") ?? "message");
+  return { event, data: dataLine };
+}
+
 export async function apiPostSSE(
   path: string,
   body: unknown,
   onChunk: (text: string) => void,
 ): Promise<void> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    credentials: "include",
-    headers: buildHeaders({
-      "Content-Type": "application/json",
-      Accept: "text/event-stream",
-    }),
-    body: JSON.stringify(body),
-  });
+  const res = await fetchWithTimeout(
+    `${API_BASE}${path}`,
+    {
+      method: "POST",
+      credentials: "include",
+      headers: buildHeaders({
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      }),
+      body: JSON.stringify(body),
+    },
+    120_000,
+  );
   captureResponseMeta(res);
   if (!res.ok || !res.body) throw new Error(await readApiError(res).catch(() => "SSE failed"));
 
@@ -152,23 +168,22 @@ export async function apiPostSSE(
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split("\n\n");
+    const parts = buffer.split(/\r?\n\r?\n/);
     buffer = parts.pop() ?? "";
     for (const part of parts) {
-      const lines = part.split("\n");
-      const event = lines.find((l) => l.startsWith("event:"))?.replace(/^event:\s*/, "");
-      const dataLine = lines.find((l) => l.startsWith("data:"))?.replace(/^data:\s*/, "");
-      if (!dataLine) continue;
+      const parsed = parseSseEventBlock(part);
+      if (!parsed) continue;
+      const { event, data } = parsed;
       if (event === "token") {
         try {
-          const payload = JSON.parse(dataLine) as { text?: string };
+          const payload = JSON.parse(data) as { text?: string };
           if (payload.text) onChunk(payload.text);
         } catch {
-          onChunk(dataLine);
+          onChunk(data);
         }
       } else if (event === "error") {
         try {
-          const payload = JSON.parse(dataLine) as { message?: string };
+          const payload = JSON.parse(data) as { message?: string };
           throw new Error(payload.message ?? "Chat error");
         } catch (e) {
           if (e instanceof Error && e.message !== "Chat error") throw e;

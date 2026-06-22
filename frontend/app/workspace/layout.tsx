@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import Image from "next/image";
 import {
   ActionIcon,
   AppShell,
@@ -22,14 +23,16 @@ import {
   TextInput,
   Title,
   Tooltip,
+  UnstyledButton,
   useMantineColorScheme,
 } from "@mantine/core";
 import { Dropzone, MIME_TYPES } from "@mantine/dropzone";
 import { useForm } from "@mantine/form";
 import { useDisclosure, useLocalStorage, useMediaQuery, useMounted } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
-import { IconFileText, IconLayoutSidebarLeftCollapse, IconLayoutSidebarLeftExpand, IconLink, IconLogin, IconMoon, IconSun, IconTrash, IconUpload, IconX } from "@tabler/icons-react";
+import { IconFileText, IconLayoutSidebarLeftCollapse, IconLink, IconLogin, IconMoon, IconSun, IconTrash, IconUpload, IconX } from "@tabler/icons-react";
 import { apiDelete, apiGet, apiPost, apiPostForm, ensureGuestSession, isArtifactId, setCsrfToken } from "@/lib/api/client";
+import { BRAND_LOGO_SRC, BRAND_NAME, BRAND_LOGO_WIDTH, BRAND_LOGO_HEIGHT } from "@/lib/brand";
 import { STORAGE_LIMIT_BYTES } from "@/lib/constants";
 import type { SourceDocument } from "@/lib/types";
 
@@ -61,38 +64,53 @@ export function useWorkspaceShell() {
   return ctx;
 }
 
-function shellTransition(reduceMotion: boolean): string {
-  return reduceMotion ? "none" : `width ${SHELL_MS}ms ${SHELL_EASE}`;
+function BrandLogo({ height }: { height: number }) {
+  const width = Math.round((height * BRAND_LOGO_WIDTH) / BRAND_LOGO_HEIGHT);
+  return (
+    <Image
+      src={BRAND_LOGO_SRC}
+      alt={BRAND_NAME}
+      width={width}
+      height={height}
+      priority
+      unoptimized
+      style={{
+        width,
+        height,
+        flexShrink: 0,
+        objectFit: "contain",
+        display: "block",
+      }}
+    />
+  );
 }
 
 function SidebarAnimatedLayer({
   visible,
   children,
-  width = SIDEBAR_EXPANDED_WIDTH,
   enterDelay = 0,
   reduceMotion,
 }: {
   visible: boolean;
   children: React.ReactNode;
-  width?: number;
   enterDelay?: number;
   reduceMotion: boolean;
 }) {
-  const duration = reduceMotion ? 0 : 240;
+  const duration = reduceMotion ? 0 : SHELL_MS;
   const delay = reduceMotion ? 0 : enterDelay;
-  const closeMs = reduceMotion ? 0 : Math.round(duration * 0.55);
+  const closeMs = reduceMotion ? 0 : Math.round(duration * 0.45);
 
   return (
     <Box
       style={{
         position: "absolute",
         inset: 0,
-        width,
+        width: "100%",
+        overflow: "hidden",
         opacity: visible ? 1 : 0,
-        transform: visible ? "translateX(0)" : "translateX(-8px)",
         transition: visible
-          ? `opacity ${duration}ms ${SHELL_EASE} ${delay}ms, transform ${duration}ms ${SHELL_EASE} ${delay}ms`
-          : `opacity ${closeMs}ms ease-in, transform ${closeMs}ms ease-in`,
+          ? `opacity ${duration}ms ${SHELL_EASE} ${delay}ms`
+          : `opacity ${closeMs}ms ease-in`,
         pointerEvents: visible ? "auto" : "none",
         zIndex: visible ? 2 : 1,
       }}
@@ -398,6 +416,8 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   return (
     <WorkspaceShellContext.Provider value={{ openAddSource: () => setAddOpen(true) }}>
       <AppShell
+        transitionDuration={reduceMotion ? 0 : SHELL_MS}
+        transitionTimingFunction={SHELL_EASE}
         navbar={{
           width: sidebarWidth,
           breakpoint: "sm",
@@ -411,8 +431,6 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
           },
           navbar: {
             overflow: "hidden",
-            transition: shellTransition(Boolean(reduceMotion)),
-            willChange: reduceMotion ? undefined : "width",
           },
           main: {
             height: "100%",
@@ -420,7 +438,6 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
             overflow: "hidden",
             display: "flex",
             flexDirection: "column",
-            transition: shellTransition(Boolean(reduceMotion)),
           },
         }}
       >
@@ -429,25 +446,30 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
             <Box pos="relative" h={48} w="100%">
               <SidebarAnimatedLayer
                 visible={!sidebarWide}
-                width={SIDEBAR_MINI_WIDTH}
                 reduceMotion={Boolean(reduceMotion)}
               >
                 <Center h={48}>
-                  <MiniRailButton label="Expand sidebar" onClick={toggleSidebar}>
-                    <IconLayoutSidebarLeftExpand size={18} stroke={1.5} />
-                  </MiniRailButton>
+                  <Tooltip label="Expand sidebar" position="right" withArrow>
+                    <UnstyledButton onClick={toggleSidebar} aria-label="Expand sidebar" p={4}>
+                      <BrandLogo height={32} />
+                    </UnstyledButton>
+                  </Tooltip>
                 </Center>
               </SidebarAnimatedLayer>
               <SidebarAnimatedLayer visible={sidebarWide} enterDelay={60} reduceMotion={Boolean(reduceMotion)}>
-                <Group px="md" h={48} justify="space-between" wrap="nowrap">
-                  <Title order={4} lineClamp={1}>
-                    Question Better.
-                  </Title>
+                <Group px="md" h={48} justify="space-between" wrap="nowrap" gap="sm">
+                  <Group gap="sm" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
+                    <BrandLogo height={34} />
+                    <Title order={4} lineClamp={1} style={{ letterSpacing: "-0.03em" }}>
+                      {BRAND_NAME}
+                    </Title>
+                  </Group>
                   <ActionIcon
                     variant="subtle"
                     color="gray"
                     onClick={toggleSidebar}
                     aria-label="Collapse sidebar"
+                    style={{ flexShrink: 0 }}
                   >
                     <IconLayoutSidebarLeftCollapse size={18} stroke={1.5} />
                   </ActionIcon>
@@ -458,15 +480,10 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
           <AppShell.Section grow p={0} style={{ minHeight: 0, overflow: "hidden", position: "relative" }}>
             <SidebarAnimatedLayer
               visible={!sidebarWide}
-              width={SIDEBAR_MINI_WIDTH}
               reduceMotion={Boolean(reduceMotion)}
             >
-              <Box
-                w={SIDEBAR_MINI_WIDTH}
-                h="100%"
-                style={{ overflowY: "auto", overflowX: "hidden" }}
-              >
-                <Stack gap={6} align="center" w={SIDEBAR_MINI_WIDTH} py={4}>
+              <Box h="100%" w="100%" style={{ overflowY: "auto", overflowX: "hidden" }}>
+                <Stack gap={6} align="center" w="100%" py={4}>
                   {documents.length === 0 ? (
                     <MiniRailButton label="No sources yet" disabled>
                       <IconFileText size={18} stroke={1.5} />
@@ -622,8 +639,8 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
                 </Button>
               </Box>
             ) : (
-              <Box pos="relative" mih={132} w={SIDEBAR_MINI_WIDTH}>
-                <Stack gap={6} align="center" w={SIDEBAR_MINI_WIDTH} py="xs">
+              <Box pos="relative" mih={132} w="100%">
+                <Stack gap={6} align="center" w="100%" py="xs">
                   <MiniRailButton
                     label={isDark ? "Switch to light mode" : "Switch to dark mode"}
                     onClick={() => toggleColorScheme()}

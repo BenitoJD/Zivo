@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.models import Document, Job
 from app.repositories.intel import create_activity
@@ -22,8 +23,8 @@ MAX_QUESTIONS_PER_PAGE = ABSOLUTE_MAX_QUESTIONS_PER_PAGE
 
 
 def default_progress(doc: Document) -> dict[str, Any]:
-    selected = (doc.meta or {}).get("selected_range") or {}
-    first_page = int(selected.get("from") or 1)
+    study_pages = selected_page_list(doc)
+    first_page = study_pages[0] if study_pages else int((doc.meta or {}).get("selected_range", {}).get("from") or 1)
     return {
         "current_page": first_page,
         "answered_ids": [],
@@ -48,10 +49,26 @@ def get_progress(doc: Document) -> dict[str, Any]:
     return progress
 
 
+def _merge_progress(existing: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(existing)
+    for key, value in patch.items():
+        if key == "page_coverage" and isinstance(value, dict) and isinstance(merged.get(key), dict):
+            if not value and merged[key]:
+                continue
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    return merged
+
+
 def save_progress(db: Session, doc: Document, progress: dict[str, Any]) -> None:
+    db.flush()
+    db.refresh(doc)
+    merged = _merge_progress(get_progress(doc), progress)
     meta = dict(doc.meta or {})
-    meta["question_progress"] = progress
+    meta["question_progress"] = merged
     doc.meta = meta
+    flag_modified(doc, "meta")
     user = doc.account_id
     if user:
         captured = doc.artifact_captured_at or doc.created_at
@@ -60,8 +77,8 @@ def save_progress(db: Session, doc: Document, progress: dict[str, Any]) -> None:
             account_id=user,
             artifact_id=doc.id,
             artifact_captured_at=captured,
-            current_page=progress.get("current_page"),
-            pool_available_count=_count_available(db, doc.id, progress),
+            current_page=merged.get("current_page"),
+            pool_available_count=_count_available(db, doc.id, merged),
             pool_target=REFILL_BATCH_SIZE,
         )
 
@@ -90,17 +107,16 @@ def save_page_coverage(
     doc = db.get(Document, document_id)
     if not doc:
         return
-    progress = get_progress(doc)
-    coverage = dict(progress.get("page_coverage") or {})
-    coverage[_page_key(page)] = {
+    entry = {
         "question_budget": question_budget,
         "aspects": aspects,
         "coverage_complete": False,
         "rationale": rationale,
         "triage_activity_id": triage_activity_id,
     }
-    progress["page_coverage"] = coverage
-    save_progress(db, doc, progress)
+    save_progress(db, doc, {"page_coverage": {_page_key(page): entry}})
+    db.commit()
+    db.refresh(doc)
 
 
 def get_question_budget(doc: Document, page: int) -> int:
@@ -200,9 +216,22 @@ def next_assertion_id(db: Session, document_id: uuid.UUID, progress: dict[str, A
     return None
 
 
-def page_range_bounds(doc: Document) -> tuple[int, int]:
+def selected_page_list(doc: Document) -> list[int]:
+    """Ordered study pages — explicit list or contiguous from/to range."""
     selected = (doc.meta or {}).get("selected_range") or {}
-    return int(selected.get("from") or 1), int(selected.get("to") or 1)
+    pages = selected.get("pages")
+    if isinstance(pages, list) and pages:
+        return sorted({int(p) for p in pages if int(p) >= 1})
+    lo = int(selected.get("from") or 1)
+    hi = int(selected.get("to") or lo)
+    return list(range(lo, hi + 1))
+
+
+def page_range_bounds(doc: Document) -> tuple[int, int]:
+    pages = selected_page_list(doc)
+    if not pages:
+        return 1, 1
+    return pages[0], pages[-1]
 
 
 def is_page_complete(db: Session, doc: Document, progress: dict[str, Any]) -> bool:
@@ -227,6 +256,7 @@ def build_learn_queue_state(
     progress: dict[str, Any],
 ) -> dict[str, Any]:
     page = int(progress.get("current_page") or 1)
+    study_pages = selected_page_list(doc)
     page_from, page_to = page_range_bounds(doc)
     answered_ids = [str(x) for x in progress.get("answered_ids") or []]
     questions_generated = count_assertions_on_page(db, document_id, page)
@@ -235,7 +265,8 @@ def build_learn_queue_state(
     next_id = next_assertion_id(db, document_id, progress)
     coverage_complete = is_coverage_complete(doc, page)
     page_complete = is_page_complete(db, doc, progress)
-    document_complete = page_complete and page >= page_to
+    last_study_page = study_pages[-1] if study_pages else page_to
+    document_complete = page_complete and page == last_study_page
 
     return {
         "current_page": page,
@@ -247,20 +278,19 @@ def build_learn_queue_state(
         "questions_answered": questions_answered,
         "questions_generated": questions_generated,
         "generation_pending": bool(progress.get("generation_pending")),
+        "page_triage_complete": bool(get_page_coverage(doc, page)),
         "coverage_complete": coverage_complete,
         "page_complete": page_complete,
         "document_complete": document_complete,
         "pool_available": _count_available(db, document_id, progress),
-        "generated_on_page": int(progress.get("generated_on_page") or 0),
+        "generated_on_page": questions_generated,
         "answered_on_page": questions_answered,
         "max_per_page": budget,
     }
 
 
 def enqueue_page_triage(db: Session, doc: Document, *, page: int) -> Job:
-    progress = get_progress(doc)
-    progress["generation_pending"] = True
-    save_progress(db, doc, progress)
+    save_progress(db, doc, {"generation_pending": True})
 
     activity_id = create_activity(
         db,
@@ -292,9 +322,7 @@ def enqueue_page_batch(
     batch_size: int,
     start_sequence: int,
 ) -> Job:
-    progress = get_progress(doc)
-    progress["generation_pending"] = True
-    save_progress(db, doc, progress)
+    save_progress(db, doc, {"generation_pending": True})
 
     activity_id = create_activity(
         db,
@@ -331,12 +359,10 @@ def on_triage_completed(db: Session, document_id: uuid.UUID, *, page: int) -> Jo
         return None
     progress = get_progress(doc)
     if int(progress.get("current_page") or 0) != page:
-        progress["generation_pending"] = False
-        save_progress(db, doc, progress)
+        save_progress(db, doc, {"generation_pending": False})
         db.commit()
         return None
-    progress["generation_pending"] = False
-    save_progress(db, doc, progress)
+    save_progress(db, doc, {"generation_pending": False})
     db.commit()
 
     budget = get_question_budget(doc, page)
@@ -364,21 +390,32 @@ def enqueue_initial_pool(db: Session, document_id: uuid.UUID) -> Job | None:
     meta["question_pool_initialized"] = True
     meta["question_progress"] = progress
     doc.meta = meta
+    flag_modified(doc, "meta")
     db.commit()
 
     return enqueue_page_triage(db, doc, page=page_from)
 
 
-def reset_for_new_page_range(db: Session, doc: Document, selected: dict[str, int]) -> None:
+def reset_for_new_page_range(db: Session, doc: Document, selected: dict[str, Any]) -> None:
     """Clear study progress so a new page-range selection starts fresh."""
-    page_from = int(selected["from"])
+    pages_raw = selected.get("pages")
+    if isinstance(pages_raw, list) and pages_raw:
+        study_pages = sorted({int(p) for p in pages_raw if int(p) >= 1})
+        page_from = study_pages[0]
+        page_to = study_pages[-1]
+        range_meta: dict[str, Any] = {"from": page_from, "to": page_to, "pages": study_pages}
+    else:
+        page_from = int(selected["from"])
+        page_to = int(selected["to"])
+        range_meta = {"from": page_from, "to": page_to}
     progress = default_progress(doc)
     progress["current_page"] = page_from
     meta = dict(doc.meta or {})
-    meta["selected_range"] = {"from": page_from, "to": int(selected["to"])}
+    meta["selected_range"] = range_meta
     meta.pop("question_pool_initialized", None)
     meta["question_progress"] = progress
     doc.meta = meta
+    flag_modified(doc, "meta")
     doc.index_progress = 0
 
     db.execute(
@@ -413,10 +450,10 @@ def on_batch_completed(db: Session, document_id: uuid.UUID, *, page: int, saved:
     if not doc:
         return
     progress = get_progress(doc)
+    patch: dict[str, Any] = {"generation_pending": False}
     if int(progress.get("current_page") or 0) == page:
-        progress["generated_on_page"] = count_assertions_on_page(db, document_id, page)
-    progress["generation_pending"] = False
-    save_progress(db, doc, progress)
+        patch["generated_on_page"] = count_assertions_on_page(db, document_id, page)
+    save_progress(db, doc, patch)
     db.commit()
 
 
@@ -426,8 +463,7 @@ def on_batch_failed(db: Session, document_id: uuid.UUID, *, page: int) -> None:
         return
     progress = get_progress(doc)
     if page and int(progress.get("current_page") or 0) == page:
-        progress["generation_pending"] = False
-        save_progress(db, doc, progress)
+        save_progress(db, doc, {"generation_pending": False})
         db.commit()
 
 
@@ -435,30 +471,22 @@ def mark_aspect_asked(db: Session, document_id: uuid.UUID, page: int, aspect_key
     doc = db.get(Document, document_id)
     if not doc:
         return
-    progress = get_progress(doc)
-    coverage = dict(progress.get("page_coverage") or {})
-    entry = dict(coverage.get(_page_key(page)) or {})
+    entry = dict(get_page_coverage(doc, page))
     aspects = list(entry.get("aspects") or [])
     for aspect in aspects:
         if aspect.get("key") == aspect_key:
             aspect["asked"] = True
     entry["aspects"] = aspects
-    coverage[_page_key(page)] = entry
-    progress["page_coverage"] = coverage
-    save_progress(db, doc, progress)
+    save_progress(db, doc, {"page_coverage": {_page_key(page): entry}})
 
 
 def set_coverage_complete(db: Session, document_id: uuid.UUID, page: int) -> None:
     doc = db.get(Document, document_id)
     if not doc:
         return
-    progress = get_progress(doc)
-    coverage = dict(progress.get("page_coverage") or {})
-    entry = dict(coverage.get(_page_key(page)) or {})
+    entry = dict(get_page_coverage(doc, page))
     entry["coverage_complete"] = True
-    coverage[_page_key(page)] = entry
-    progress["page_coverage"] = coverage
-    save_progress(db, doc, progress)
+    save_progress(db, doc, {"page_coverage": {_page_key(page): entry}})
 
 
 def _has_running_generate_job(db: Session, document_id: uuid.UUID) -> bool:
@@ -509,31 +537,30 @@ def _cancel_queued_generate_jobs(db: Session, document_id: uuid.UUID) -> None:
 
 
 def release_stuck_generation(db: Session, document_id: uuid.UUID) -> None:
-    """Drop a stale pending flag and orphan queued jobs when nothing is running."""
+    """Clear a stale generation_pending flag when no job is actually running."""
     if _has_running_generate_job(db, document_id):
         return
-    _cancel_queued_generate_jobs(db, document_id)
     doc = db.get(Document, document_id)
     if not doc:
         return
+    db.refresh(doc)
     progress = get_progress(doc)
     if not progress.get("generation_pending"):
         return
-    progress["generation_pending"] = False
-    save_progress(db, doc, progress)
+    _cancel_queued_generate_jobs(db, document_id)
+    save_progress(db, doc, {"generation_pending": False})
     db.commit()
 
 
 def kick_generation_sync(db: Session, document_id: uuid.UUID) -> None:
-    """Run triage + first batch inline when the pool is empty (workers optional)."""
-    if _has_running_generate_job(db, document_id):
+    """Run triage + first batch inline when the pool is empty and no worker job is active."""
+    if _has_active_generate_job(db, document_id):
         return
 
     doc = db.get(Document, document_id)
     if not doc or doc.status != "ready":
         return
 
-    release_stuck_generation(db, document_id)
     db.refresh(doc)
 
     progress = get_progress(doc)
@@ -551,18 +578,11 @@ def kick_generation_sync(db: Session, document_id: uuid.UUID) -> None:
             {"mode": "page_triage", "page_number": page},
         )
         db.refresh(doc)
-        release_stuck_generation(db, document_id)
-        db.refresh(doc)
 
-    if count_assertions_on_page(db, document_id, page) == 0:
-        _cancel_queued_generate_jobs(db, document_id)
-        doc = db.get(Document, document_id)
-        if doc:
-            progress = get_progress(doc)
-            progress["generation_pending"] = False
-            save_progress(db, doc, progress)
-            db.commit()
-        budget = get_question_budget(doc, page) if doc else INITIAL_BATCH_SIZE
+    if count_assertions_on_page(db, document_id, page) == 0 and not _has_active_generate_job(
+        db, document_id
+    ):
+        budget = get_question_budget(doc, page)
         run_generation(
             db,
             document_id,
@@ -576,6 +596,9 @@ def kick_generation_sync(db: Session, document_id: uuid.UUID) -> None:
 
 
 def _enqueue_pool_work(db: Session, document_id: uuid.UUID, doc: Document) -> Job | None:
+    if _has_active_generate_job(db, document_id):
+        return None
+    db.refresh(doc)
     meta = dict(doc.meta or {})
     progress = get_progress(doc)
     if not meta.get("question_pool_initialized"):
@@ -604,19 +627,28 @@ def clear_stale_generation_pending(db: Session, doc: Document) -> None:
 
 def advance_to_next_page(db: Session, doc: Document) -> Job | None:
     progress = get_progress(doc)
-    page = int(progress.get("current_page") or 1)
-    _, page_to = page_range_bounds(doc)
-    if page >= page_to:
+    study_pages = selected_page_list(doc)
+    page = int(progress.get("current_page") or (study_pages[0] if study_pages else 1))
+    try:
+        idx = study_pages.index(page)
+    except ValueError:
+        return None
+    if idx >= len(study_pages) - 1:
         return None
 
-    progress["current_page"] = page + 1
-    progress["answered_on_page"] = 0
-    progress["generated_on_page"] = 0
-    progress["generation_pending"] = False
-    save_progress(db, doc, progress)
+    new_page = study_pages[idx + 1]
+    save_progress(
+        db,
+        doc,
+        {
+            "current_page": new_page,
+            "answered_on_page": 0,
+            "generated_on_page": 0,
+            "generation_pending": False,
+        },
+    )
     db.commit()
 
-    new_page = page + 1
     if not get_page_coverage(doc, new_page):
         return enqueue_page_triage(db, doc, page=new_page)
     generated = count_assertions_on_page(db, doc.id, new_page)
@@ -638,6 +670,7 @@ def ensure_question_pool(db: Session, document_id: uuid.UUID) -> Job | None:
     if not doc or doc.status != "ready":
         return None
 
+    db.refresh(doc)
     meta = dict(doc.meta or {})
     if meta.get("no_searchable_text"):
         return None
@@ -650,7 +683,7 @@ def ensure_question_pool(db: Session, document_id: uuid.UUID) -> Job | None:
         return None
 
     job: Job | None = None
-    if not _has_running_generate_job(db, document_id):
+    if not _has_active_generate_job(db, document_id):
         job = _enqueue_pool_work(db, document_id, doc)
         kick_generation_sync(db, document_id)
 
@@ -664,32 +697,33 @@ def record_answer(db: Session, document_id: uuid.UUID, assertion_id: uuid.UUID) 
     progress = get_progress(doc)
     aid = str(assertion_id)
     answered = [str(x) for x in progress.get("answered_ids") or []]
-    if aid not in answered:
-        answered.append(aid)
-        progress["answered_on_page"] = int(progress.get("answered_on_page") or 0) + 1
-        # Mark aspect answered if present
-        row = db.execute(
-            text(
-                """
-                SELECT payload->>'primary_concept_key' AS key,
-                       (payload->>'page_number')::int AS page
-                FROM intel.assertion WHERE id = :id
-                """
-            ),
-            {"id": assertion_id},
-        ).mappings().first()
-        if row and row.get("key") and row.get("page"):
-            coverage = dict(progress.get("page_coverage") or {})
-            entry = dict(coverage.get(_page_key(int(row["page"]))) or {})
-            aspects = list(entry.get("aspects") or [])
-            for aspect in aspects:
-                if aspect.get("key") == row["key"]:
-                    aspect["answered"] = True
-            entry["aspects"] = aspects
-            coverage[_page_key(int(row["page"]))] = entry
-            progress["page_coverage"] = coverage
-    progress["answered_ids"] = answered
-    save_progress(db, doc, progress)
+    if aid in answered:
+        return
+    answered.append(aid)
+    patch: dict[str, Any] = {
+        "answered_ids": answered,
+        "answered_on_page": int(progress.get("answered_on_page") or 0) + 1,
+    }
+    row = db.execute(
+        text(
+            """
+            SELECT payload->>'primary_concept_key' AS key,
+                   (payload->>'page_number')::int AS page
+            FROM intel.assertion WHERE id = :id
+            """
+        ),
+        {"id": assertion_id},
+    ).mappings().first()
+    if row and row.get("key") and row.get("page"):
+        page_num = int(row["page"])
+        entry = dict(get_page_coverage(doc, page_num))
+        aspects = list(entry.get("aspects") or [])
+        for aspect in aspects:
+            if aspect.get("key") == row["key"]:
+                aspect["answered"] = True
+        entry["aspects"] = aspects
+        patch["page_coverage"] = {_page_key(page_num): entry}
+    save_progress(db, doc, patch)
     db.commit()
     maybe_refill_pool(db, document_id)
 

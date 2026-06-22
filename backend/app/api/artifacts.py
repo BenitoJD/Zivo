@@ -26,6 +26,7 @@ router = APIRouter()
 class PageRangeIn(BaseModel):
     from_page: int = Field(alias="from", ge=1)
     to_page: int = Field(alias="to", ge=1)
+    pages: list[int] | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -99,12 +100,21 @@ def confirm_page_range(
     guest_id: str | None = Depends(optional_guest_session),
 ) -> dict:
     doc = _resolve_document(db, artifact_id, user, guest_id)
-    if body.to_page < body.from_page:
-        raise HTTPException(status_code=400, detail="Invalid page range")
     page_count = (doc.meta or {}).get("page_count") or body.to_page
-    if body.to_page > page_count:
-        raise HTTPException(status_code=400, detail="Page range exceeds document")
-    selected = {"from": body.from_page, "to": body.to_page}
+
+    if body.pages:
+        study_pages = sorted({p for p in body.pages if p >= 1})
+        if not study_pages:
+            raise HTTPException(status_code=400, detail="No pages selected")
+        if any(p > page_count for p in study_pages):
+            raise HTTPException(status_code=400, detail="Page selection exceeds document")
+        selected = {"from": study_pages[0], "to": study_pages[-1], "pages": study_pages}
+    else:
+        if body.to_page < body.from_page:
+            raise HTTPException(status_code=400, detail="Invalid page range")
+        if body.to_page > page_count:
+            raise HTTPException(status_code=400, detail="Page range exceeds document")
+        selected = {"from": body.from_page, "to": body.to_page}
     reset_for_new_page_range(db, doc, selected)
     doc.status = "indexing"
     captured = doc.artifact_captured_at or doc.created_at

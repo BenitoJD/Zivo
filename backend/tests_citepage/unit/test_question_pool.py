@@ -7,12 +7,14 @@ from unittest.mock import MagicMock, patch
 
 from app.services.question_pool import (
     REFILL_AFTER_ANSWERED,
+    _merge_progress,
     clear_stale_generation_pending,
     ensure_question_pool,
     get_progress,
     get_question_budget,
     maybe_refill_pool,
     record_answer,
+    release_stuck_generation,
 )
 
 
@@ -124,7 +126,7 @@ def test_clear_stale_generation_pending_clears_without_active_job() -> None:
         clear_stale_generation_pending(db, doc)
 
     save.assert_called_once()
-    assert doc.meta["question_progress"]["generation_pending"] is False
+    assert save.call_args.args[2] == {"generation_pending": False}
 
 
 def test_ensure_question_pool_requeues_triage_when_no_coverage() -> None:
@@ -152,6 +154,7 @@ def test_ensure_question_pool_requeues_triage_when_no_coverage() -> None:
         patch("app.services.question_pool.release_stuck_generation"),
         patch("app.services.question_pool.kick_generation_sync"),
         patch("app.services.question_pool.next_assertion_id", return_value=None),
+        patch("app.services.question_pool._has_active_generate_job", return_value=False),
         patch("app.services.question_pool.enqueue_page_triage") as triage,
     ):
         triage.return_value = MagicMock()
@@ -229,3 +232,112 @@ def test_reset_for_new_page_range_clears_pool_state() -> None:
     assert kwargs["page"] == 10
     assert kwargs["batch_size"] == 5
     assert kwargs["start_sequence"] == 5
+
+
+def test_merge_progress_does_not_wipe_page_coverage() -> None:
+    existing = {
+        "current_page": 17,
+        "generation_pending": False,
+        "page_coverage": {"17": {"question_budget": 12, "aspects": [{"key": "a"}]}},
+    }
+    patch = {
+        "generation_pending": True,
+        "page_coverage": {},
+    }
+    merged = _merge_progress(existing, patch)
+    assert merged["generation_pending"] is True
+    assert merged["page_coverage"]["17"]["question_budget"] == 12
+
+
+def test_release_stuck_generation_keeps_queued_jobs_when_not_pending() -> None:
+    doc_id = uuid.uuid4()
+    doc = MagicMock()
+    doc.id = doc_id
+    doc.meta = {
+        "question_progress": {
+            "current_page": 17,
+            "generation_pending": False,
+            "page_coverage": {},
+        }
+    }
+    db = MagicMock()
+    db.get.return_value = doc
+
+    def execute_side_effect(statement, params=None):
+        sql = str(statement)
+        mock = MagicMock()
+        if "status = 'running'" in sql:
+            mock.scalar.return_value = None
+        return mock
+
+    db.execute.side_effect = execute_side_effect
+
+    with patch("app.services.question_pool._cancel_queued_generate_jobs") as cancel:
+        release_stuck_generation(db, doc_id)
+
+    cancel.assert_not_called()
+    db.commit.assert_not_called()
+
+
+def test_release_stuck_generation_cancels_when_pending_stale() -> None:
+    doc_id = uuid.uuid4()
+    doc = MagicMock()
+    doc.id = doc_id
+    doc.meta = {
+        "question_progress": {
+            "current_page": 17,
+            "generation_pending": True,
+            "page_coverage": {},
+        }
+    }
+    db = MagicMock()
+    db.get.return_value = doc
+
+    def execute_side_effect(statement, params=None):
+        sql = str(statement)
+        mock = MagicMock()
+        if "status = 'running'" in sql:
+            mock.scalar.return_value = None
+        return mock
+
+    db.execute.side_effect = execute_side_effect
+
+    with (
+        patch("app.services.question_pool._cancel_queued_generate_jobs") as cancel,
+        patch("app.services.question_pool.save_progress") as save,
+    ):
+        release_stuck_generation(db, doc_id)
+
+    cancel.assert_called_once_with(db, doc_id)
+    save.assert_called_once_with(db, doc, {"generation_pending": False})
+    db.commit.assert_called_once()
+
+
+def test_ensure_question_pool_skips_enqueue_when_job_active() -> None:
+    doc_id = uuid.uuid4()
+    doc = MagicMock()
+    doc.id = doc_id
+    doc.status = "ready"
+    doc.account_id = None
+    doc.meta = {
+        "selected_range": {"from": 17, "to": 35},
+        "question_pool_initialized": True,
+        "question_progress": {
+            "current_page": 17,
+            "generation_pending": True,
+            "page_coverage": {},
+        },
+    }
+    db = MagicMock()
+    db.get.return_value = doc
+
+    with (
+        patch("app.services.question_pool.release_stuck_generation"),
+        patch("app.services.question_pool.kick_generation_sync"),
+        patch("app.services.question_pool.next_assertion_id", return_value=None),
+        patch("app.services.question_pool._has_active_generate_job", return_value=True),
+        patch("app.services.question_pool.enqueue_page_triage") as triage,
+    ):
+        ensure_question_pool(db, doc_id)
+
+    triage.assert_not_called()

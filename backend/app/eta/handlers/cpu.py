@@ -26,13 +26,19 @@ def parse_document_job(payload: dict) -> dict:
             return {"document_id": str(document_id), "image": True}
 
         pages = parse_document(doc.content_type, raw)
+        total_pages = len(pages)
         selected = (doc.meta or {}).get("selected_range")
         if selected:
-            page_from = int(selected.get("from", 1))
-            page_to = int(selected.get("to", page_from))
-            pages = [p for p in pages if page_from <= int(p.get("page", 0)) <= page_to]
+            page_list = selected.get("pages")
+            if isinstance(page_list, list) and page_list:
+                allowed = {int(p) for p in page_list}
+                pages = [p for p in pages if int(p.get("page", 0)) in allowed]
+            else:
+                page_from = int(selected.get("from", 1))
+                page_to = int(selected.get("to", page_from))
+                pages = [p for p in pages if page_from <= int(p.get("page", 0)) <= page_to]
         meta = dict(doc.meta or {})
-        meta["page_count"] = len(pages)
+        meta["page_count"] = int(meta.get("page_count") or total_pages or 1)
         doc.meta = meta
         put_json(ingest_tmp_key(document_id, "pages"), {"pages": pages})
         doc.index_progress = 30

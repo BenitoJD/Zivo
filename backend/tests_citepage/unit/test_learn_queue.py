@@ -45,6 +45,7 @@ def test_build_learn_queue_state_resume_at_question_three() -> None:
         patch("app.services.question_pool.next_assertion_id", return_value="id-3"),
         patch("app.services.question_pool._count_available", return_value=8),
         patch("app.services.question_pool.is_page_complete", return_value=False),
+        patch("app.services.question_pool.get_page_coverage", return_value={"question_budget": 47}),
     ):
         state = build_learn_queue_state(db, doc_id, doc, progress)
 
@@ -53,6 +54,8 @@ def test_build_learn_queue_state_resume_at_question_three() -> None:
     assert state["question_budget"] == 47
     assert state["current_assertion_id"] == "id-3"
     assert state["page_complete"] is False
+    assert state["page_triage_complete"] is True
+    assert state["generated_on_page"] == 10
 
 
 def test_is_page_complete_when_budget_reached_and_pool_empty() -> None:

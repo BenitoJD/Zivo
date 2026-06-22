@@ -14,7 +14,7 @@ export type ArtifactMeta = {
   index_progress?: number;
   filename?: string;
   content_type?: string;
-  meta?: { selected_range?: { from: number; to: number }; page_count?: number };
+  meta?: { selected_range?: { from: number; to: number; pages?: number[] }; page_count?: number };
 };
 
 export type PagesInfo = {
@@ -32,6 +32,7 @@ export type McqState = {
   page_mastered: boolean;
   page_ready: boolean;
   generation_pending?: boolean;
+  page_triage_complete?: boolean;
   generated_on_page?: number;
   answered_on_page?: number;
   max_per_page?: number;
