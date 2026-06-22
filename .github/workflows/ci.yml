@@ -8,31 +8,39 @@ on:
 
 jobs:
   backend:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_USER: zivo
-          POSTGRES_PASSWORD: zivo
-          POSTGRES_DB: zivo
-        ports:
-          - 5455:5432
-        options: >-
-          --health-cmd "pg_isready -U zivo"
-          --health-interval 5s
-          --health-retries 5
+    runs-on: [self-hosted, zivo]
     defaults:
       run:
         working-directory: backend
     env:
       DATABASE_URL: postgresql+psycopg://zivo:zivo@localhost:5455/zivo
+      CI_POSTGRES_CONTAINER: ci-postgres-${{ github.run_id }}
     steps:
       - uses: actions/checkout@v6
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+
+      - name: Start Postgres
+        run: |
+          docker rm -f "$CI_POSTGRES_CONTAINER" 2>/dev/null || true
+          docker run -d --name "$CI_POSTGRES_CONTAINER" \
+            -e POSTGRES_USER=zivo \
+            -e POSTGRES_PASSWORD=zivo \
+            -e POSTGRES_DB=zivo \
+            -p 5455:5432 \
+            pgvector/pgvector:pg16
+          for i in $(seq 1 30); do
+            if docker exec "$CI_POSTGRES_CONTAINER" pg_isready -U zivo >/dev/null 2>&1; then
+              echo "Postgres ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Postgres failed to start" >&2
+          docker logs "$CI_POSTGRES_CONTAINER" || true
+          exit 1
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -49,8 +57,12 @@ jobs:
       - name: Unit tests
         run: python -m pytest tests/unit/ tests_citepage/unit/ -q --tb=no
 
+      - name: Stop Postgres
+        if: always()
+        run: docker rm -f "$CI_POSTGRES_CONTAINER" 2>/dev/null || true
+
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, zivo]
     defaults:
       run:
         working-directory: frontend

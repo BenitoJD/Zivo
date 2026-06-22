@@ -18,7 +18,7 @@ Same deployment model as [citepage](https://github.com/BenitoJD/citepage): **K3s
 | **Workers** | Ready | Citepage ETA IO+CPU — `backend/app/eta/`, `run_eta_worker_*.py` |
 | **Workspace UI** | Ready | `/workspace` — Learn/Test 3-panel layout |
 | **Helm / K8s** | Ready | postgres, minio, api, web, db-schema charts |
-| **CI** | Ready | `.github/workflows/ci.yml` |
+| **CI** | Ready | `.github/workflows/ci.yml` — self-hosted `zivo` runner on VPS |
 | **Deploy workflow** | Ready | `.github/workflows/deploy.yml` (needs push + workflow run) |
 | **VPS base** | Ready | K3s, Traefik, cert-manager, GH runner at `103.194.228.47` |
 | **VPS app stack** | Empty | Run deploy after code is on `main` |
