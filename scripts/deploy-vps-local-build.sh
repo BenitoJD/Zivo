@@ -19,8 +19,8 @@ docker build --pull -t "${API_IMAGE}" -f backend/Dockerfile --target runtime bac
 docker build --pull -t "${WEB_IMAGE}" -f frontend/Dockerfile --target runtime \
   --build-arg NEXT_PUBLIC_API_URL=https://api.zivo.fyi frontend/
 
-docker save "${API_IMAGE}" | k3s ctr images import -
-docker save "${WEB_IMAGE}" | k3s ctr images import -
+docker save "${API_IMAGE}" | sudo k3s ctr images import -
+docker save "${WEB_IMAGE}" | sudo k3s ctr images import -
 
 kubectl -n zivo delete job alembic-migrate --ignore-not-found=true
 helm upgrade --install db-schema ./infra/k8s/charts/db-schema -n zivo \

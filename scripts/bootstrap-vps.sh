@@ -103,6 +103,10 @@ if [[ ! -f "$RUNNER_DIR/.runner" && -n "${RUNNER_TOKEN:-}" ]]; then
   cp /etc/rancher/k3s/k3s.yaml /home/github-runner/.kube/config
   chown -R github-runner:github-runner /home/github-runner/.kube
   chmod 600 /home/github-runner/.kube/config
+  cat >/etc/sudoers.d/github-runner-k3s <<'SUDOERS'
+github-runner ALL=(ALL) NOPASSWD: /usr/local/bin/k3s
+SUDOERS
+  chmod 440 /etc/sudoers.d/github-runner-k3s
 fi
 
 log "Bootstrap complete."
