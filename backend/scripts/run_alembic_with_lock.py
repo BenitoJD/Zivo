@@ -126,6 +126,14 @@ def _acquire_lock(connection, lock_id: int, timeout_seconds: int) -> bool:
         time.sleep(min(5, remaining))
 
 
+def _run_vocab_seed() -> int:
+    script = BACKEND_ROOT / "scripts" / "seed_question_vocab.py"
+    command = [sys.executable, str(script)]
+    print(f"Running {' '.join(command)}", flush=True)
+    result = subprocess.run(command, cwd=BACKEND_ROOT, check=False)
+    return result.returncode
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--revision", default="head", help="Alembic revision target.")
@@ -163,6 +171,9 @@ def main() -> int:
             exit_code = _run_alembic(args.revision, args.timeout_seconds)
             if exit_code != 0:
                 return exit_code
+            seed_code = _run_vocab_seed()
+            if seed_code != 0:
+                return seed_code
             if args.verify_head:
                 return _verify_head(min(args.timeout_seconds, 120))
             return 0
