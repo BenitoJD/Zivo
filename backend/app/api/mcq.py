@@ -13,7 +13,7 @@ from app.db import get_db
 from app.graphs.mcq_graph import grade_mcq
 from app.models import Account
 from app.services.auth import get_optional_user, require_csrf_or_guest
-from app.services.question_pool import record_answer
+from app.services.question_pool import record_answer, save_confirmed_answer
 
 router = APIRouter()
 
@@ -82,6 +82,14 @@ def grade(
         {"id": body.assertion_id},
     ).first()
     if row and row[0]:
-        record_answer(db, uuid.UUID(str(row[0])), body.assertion_id)
+        artifact_id = uuid.UUID(str(row[0]))
+        save_confirmed_answer(
+            db,
+            artifact_id,
+            body.assertion_id,
+            choice_index=body.choice_index,
+            correct=bool(result.get("correct")),
+        )
+        record_answer(db, artifact_id, body.assertion_id)
 
     return result

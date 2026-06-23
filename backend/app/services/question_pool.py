@@ -878,6 +878,32 @@ def maybe_transition_prefetch(db: Session, document_id: uuid.UUID) -> Job | None
     )
 
 
+def save_confirmed_answer(
+    db: Session,
+    document_id: uuid.UUID,
+    assertion_id: uuid.UUID,
+    *,
+    choice_index: int,
+    correct: bool,
+) -> None:
+    """Persist the learner's latest confirmed MCQ choice for tutor chat context."""
+    doc = db.get(Document, document_id)
+    if not doc:
+        return
+    save_progress(
+        db,
+        doc,
+        {
+            "last_confirmed_answer": {
+                "assertion_id": str(assertion_id),
+                "choice_index": int(choice_index),
+                "correct": bool(correct),
+            }
+        },
+    )
+    db.commit()
+
+
 def record_answer(db: Session, document_id: uuid.UUID, assertion_id: uuid.UUID) -> None:
     doc = db.get(Document, document_id)
     if not doc:

@@ -538,7 +538,15 @@ export default function WorkspaceArtifactPage({
     try {
       await ensureGuestSession();
       const currentPage = queue?.current_page;
-      const scope = currentPage && currentPage > 0 ? { current_page: currentPage } : {};
+      const scope: Record<string, unknown> =
+        currentPage && currentPage > 0 ? { current_page: currentPage } : {};
+      if (queue?.current_assertion_id) {
+        scope.current_assertion_id = queue.current_assertion_id;
+      }
+      if (gradeState !== null && selected !== null) {
+        scope.confirmed_choice_index = Number(selected);
+        scope.answer_correct = gradeState.correct;
+      }
       let assistant = "";
       let gotToken = false;
       await apiPostSSE(

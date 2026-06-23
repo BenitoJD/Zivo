@@ -60,6 +60,8 @@ class ChatScope(BaseModel):
     page_end: int | None = Field(default=None, ge=1)
     selection_text: str | None = Field(default=None, max_length=8000)
     current_page: int | None = Field(default=None, ge=1)
+    confirmed_choice_index: int | None = Field(default=None, ge=0, le=25)
+    answer_correct: bool | None = None
     mentions: list[str] = Field(default_factory=list, max_length=20)
 
     @field_validator("mentions")
@@ -262,7 +264,14 @@ async def chat_stream(
             yield {"event": "status", "data": json.dumps({"phase": "thinking"})}
             try:
                 scope = normalize_chat_scope(request_scope, doc_snapshot)
-                scope.update(learn_scope_fields(stream_db, doc_snapshot.id, doc_snapshot))
+                scope.update(
+                    learn_scope_fields(
+                        stream_db,
+                        doc_snapshot.id,
+                        doc_snapshot,
+                        request_scope=request_scope,
+                    )
+                )
                 doc_ids = _resolve_document_ids(
                     stream_db,
                     doc_snapshot.id,
@@ -304,7 +313,12 @@ async def chat_stream(
                     page_end=scope.get("page_end"),
                 )
                 trailer_parts: list[str] = []
-                learn_context = build_learn_chat_context(stream_db, doc_snapshot.id, doc_snapshot)
+                learn_context = build_learn_chat_context(
+                    stream_db,
+                    doc_snapshot.id,
+                    doc_snapshot,
+                    scope=scope,
+                )
                 if learn_context:
                     trailer_parts.append(learn_context)
                 if context_block:
