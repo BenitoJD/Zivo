@@ -565,8 +565,10 @@ export default function WorkspaceArtifactPage({
       }
     } catch (e) {
       const raw = e instanceof Error && e.message ? e.message : null;
-      const detail =
-        raw && raw !== "empty response"
+      const timedOut = raw && /timed out|aborted/i.test(raw);
+      const detail = timedOut
+        ? `${ZIVO_ASSISTANT_NAME} is still waking up — try again in a moment.`
+        : raw && raw !== "empty response"
           ? humanizeApiFailure(0, raw)
           : `${ZIVO_ASSISTANT_NAME} could not reply right now. Try again in a moment.`;
       setChatMessages((m) => {

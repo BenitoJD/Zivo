@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -17,6 +18,13 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+def _warmup_retrieval_models() -> None:
+    """Load the embedding model before serving chat (reranker stays lazy to save RAM)."""
+    from app.services.embed import embed_query
+
+    embed_query("warmup")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     try:
@@ -29,6 +37,8 @@ async def lifespan(_: FastAPI):
             try:
                 embed = resolve_embedding_model(db)
                 set_active_embed_model(embed.record.litellm_model)
+                await asyncio.to_thread(_warmup_retrieval_models)
+                logger.info("startup: retrieval models warmed up")
             except Exception as exc:
                 logger.exception("startup: embedding model resolution failed: %s", exc)
     except Exception as exc:

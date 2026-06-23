@@ -259,6 +259,7 @@ async def chat_stream(
         # dedicated session for all post-stream persistence.
         stream_db = SessionLocal()
         try:
+            yield {"event": "status", "data": json.dumps({"phase": "thinking"})}
             try:
                 scope = normalize_chat_scope(request_scope, doc_snapshot)
                 scope.update(learn_scope_fields(stream_db, doc_snapshot.id, doc_snapshot))

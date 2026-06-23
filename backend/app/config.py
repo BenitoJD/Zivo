@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     embed_dimension: int = 384
+    rerank_enabled: bool = True
 
     session_days: int = 7
     session_remember_days: int = 30

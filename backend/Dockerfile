@@ -30,6 +30,12 @@ ENV PATH="/opt/venv/bin:$PATH" \
 
 COPY --chown=appuser:appuser . .
 
+# Bake retrieval models so chat does not download from HuggingFace on first request.
+ENV HF_HOME=/app/.cache/huggingface
+RUN mkdir -p /app/.cache/huggingface \
+    && python -c "from fastembed import TextEmbedding; from fastembed.rerank.cross_encoder import TextCrossEncoder; TextEmbedding(model_name='sentence-transformers/all-MiniLM-L6-v2'); TextCrossEncoder(model_name='BAAI/bge-reranker-base')" \
+    && chown -R appuser:appuser /app/.cache
+
 USER appuser
 
 EXPOSE 8000

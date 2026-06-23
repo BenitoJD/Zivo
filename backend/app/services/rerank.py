@@ -12,6 +12,8 @@ from functools import lru_cache
 
 from fastembed.rerank.cross_encoder import TextCrossEncoder
 
+from app.config import get_settings
+
 _RERANK_MODEL = "BAAI/bge-reranker-base"
 
 
@@ -31,6 +33,8 @@ def rerank_chunks(
     Falls back to the input order (truncated) if reranking fails or the input
     is small — never blocks retrieval on a reranker error.
     """
+    if not get_settings().rerank_enabled:
+        return chunks[:top_n]
     if len(chunks) <= top_n:
         return chunks
     try:
