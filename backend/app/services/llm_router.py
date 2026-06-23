@@ -4,6 +4,9 @@ Every completion (streaming or not) emits one structured log line with
 prompt/completion/cached token counts and latency. This is the before/after
 ruler for compute-cost optimization work (provider prompt caching, retrieval
 gating, semantic cache).
+
+When ``model_id`` is omitted and the pool is enabled, requests round-robin
+across all configured chat models and fail over on transient provider errors.
 """
 
 from collections.abc import AsyncIterator
@@ -14,7 +17,13 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from app.services.llm_registry import ResolvedLlmModel, configure_litellm, resolve_chat_model
+from app.services.llm_pool import (
+    is_failover_eligible,
+    iter_chat_model_attempts,
+    litellm_provider_kwargs,
+    log_failover,
+)
+from app.services.llm_registry import ResolvedLlmModel, configure_litellm
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +79,11 @@ def _log_usage(tag: str, model: str, usage: object, started: float) -> None:
     )
 
 
+def _apply_model(resolved: ResolvedLlmModel) -> dict[str, str]:
+    configure_litellm(resolved.provider)
+    return litellm_provider_kwargs(resolved)
+
+
 async def stream_chat_completion(
     messages: list[dict],
     db: Session,
@@ -81,27 +95,38 @@ async def stream_chat_completion(
     """Stream tokens from LiteLLM using the DB model registry."""
     import litellm
 
-    resolved = resolve_chat_model(db, model_id=model_id, require_vision=require_vision)
-    _apply_model(resolved)
-    started = time.perf_counter()
-    response = await litellm.acompletion(
-        model=resolved.litellm_model,
-        messages=messages,
-        stream=True,
-        stream_options={"include_usage": True},
-        num_retries=LLM_NUM_RETRIES,
-    )
-    final_usage: object = None
-    async for chunk in response:
-        # The usage object rides on a trailing chunk (choices may be empty/None).
-        if getattr(chunk, "usage", None):
-            final_usage = chunk.usage
-        choices = getattr(chunk, "choices", None) or []
-        if choices:
-            delta = choices[0].delta.content or ""
-            if delta:
-                yield delta
-    _log_usage(log_tag, resolved.litellm_model, final_usage, started)
+    last_exc: BaseException | None = None
+    for resolved in iter_chat_model_attempts(db, model_id=model_id, require_vision=require_vision):
+        provider_kwargs = _apply_model(resolved)
+        started = time.perf_counter()
+        try:
+            response = await litellm.acompletion(
+                model=resolved.litellm_model,
+                messages=messages,
+                stream=True,
+                stream_options={"include_usage": True},
+                num_retries=LLM_NUM_RETRIES,
+                **provider_kwargs,
+            )
+            final_usage: object = None
+            async for chunk in response:
+                if getattr(chunk, "usage", None):
+                    final_usage = chunk.usage
+                choices = getattr(chunk, "choices", None) or []
+                if choices:
+                    delta = choices[0].delta.content or ""
+                    if delta:
+                        yield delta
+            _log_usage(log_tag, resolved.litellm_model, final_usage, started)
+            return
+        except Exception as exc:
+            last_exc = exc
+            if model_id is not None or not is_failover_eligible(exc):
+                raise
+            log_failover(resolved, exc, log_tag=log_tag)
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("stream_chat_completion exhausted model pool without result")
 
 
 async def complete_chat(
@@ -114,20 +139,25 @@ async def complete_chat(
 ) -> str:
     import litellm
 
-    resolved = resolve_chat_model(db, model_id=model_id, require_vision=require_vision)
-    _apply_model(resolved)
-    started = time.perf_counter()
-    response = await litellm.acompletion(
-        model=resolved.litellm_model,
-        messages=messages,
-        stream=False,
-        num_retries=LLM_NUM_RETRIES,
-    )
-    _log_usage(log_tag, resolved.litellm_model, getattr(response, "usage", None), started)
-    return response.choices[0].message.content or ""
-
-
-def _apply_model(resolved: ResolvedLlmModel) -> None:
-    configure_litellm(resolved.provider)
-    if not resolved.record.supports_streaming:
-        pass  # caller may still use non-streaming complete_chat
+    last_exc: BaseException | None = None
+    for resolved in iter_chat_model_attempts(db, model_id=model_id, require_vision=require_vision):
+        provider_kwargs = _apply_model(resolved)
+        started = time.perf_counter()
+        try:
+            response = await litellm.acompletion(
+                model=resolved.litellm_model,
+                messages=messages,
+                stream=False,
+                num_retries=LLM_NUM_RETRIES,
+                **provider_kwargs,
+            )
+            _log_usage(log_tag, resolved.litellm_model, getattr(response, "usage", None), started)
+            return response.choices[0].message.content or ""
+        except Exception as exc:
+            last_exc = exc
+            if model_id is not None or not is_failover_eligible(exc):
+                raise
+            log_failover(resolved, exc, log_tag=log_tag)
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("complete_chat exhausted model pool without result")

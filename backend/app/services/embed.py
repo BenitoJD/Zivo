@@ -7,6 +7,9 @@ from app.config import get_settings
 
 settings = get_settings()
 
+# Smallest dense embedder in FastEmbed TextEmbedding.list_supported_models() (~0.067 GB).
+DEFAULT_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
+
 _active_embed_model: str | None = None
 
 

@@ -35,11 +35,20 @@ class Settings(BaseSettings):
     litellm_model: str = "openai/mimo-v2.5"
     openai_api_base: str = ""
     openai_api_key: str = ""
+    zai_api_base: str = "https://api.z.ai/api/coding/paas/v4"
+    zai_api_key: str = ""
+    openrouter_api_base: str = "https://openrouter.ai/api/v1"
+    openrouter_api_key: str = ""
     gemini_api_key: str = ""
     anthropic_api_key: str = ""
-    embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    # When true, chat/MCQ calls without an explicit model_id rotate across all
+    # configured chat models and fail over on transient provider errors.
+    llm_pool_enabled: bool = True
+    embed_model: str = "BAAI/bge-small-en-v1.5"
     embed_dimension: int = 384
     rerank_enabled: bool = True
+    # Smallest FastEmbed cross-encoder (0.08 GB ONNX); CPU-friendly MS MARCO reranker.
+    rerank_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"
 
     session_days: int = 7
     session_remember_days: int = 30

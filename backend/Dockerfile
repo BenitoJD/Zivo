@@ -33,7 +33,7 @@ COPY --chown=appuser:appuser . .
 # Bake retrieval models so chat does not download from HuggingFace on first request.
 ENV HF_HOME=/app/.cache/huggingface
 RUN mkdir -p /app/.cache/huggingface \
-    && python -c "from fastembed import TextEmbedding; from fastembed.rerank.cross_encoder import TextCrossEncoder; TextEmbedding(model_name='sentence-transformers/all-MiniLM-L6-v2'); TextCrossEncoder(model_name='BAAI/bge-reranker-base')" \
+    && python -c "from fastembed import TextEmbedding; from fastembed.rerank.cross_encoder import TextCrossEncoder; TextEmbedding(model_name='BAAI/bge-small-en-v1.5'); TextCrossEncoder(model_name='Xenova/ms-marco-MiniLM-L-6-v2')" \
     && chown -R appuser:appuser /app/.cache
 
 USER appuser

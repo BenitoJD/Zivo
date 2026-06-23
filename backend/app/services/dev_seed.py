@@ -115,13 +115,15 @@ def seed_local_database(
         if not any(
             [
                 settings.openai_api_key,
+                settings.zai_api_key,
+                settings.openrouter_api_key,
                 settings.gemini_api_key,
                 settings.anthropic_api_key,
             ]
         ):
             report.warnings.append(
-                "No LLM API keys in env — add OPENAI_API_KEY, GEMINI_API_KEY, or "
-                "ANTHROPIC_API_KEY to backend/.env.local"
+                "No LLM API keys in env — add OPENAI_API_KEY, ZAI_API_KEY, OPENROUTER_API_KEY, "
+                "GEMINI_API_KEY, or ANTHROPIC_API_KEY to backend/.env.local"
             )
 
     if demo_embeddings:

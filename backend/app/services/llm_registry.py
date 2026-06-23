@@ -18,6 +18,10 @@ _PREFIX_ENV_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
         ("api_key", "OPENAI_API_KEY"),
         ("api_base_url", "OPENAI_API_BASE"),
     ),
+    "openrouter": (
+        ("api_key", "OPENROUTER_API_KEY"),
+        ("api_base_url", "OPENROUTER_API_BASE"),
+    ),
     "gemini": (("api_key", "GEMINI_API_KEY"),),
     "anthropic": (("api_key", "ANTHROPIC_API_KEY"),),
     "vertex_ai": (("api_key", "VERTEXAI_API_KEY"),),
@@ -135,6 +139,7 @@ def _provider_slug_for_litellm_model(litellm_model: str) -> str:
     prefix = litellm_model.split("/", 1)[0]
     return {
         "openai": "openai",
+        "openrouter": "openrouter",
         "gemini": "gemini",
         "anthropic": "anthropic",
     }.get(prefix, prefix)
@@ -185,6 +190,7 @@ def _upsert_model(
     max_output_tokens: int | None = None,
     sort_order: int = 0,
     meta: dict | None = None,
+    update_fields: bool = False,
 ) -> LlmModel:
     model = (
         db.query(LlmModel)
@@ -192,8 +198,19 @@ def _upsert_model(
         .first()
     )
     if model:
-        model.is_default = is_default
         model.is_enabled = True
+        if update_fields:
+            model.litellm_model = litellm_model
+            model.display_name = display_name
+            model.sort_order = sort_order
+            if max_input_tokens is not None:
+                model.max_input_tokens = max_input_tokens
+            if max_output_tokens is not None:
+                model.max_output_tokens = max_output_tokens
+            if meta is not None:
+                model.meta = meta
+        if is_default:
+            model.is_default = True
         return model
 
     model = LlmModel(
@@ -221,6 +238,102 @@ def _clear_defaults_for_kind(db: Session, kind: LlmModelKind) -> None:
     )
 
 
+def ensure_registry_providers(db: Session, settings: Settings | None = None) -> bool:
+    """Upsert known providers/models so existing DBs pick up new routes (e.g. Z.AI GLM)."""
+    settings = settings or get_settings()
+    dirty = False
+
+    zai = _upsert_provider(
+        db,
+        slug="zai",
+        display_name="Z.AI",
+        litellm_prefix="openai",
+        api_base_url=settings.zai_api_base.rstrip("/") or None,
+        api_key=settings.zai_api_key or None,
+    )
+    before = (
+        db.query(LlmModel)
+        .filter(LlmModel.provider_id == zai.id, LlmModel.slug == "glm-4.7")
+        .count()
+    )
+    _upsert_model(
+        db,
+        provider=zai,
+        slug="glm-4.7",
+        litellm_model="openai/glm-4.7",
+        display_name="GLM 4.7",
+        kind=LlmModelKind.chat,
+        sort_order=15,
+        max_input_tokens=200_000,
+        max_output_tokens=8_192,
+        update_fields=True,
+    )
+    if before == 0:
+        dirty = True
+
+    openrouter = _upsert_provider(
+        db,
+        slug="openrouter",
+        display_name="OpenRouter",
+        litellm_prefix="openrouter",
+        api_base_url=settings.openrouter_api_base.rstrip("/") or None,
+        api_key=settings.openrouter_api_key or None,
+    )
+    before = (
+        db.query(LlmModel)
+        .filter(LlmModel.provider_id == openrouter.id, LlmModel.slug == "free")
+        .count()
+    )
+    _upsert_model(
+        db,
+        provider=openrouter,
+        slug="free",
+        litellm_model="openrouter/openrouter/free",
+        display_name="OpenRouter Free",
+        kind=LlmModelKind.chat,
+        sort_order=12,
+        max_input_tokens=128_000,
+        max_output_tokens=8_192,
+        update_fields=True,
+    )
+    if before == 0:
+        dirty = True
+
+    openai = db.query(LlmProvider).filter(LlmProvider.slug == "openai").first()
+    if openai is None and (settings.openai_api_key or settings.openai_api_base):
+        openai = _upsert_provider(
+            db,
+            slug="openai",
+            display_name="OpenAI-compatible",
+            litellm_prefix="openai",
+            api_base_url=settings.openai_api_base or None,
+            api_key=settings.openai_api_key or None,
+        )
+        dirty = True
+    if openai:
+        before = (
+            db.query(LlmModel)
+            .filter(LlmModel.provider_id == openai.id, LlmModel.slug == "mimo-v2.5")
+            .count()
+        )
+        _upsert_model(
+            db,
+            provider=openai,
+            slug="mimo-v2.5",
+            litellm_model="openai/mimo-v2.5",
+            display_name="MiMo v2.5",
+            kind=LlmModelKind.chat,
+            sort_order=10,
+            max_input_tokens=128_000,
+            max_output_tokens=8_192,
+            update_fields=True,
+        )
+        if before == 0:
+            dirty = True
+
+    return dirty
+
+
 def refresh_llm_registry_from_env(
     db: Session,
     settings: Settings | None = None,
@@ -230,6 +343,29 @@ def refresh_llm_registry_from_env(
     """Apply env API keys/base URLs and default chat model. Returns True if DB changed."""
     settings = settings or get_settings()
     dirty = False
+
+    if ensure_registry_providers(db, settings):
+        dirty = True
+
+    if settings.zai_api_key or settings.zai_api_base:
+        provider = db.query(LlmProvider).filter(LlmProvider.slug == "zai").first()
+        if provider:
+            if settings.zai_api_key and (force_keys or not provider.api_key):
+                provider.api_key = settings.zai_api_key
+                dirty = True
+            if settings.zai_api_base and (force_keys or not provider.api_base_url):
+                provider.api_base_url = settings.zai_api_base.rstrip("/")
+                dirty = True
+
+    if settings.openrouter_api_key or settings.openrouter_api_base:
+        provider = db.query(LlmProvider).filter(LlmProvider.slug == "openrouter").first()
+        if provider:
+            if settings.openrouter_api_key and (force_keys or not provider.api_key):
+                provider.api_key = settings.openrouter_api_key
+                dirty = True
+            if settings.openrouter_api_base and (force_keys or not provider.api_base_url):
+                provider.api_base_url = settings.openrouter_api_base.rstrip("/")
+                dirty = True
 
     if settings.openai_api_key or settings.openai_api_base:
         provider = db.query(LlmProvider).filter(LlmProvider.slug == "openai").first()
@@ -252,6 +388,9 @@ def refresh_llm_registry_from_env(
             dirty = True
 
     if sync_default_chat_model_from_env(db, settings):
+        dirty = True
+
+    if sync_default_embedding_model_from_env(db, settings):
         dirty = True
 
     if dirty:
@@ -299,6 +438,37 @@ def sync_default_chat_model_from_env(db: Session, settings: Settings | None = No
     return True
 
 
+def sync_default_embedding_model_from_env(db: Session, settings: Settings | None = None) -> bool:
+    """Keep the default embedding row aligned with ``settings.embed_model``."""
+    settings = settings or get_settings()
+    embed_model = settings.embed_model.strip()
+    if not embed_model:
+        return False
+
+    model = (
+        db.query(LlmModel)
+        .filter(LlmModel.kind == LlmModelKind.embedding, LlmModel.is_default.is_(True))
+        .first()
+    )
+    if not model:
+        return False
+
+    dirty = False
+    if model.litellm_model != embed_model:
+        model.litellm_model = embed_model
+        dirty = True
+    display_name = "BGE small en v1.5 (embeddings)"
+    if model.display_name != display_name:
+        model.display_name = display_name
+        dirty = True
+    meta = dict(model.meta or {})
+    if meta.get("embed_dimension") != settings.embed_dimension:
+        meta["embed_dimension"] = settings.embed_dimension
+        model.meta = meta
+        dirty = True
+    return dirty
+
+
 def bootstrap_llm_registry_from_env(db: Session, settings: Settings | None = None) -> None:
     """Seed or refresh providers/models from env on startup (idempotent)."""
     settings = settings or get_settings()
@@ -313,9 +483,9 @@ def bootstrap_llm_registry_from_env(db: Session, settings: Settings | None = Non
         _upsert_model(
             db,
             provider=local,
-            slug="minilm-l6",
+            slug="bge-small-en",
             litellm_model=settings.embed_model,
-            display_name="MiniLM L6 (embeddings)",
+            display_name="BGE small en v1.5 (embeddings)",
             kind=LlmModelKind.embedding,
             is_default=True,
             supports_streaming=False,
@@ -340,6 +510,48 @@ def bootstrap_llm_registry_from_env(db: Session, settings: Settings | None = Non
             kind=LlmModelKind.chat,
             is_default=settings.litellm_model == "openai/mimo-v2.5",
             sort_order=10,
+            max_input_tokens=128_000,
+            max_output_tokens=8_192,
+        )
+
+        zai = _upsert_provider(
+            db,
+            slug="zai",
+            display_name="Z.AI",
+            litellm_prefix="openai",
+            api_base_url=settings.zai_api_base.rstrip("/") or None,
+            api_key=settings.zai_api_key or None,
+        )
+        _upsert_model(
+            db,
+            provider=zai,
+            slug="glm-4.7",
+            litellm_model="openai/glm-4.7",
+            display_name="GLM 4.7",
+            kind=LlmModelKind.chat,
+            is_default=settings.litellm_model == "openai/glm-4.7",
+            sort_order=15,
+            max_input_tokens=200_000,
+            max_output_tokens=8_192,
+        )
+
+        openrouter = _upsert_provider(
+            db,
+            slug="openrouter",
+            display_name="OpenRouter",
+            litellm_prefix="openrouter",
+            api_base_url=settings.openrouter_api_base.rstrip("/") or None,
+            api_key=settings.openrouter_api_key or None,
+        )
+        _upsert_model(
+            db,
+            provider=openrouter,
+            slug="free",
+            litellm_model="openrouter/openrouter/free",
+            display_name="OpenRouter Free",
+            kind=LlmModelKind.chat,
+            is_default=settings.litellm_model == "openrouter/openrouter/free",
+            sort_order=12,
             max_input_tokens=128_000,
             max_output_tokens=8_192,
         )

@@ -14,12 +14,13 @@ from fastembed.rerank.cross_encoder import TextCrossEncoder
 
 from app.config import get_settings
 
-_RERANK_MODEL = "BAAI/bge-reranker-base"
+# Smallest model in FastEmbed TextCrossEncoder.list_supported_models() (~0.08 GB).
+DEFAULT_RERANK_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2"
 
 
 @lru_cache
-def get_reranker() -> TextCrossEncoder:
-    return TextCrossEncoder(model_name=_RERANK_MODEL)
+def get_reranker(model_name: str) -> TextCrossEncoder:
+    return TextCrossEncoder(model_name=model_name)
 
 
 def rerank_chunks(
@@ -38,7 +39,7 @@ def rerank_chunks(
     if len(chunks) <= top_n:
         return chunks
     try:
-        reranker = get_reranker()
+        reranker = get_reranker(get_settings().rerank_model)
         texts = [c.get("text") or "" for c in chunks]
         scores = list(reranker.rerank(query, texts))
         paired = sorted(
