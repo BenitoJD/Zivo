@@ -1,16 +1,12 @@
 namespace: zivo
 replicaCount: 1
-
 image:
   repository: ghcr.io/benitojd/zivo-api
-  tag: Zivo_0.1.5
+  tag: Zivo_0.1.7
   pullPolicy: IfNotPresent
-
 secretName: zivo-secrets
-
 imagePullSecrets:
   - name: ghcr-cred
-
 workloads:
   io:
     enabled: true
@@ -22,7 +18,6 @@ workloads:
     command: ["python", "run_eta_worker_cpu.py"]
     env:
       ETA_WORKER_WORKLOADS: cpu
-
 resources:
   requests:
     cpu: 100m
