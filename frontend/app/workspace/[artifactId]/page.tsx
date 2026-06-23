@@ -51,7 +51,7 @@ import {
 } from "@tabler/icons-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { apiFetchBytes, apiGet, apiPost, apiPostSSE, ensureGuestSession, humanizeApiFailure, isArtifactId } from "@/lib/api/client";
-import { BRAND_LOGO_SRC, ZIVO_ASSISTANT_NAME } from "@/lib/brand";
+import { BRAND_LOGO_HEIGHT, BRAND_LOGO_SRC, BRAND_LOGO_WIDTH, ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import { AssistantMarkdown } from "@/lib/chatMarkdown";
 import { indexingStage } from "@/lib/constants";
 import { learnWaitStatus } from "@/lib/learnStatus";
@@ -2392,16 +2392,18 @@ function McqHeroPanel({
 }
 
 function AssistantLogo({ size }: { size: number }) {
+  const height = size;
+  const width = Math.round((size * BRAND_LOGO_WIDTH) / BRAND_LOGO_HEIGHT);
   return (
     <Image
       src={BRAND_LOGO_SRC}
       alt={ZIVO_ASSISTANT_NAME}
-      width={size}
-      height={size}
+      width={width}
+      height={height}
       unoptimized
       style={{
-        width: size,
-        height: size,
+        width,
+        height,
         flexShrink: 0,
         objectFit: "contain",
         display: "block",
