@@ -7,6 +7,7 @@ import {
   ActionIcon,
   AppShell,
   Box,
+  Burger,
   Button,
   Center,
   Group,
@@ -44,6 +45,7 @@ const MODAL_OVERLAY_PROPS = {
 
 const SIDEBAR_MINI_WIDTH = 56;
 const SIDEBAR_EXPANDED_WIDTH = 280;
+const MOBILE_HEADER_HEIGHT = 48;
 const MINI_RAIL_ICON_SIZE = 40;
 const SHELL_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
 const SHELL_MS = 280;
@@ -188,7 +190,11 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   const isMobile = useMediaQuery("(max-width: 48em)");
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const sidebarWide = isMobile ? mobileOpened : sidebarExpanded;
-  const sidebarWidth = sidebarWide ? SIDEBAR_EXPANDED_WIDTH : SIDEBAR_MINI_WIDTH;
+  const sidebarWidth = isMobile
+    ? SIDEBAR_EXPANDED_WIDTH
+    : sidebarWide
+      ? SIDEBAR_EXPANDED_WIDTH
+      : SIDEBAR_MINI_WIDTH;
   const mounted = useMounted();
   const { colorScheme, toggleColorScheme } = useMantineColorScheme();
   const isDark = mounted ? colorScheme === "dark" : true;
@@ -254,6 +260,10 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
     }, 4000);
     return () => window.clearInterval(id);
   }, [documents, loadDocs]);
+
+  useEffect(() => {
+    if (isMobile) closeMobile();
+  }, [pathname, isMobile, closeMobile]);
 
   const storagePct = Math.min(
     100,
@@ -418,16 +428,20 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
       <AppShell
         transitionDuration={reduceMotion ? 0 : SHELL_MS}
         transitionTimingFunction={SHELL_EASE}
+        header={{ height: { base: MOBILE_HEADER_HEIGHT, sm: 0 } }}
         navbar={{
           width: sidebarWidth,
           breakpoint: "sm",
-          collapsed: { mobile: false, desktop: false },
+          collapsed: { mobile: !mobileOpened, desktop: false },
         }}
         padding={{ base: "xs", sm: "md" }}
         styles={{
           root: {
             height: "100dvh",
             overflow: "hidden",
+          },
+          header: {
+            borderBottom: "1px solid var(--mantine-color-default-border)",
           },
           navbar: {
             overflow: "hidden",
@@ -441,6 +455,30 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
           },
         }}
       >
+        <AppShell.Header hiddenFrom="sm" px="sm">
+          <Group h="100%" justify="space-between" wrap="nowrap">
+            <Burger
+              opened={mobileOpened}
+              onClick={toggleMobile}
+              size="sm"
+              aria-label={mobileOpened ? "Close navigation" : "Open navigation"}
+            />
+            <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+              <BrandLogo height={28} />
+              <Title order={5} lineClamp={1} style={{ letterSpacing: "-0.03em" }}>
+                {BRAND_NAME}
+              </Title>
+            </Group>
+            <ActionIcon
+              variant="subtle"
+              color="gray"
+              aria-label="Add source"
+              onClick={() => setAddOpen(true)}
+            >
+              <IconUpload size={18} stroke={1.5} />
+            </ActionIcon>
+          </Group>
+        </AppShell.Header>
         <AppShell.Navbar p={0}>
           <AppShell.Section p={0} style={{ flexShrink: 0, overflow: "hidden" }}>
             <Box pos="relative" h={48} w="100%">
@@ -702,10 +740,12 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
         }}
         title="Add to library"
         size="lg"
+        fullScreen={isMobile}
         centered
         overlayProps={MODAL_OVERLAY_PROPS}
         closeOnClickOutside={!importBusy}
         closeOnEscape={!importBusy}
+        padding={isMobile ? "md" : undefined}
       >
         <Text size="sm" c="dimmed" mb="lg">
           Upload a file, import a link, or paste notes to generate practice questions.
@@ -716,17 +756,25 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
           keepMounted={false}
         >
           <Tabs.List grow mb="md">
-            <Tabs.Tab value="file" leftSection={<IconUpload size={16} />}>
-              File
+            <Tabs.Tab value="file" leftSection={<IconUpload size={16} />} aria-label="Upload a file">
+              <Box visibleFrom="sm" component="span">
+                File
+              </Box>
             </Tabs.Tab>
-            <Tabs.Tab value="url" leftSection={<IconLink size={16} />}>
-              Link
+            <Tabs.Tab value="url" leftSection={<IconLink size={16} />} aria-label="Import from a link">
+              <Box visibleFrom="sm" component="span">
+                Link
+              </Box>
             </Tabs.Tab>
-            <Tabs.Tab value="paste" leftSection={<IconFileText size={16} />}>
-              Paste
+            <Tabs.Tab value="paste" leftSection={<IconFileText size={16} />} aria-label="Paste text">
+              <Box visibleFrom="sm" component="span">
+                Paste
+              </Box>
             </Tabs.Tab>
-            <Tabs.Tab value="github" leftSection={<IconLink size={16} />}>
-              GitHub
+            <Tabs.Tab value="github" leftSection={<IconLink size={16} />} aria-label="Import a GitHub repository">
+              <Box visibleFrom="sm" component="span">
+                GitHub
+              </Box>
             </Tabs.Tab>
           </Tabs.List>
 
@@ -739,9 +787,9 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
               radius="md"
             >
               {importBusy ? (
-                <Box mih={220} />
+                <Box mih={{ base: 160, sm: 220 }} />
               ) : (
-                <Group justify="center" gap="xl" mih={220} style={{ pointerEvents: "none" }}>
+                <Group justify="center" gap="xl" mih={{ base: 160, sm: 220 }} style={{ pointerEvents: "none" }}>
                   <Dropzone.Accept>
                     <IconUpload size={52} stroke={1.5} />
                   </Dropzone.Accept>

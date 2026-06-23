@@ -50,7 +50,7 @@ import {
   IconZoomOut,
 } from "@tabler/icons-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import { apiFetchBytes, apiGet, apiPost, apiPostSSE, ensureGuestSession, isArtifactId } from "@/lib/api/client";
+import { apiFetchBytes, apiGet, apiPost, apiPostSSE, ensureGuestSession, humanizeApiFailure, isArtifactId } from "@/lib/api/client";
 import { BRAND_LOGO_SRC, ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import { AssistantMarkdown } from "@/lib/chatMarkdown";
 import { indexingStage } from "@/lib/constants";
@@ -85,10 +85,13 @@ const TUTOR_PANEL_MAX = 560;
 const STUDY_CENTER_MIN = 380;
 const PANEL_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
 const PANEL_MS = 280;
-const STUDY_DESKTOP_BP = "(min-width: 62em)";
+const STUDY_DESKTOP_BP = "(min-width: 48em)";
 const STUDY_COMPACT_BP = "(max-width: 47.99em)";
+/** Tablet range (768–991px): desktop study shell, but Source/Tutor ride as floating slide-over panels. */
+const STUDY_OVERLAY_BP = "(max-width: 61.99em)";
 const THUMB_GAP = 20;
 const THUMB_MIN_WIDTH = 188;
+const THUMB_MIN_WIDTH_COMPACT = 132;
 const SELECTION_PAD_X = 20;
 const SELECTION_PAD_Y = 12;
 
@@ -114,6 +117,7 @@ export default function WorkspaceArtifactPage({
   const invalidArtifactId = !isArtifactId(artifactId);
   const isLg = useMediaQuery(STUDY_DESKTOP_BP);
   const isCompact = useMediaQuery(STUDY_COMPACT_BP);
+  const useOverlayRails = useMediaQuery(STUDY_OVERLAY_BP);
   const mounted = useMounted();
   const { colorScheme } = useMantineColorScheme();
   const isDark = mounted ? colorScheme === "dark" : true;
@@ -228,6 +232,31 @@ export default function WorkspaceArtifactPage({
       window.clearInterval(id);
     };
   }, [artifact?.status, artifactId, invalidArtifactId]);
+
+  useEffect(() => {
+    if (invalidArtifactId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        await ensureGuestSession();
+        const history = await apiGet<{ role: string; content: string }[]>(
+          `/api/chat/threads/${artifactId}/messages`,
+        );
+        if (!cancelled) {
+          setChatMessages(
+            history
+              .filter((m) => (m.content || "").trim())
+              .map((m) => ({ role: m.role, content: m.content })),
+          );
+        }
+      } catch {
+        /* thread may not exist yet */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [artifactId, invalidArtifactId]);
 
   const isPdf = artifact?.content_type === "application/pdf";
 
@@ -535,18 +564,18 @@ export default function WorkspaceArtifactPage({
         throw new Error("empty response");
       }
     } catch (e) {
-      const detail = e instanceof Error && e.message ? e.message : null;
+      const raw = e instanceof Error && e.message ? e.message : null;
+      const detail =
+        raw && raw !== "empty response"
+          ? humanizeApiFailure(0, raw)
+          : `${ZIVO_ASSISTANT_NAME} could not reply right now. Try again in a moment.`;
       setChatMessages((m) => {
         const copy = [...m];
         const last = copy[copy.length - 1];
-        const fallback =
-          detail && detail !== "empty response"
-            ? detail
-            : `${ZIVO_ASSISTANT_NAME} could not reply right now. Try again in a moment.`;
         if (last?.role === "assistant") {
-          last.content = fallback;
+          last.content = detail;
         } else {
-          copy.push({ role: "assistant", content: fallback });
+          copy.push({ role: "assistant", content: detail });
         }
         return copy;
       });
@@ -778,6 +807,18 @@ export default function WorkspaceArtifactPage({
             pos="relative"
             style={{ display: "flex", overflow: "hidden", minHeight: 0 }}
           >
+            {useOverlayRails && (sourceOpen || tutorOpen) && (
+              <Box
+                pos="absolute"
+                inset={0}
+                style={{ zIndex: 15, background: "rgba(0, 0, 0, 0.28)" }}
+                onClick={() => {
+                  if (sourceOpen) closeSource();
+                  if (tutorOpen) closeTutor();
+                }}
+                aria-hidden
+              />
+            )}
             {!sourceOpen && (
               <StudyEdgeTrigger
                 side="left"
@@ -806,6 +847,7 @@ export default function WorkspaceArtifactPage({
               onClose={closeSource}
               headerSize="compact"
               resizable
+              overlay={Boolean(useOverlayRails)}
               isResizing={resizingSource}
               onResizeStart={() => setResizingSource(true)}
               onResizeEnd={() => setResizingSource(false)}
@@ -847,6 +889,7 @@ export default function WorkspaceArtifactPage({
               onClose={closeTutor}
               headerSize="compact"
               resizable
+              overlay={Boolean(useOverlayRails)}
               isResizing={resizingTutor}
               onResizeStart={() => setResizingTutor(true)}
               onResizeEnd={() => setResizingTutor(false)}
@@ -868,7 +911,7 @@ export default function WorkspaceArtifactPage({
       ) : (
         <StudyMobileShell
           question={questionColumn}
-          source={
+          renderSource={(visible) => (
             <StudySourcePanel
               filename={artifact.filename}
               pageRange={selectedRange}
@@ -878,10 +921,10 @@ export default function WorkspaceArtifactPage({
               pdfError={pdfError}
               pdfDoc={pdfDoc}
               studyPages={studyPages}
-              open
+              open={visible}
             />
-          }
-          tutor={
+          )}
+          renderTutor={() => (
             <TutorPanel
               messages={chatMessages}
               input={chatInput}
@@ -890,7 +933,7 @@ export default function WorkspaceArtifactPage({
               onInputChange={setChatInput}
               onSend={() => void sendChat()}
             />
-          }
+          )}
         />
       )}
       {reselectOpen && (
@@ -1246,12 +1289,12 @@ type StudyMobileTab = "question" | "source" | "tutor";
 
 function StudyMobileShell({
   question,
-  source,
-  tutor,
+  renderSource,
+  renderTutor,
 }: {
   question: ReactNode;
-  source: ReactNode;
-  tutor: ReactNode;
+  renderSource: (visible: boolean) => ReactNode;
+  renderTutor: () => ReactNode;
 }) {
   const [active, setActive] = useState<StudyMobileTab>("question");
 
@@ -1264,27 +1307,9 @@ function StudyMobileShell({
   return (
     <Stack gap={0} flex={1} mih={0} style={{ overflow: "hidden" }}>
       <Box flex={1} mih={0} pos="relative" style={{ overflow: "hidden" }}>
-        <Box
-          hidden={active !== "question"}
-          h="100%"
-          style={{ display: active === "question" ? "flex" : "none", flexDirection: "column", overflow: "hidden" }}
-        >
-          {question}
-        </Box>
-        <Box
-          hidden={active !== "source"}
-          h="100%"
-          style={{ display: active === "source" ? "flex" : "none", flexDirection: "column", overflow: "hidden" }}
-        >
-          {source}
-        </Box>
-        <Box
-          hidden={active !== "tutor"}
-          h="100%"
-          style={{ display: active === "tutor" ? "flex" : "none", flexDirection: "column", overflow: "hidden" }}
-        >
-          {tutor}
-        </Box>
+        <StudyMobilePanel visible={active === "question"}>{question}</StudyMobilePanel>
+        <StudyMobilePanel visible={active === "source"}>{renderSource(active === "source")}</StudyMobilePanel>
+        <StudyMobilePanel visible={active === "tutor"}>{renderTutor()}</StudyMobilePanel>
       </Box>
       <Box
         component="nav"
@@ -1328,6 +1353,25 @@ function StudyMobileShell({
         </Group>
       </Box>
     </Stack>
+  );
+}
+
+function StudyMobilePanel({ visible, children }: { visible: boolean; children: ReactNode }) {
+  return (
+    <Box
+      pos="absolute"
+      inset={0}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        visibility: visible ? "visible" : "hidden",
+        pointerEvents: visible ? "auto" : "none",
+        zIndex: visible ? 1 : 0,
+      }}
+    >
+      {children}
+    </Box>
   );
 }
 
@@ -1393,6 +1437,7 @@ function StudyPushRail({
   children,
   headerSize = "default",
   resizable = false,
+  overlay = false,
   isResizing = false,
   onResizeStart,
   onResizeEnd,
@@ -1408,32 +1453,64 @@ function StudyPushRail({
   children: ReactNode;
   headerSize?: "default" | "compact";
   resizable?: boolean;
+  overlay?: boolean;
   isResizing?: boolean;
   onResizeStart?: () => void;
   onResizeEnd?: () => void;
   onWidthChange?: (width: number) => void;
 }) {
   const railBorder = "1px solid var(--mantine-color-default-border)";
+  // Tablet slide-over: cap the panel at ~58% of its row so the question column
+  // underneath is never cramped, regardless of the stored drag width.
+  const overlayWidth = Math.min(width, 460);
 
   return (
     <Box
-      pos="relative"
+      pos={overlay ? "absolute" : "relative"}
       h="100%"
-      style={{
-        width: open ? width : 0,
-        flexShrink: 0,
-        alignSelf: "stretch",
-        overflow: "hidden",
-        transition: isResizing ? undefined : `width ${PANEL_MS}ms ${PANEL_EASE}`,
-        display: "flex",
-        flexDirection: "column",
-        minHeight: 0,
-        borderRight: open && side === "left" ? railBorder : undefined,
-        borderLeft: open && side === "right" ? railBorder : undefined,
-      }}
-    >
+      style={
+        overlay
+          ? {
+              top: 0,
+              bottom: 0,
+              [side]: 0,
+              width: open ? overlayWidth : 0,
+              maxWidth: "82%",
+              flexShrink: 0,
+              overflow: "hidden",
+              zIndex: open ? 20 : 1,
+              transition: isResizing
+                ? undefined
+                : `width ${PANEL_MS}ms ${PANEL_EASE}, transform ${PANEL_MS}ms ${PANEL_EASE}`,
+              transform: open
+                ? "translateX(0)"
+                : side === "left"
+                  ? "translateX(-100%)"
+                  : "translateX(100%)",
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+              boxShadow: open ? "0 12px 40px rgba(0, 0, 0, 0.35)" : undefined,
+              borderRight: open && side === "left" ? railBorder : undefined,
+              borderLeft: open && side === "right" ? railBorder : undefined,
+              borderRadius: side === "left" ? "0 16px 16px 0" : "16px 0 0 16px",
+            }
+          : {
+              width: open ? width : 0,
+              flexShrink: 0,
+              alignSelf: "stretch",
+              overflow: "hidden",
+              transition: isResizing ? undefined : `width ${PANEL_MS}ms ${PANEL_EASE}`,
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+              borderRight: open && side === "left" ? railBorder : undefined,
+              borderLeft: open && side === "right" ? railBorder : undefined,
+            }
+      }
+      >
       <Box
-        w={width}
+        w={overlay ? overlayWidth : width}
         h="100%"
         mih={0}
         style={{
@@ -1472,7 +1549,7 @@ function StudyPushRail({
           {children}
         </Box>
       </Box>
-      {open && resizable && onWidthChange && (
+      {open && resizable && !overlay && onWidthChange && (
         <PanelResizeHandle
           side={side}
           minWidth={minWidth ?? 280}
@@ -1629,17 +1706,27 @@ function StudySourcePanel({
   const canPan = zoom > 1.01;
 
   useEffect(() => {
-    if (!open) setZoom(1);
+    if (!open) {
+      setZoom(1);
+      setViewerWidth(0);
+    }
   }, [open]);
 
   useEffect(() => {
     const el = viewportRef.current;
     if (!el || !open) return;
-    const update = () => setViewerWidth(Math.max(1, el.clientWidth));
+    const update = () => {
+      const w = el.clientWidth;
+      if (w > 0) setViewerWidth(w);
+    };
     update();
+    const raf = requestAnimationFrame(update);
     const ro = new ResizeObserver(() => update());
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
   }, [open]);
 
   useEffect(() => {
@@ -2423,6 +2510,7 @@ function TutorPanel({
           flexShrink: 0,
           borderTop: `1px solid var(--mantine-color-default-border)`,
           background: isDark ? "var(--mantine-color-dark-8)" : "var(--mantine-color-white)",
+          paddingBottom: "max(6px, env(safe-area-inset-bottom))",
         }}
       >
         <Paper
@@ -2930,7 +3018,7 @@ function PageSelectionControls({
   return (
     <Stack gap={4} w="100%" maw="100%">
       <Group justify="space-between" align="center" wrap="nowrap" gap="sm" w="100%" maw="100%">
-        <Text size="xs" c="dimmed" lineClamp={1} style={{ flex: 1, minWidth: 0 }}>
+        <Text size="xs" c="dimmed" lineClamp={1} visibleFrom="sm" style={{ flex: 1, minWidth: 0 }}>
           Slider for range · tap to toggle · Shift+tap to extend
         </Text>
         <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
@@ -2983,7 +3071,10 @@ function PageThumbnailGrid({
   const gridRef = useRef<HTMLDivElement>(null);
   const [gridWidth, setGridWidth] = useState(0);
 
-  const { cols, thumbWidth } = computeGridLayout(gridWidth, THUMB_MIN_WIDTH, THUMB_GAP);
+  // On narrow (phone) grids, use a smaller thumb floor so we get 2 columns
+  // instead of a single oversized column that forces excessive scrolling.
+  const thumbMinWidth = gridWidth > 0 && gridWidth < 420 ? THUMB_MIN_WIDTH_COMPACT : THUMB_MIN_WIDTH;
+  const { cols, thumbWidth } = computeGridLayout(gridWidth, thumbMinWidth, THUMB_GAP);
 
   useEffect(() => {
     const el = gridRef.current;

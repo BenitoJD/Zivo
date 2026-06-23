@@ -247,81 +247,95 @@ async def chat_stream(
     db.add(ChatMessage(thread_id=thread.id, role="user", content=body.message))
     db.commit()
 
-    scope = normalize_chat_scope(body.scope.model_dump(), doc)
-    scope.update(learn_scope_fields(db, doc.id, doc))
-    doc_ids = _resolve_document_ids(db, doc.id, scope.get("mentions") or [], user, guest_id)
-    if is_image_document(doc):
-        retrieved = {"citations": [], "messages": prior, "context_block": "", "context_note": ""}
-    else:
-        # run_retrieve runs synchronous embed + pgvector work; keep it off the
-        # event loop so concurrent SSE streams aren't serialized by it.
-        retrieved = await asyncio.to_thread(
-            run_retrieve,
-            db,
-            document_ids=doc_ids,
-            query=body.message,
-            scope=scope,
-            mentions=scope.get("mentions") or [],
-            prior_messages=prior,
-        )
-    citations = retrieved.get("citations", [])
-    # Build a byte-stable system prefix: tutor_system always; mcq_format only
-    # on quiz-looking turns. Provider prefix caching (MiMo/OpenAI) keys on the
-    # leading system+history being identical across turns.
-    system = get_prompt(db, "tutor_system")
-    if _looks_like_quiz(body.message):
-        system = system + "\n\n" + get_prompt(db, "mcq_format")
-    messages = [{"role": "system", "content": system}]
-    messages.extend(retrieved.get("messages") or prior)
-
-    # Fold retrieved context into the final user turn (not a mid-list system
-    # message) so the [system, ...history] prefix stays cacheable.
-    context_block = retrieved.get("context_block") or ""
-    user_content = build_user_message(
-        body.message,
-        doc,
-        include_image=include_image,
-        current_page=scope.get("current_page"),
-        page_start=scope.get("page_start"),
-        page_end=scope.get("page_end"),
-    )
-    trailer_parts: list[str] = []
-    learn_context = build_learn_chat_context(db, doc.id, doc)
-    if learn_context:
-        trailer_parts.append(learn_context)
-    if context_block:
-        trailer_parts.append("Document excerpts:\n\n" + context_block)
-    if trailer_parts:
-        user_content = user_content + "\n\n" + "\n\n".join(trailer_parts)
-    messages.append({"role": "user", "content": user_content})
-
-    # Semantic response cache: only for non-vision turns with no ephemeral
-    # selection and where retrieval actually produced context. A hit streams
-    # the cached answer and skips the LLM call entirely.
-    cache_eligible = (
-        not include_image
-        and not scope.get("selection_text")
-        and bool(citations)
-        and len(doc_ids) == 1
-    )
-    artifact_id, artifact_captured_at = _artifact_ref(doc)
-    cached: dict | None = None
-    if cache_eligible:
-        query_embedding = await asyncio.to_thread(embed_query, body.message)
-        cached = await asyncio.to_thread(
-            get_cached_response,
-            db,
-            document_id=artifact_id,
-            artifact_captured_at=artifact_captured_at,
-            scope=scope,
-            query_embedding=query_embedding,
-        )
+    doc_snapshot = doc
+    thread_id = thread.id
+    prior_messages = prior
+    request_message = body.message
+    request_model_id = body.model_id
+    request_scope = body.scope.model_dump() if body.scope else {}
 
     async def event_generator() -> Any:
         # Request-scoped `db` may close before this generator finishes; use a
         # dedicated session for all post-stream persistence.
         stream_db = SessionLocal()
         try:
+            try:
+                scope = normalize_chat_scope(request_scope, doc_snapshot)
+                scope.update(learn_scope_fields(stream_db, doc_snapshot.id, doc_snapshot))
+                doc_ids = _resolve_document_ids(
+                    stream_db,
+                    doc_snapshot.id,
+                    scope.get("mentions") or [],
+                    user,
+                    guest_id,
+                )
+                if is_image_document(doc_snapshot):
+                    retrieved = {
+                        "citations": [],
+                        "messages": prior_messages,
+                        "context_block": "",
+                        "context_note": "",
+                    }
+                else:
+                    retrieved = await asyncio.to_thread(
+                        run_retrieve,
+                        stream_db,
+                        document_ids=doc_ids,
+                        query=request_message,
+                        scope=scope,
+                        mentions=scope.get("mentions") or [],
+                        prior_messages=prior_messages,
+                    )
+                citations = retrieved.get("citations", [])
+                system = get_prompt(stream_db, "tutor_system")
+                if _looks_like_quiz(request_message):
+                    system = system + "\n\n" + get_prompt(stream_db, "mcq_format")
+                messages = [{"role": "system", "content": system}]
+                messages.extend(retrieved.get("messages") or prior_messages)
+
+                context_block = retrieved.get("context_block") or ""
+                user_content = build_user_message(
+                    request_message,
+                    doc_snapshot,
+                    include_image=include_image,
+                    current_page=scope.get("current_page"),
+                    page_start=scope.get("page_start"),
+                    page_end=scope.get("page_end"),
+                )
+                trailer_parts: list[str] = []
+                learn_context = build_learn_chat_context(stream_db, doc_snapshot.id, doc_snapshot)
+                if learn_context:
+                    trailer_parts.append(learn_context)
+                if context_block:
+                    trailer_parts.append("Document excerpts:\n\n" + context_block)
+                if trailer_parts:
+                    user_content = user_content + "\n\n" + "\n\n".join(trailer_parts)
+                messages.append({"role": "user", "content": user_content})
+
+                cache_eligible = (
+                    not include_image
+                    and not scope.get("selection_text")
+                    and bool(citations)
+                    and len(doc_ids) == 1
+                )
+                artifact_id, artifact_captured_at = _artifact_ref(doc_snapshot)
+                cached: dict | None = None
+                query_embedding: list[float] | None = None
+                if cache_eligible:
+                    query_embedding = await asyncio.to_thread(embed_query, request_message)
+                    cached = await asyncio.to_thread(
+                        get_cached_response,
+                        stream_db,
+                        document_id=artifact_id,
+                        artifact_captured_at=artifact_captured_at,
+                        scope=scope,
+                        query_embedding=query_embedding,
+                    )
+            except Exception as exc:
+                logger.exception("chat setup failed: %s", exc)
+                yield _stream_error_event("Tutor is busy. Try again.")
+                return
+
             if cached:
                 full = cached["response_text"]
                 cache_citations = (cached.get("citations") or {}).get("sources", citations)
@@ -330,7 +344,7 @@ async def chat_stream(
                         yield {"event": "token", "data": json.dumps({"text": full[i : i + 8]})}
                     stream_db.add(
                         ChatMessage(
-                            thread_id=thread.id,
+                            thread_id=thread_id,
                             role="assistant",
                             content=full,
                             citations={"sources": cache_citations},
@@ -353,7 +367,7 @@ async def chat_stream(
                 async for token in stream_chat_completion(
                     messages,
                     stream_db,
-                    model_id=body.model_id,
+                    model_id=request_model_id,
                     require_vision=include_image,
                 ):
                     full += token
@@ -362,7 +376,7 @@ async def chat_stream(
                     raise RuntimeError("empty model response")
                 stream_db.add(
                     ChatMessage(
-                        thread_id=thread.id,
+                        thread_id=thread_id,
                         role="assistant",
                         content=full,
                         citations={"sources": citations},
@@ -391,7 +405,7 @@ async def chat_stream(
                 try:
                     stream_db.add(
                         ChatMessage(
-                            thread_id=thread.id,
+                            thread_id=thread_id,
                             role="assistant",
                             content=error_text,
                             citations=None,

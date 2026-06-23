@@ -33,7 +33,20 @@ async function readApiError(res: Response): Promise<string> {
   } catch {
     /* keep raw text */
   }
-  return text;
+  return humanizeApiFailure(res.status, text);
+}
+
+export function humanizeApiFailure(status: number, message: string): string {
+  const trimmed = message.trim();
+  if (trimmed && !/^internal server error$/i.test(trimmed)) {
+    return trimmed;
+  }
+  if (status === 409) return trimmed || "Not ready yet — try again shortly.";
+  if (status === 429) return trimmed || "Message limit reached.";
+  if (status >= 500 || status === 502 || status === 503 || status === 504) {
+    return "Could not reach the tutor service. Try again in a moment.";
+  }
+  return trimmed || "Request failed";
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 120_000): Promise<Response> {
@@ -159,7 +172,10 @@ export async function apiPostSSE(
     120_000,
   );
   captureResponseMeta(res);
-  if (!res.ok || !res.body) throw new Error(await readApiError(res).catch(() => "SSE failed"));
+  if (!res.ok || !res.body) {
+    const detail = await readApiError(res).catch(() => humanizeApiFailure(res.status, "SSE failed"));
+    throw new Error(detail);
+  }
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
