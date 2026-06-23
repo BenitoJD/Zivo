@@ -620,7 +620,7 @@ def bootstrap_llm_registry_from_env(db: Session, settings: Settings | None = Non
         db.commit()
         return
 
-    refresh_llm_registry_from_env(db, settings, force_keys=False)
+    refresh_llm_registry_from_env(db, settings, force_keys=True)
 
 
 def seed_llm_registry_from_env(db: Session, settings: Settings | None = None, *, force_keys: bool = True) -> None:
