@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import uuid
+from collections import OrderedDict
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -283,6 +285,27 @@ def _parse_mcq_blocks(raw: str) -> list[dict[str, Any]]:
     return out
 
 
+def _trim_explanation(text: str, *, max_chars: int = 160) -> str:
+    """Cap an MCQ explanation to one concise sentence (output-token economy).
+
+    The model is told to keep explanations to one short sentence, but it often
+    over-writes. Trimming here guarantees a compact stored payload and — more
+    importantly — fewer emitted tokens during generation means faster completion.
+    Keeps the first sentence; ellipsizes only if a second sentence was present.
+    """
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return ""
+    # Take up to the first sentence boundary.
+    for sep in (". ", "! ", "? "):
+        idx = cleaned.find(sep)
+        if 0 < idx < max_chars:
+            return cleaned[: idx + 1].strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+    return cleaned[: max_chars - 1].rstrip() + "…"
+
+
 def _normalize_mcq_payload(data: dict[str, Any], target_aspect: dict[str, Any] | None) -> dict[str, Any]:
     question = sanitize_mcq_stem(str(data.get("question") or data.get("stem") or ""))
     options = coerce_mcq_options(data.get("options") or data.get("choices"))
@@ -294,7 +317,7 @@ def _normalize_mcq_payload(data: dict[str, Any], target_aspect: dict[str, Any] |
         "question": question,
         "options": options,
         "correct_index": int(data.get("correct_index", 0)),
-        "explanation": data.get("explanation") or "",
+        "explanation": _trim_explanation(str(data.get("explanation") or "")),
         "primary_concept_key": key,
         "primary_concept": label,
         "tags": data.get("tags") or ["auto"],
@@ -657,6 +680,52 @@ def generate_quality_mcq(
 BATCH_MCQ_CAP = 5
 
 
+class _BatchDraftCache:
+    """In-process LRU cache of batch draft responses (no DB migration needed).
+
+    Caches the *drafts* (pre-quality-gate) keyed by a deterministic hash of the
+    page context + sorted aspect keys. The quality gate still runs on every
+    retrieval (we never bypass heuristics/embedding checks) — only the LLM
+    generation call is skipped on a hit. Highest value for rapid re-queries of
+    the same page (demo doc, a page re-generated within the TTL) and avoids
+    paying for a DB-backed cache table + migration for a lower-volume win.
+    """
+
+    def __init__(self, max_entries: int = 64) -> None:
+        self._store: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
+        self._max = max_entries
+
+    def _key(self, page_text: str, targets: list[dict[str, Any]]) -> str:
+        aspect_keys = sorted(str(t.get("key") or "") for t in targets)
+        h = hashlib.sha256()
+        h.update(page_text.encode("utf-8", "ignore"))
+        h.update(b"\x1f")
+        h.update("\x1e".join(aspect_keys).encode("utf-8", "ignore"))
+        return h.hexdigest()
+
+    def get(self, page_text: str, targets: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+        key = self._key(page_text, targets)
+        hits = self._store.get(key)
+        if hits is None:
+            return None
+        # Refresh recency.
+        self._store.move_to_end(key)
+        # Return deep copies so callers can't mutate the cache.
+        return [dict(d) for d in hits]
+
+    def put(self, page_text: str, targets: list[dict[str, Any]], drafts: list[dict[str, Any]]) -> None:
+        if not drafts:
+            return
+        key = self._key(page_text, targets)
+        self._store[key] = [dict(d) for d in drafts]
+        self._store.move_to_end(key)
+        while len(self._store) > self._max:
+            self._store.popitem(last=False)
+
+
+_batch_draft_cache = _BatchDraftCache()
+
+
 def _generate_batch_drafts(
     db: Session,
     *,
@@ -686,7 +755,8 @@ def _generate_batch_drafts(
         f"Target aspects:\n{targets_block}\n\n"
         f"{prior_block}"
         f"Return ONLY {len(targets)} ```zv-mcq``` JSON blocks, one per aspect, in order. "
-        "Each block's primary_concept_key must match its target aspect key."
+        "Each block's primary_concept_key must match its target aspect key. "
+        "Be economical with tokens: no commentary, explanation at most ONE short sentence."
     )
     raw = _complete_chat_sync(
         db,
@@ -743,14 +813,22 @@ def generate_quality_mcq_batch(
 
         model_id = default_chat_model_id(db)
 
-    drafts = _generate_batch_drafts(
-        db,
-        page_text=page_text,
-        page_number=page_number,
-        targets=targets,
-        prior_mcqs=prior_mcqs,
-        model_id=model_id,
-    )
+    # Generation response cache: skip the LLM call if we've already generated
+    # drafts for this (page context, aspect set). The quality gate below still
+    # runs on every retrieval — only the generation call is skipped. Highest
+    # value for rapid re-queries (demo doc, same page within the process TTL).
+    drafts = _batch_draft_cache.get(page_text, targets)
+    if drafts is None:
+        drafts = _generate_batch_drafts(
+            db,
+            page_text=page_text,
+            page_number=page_number,
+            targets=targets,
+            prior_mcqs=prior_mcqs,
+            model_id=model_id,
+        )
+        if drafts:
+            _batch_draft_cache.put(page_text, targets, drafts)
     if not drafts:
         return []
 

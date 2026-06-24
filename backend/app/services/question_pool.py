@@ -524,7 +524,14 @@ def enqueue_initial_pool(db: Session, document_id: uuid.UUID) -> Job | None:
     if get_page_coverage(doc, page_from):
         job = _enqueue_first_question_batch(db, doc, page=page_from)
     else:
-        job = enqueue_page_triage(db, doc, page=page_from)
+        # Triage off the critical path: enqueue triage AND the first batch in
+        # parallel. The batch uses speculative (heuristic) aspects when triage
+        # hasn't landed yet — _run_page_batch synthesizes aspect targets from
+        # the page text if coverage is absent. Real triage lands ~5s later and
+        # refines the plan for subsequent batches. This removes the triage LLM
+        # call from the path the user waits on.
+        enqueue_page_triage(db, doc, page=page_from)
+        job = _enqueue_first_question_batch(db, doc, page=page_from)
     # Eagerly triage the next few pages in the background so the document is
     # understood ahead of the reader and transitions never wait on triage.
     study = selected_page_list(doc)
@@ -696,11 +703,14 @@ def _has_active_generate_job(db: Session, document_id: uuid.UUID) -> bool:
 
 
 def _has_active_generate_job_for_page(db: Session, document_id: uuid.UUID, page: int) -> bool:
-    """Like _has_active_generate_job but scoped to one page.
+    """Like _has_active_generate_job but scoped to one page AND to batch mode.
 
     Lets different pages of the same document generate concurrently (e.g. the
     current page's pool plus the next page's transition prefetch) while still
-    preventing a duplicate job for the same page.
+    preventing a duplicate BATCH job for the same page. A page_triage job for
+    the same page does NOT block a batch — triage and the first batch run in
+    parallel (triage off the critical path), with the batch using speculative
+    aspects until triage lands.
     """
     active = db.execute(
         text(
@@ -709,6 +719,7 @@ def _has_active_generate_job_for_page(db: Session, document_id: uuid.UUID, page:
             WHERE name = 'generate.questions'
               AND payload->>'document_id' = :document_id
               AND payload->>'page_number' = :page
+              AND (payload->>'mode' IS NULL OR payload->>'mode' = 'page_batch')
               AND status IN ('queued', 'running')
             LIMIT 1
             """

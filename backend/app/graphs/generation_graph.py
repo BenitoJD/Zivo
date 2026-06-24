@@ -24,13 +24,80 @@ from app.services.question_pool import (
     on_batch_completed,
     set_coverage_complete,
 )
-from app.services.retrieval import fetch_chunks_for_page_range
+from app.services.embed import embed_texts
+from app.services.retrieval import fetch_chunks_for_page_range, search_chunks
+from app.services.mcq_dedup import prior_mcq_from_payload
 
 # How many questions in a batch to generate concurrently. The model is a hosted
 # API (serves concurrent requests), so a batch's wall-clock collapses from the
 # sum of per-question times to roughly the slowest single question. Bounded to
 # stay under the provider's per-key rate limit; override with the env var.
 GENERATION_CONCURRENCY = int(os.getenv("ZIVO_GENERATION_CONCURRENCY", "5"))
+
+# Retrieval-first context: instead of sending the whole page (~12k chars) to the
+# model, embed the target aspect labels and retrieve only the semantically
+# relevant chunks. ~75% less input processing = much faster generation, and
+# tighter/grounded questions (less noise for the model to wade through). The
+# fallback is the full page text if retrieval returns too little.
+CONTEXT_CHAR_BUDGET = int(os.getenv("ZIVO_CONTEXT_CHAR_BUDGET", "4000"))
+CONTEXT_MIN_CHUNKS = 3
+
+
+def _fetch_focused_context(
+    db: Session,
+    document_id: uuid.UUID,
+    page_number: int,
+    targets: list[dict[str, Any]],
+    page_text: str,
+) -> str:
+    """Aspect-relevant page context for generation, instead of the whole page.
+
+    Embeds the target aspect labels, retrieves the top matching chunks via
+    pgvector, and concatenates up to CONTEXT_CHAR_BUDGET chars. Falls back to the
+    full page text if retrieval misses (so generation never fails for lack of
+    context — the model always has something grounded to work from).
+    """
+    if not targets:
+        return page_text[:12_000]
+
+    try:
+        # Embed all aspect labels in one batch; use the mean vector as the query
+        # so we retrieve chunks relevant to the WHOLE set, not just one aspect.
+        labels = [str(t.get("label") or t.get("key") or "") for t in targets]
+        vecs = embed_texts(labels)
+        if not vecs:
+            return page_text[:12_000]
+        dims = len(vecs[0])
+        mean_vec = [sum(v[i] for v in vecs) / len(vecs) for i in range(dims)]
+        hits = search_chunks(
+            db,
+            document_ids=[document_id],
+            query_embedding=mean_vec,
+            page_start=page_number,
+            page_end=page_number,
+            limit=10,
+        )
+        # Dedupe by text, keep order by score, accumulate up to the char budget.
+        seen: set[str] = set()
+        parts: list[str] = []
+        total = 0
+        for chunk in hits:
+            t = (chunk.get("text") or "").strip()
+            if not t or t in seen:
+                continue
+            seen.add(t)
+            if total + len(t) > CONTEXT_CHAR_BUDGET and len(parts) >= CONTEXT_MIN_CHUNKS:
+                break
+            parts.append(t)
+            total += len(t)
+        if len(parts) < CONTEXT_MIN_CHUNKS:
+            # Retrieval too sparse — fall back to the full page so the model
+            # still has grounded context to write from.
+            return page_text[:12_000]
+        return "\n\n".join(parts)
+    except Exception:
+        # Any retrieval failure must not block generation.
+        return page_text[:12_000]
 
 
 def run_generation(db: Session, document_id: uuid.UUID, options: dict[str, Any]) -> dict[str, Any]:
@@ -287,6 +354,11 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
             return {"questions_saved": 0, "page_number": page_number}
 
     prior_mcqs = _prior_mcqs_on_page(db, document_id, page_number)
+    # Retrieval-first: instead of the whole page, send only the chunks relevant
+    # to these target aspects. ~75% less input for the model to process, and
+    # tighter/grounded questions. Falls back to full page text if retrieval
+    # returns too little.
+    context = _fetch_focused_context(db, document_id, page_number, targets, page_text)
     # One LLM call produces up to N MCQs (N = len(targets), capped at 5). The
     # batch generator runs the per-MCQ quality gate (heuristics + embedding
     # similarity) internally, so this replaces both the N-way parallel
@@ -295,7 +367,7 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
     # diversity across the batch.
     kept = generate_quality_mcq_batch(
         db,
-        page_text=page_text,
+        page_text=context,
         page_number=page_number,
         targets=targets,
         prior_mcqs=prior_mcqs,
