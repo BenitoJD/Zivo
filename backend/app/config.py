@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     minio_public_endpoint: str = ""
     minio_public_secure: bool | None = None
 
-    litellm_model: str = "openai/mimo-v2.5"
+    litellm_model: str = "openai/glm-4.7"
     openai_api_base: str = ""
     openai_api_key: str = ""
     zai_api_base: str = "https://api.z.ai/api/coding/paas/v4"

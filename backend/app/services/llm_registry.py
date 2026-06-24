@@ -235,6 +235,7 @@ def _upsert_model(
     sort_order: int = 0,
     meta: dict | None = None,
     update_fields: bool = False,
+    is_enabled: bool | None = None,
 ) -> LlmModel:
     model = (
         db.query(LlmModel)
@@ -262,6 +263,7 @@ def _upsert_model(
         litellm_model=litellm_model,
         display_name=display_name,
         kind=kind.value,
+        is_enabled=is_enabled if is_enabled is not None else True,
         is_default=is_default,
         supports_image_input=supports_image_input,
         supports_streaming=supports_streaming,
@@ -370,6 +372,7 @@ def ensure_registry_providers(db: Session, settings: Settings | None = None) -> 
             max_input_tokens=128_000,
             max_output_tokens=8_192,
             update_fields=True,
+            is_enabled=False,
         )
         if before == 0:
             dirty = True
@@ -551,7 +554,8 @@ def bootstrap_llm_registry_from_env(db: Session, settings: Settings | None = Non
             litellm_model="openai/mimo-v2.5",
             display_name="MiMo v2.5",
             kind=LlmModelKind.chat,
-            is_default=settings.litellm_model == "openai/mimo-v2.5",
+            is_default=False,
+            is_enabled=False,
             sort_order=10,
             max_input_tokens=128_000,
             max_output_tokens=8_192,
