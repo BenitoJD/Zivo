@@ -14,7 +14,7 @@ from app.models import Account, Document, User
 from app.repositories.intel import create_activity
 from app.services.auth import get_current_user, get_optional_user, require_csrf
 from app.services.guest import can_access_document
-from app.services.guest_session import guest_session_for_read, optional_guest_session
+from app.services.guest_session import guest_session_for_read
 from app.services.jobs import enqueue_generate
 
 router = APIRouter()

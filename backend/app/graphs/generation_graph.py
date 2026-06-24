@@ -24,14 +24,31 @@ from app.services.question_pool import (
 )
 from app.services.embed import embed_texts
 from app.services.retrieval import fetch_chunks_for_page_range, search_chunks
+from app.services.token_budget import truncate_to_tokens
 
 # Retrieval-first context: instead of sending the whole page (~12k chars) to the
 # model, embed the target aspect labels and retrieve only the semantically
 # relevant chunks. ~75% less input processing = much faster generation, and
 # tighter/grounded questions (less noise for the model to wade through). The
-# fallback is the full page text if retrieval returns too little.
+# fallback is a window around the best-matching chunk if retrieval is sparse.
 CONTEXT_CHAR_BUDGET = int(os.getenv("ZIVO_CONTEXT_CHAR_BUDGET", "4000"))
 CONTEXT_MIN_CHUNKS = 3
+_PAGE_CONTEXT_MAX_TOKENS = 3_500
+
+
+def _window_around_chunk(page_text: str, anchor: str, *, window_chars: int = 4_000) -> str:
+    """Return a local window of page text centered on anchor text."""
+    if not page_text:
+        return ""
+    if not anchor:
+        return truncate_to_tokens(page_text, _PAGE_CONTEXT_MAX_TOKENS)
+    idx = page_text.find(anchor[: min(200, len(anchor))])
+    if idx < 0:
+        return truncate_to_tokens(page_text, _PAGE_CONTEXT_MAX_TOKENS)
+    half = window_chars // 2
+    start = max(0, idx - half)
+    end = min(len(page_text), idx + half)
+    return truncate_to_tokens(page_text[start:end], _PAGE_CONTEXT_MAX_TOKENS)
 
 
 def _fetch_focused_context(
@@ -49,7 +66,7 @@ def _fetch_focused_context(
     context — the model always has something grounded to work from).
     """
     if not targets:
-        return page_text[:12_000]
+        return truncate_to_tokens(page_text, _PAGE_CONTEXT_MAX_TOKENS)
 
     try:
         # Embed all aspect labels in one batch; use the mean vector as the query
@@ -57,7 +74,7 @@ def _fetch_focused_context(
         labels = [str(t.get("label") or t.get("key") or "") for t in targets]
         vecs = embed_texts(labels)
         if not vecs:
-            return page_text[:12_000]
+            return truncate_to_tokens(page_text, _PAGE_CONTEXT_MAX_TOKENS)
         dims = len(vecs[0])
         mean_vec = [sum(v[i] for v in vecs) / len(vecs) for i in range(dims)]
         hits = search_chunks(
@@ -82,13 +99,12 @@ def _fetch_focused_context(
             parts.append(t)
             total += len(t)
         if len(parts) < CONTEXT_MIN_CHUNKS:
-            # Retrieval too sparse — fall back to the full page so the model
-            # still has grounded context to write from.
-            return page_text[:12_000]
+            best = (hits[0].get("text") or "").strip() if hits else ""
+            return _window_around_chunk(page_text, best)
         return "\n\n".join(parts)
     except Exception:
         # Any retrieval failure must not block generation.
-        return page_text[:12_000]
+        return truncate_to_tokens(page_text, _PAGE_CONTEXT_MAX_TOKENS)
 
 
 def run_generation(db: Session, document_id: uuid.UUID, options: dict[str, Any]) -> dict[str, Any]:
@@ -130,14 +146,6 @@ def _assertion_sequence_exists(
         },
     ).scalar()
     return exists is not None
-
-
-def _next_aspect(doc: Document, page_number: int) -> dict[str, Any] | None:
-    cov = get_page_coverage(doc, page_number)
-    for aspect in cov.get("aspects") or []:
-        if not aspect.get("asked"):
-            return aspect
-    return None
 
 
 def _prior_mcqs_on_page(

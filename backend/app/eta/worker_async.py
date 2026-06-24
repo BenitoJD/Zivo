@@ -23,8 +23,10 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 WORKER_ID = os.getenv("ETA_WORKER_ID", str(uuid.uuid4()))
-POLL_INTERVAL = float(os.getenv("ETA_WORKER_POLL_INTERVAL", "2.0"))
+POLL_INTERVAL = float(os.getenv("ETA_WORKER_POLL_INTERVAL", "0.3"))
 RETRY_DELAY_SECONDS = float(os.getenv("ETA_WORKER_RETRY_DELAY_SECONDS", "5.0"))
+_ETA_NOTIFY_CHANNEL = "zivo_eta_job"
+_job_wake = asyncio.Event()
 
 
 def _parse_workloads(value: str) -> Sequence[JobWorkload]:
@@ -85,6 +87,8 @@ def _async_url() -> str:
 engine = create_async_engine(
     _async_url(),
     pool_pre_ping=True,
+    pool_size=int(os.getenv("DB_POOL_SIZE", "20")),
+    max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "20")),
     connect_args={"server_settings": {"search_path": "qb,intel,public"}},
 )
 AsyncSessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
@@ -237,8 +241,31 @@ async def _handle_job(job_id: object, execution_id: object, semaphore: asyncio.S
         semaphore.release()
 
 
+async def _listen_for_job_notifications() -> None:
+    """LISTEN/NOTIFY wake — sub-second dispatch when jobs enqueue."""
+    try:
+        import asyncpg
+
+        dsn = settings.database_url
+        for prefix in ("postgresql+psycopg://", "postgresql+asyncpg://", "postgresql://"):
+            if dsn.startswith(prefix):
+                dsn = "postgresql://" + dsn[len(prefix) :]
+                break
+        conn = await asyncpg.connect(dsn, server_settings={"search_path": "qb,intel,public"})
+
+        def _on_notify(*_args) -> None:
+            _job_wake.set()
+
+        await conn.add_listener(_ETA_NOTIFY_CHANNEL, _on_notify)
+        while True:
+            await asyncio.sleep(3600)
+    except Exception:
+        logger.exception("ETA job NOTIFY listener failed — polling only")
+
+
 async def run_eta_worker_async() -> None:
     semaphore = asyncio.Semaphore(CONCURRENCY)
+    asyncio.create_task(_listen_for_job_notifications())
     # Reclaim jobs orphaned by a prior worker crash before entering the loop.
     try:
         async with AsyncSessionLocal() as session, session.begin():
@@ -261,7 +288,11 @@ async def run_eta_worker_async() -> None:
 
         if not reserved:
             semaphore.release()
-            await asyncio.sleep(POLL_INTERVAL)
+            try:
+                await asyncio.wait_for(_job_wake.wait(), timeout=POLL_INTERVAL)
+            except TimeoutError:
+                pass
+            _job_wake.clear()
             continue
 
         job_id, execution_id = reserved

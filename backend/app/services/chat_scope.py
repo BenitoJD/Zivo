@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.models import Document
-from app.services.question_pool import get_progress, selected_page_list
+from app.services.question_pool import selected_page_list
 from app.services.rag_window import chat_rag_window
 
 

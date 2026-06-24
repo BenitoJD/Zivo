@@ -7,7 +7,7 @@ import uuid
 from fastapi import Response
 from sqlalchemy.orm import Session
 
-from app.models import Account, ChatThread, Document, User
+from app.models import Account, ChatThread, Document
 from app.services.usage import DEMO_COOKIE, ensure_demo_cookie
 
 __all__ = [

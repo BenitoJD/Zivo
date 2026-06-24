@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 WORKER_ID = os.getenv("ETA_WORKER_ID", str(uuid.uuid4()))
-POLL_INTERVAL = float(os.getenv("ETA_WORKER_POLL_INTERVAL", "2.0"))
+POLL_INTERVAL = float(os.getenv("ETA_WORKER_POLL_INTERVAL", "0.3"))
 RETRY_DELAY_SECONDS = float(os.getenv("ETA_WORKER_RETRY_DELAY_SECONDS", "5.0"))
 # CPU-workload jobs (incl. generate.questions) run concurrently in a thread pool.
 # generate.questions is LLM-I/O-bound — threads overlap on network waits — and the

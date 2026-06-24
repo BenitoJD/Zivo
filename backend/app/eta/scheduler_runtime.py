@@ -185,6 +185,7 @@ class EtaSchedulerService:
             enabled
             if enabled is not None
             else os.getenv("ETA_SCHEDULER_ENABLED", "true").lower() == "true"
+            and os.getenv("ETA_SCHEDULER_PRIMARY", "true").lower() == "true"
         )
         self.poll_interval_seconds = poll_interval_seconds or float(
             os.getenv("ETA_SCHEDULER_POLL_INTERVAL_SECONDS", "5.0")

@@ -11,23 +11,35 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 
+_concept_id_store: dict[str, uuid.UUID] = {}
+_source_id_store: dict[str, uuid.UUID] = {}
+
+
 def _concept_id(db: Session, uri: str) -> uuid.UUID:
+    cached = _concept_id_store.get(uri)
+    if cached is not None:
+        return cached
     row = db.execute(
         text("SELECT id FROM intel.concept WHERE uri = :uri"),
         {"uri": uri},
     ).first()
     if not row:
         raise ValueError(f"Missing concept seed: {uri}")
+    _concept_id_store[uri] = row[0]
     return row[0]
 
 
 def _source_id(db: Session, slug: str) -> uuid.UUID:
+    cached = _source_id_store.get(slug)
+    if cached is not None:
+        return cached
     row = db.execute(
         text("SELECT id FROM intel.source WHERE slug = :slug"),
         {"slug": slug},
     ).first()
     if not row:
         raise ValueError(f"Missing source seed: {slug}")
+    _source_id_store[slug] = row[0]
     return row[0]
 
 
@@ -88,49 +100,6 @@ def update_activity(
         text(f"UPDATE intel.activity SET {', '.join(parts)} WHERE id = :id"),
         params,
     )
-
-
-def insert_artifact(
-    db: Session,
-    *,
-    source_slug: str,
-    external_key: str,
-    content_hash: str,
-    storage_uri: str,
-    media_type: str,
-    payload: dict[str, Any],
-    byte_size: int | None = None,
-    activity_id: uuid.UUID | None = None,
-) -> tuple[uuid.UUID, datetime]:
-    artifact_id = uuid.uuid4()
-    captured_at = datetime.now(timezone.utc)
-    db.execute(
-        text(
-            """
-            INSERT INTO intel.artifact (
-              id, source_id, activity_id, external_key, content_hash, byte_size,
-              storage_uri, payload, media_type, captured_at
-            )
-            VALUES (
-              :id, :source_id, :activity_id, :external_key, :content_hash, :byte_size,
-              :storage_uri, CAST(:payload AS jsonb), :media_type, :captured_at
-            )
-            """
-        ),
-        {
-            "id": artifact_id,
-            "source_id": _source_id(db, source_slug),
-            "activity_id": activity_id,
-            "external_key": external_key,
-            "content_hash": content_hash,
-            "byte_size": byte_size,
-            "storage_uri": storage_uri,
-            "payload": json.dumps(payload),
-            "media_type": media_type,
-            "captured_at": captured_at,
-        },
-    )
-    return artifact_id, captured_at
 
 
 def get_activity(db: Session, activity_id: uuid.UUID) -> dict[str, Any] | None:

@@ -55,3 +55,7 @@ htmlcov/
 test-results/
 playwright-report/
 output/
+
+# Cursor editor debug snapshots (keep config, ignore artifacts)
+.cursor/*.png
+.cursor/*.txt

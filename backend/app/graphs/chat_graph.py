@@ -5,7 +5,6 @@ from __future__ import annotations
 import uuid
 from typing import Any, TypedDict
 
-from langgraph.graph import END, START, StateGraph
 from sqlalchemy.orm import Session
 
 from app.services.chat_retrieval import retrieve_document_chunks
@@ -69,18 +68,6 @@ def retrieve_context(state: ChatState, *, db: Session) -> dict[str, Any]:
         "messages": messages,
         "context_block": context_block,
     }
-
-
-def build_chat_graph():
-    graph = StateGraph(ChatState)
-
-    def retrieve_node(state: ChatState) -> dict[str, Any]:
-        raise RuntimeError("Use run_retrieve() with db session")
-
-    graph.add_node("retrieve_context", retrieve_node)
-    graph.add_edge(START, "retrieve_context")
-    graph.add_edge("retrieve_context", END)
-    return graph.compile()
 
 
 def run_retrieve(

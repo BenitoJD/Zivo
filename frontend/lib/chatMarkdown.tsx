@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Anchor,
   Blockquote,
@@ -169,6 +169,22 @@ function markdownComponents(isDark: boolean): Components {
   };
 }
 
+function useThrottledMarkdown(content: string, streaming: boolean) {
+  const [rendered, setRendered] = useState(content);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!streaming) return;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setRendered(content), 50);
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [content, streaming]);
+
+  return streaming ? rendered : content;
+}
+
 export function AssistantMarkdown({
   content,
   isDark,
@@ -178,6 +194,9 @@ export function AssistantMarkdown({
   isDark: boolean;
   streaming?: boolean;
 }) {
+  const displayContent = useThrottledMarkdown(content, Boolean(streaming));
+  const components = useMemo(() => markdownComponents(isDark), [isDark]);
+
   return (
     <Stack gap={0} maw="100%">
       <Box
@@ -186,8 +205,8 @@ export function AssistantMarkdown({
           wordBreak: "break-word",
         }}
       >
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents(isDark)}>
-          {content}
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+          {displayContent}
         </ReactMarkdown>
       </Box>
       {streaming && content ? (

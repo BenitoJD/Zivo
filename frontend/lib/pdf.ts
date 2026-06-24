@@ -76,7 +76,7 @@ function releaseRenderSlot(): void {
   next?.();
 }
 
-export async function loadPdfDocument(data: ArrayBuffer): Promise<PDFDocumentProxy> {
+async function loadPdfDocument(data: ArrayBuffer): Promise<PDFDocumentProxy> {
   return getDocument({ data }).promise;
 }
 

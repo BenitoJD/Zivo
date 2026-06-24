@@ -84,15 +84,6 @@ def get_cached_response(
     similarity = float(row["similarity"])
     if similarity < threshold:
         return None
-    try:
-        db.execute(
-            text("UPDATE llm_response_cache SET hit_count = hit_count + 1 WHERE id = :id"),
-            {"id": str(row["id"])},
-        )
-        db.commit()
-    except Exception:
-        logger.exception("failed to bump cache hit_count")
-        db.rollback()
     return {
         "response_text": row["response_text"],
         "citations": row["citations"],

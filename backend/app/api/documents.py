@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 
@@ -180,7 +181,8 @@ async def upload_document(
         if not (ct.startswith(ALLOWED_IMAGE_PREFIX) and ct not in {"image/svg+xml", "image/svg"}):
             raise HTTPException(status_code=415, detail="Unsupported file type")
 
-    return create_document_record(
+    return await asyncio.to_thread(
+        create_document_record,
         db,
         user=user,
         guest_id=guest_id,
@@ -207,7 +209,8 @@ async def import_document_from_url(
     meta = build_document_meta(article, source_type="url")
     meta["page_count"] = len(pages)
     filename = article_filename(article.title, article.source_domain)
-    return create_document_record(
+    return await asyncio.to_thread(
+        create_document_record,
         db,
         user=user,
         guest_id=guest_id,
@@ -219,7 +222,7 @@ async def import_document_from_url(
 
 
 @router.post("/import-text", response_model=DocumentOut, dependencies=[Depends(require_csrf_or_guest)])
-def import_document_from_text(
+async def import_document_from_text(
     body: ImportTextIn,
     db: Session = Depends(get_db),
     user: Account | None = Depends(get_optional_user),
@@ -235,7 +238,8 @@ def import_document_from_text(
     meta = build_document_meta(article, source_type="paste" if not article.source_url else "url")
     meta["page_count"] = len(pages)
     filename = article_filename(article.title, article.source_domain)
-    return create_document_record(
+    return await asyncio.to_thread(
+        create_document_record,
         db,
         user=user,
         guest_id=guest_id,
@@ -266,7 +270,8 @@ async def import_document_from_github(
     meta = build_document_meta(article, source_type="github")
     meta["page_count"] = len(pages)
     filename = article_filename(article.title, article.source_domain)
-    return create_document_record(
+    return await asyncio.to_thread(
+        create_document_record,
         db,
         user=user,
         guest_id=guest_id,

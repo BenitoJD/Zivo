@@ -14,7 +14,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.db import SessionLocal, get_db
 from app.graphs.chat_graph import run_retrieve
 from app.graphs.mcq_graph import grade_mcq_answer, try_grade_mcq_fast
-from app.models import Account, ChatMessage, ChatThread, Document, User
+from app.models import Account, ChatMessage, ChatThread, Document
 from app.schemas.mcq import McqGradeRequest, McqGradeResponse
 from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.services.chat_scope import normalize_chat_scope
@@ -301,9 +301,16 @@ async def chat_stream(
                 if _looks_like_quiz(request_message):
                     system = system + "\n\n" + get_prompt(stream_db, "mcq_format")
                 messages = [{"role": "system", "content": system}]
+                context_block = retrieved.get("context_block") or ""
+                if context_block:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": "Document excerpts (pinned for this session):\n\n" + context_block,
+                        }
+                    )
                 messages.extend(retrieved.get("messages") or prior_messages)
 
-                context_block = retrieved.get("context_block") or ""
                 user_content = build_user_message(
                     request_message,
                     doc_snapshot,
@@ -321,8 +328,6 @@ async def chat_stream(
                 )
                 if learn_context:
                     trailer_parts.append(learn_context)
-                if context_block:
-                    trailer_parts.append("Document excerpts:\n\n" + context_block)
                 if trailer_parts:
                     user_content = user_content + "\n\n" + "\n\n".join(trailer_parts)
                 messages.append({"role": "user", "content": user_content})
@@ -463,8 +468,9 @@ async def grade_mcq(
             feedback=fast["feedback"],
         )
 
+    # Stored explanation usually grounds grading; skip retrieval unless missing.
     context = ""
-    if not is_image_document(doc):
+    if not (body.explanation or "").strip() and not is_image_document(doc):
         retrieved = await asyncio.to_thread(
             run_retrieve,
             db,

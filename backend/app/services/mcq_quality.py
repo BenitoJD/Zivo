@@ -22,6 +22,9 @@ from app.services.mcq_dedup import (
     stems_match,
 )
 from app.services.prompts import get_prompt
+from app.services.token_budget import truncate_to_tokens
+
+_PAGE_EXCERPT_MAX_TOKENS = 3_500
 
 MAX_GENERATION_ATTEMPTS = 3
 
@@ -51,10 +54,6 @@ _NEGATIVE_STEM_RE = re.compile(
 )
 _FILL_BLANK_RE = re.compile(r"_{3,}|\.{3,}\s*$|\[\s*\]")
 _ABSOLUTE_RE = re.compile(r"\b(always|never|only|all|none)\b", re.IGNORECASE)
-
-
-class McqQualityError(Exception):
-    """Raised when an MCQ cannot pass the quality gate."""
 
 
 def run_heuristic_checks(
@@ -367,7 +366,7 @@ def _generate_draft_mcq(
     prior_mcqs: list[dict[str, Any]] | None,
     model_id: uuid.UUID | None = None,
 ) -> dict[str, Any] | None:
-    excerpt = page_text[:12_000]
+    excerpt = truncate_to_tokens(page_text, _PAGE_EXCERPT_MAX_TOKENS)
     aspect_line = ""
     cognitive_line = ""
     if target_aspect:
@@ -424,7 +423,7 @@ def _rewrite_mcq(
     prior_mcqs: list[dict[str, Any]] | None,
     model_id: uuid.UUID | None = None,
 ) -> dict[str, Any] | None:
-    excerpt = page_text[:12_000]
+    excerpt = truncate_to_tokens(page_text, _PAGE_EXCERPT_MAX_TOKENS)
     aspect_label = (target_aspect or {}).get("label") or draft.get("primary_concept") or "aspect"
     flaws_json = json.dumps(critique_bundle.get("flaws") or [], ensure_ascii=False)
     hints = critique_bundle.get("rewrite_hints") or ""
@@ -740,7 +739,7 @@ def _generate_batch_drafts(
     Returns normalized payload dicts for every block the model emitted. The
     quality gates (heuristics, embedding similarity) run on each in the caller.
     """
-    excerpt = page_text[:12_000]
+    excerpt = truncate_to_tokens(page_text, _PAGE_EXCERPT_MAX_TOKENS)
     targets_block = "\n".join(
         f"{i + 1}. {t.get('label')} (key: {t.get('key')})"
         + (f" — angle: {t.get('cognitive_angle')}" if t.get("cognitive_angle") else "")

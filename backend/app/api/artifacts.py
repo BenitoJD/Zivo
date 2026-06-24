@@ -11,9 +11,9 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Account, Document, User
+from app.models import Account, Document
 from app.repositories import workspace as workspace_repo
-from app.services.auth import get_current_user, get_optional_user, require_csrf, require_csrf_or_guest
+from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.services.guest import can_access_document
 from app.services.guest_session import optional_guest_session
 from app.services.jobs import enqueue_rag_window

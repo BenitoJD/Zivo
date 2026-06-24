@@ -107,17 +107,16 @@ def prior_mcq_from_payload(payload: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def format_prior_mcqs_block(prior_mcqs: list[dict[str, Any]] | None, *, max_items: int = 20) -> str:
+def format_prior_mcqs_block(prior_mcqs: list[dict[str, Any]] | None, *, max_items: int = 6) -> str:
     if not prior_mcqs:
         return ""
+    recent = list(prior_mcqs[-max_items:])
     lines = [
-        "Prior questions on this page — do NOT repeat these facts, correct answers, or paraphrase these stems:"
+        "Recent questions on this page — do NOT repeat these stems or test the same fact:"
     ]
-    for i, item in enumerate(prior_mcqs[:max_items], start=1):
+    for i, item in enumerate(recent, start=1):
         label = item.get("aspect_label") or item.get("aspect_key") or "aspect"
-        lines.append(
-            f"{i}. [{label}] Q: {item.get('question', '')} | Correct: {item.get('correct_answer', '')}"
-        )
+        lines.append(f"{i}. [{label}] Q: {item.get('question', '')}")
     return "\n".join(lines) + "\n"
 
 

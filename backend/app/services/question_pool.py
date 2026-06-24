@@ -165,19 +165,24 @@ def is_coverage_complete(doc: Document, page: int) -> bool:
 
 
 def count_assertions_on_page(db: Session, document_id: uuid.UUID, page: int) -> int:
-    return int(
+    return len(page_assertion_ids(db, document_id, page))
+
+
+def page_assertion_ids(db: Session, document_id: uuid.UUID, page: int) -> list[str]:
+    """Ordered assertion ids for a page — single query, reused across learn state."""
+    return list(
         db.execute(
             text(
                 """
-                SELECT COUNT(*)::int FROM intel.assertion
+                SELECT id::text FROM intel.assertion
                 WHERE payload->>'artifact_id' = :artifact_id
                   AND status = 'active'
                   AND (payload->>'page_number')::int = :page
+                ORDER BY (payload->>'sequence')::int ASC
                 """
             ),
             {"artifact_id": str(document_id), "page": page},
-        ).scalar()
-        or 0
+        ).scalars().all()
     )
 
 
@@ -206,39 +211,29 @@ def count_answered_on_page(
     )
 
 
-def _count_available(db: Session, document_id: uuid.UUID, progress: dict[str, Any]) -> int:
+def _count_available(
+    db: Session,
+    document_id: uuid.UUID,
+    progress: dict[str, Any],
+    *,
+    page_ids: list[str] | None = None,
+) -> int:
     page = int(progress.get("current_page") or 1)
     answered = {str(x) for x in progress.get("answered_ids") or []}
-    rows = db.execute(
-        text(
-            """
-            SELECT id::text FROM intel.assertion
-            WHERE payload->>'artifact_id' = :artifact_id
-              AND status = 'active'
-              AND (payload->>'page_number')::int = :page
-            ORDER BY (payload->>'sequence')::int ASC
-            """
-        ),
-        {"artifact_id": str(document_id), "page": page},
-    ).scalars().all()
+    rows = page_ids if page_ids is not None else page_assertion_ids(db, document_id, page)
     return sum(1 for row_id in rows if row_id not in answered)
 
 
-def next_assertion_id(db: Session, document_id: uuid.UUID, progress: dict[str, Any]) -> str | None:
+def next_assertion_id(
+    db: Session,
+    document_id: uuid.UUID,
+    progress: dict[str, Any],
+    *,
+    page_ids: list[str] | None = None,
+) -> str | None:
     page = int(progress.get("current_page") or 1)
     answered = {str(x) for x in progress.get("answered_ids") or []}
-    rows = db.execute(
-        text(
-            """
-            SELECT id::text FROM intel.assertion
-            WHERE payload->>'artifact_id' = :artifact_id
-              AND status = 'active'
-              AND (payload->>'page_number')::int = :page
-            ORDER BY (payload->>'sequence')::int ASC
-            """
-        ),
-        {"artifact_id": str(document_id), "page": page},
-    ).scalars().all()
+    rows = page_ids if page_ids is not None else page_assertion_ids(db, document_id, page)
     for row_id in rows:
         if row_id not in answered:
             return row_id
@@ -288,10 +283,12 @@ def build_learn_queue_state(
     study_pages = selected_page_list(doc)
     page_from, page_to = page_range_bounds(doc)
     answered_ids = [str(x) for x in progress.get("answered_ids") or []]
-    questions_generated = count_assertions_on_page(db, document_id, page)
-    questions_answered = count_answered_on_page(db, document_id, page, answered_ids)
+    answered_set = set(answered_ids)
+    page_ids = page_assertion_ids(db, document_id, page)
+    questions_generated = len(page_ids)
+    questions_answered = sum(1 for row_id in page_ids if row_id in answered_set)
     budget = get_question_budget(doc, page)
-    next_id = next_assertion_id(db, document_id, progress)
+    next_id = next((row_id for row_id in page_ids if row_id not in answered_set), None)
     coverage_complete = is_coverage_complete(doc, page)
     page_complete = is_page_complete(db, doc, progress)
     last_study_page = study_pages[-1] if study_pages else page_to
@@ -316,7 +313,7 @@ def build_learn_queue_state(
         "coverage_complete": coverage_complete,
         "page_complete": page_complete,
         "document_complete": document_complete,
-        "pool_available": _count_available(db, document_id, progress),
+        "pool_available": _count_available(db, document_id, progress, page_ids=page_ids),
         "generated_on_page": questions_generated,
         "answered_on_page": questions_answered,
         "max_per_page": budget,
@@ -670,22 +667,6 @@ def _reclaim_stale_generate_jobs(db: Session, document_id: uuid.UUID | None = No
     )
     db.commit()
     return int(result.rowcount or 0)
-
-
-def _has_running_generate_job(db: Session, document_id: uuid.UUID) -> bool:
-    running = db.execute(
-        text(
-            """
-            SELECT 1 FROM jobs
-            WHERE name = 'generate.questions'
-              AND payload->>'document_id' = :document_id
-              AND status = 'running'
-            LIMIT 1
-            """
-        ),
-        {"document_id": str(document_id)},
-    ).scalar()
-    return running is not None
 
 
 def _has_active_generate_job(db: Session, document_id: uuid.UUID) -> bool:

@@ -1,9 +1,19 @@
 import uuid
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.eta.submit import build_job
 from app.models import Job, JobWorkload
+
+_ETA_NOTIFY_CHANNEL = "zivo_eta_job"
+
+
+def _wake_workers(db: Session) -> None:
+    try:
+        db.execute(text("SELECT pg_notify(:channel, '')"), {"channel": _ETA_NOTIFY_CHANNEL})
+    except Exception:
+        pass
 
 
 def enqueue_job(
@@ -31,6 +41,7 @@ def enqueue_job(
     )
     db.add(job)
     db.commit()
+    _wake_workers(db)
     db.refresh(job)
     return job
 

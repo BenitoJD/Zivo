@@ -24,9 +24,11 @@ import {
   NumberInput,
   Paper,
   Progress,
+  Radio,
   RangeSlider,
   ScrollArea,
   SegmentedControl,
+  Skeleton,
   Stack,
   Text,
   Textarea,
@@ -46,6 +48,7 @@ import {
   IconFileText,
   IconGripVertical,
   IconMessageCircle,
+  IconPlayerStop,
   IconPoint,
   IconX,
   IconZoomIn,
@@ -147,7 +150,7 @@ export default function WorkspaceArtifactPage({
   const useOverlayRails = useMediaQuery(STUDY_OVERLAY_BP);
   const mounted = useMounted();
   const { colorScheme } = useMantineColorScheme();
-  const isDark = mounted ? colorScheme === "dark" : true;
+  const isDark = colorScheme === "dark";
   const [mode, setMode] = useState<"learn" | "test">("learn");
 
   const [artifact, setArtifact] = useState<ArtifactMeta | null>(null);
@@ -174,6 +177,7 @@ export default function WorkspaceArtifactPage({
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<{ role: string; content: string }[]>([]);
   const [chatBusy, setChatBusy] = useState(false);
+  const chatAbortRef = useRef<AbortController | null>(null);
   const [chatThinking, setChatThinking] = useState(false);
   const [sourceOpen, { open: openSource, close: closeSource }] = useDisclosure(false);
   const [tutorOpen, { open: openTutor, close: closeTutor }] = useDisclosure(false);
@@ -240,21 +244,30 @@ export default function WorkspaceArtifactPage({
     };
   }, [artifactId, invalidArtifactId]);
 
+  const queueRef = useRef(queue);
+  queueRef.current = queue;
+
   useEffect(() => {
     if (invalidArtifactId || artifact?.status !== "indexing") return;
     let cancelled = false;
+    let timer: number | undefined;
     const poll = () => {
+      if (cancelled) return;
+      if (document.visibilityState !== "visible") {
+        timer = window.setTimeout(poll, 2500);
+        return;
+      }
       apiGet<ArtifactMeta>(`/api/artifacts/${artifactId}`)
         .then((art) => {
           if (!cancelled) setArtifact(art);
         })
         .catch(() => {});
+      timer = window.setTimeout(poll, 2500);
     };
     poll();
-    const id = window.setInterval(poll, 2500);
     return () => {
       cancelled = true;
-      window.clearInterval(id);
+      if (timer) window.clearTimeout(timer);
     };
   }, [artifact?.status, artifactId, invalidArtifactId]);
 
@@ -399,18 +412,32 @@ export default function WorkspaceArtifactPage({
     if (invalidArtifactId || !selectedRange || artifact?.status !== "ready") return;
     if (queue?.current_assertion_id) return;
     let cancelled = false;
+    let delay = 1000;
+    let timer: number | undefined;
     const poll = () => {
+      if (cancelled) return;
+      if (document.visibilityState !== "visible") {
+        timer = window.setTimeout(poll, Math.max(delay, 2000));
+        return;
+      }
       apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`)
         .then((data) => {
           if (!cancelled) setQueue(data);
         })
         .catch(() => {});
+      const q = queueRef.current;
+      const stagnant = Boolean(q?.generation_pending) && (q?.questions_generated ?? 0) === 0;
+      if (stagnant) {
+        delay = Math.min(8000, Math.round(delay * 1.4 + Math.random() * 400));
+      } else {
+        delay = 1000;
+      }
+      timer = window.setTimeout(poll, delay);
     };
     poll();
-    const id = window.setInterval(poll, 1000);
     return () => {
       cancelled = true;
-      window.clearInterval(id);
+      if (timer) window.clearTimeout(timer);
     };
   }, [artifactId, invalidArtifactId, selectedRange, artifact?.status, queue?.current_assertion_id, queue?.generation_pending]);
 
@@ -563,6 +590,9 @@ export default function WorkspaceArtifactPage({
     setChatInput("");
     setChatBusy(true);
     setChatThinking(true);
+    chatAbortRef.current?.abort();
+    const abort = new AbortController();
+    chatAbortRef.current = abort;
     setChatMessages((m) => [...m, { role: "user", content: userMsg }, { role: "assistant", content: "" }]);
     try {
       await ensureGuestSession();
@@ -598,11 +628,21 @@ export default function WorkspaceArtifactPage({
             return copy;
           });
         },
-      });
+      }, { signal: abort.signal });
       if (!gotToken || !assistant.trim()) {
         throw new Error("empty response");
       }
     } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") {
+        setChatMessages((m) => {
+          const copy = [...m];
+          if (copy[copy.length - 1]?.role === "assistant" && !copy[copy.length - 1]?.content) {
+            copy.pop();
+          }
+          return copy;
+        });
+        return;
+      }
       const raw = e instanceof Error && e.message ? e.message : null;
       const timedOut = raw && /timed out|aborted/i.test(raw);
       const detail = timedOut
@@ -621,15 +661,23 @@ export default function WorkspaceArtifactPage({
         return copy;
       });
     } finally {
+      if (chatAbortRef.current === abort) chatAbortRef.current = null;
       setChatBusy(false);
       setChatThinking(false);
     }
   }
 
+  function stopChat() {
+    chatAbortRef.current?.abort();
+  }
+
   if (invalidArtifactId) {
     return (
       <Center mih="50vh">
-        <Loader />
+        <Stack gap="sm" w={280}>
+          <Skeleton height={24} radius="md" />
+          <Skeleton height={120} radius="md" />
+        </Stack>
       </Center>
     );
   }
@@ -652,7 +700,11 @@ export default function WorkspaceArtifactPage({
   if (!artifact || !pages) {
     return (
       <Center mih="50vh">
-        <Loader />
+        <Stack gap="sm" w={320}>
+          <Skeleton height={28} width="60%" radius="md" />
+          <Skeleton height={200} radius="md" />
+          <Skeleton height={16} width="40%" radius="md" />
+        </Stack>
       </Center>
     );
   }
@@ -822,6 +874,7 @@ export default function WorkspaceArtifactPage({
             compact={isCompact}
             onSubmit={() => void submitMcq()}
             onContinue={() => void advanceMcq()}
+            onRetry={() => void refreshQueue()}
           />
           )}
         </Box>
@@ -946,6 +999,7 @@ export default function WorkspaceArtifactPage({
                 contextReady={chatContextReady}
                 onInputChange={setChatInput}
                 onSend={() => void sendChat()}
+                onStop={stopChat}
               />
             </StudyPushRail>
           </Box>
@@ -975,6 +1029,7 @@ export default function WorkspaceArtifactPage({
               contextReady={chatContextReady}
               onInputChange={setChatInput}
               onSend={() => void sendChat()}
+              onStop={stopChat}
             />
           )}
         />
@@ -2237,6 +2292,7 @@ function McqHeroPanel({
   onSubmit,
   onContinue,
   onAdvance,
+  onRetry,
 }: {
   stem: string;
   options: string[];
@@ -2255,6 +2311,7 @@ function McqHeroPanel({
   onSubmit: () => void;
   onContinue: () => void;
   onAdvance?: () => void;
+  onRetry?: () => void;
 }) {
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
@@ -2265,9 +2322,6 @@ function McqHeroPanel({
   const waiting =
     mcqLoading ||
     artifactStatus === "indexing" ||
-    stem.toLowerCase().includes("loading") ||
-    stem.toLowerCase().includes("indexing") ||
-    stem.toLowerCase().includes("will appear") ||
     (Boolean(queue?.generation_pending) && !queue?.current_assertion_id) ||
     (!queue?.current_assertion_id &&
       artifactStatus === "ready" &&
@@ -2275,6 +2329,19 @@ function McqHeroPanel({
       (queue?.generation_pending || (queue?.questions_generated ?? 0) === 0));
 
   const [statusTick, setStatusTick] = useState(0);
+  const stagnant =
+    waiting && Boolean(queue?.generation_pending) && (queue?.questions_generated ?? 0) === 0;
+  const stuckStartRef = useRef<number | null>(null);
+  if (stagnant) {
+    if (!stuckStartRef.current) stuckStartRef.current = Date.now();
+  } else {
+    stuckStartRef.current = null;
+  }
+  const stuckSeconds =
+    stagnant && stuckStartRef.current
+      ? Math.floor((Date.now() - stuckStartRef.current) / 1000)
+      : 0;
+  void statusTick;
   const waitStatus = learnWaitStatus(
     {
       artifactStatus,
@@ -2333,6 +2400,16 @@ function McqHeroPanel({
               {generated} of {budget} ready
             </Text>
           )}
+          {stuckSeconds >= 45 && onRetry ? (
+            <Stack gap={6} align="center">
+              <Text size="sm" c="dimmed" ta="center">
+                Something&apos;s taking a while.
+              </Text>
+              <Button variant="light" size="compact-sm" onClick={onRetry}>
+                Retry generation
+              </Button>
+            </Stack>
+          ) : null}
         </Stack>
       </Center>
     );
@@ -2355,57 +2432,68 @@ function McqHeroPanel({
         {stem}
       </Title>
 
-      <Stack gap={compact ? 6 : 8} mih={0} style={{ flexShrink: 1, overflow: "hidden" }}>
-        {safeOptions.map((opt, i) => {
-          const value = String(i);
-          const isSelected = selected === value;
-          const isCorrectOption = graded && gradeState.correctIndex === i;
-          const isWrongSelected = graded && !gradeState.correct && isSelected;
-          let borderColor = "var(--mantine-color-default-border)";
-          let background = "transparent";
-          if (isCorrectOption) {
-            borderColor = "var(--mantine-color-green-filled)";
-            background = isDark ? "rgba(64, 192, 87, 0.16)" : "rgba(64, 192, 87, 0.1)";
-          } else if (isWrongSelected) {
-            borderColor = "var(--mantine-color-red-filled)";
-            background = isDark ? "rgba(250, 82, 82, 0.14)" : "rgba(250, 82, 82, 0.08)";
-          } else if (isSelected) {
-            borderColor = "var(--mantine-color-blue-filled)";
-            background = isDark ? "rgba(51, 154, 240, 0.14)" : "rgba(51, 154, 240, 0.08)";
-          }
-          return (
-            <UnstyledButton
-              key={value}
-              onClick={() => {
-                if (optionsLocked) return;
-                onSelect(value);
-              }}
-              disabled={optionsLocked}
-              style={{
-                width: "100%",
-                textAlign: "left",
-                borderRadius: 12,
-                padding: compact ? "14px 12px" : "12px 14px",
-                minHeight: 44,
-                border: isSelected || isCorrectOption || isWrongSelected ? `2px solid ${borderColor}` : `1px solid ${borderColor}`,
-                background,
-                opacity: optionsLocked && !isCorrectOption && !isWrongSelected ? 0.65 : 1,
-                transition: "border-color 120ms ease, background 120ms ease",
-                cursor: optionsLocked ? "default" : "pointer",
-              }}
-            >
-              <Group wrap="nowrap" align="flex-start" gap="sm">
-                <Text size="sm" c="dimmed" w={20} ta="center" ff="monospace" fw={600}>
-                  {String.fromCharCode(65 + i)}
-                </Text>
-                <Text size={compact ? "sm" : "md"} lh={1.5} style={{ flex: 1, fontSize: compact ? undefined : "1.0625rem" }}>
-                  {opt}
-                </Text>
-              </Group>
-            </UnstyledButton>
-          );
-        })}
-      </Stack>
+      <Radio.Group
+        value={selected}
+        onChange={(value) => {
+          if (optionsLocked) return;
+          onSelect(value);
+        }}
+        name="mcq-options"
+      >
+        <Stack gap={compact ? 6 : 8} mih={0} style={{ flexShrink: 1, overflow: "hidden" }}>
+          {safeOptions.map((opt, i) => {
+            const value = String(i);
+            const isSelected = selected === value;
+            const isCorrectOption = graded && gradeState.correctIndex === i;
+            const isWrongSelected = graded && !gradeState.correct && isSelected;
+            let borderColor = "var(--mantine-color-default-border)";
+            let background = "transparent";
+            if (isCorrectOption) {
+              borderColor = "var(--mantine-color-green-filled)";
+              background = isDark ? "rgba(64, 192, 87, 0.16)" : "rgba(64, 192, 87, 0.1)";
+            } else if (isWrongSelected) {
+              borderColor = "var(--mantine-color-red-filled)";
+              background = isDark ? "rgba(250, 82, 82, 0.14)" : "rgba(250, 82, 82, 0.08)";
+            } else if (isSelected) {
+              borderColor = "var(--mantine-color-blue-filled)";
+              background = isDark ? "rgba(51, 154, 240, 0.14)" : "rgba(51, 154, 240, 0.08)";
+            }
+            return (
+              <Radio
+                key={value}
+                value={value}
+                disabled={optionsLocked}
+                label={
+                  <Group wrap="nowrap" align="flex-start" gap="sm">
+                    <Text size="sm" c="dimmed" w={20} ta="center" ff="monospace" fw={600}>
+                      {String.fromCharCode(65 + i)}
+                    </Text>
+                    <Text size={compact ? "sm" : "md"} lh={1.5} style={{ flex: 1, fontSize: compact ? undefined : "1.0625rem" }}>
+                      {opt}
+                    </Text>
+                  </Group>
+                }
+                styles={{
+                  root: {
+                    width: "100%",
+                    borderRadius: 12,
+                    padding: compact ? "14px 12px" : "12px 14px",
+                    minHeight: 44,
+                    border: isSelected || isCorrectOption || isWrongSelected ? `2px solid ${borderColor}` : `1px solid ${borderColor}`,
+                    background,
+                    opacity: optionsLocked && !isCorrectOption && !isWrongSelected ? 0.65 : 1,
+                    transition: "border-color 120ms ease, background 120ms ease",
+                    cursor: optionsLocked ? "default" : "pointer",
+                  },
+                  body: { alignItems: "flex-start" },
+                  label: { width: "100%", paddingInlineStart: 8 },
+                  radio: { marginTop: 4 },
+                }}
+              />
+            );
+          })}
+        </Stack>
+      </Radio.Group>
 
       {feedback && (
         <McqFeedbackCard
@@ -2482,6 +2570,7 @@ function TutorPanel({
   contextReady = true,
   onInputChange,
   onSend,
+  onStop,
 }: {
   messages: { role: string; content: string }[];
   input: string;
@@ -2490,19 +2579,36 @@ function TutorPanel({
   contextReady?: boolean;
   onInputChange: (value: string) => void;
   onSend: () => void;
+  onStop?: () => void;
 }) {
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [showJumpLatest, setShowJumpLatest] = useState(false);
   const canSend = Boolean(input.trim()) && !busy && contextReady;
 
-  useEffect(() => {
+  const scrollToBottom = useCallback((force = false) => {
     const el = scrollRef.current;
-    if (!el || messages.length === 0) return;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (!force && !nearBottom) return;
     requestAnimationFrame(() => {
       el.scrollTop = el.scrollHeight;
+      setShowJumpLatest(false);
     });
-  }, [messages, busy]);
+  }, []);
+
+  useEffect(() => {
+    if (messages.length === 0) return;
+    scrollToBottom();
+  }, [messages, busy, scrollToBottom]);
+
+  function handleScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    setShowJumpLatest(!nearBottom && messages.length > 0);
+  }
 
   function submitMessage() {
     if (!canSend) return;
@@ -2515,6 +2621,8 @@ function TutorPanel({
         ref={scrollRef}
         flex={1}
         mih={0}
+        pos="relative"
+        onScroll={handleScroll}
         style={{ overflow: "auto", overscrollBehavior: "contain" }}
       >
         {messages.length === 0 ? (
@@ -2572,6 +2680,20 @@ function TutorPanel({
             </Stack>
           </Box>
         )}
+        {showJumpLatest ? (
+          <Button
+            size="compact-xs"
+            variant="filled"
+            radius="xl"
+            pos="absolute"
+            bottom={12}
+            left="50%"
+            style={{ transform: "translateX(-50%)", zIndex: 2 }}
+            onClick={() => scrollToBottom(true)}
+          >
+            Jump to latest
+          </Button>
+        ) : null}
       </Box>
 
       <Box
@@ -2603,6 +2725,19 @@ function TutorPanel({
           }}
         >
           <Group align="center" wrap="nowrap" gap={6}>
+            {busy && onStop ? (
+              <ActionIcon
+                type="button"
+                radius="xl"
+                size={32}
+                variant="light"
+                color="red"
+                onClick={onStop}
+                aria-label="Stop response"
+              >
+                <IconPlayerStop size={16} />
+              </ActionIcon>
+            ) : null}
             <Textarea
               flex={1}
               variant="unstyled"
@@ -3603,9 +3738,10 @@ function PageThumbnailCell({
   }, [compact, thumbWidth]);
 
   useEffect(() => {
-    thumbCanvasRefs.current[page] = canvasRef.current;
+    const canvas = canvasRef.current;
+    thumbCanvasRefs.current[page] = canvas;
     return () => {
-      if (thumbCanvasRefs.current[page] === canvasRef.current) {
+      if (thumbCanvasRefs.current[page] === canvas) {
         delete thumbCanvasRefs.current[page];
       }
     };
@@ -3650,7 +3786,7 @@ function PageThumbnailCell({
     return () => {
       cancelled = true;
     };
-  }, [nearViewport, pdfDoc, isPdf, page, renderWidth, frameHeight, compact, thumbCanvasRefs]);
+  }, [nearViewport, pdfDoc, isPdf, page, renderWidth, frameHeight, compact]);
 
   return (
     <UnstyledButton

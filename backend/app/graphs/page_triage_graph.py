@@ -21,6 +21,9 @@ from app.services.question_pool import (
     save_page_coverage,
 )
 from app.services.retrieval import fetch_chunks_for_page_range
+from app.services.token_budget import truncate_to_tokens
+
+_TRIAGE_PAGE_MAX_TOKENS = 4_000
 
 
 def run_page_triage(
@@ -168,7 +171,7 @@ def _finalize_triage(
 
 
 def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, Any]:
-    excerpt = page_text[:14_000] if page_text else ""
+    excerpt = truncate_to_tokens(page_text, _TRIAGE_PAGE_MAX_TOKENS) if page_text else ""
     if excerpt:
         try:
             # Pin triage to the default model rather than round-robining the pool,

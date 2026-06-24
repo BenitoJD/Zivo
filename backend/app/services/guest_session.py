@@ -6,7 +6,7 @@ import re
 
 from fastapi import Cookie, Depends, Header, Response
 
-from app.models import Account as User
+from app.models import Account
 from app.services.auth import get_optional_user
 from app.services.usage import DEMO_COOKIE, ensure_demo_cookie
 

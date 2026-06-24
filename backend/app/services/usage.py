@@ -11,7 +11,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import Account, DemoUsage, UsageDaily, User
+from app.models import Account, DemoUsage, UsageDaily
 
 settings = get_settings()
 DEMO_COOKIE = "zivo_demo_id"

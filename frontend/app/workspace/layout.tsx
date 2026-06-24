@@ -197,7 +197,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
       : SIDEBAR_MINI_WIDTH;
   const mounted = useMounted();
   const { colorScheme, toggleColorScheme } = useMantineColorScheme();
-  const isDark = mounted ? colorScheme === "dark" : true;
+  const isDark = colorScheme === "dark";
 
   const [addOpen, setAddOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
@@ -211,6 +211,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   const [importPaste, setImportPaste] = useState("");
   const [importGithub, setImportGithub] = useState("");
   const [importBusy, setImportBusy] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [addSourceTab, setAddSourceTab] = useState<AddSourceTab>("file");
   const uploadInFlight = useRef(false);
 
@@ -260,11 +261,21 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   }, []);
 
   useEffect(() => {
-    const id = window.setInterval(() => {
+    if (artifactId) return;
+    let timer: number | undefined;
+    const tick = () => {
+      if (document.visibilityState !== "visible") {
+        timer = window.setTimeout(tick, 4000);
+        return;
+      }
       if (documents.some((d) => d.status === "indexing")) void loadDocs();
-    }, 4000);
-    return () => window.clearInterval(id);
-  }, [documents, loadDocs]);
+      timer = window.setTimeout(tick, 4000);
+    };
+    tick();
+    return () => {
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [artifactId, documents, loadDocs]);
 
   useEffect(() => {
     if (isMobile) closeMobile();
@@ -292,11 +303,16 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
     if (uploadInFlight.current) return;
     uploadInFlight.current = true;
     setImportBusy(true);
+    setUploadProgress(0);
     try {
       await ensureGuestSession();
       const form = new FormData();
       form.append("file", file);
-      const data = await apiPostForm<{ id: string }>("/api/sources", form);
+      const data = await apiPostForm<{ id: string }>("/api/sources", form, {
+        onProgress: (loaded, total) => {
+          if (total > 0) setUploadProgress(Math.round((loaded / total) * 100));
+        },
+      });
       notifications.show({ title: "Uploaded", message: file.name, color: "green" });
       setImportUrl("");
       setImportPaste("");
@@ -306,7 +322,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
     } catch (e) {
       const message =
         e instanceof Error && e.name === "TimeoutError"
-          ? "Upload timed out — if the file is large, restart the dev server after pulling latest changes."
+          ? "Upload timed out. Try a smaller file or check your connection."
           : e instanceof Error
             ? e.message
             : "Unknown error";
@@ -318,6 +334,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
     } finally {
       uploadInFlight.current = false;
       setImportBusy(false);
+      setUploadProgress(null);
     }
   }
 
@@ -838,7 +855,12 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
               radius="md"
             >
               {importBusy ? (
-                <Box mih={{ base: 160, sm: 220 }} />
+                <Stack align="center" justify="center" gap="sm" mih={{ base: 160, sm: 220 }} px="md">
+                  <Progress value={uploadProgress ?? 0} size="sm" w="100%" maw={280} animated={uploadProgress === null} />
+                  <Text size="sm" c="dimmed">
+                    {uploadProgress !== null ? `Uploading… ${uploadProgress}%` : "Uploading…"}
+                  </Text>
+                </Stack>
               ) : (
                 <Group justify="center" gap="xl" mih={{ base: 160, sm: 220 }} style={{ pointerEvents: "none" }}>
                   <Dropzone.Accept>

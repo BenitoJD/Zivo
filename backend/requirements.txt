@@ -24,3 +24,4 @@ trafilatura>=2.0.0
 pygments>=2.18.0
 pytest>=8.0.0
 alembic>=1.14.0
+tiktoken>=0.8.0

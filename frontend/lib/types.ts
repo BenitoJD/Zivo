@@ -67,7 +67,7 @@ const PAGE_REFERENCE_STEM =
   /^(?:(?:according|based)\s+to\s+(?:the\s+)?(?:page|text|passage|source|excerpt)|from\s+(?:the\s+)?(?:page|text|passage|source)|in\s+(?:the\s+)?(?:passage|text|excerpt)|(?:the\s+)?(?:page|text|passage|source)\s+(?:states|says|indicates|describes|explains)(?:\s+that)?)[,:]?\s+/i;
 
 /** Strip leading A)/B. prefixes — the UI renders letter labels. */
-export function sanitizeMcqOption(text: string): string {
+function sanitizeMcqOption(text: string): string {
   return String(text || "")
     .trim()
     .replace(OPTION_LETTER_PREFIX, "")

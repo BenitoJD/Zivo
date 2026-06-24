@@ -1,3 +1,4 @@
+import os
 from collections.abc import Generator
 
 from sqlalchemy import MetaData, create_engine, text
@@ -7,9 +8,14 @@ from app.config import get_settings
 
 settings = get_settings()
 
+_pool_size = int(os.getenv("DB_POOL_SIZE", "20"))
+_max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "20"))
+
 engine = create_engine(
     settings.database_url,
     pool_pre_ping=True,
+    pool_size=_pool_size,
+    max_overflow=_max_overflow,
     connect_args={"options": "-csearch_path=qb,intel,public"},
 )
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)

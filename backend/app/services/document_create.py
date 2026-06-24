@@ -6,22 +6,12 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import Account, Document, User
+from app.models import Account, Document
 from app.services.jobs import enqueue_ingest
 from app.services.parse import count_pdf_pages
 from app.services.storage import save_upload, slugify_filename
 
 _GB = 1024 * 1024 * 1024
-
-
-def guest_document_count(db: Session, guest_id: str) -> int:
-    return (
-        db.query(Document)
-        .filter(Document.account_id.is_(None))
-        .filter(Document.meta["guest_id"].astext == guest_id)
-        .filter(~Document.content_type.like("image/%"))
-        .count()
-    )
 
 
 def guest_storage_used(db: Session, guest_id: str) -> int:

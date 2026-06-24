@@ -39,10 +39,10 @@ def test_build_learn_queue_state_resume_at_question_three() -> None:
     progress = doc.meta["question_progress"]
     db = MagicMock()
 
+    page_ids = [f"id-{i}" for i in range(1, 11)]
+
     with (
-        patch("app.services.question_pool.count_assertions_on_page", return_value=10),
-        patch("app.services.question_pool.count_answered_on_page", return_value=2),
-        patch("app.services.question_pool.next_assertion_id", return_value="id-3"),
+        patch("app.services.question_pool.page_assertion_ids", return_value=page_ids),
         patch("app.services.question_pool._count_available", return_value=8),
         patch("app.services.question_pool.is_page_complete", return_value=False),
         patch("app.services.question_pool.get_page_coverage", return_value={"question_budget": 47}),

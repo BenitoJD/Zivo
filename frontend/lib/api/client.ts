@@ -49,8 +49,17 @@ export function humanizeApiFailure(status: number, message: string): string {
   return trimmed || "Request failed";
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 120_000): Promise<Response> {
-  return fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs = 120_000,
+  signal?: AbortSignal,
+): Promise<Response> {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const signalAny = signal
+    ? AbortSignal.any([signal, timeoutSignal])
+    : timeoutSignal;
+  return fetch(url, { ...init, signal: signalAny });
 }
 
 function captureResponseMeta(res: Response) {
@@ -127,7 +136,57 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export async function apiPostForm<T>(path: string, form: FormData): Promise<T> {
+export type UploadProgressHandler = (loaded: number, total: number) => void;
+
+export async function apiPostForm<T>(
+  path: string,
+  form: FormData,
+  options?: { onProgress?: UploadProgressHandler; timeoutMs?: number },
+): Promise<T> {
+  const timeoutMs = options?.timeoutMs ?? 30 * 60 * 1000;
+  const onProgress = options?.onProgress;
+
+  if (onProgress && typeof XMLHttpRequest !== "undefined") {
+    return new Promise<T>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${API_BASE}${path}`);
+      xhr.withCredentials = true;
+      xhr.timeout = timeoutMs;
+      const headers = buildHeaders();
+      headers.forEach((value, key) => xhr.setRequestHeader(key, value));
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) onProgress(event.loaded, event.total);
+      };
+      xhr.onload = () => {
+        const headerGuest = xhr.getResponseHeader(GUEST_HEADER);
+        if (headerGuest) guestId = headerGuest;
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText) as T);
+          } catch {
+            reject(new Error("Invalid response"));
+          }
+          return;
+        }
+        void (async () => {
+          try {
+            const body = JSON.parse(xhr.responseText) as { detail?: unknown };
+            if (typeof body.detail === "string") {
+              reject(new Error(body.detail));
+              return;
+            }
+          } catch {
+            /* fall through */
+          }
+          reject(new Error(humanizeApiFailure(xhr.status, xhr.responseText)));
+        })();
+      };
+      xhr.onerror = () => reject(new Error("Upload failed"));
+      xhr.ontimeout = () => reject(new Error("Upload timed out"));
+      xhr.send(form);
+    });
+  }
+
   const res = await fetchWithTimeout(
     `${API_BASE}${path}`,
     {
@@ -136,7 +195,7 @@ export async function apiPostForm<T>(path: string, form: FormData): Promise<T> {
       headers: buildHeaders(),
       body: form,
     },
-    30 * 60 * 1000,
+    timeoutMs,
   );
   captureResponseMeta(res);
   if (!res.ok) throw new Error(await readApiError(res));
@@ -171,10 +230,15 @@ export type ChatSseHandlers = {
   onStatus?: (phase: string) => void;
 };
 
+export type ApiPostSSEOptions = {
+  signal?: AbortSignal;
+};
+
 export async function apiPostSSE(
   path: string,
   body: unknown,
   onChunkOrHandlers: ((text: string) => void) | ChatSseHandlers,
+  options?: ApiPostSSEOptions,
 ): Promise<void> {
   const handlers: ChatSseHandlers =
     typeof onChunkOrHandlers === "function"
@@ -193,6 +257,7 @@ export async function apiPostSSE(
       body: JSON.stringify(body),
     },
     120_000,
+    options?.signal,
   );
   captureResponseMeta(res);
   if (!res.ok || !res.body) {
@@ -204,6 +269,10 @@ export async function apiPostSSE(
   const decoder = new TextDecoder();
   let buffer = "";
   while (true) {
+    if (options?.signal?.aborted) {
+      await reader.cancel();
+      throw new DOMException("Aborted", "AbortError");
+    }
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });

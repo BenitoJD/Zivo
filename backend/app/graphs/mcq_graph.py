@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.services.llm_router import complete_chat
 from app.services.prompts import get_prompt
+from app.services.token_budget import truncate_to_tokens
 
 _LEARN_FEEDBACK_MAX = 280
 
@@ -162,11 +163,22 @@ async def _teach_feedback(state: McqGradeState, *, db: Session) -> dict[str, Any
         f"Author explanation: {(state.get('explanation') or '').strip() or '(none)'}\n"
     )
     if state.get("document_context"):
-        user += f"\nDocument context:\n{state['document_context'][:6000]}\n"
+        user += f"\n(See document context above.)\n"
     user += "\nWrite teacher feedback only — no labels like 'Feedback:' or markdown."
 
+    messages = [{"role": "system", "content": system}]
+    doc_ctx = (state.get("document_context") or "").strip()
+    if doc_ctx:
+        messages.append(
+            {
+                "role": "user",
+                "content": f"Document context (stable across grading on this page):\n{truncate_to_tokens(doc_ctx, 1_500)}",
+            }
+        )
+    messages.append({"role": "user", "content": user})
+
     feedback = await complete_chat(
-        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        messages,
         db,
         log_tag="grade_mcq",
     )
