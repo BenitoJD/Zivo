@@ -511,6 +511,16 @@ CREATE INDEX assertion_recorded_idx ON intel.assertion (recorded_at DESC);
 CREATE INDEX assertion_recorded_brin_idx ON intel.assertion USING brin (recorded_at);
 CREATE INDEX assertion_payload_gin_idx ON intel.assertion USING gin (payload);
 CREATE INDEX assertion_search_gin_idx ON intel.assertion USING gin (search_document);
+-- Expression indexes for the payload->> read paths (question-pool lookups). The
+-- GIN index above does not serve ->> equality / ::int casts / ORDER BY, so these
+-- partial btree expression indexes back count_assertions_on_page, _count_available,
+-- next_assertion_id, _assertion_sequence_exists, and the concept/purge queries.
+CREATE INDEX IF NOT EXISTS assertion_artifact_page_idx
+  ON intel.assertion ((payload->>'artifact_id'), ((payload->>'page_number')::int))
+  WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS assertion_artifact_concept_idx
+  ON intel.assertion ((payload->>'artifact_id'))
+  WHERE status = 'active';
 
 -- -----------------------------------------------------------------------------
 -- intel.assertion_status_log

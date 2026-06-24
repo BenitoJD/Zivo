@@ -39,12 +39,18 @@ def test_build_learn_queue_state_resume_at_question_three() -> None:
     progress = doc.meta["question_progress"]
     db = MagicMock()
 
+    # build_learn_queue_state now derives generated/answered/available/next_id
+    # from one page_assertion_summary call instead of four separate lookups.
     with (
-        patch("app.services.question_pool.count_assertions_on_page", return_value=10),
-        patch("app.services.question_pool.count_answered_on_page", return_value=2),
-        patch("app.services.question_pool.next_assertion_id", return_value="id-3"),
-        patch("app.services.question_pool._count_available", return_value=8),
-        patch("app.services.question_pool.is_page_complete", return_value=False),
+        patch(
+            "app.services.question_pool.page_assertion_summary",
+            return_value={
+                "generated": 10,
+                "answered": 2,
+                "available": 8,
+                "next_id": "id-3",
+            },
+        ),
         patch("app.services.question_pool.get_page_coverage", return_value={"question_budget": 47}),
     ):
         state = build_learn_queue_state(db, doc_id, doc, progress)

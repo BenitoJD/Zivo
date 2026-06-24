@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     daily_message_limit: int = 100
     max_upload_bytes: int = _GB
     storage_limit_bytes: int = _GB
+    # Semantic chat-response cache (qb.llm_response_cache) rows older than this
+    # are purged by the daily cache.purge schedule. 0 disables eviction. Backed
+    # by the llm_response_cache_created_idx index; without this the HNSW index
+    # and table grow unbounded with every cached reply.
+    response_cache_ttl_days: int = 30
 
     @field_validator("minio_public_secure", mode="before")
     @classmethod

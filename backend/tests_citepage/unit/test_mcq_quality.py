@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -84,7 +84,8 @@ def test_critique_passes_requires_zero_fatal() -> None:
     assert not _critique_passes({"pass": False, "flaw_count": 0, "fatal_flaws": []})
 
 
-def test_generate_quality_mcq_passes_on_first_attempt() -> None:
+@pytest.mark.asyncio
+async def test_generate_quality_mcq_passes_on_first_attempt() -> None:
     db = MagicMock()
     good = _good_mcq()
     good["primary_concept_key"] = "chlorophyll"
@@ -103,8 +104,8 @@ def test_generate_quality_mcq_passes_on_first_attempt() -> None:
     )
     zv_block = f'```zv-mcq\n{json.dumps(good)}\n```'
 
-    with patch("app.services.mcq_quality._complete_chat_sync", side_effect=[zv_block, critic_json]):
-        result = generate_quality_mcq(
+    with patch("app.services.mcq_quality._complete_chat", new=AsyncMock(side_effect=[zv_block, critic_json])):
+        result = await generate_quality_mcq(
             db,
             page_text="Chlorophyll absorbs light during photosynthesis on page 3.",
             page_number=3,
@@ -118,7 +119,8 @@ def test_generate_quality_mcq_passes_on_first_attempt() -> None:
     assert result["cognitive_angle"] == "mechanism"
 
 
-def test_generate_quality_mcq_rewrites_then_passes() -> None:
+@pytest.mark.asyncio
+async def test_generate_quality_mcq_rewrites_then_passes() -> None:
     db = MagicMock()
     # Stem trips the negative-wording heuristic ("which ... not"), which is a
     # fatal flaw. Fatal heuristic flaws skip the critic and go straight to a
@@ -136,10 +138,10 @@ def test_generate_quality_mcq_rewrites_then_passes() -> None:
     good_block = f'```zv-mcq\n{json.dumps(good)}\n```'
 
     with patch(
-        "app.services.mcq_quality._complete_chat_sync",
-        side_effect=[bad_block, good_block],
+        "app.services.mcq_quality._complete_chat",
+        new=AsyncMock(side_effect=[bad_block, good_block]),
     ):
-        result = generate_quality_mcq(
+        result = await generate_quality_mcq(
             db,
             page_text="Mitosis divides the nucleus.",
             page_number=5,
@@ -152,7 +154,8 @@ def test_generate_quality_mcq_rewrites_then_passes() -> None:
     assert result["quality"]["attempts"] == 2
 
 
-def test_generate_quality_mcq_returns_none_when_exhausted() -> None:
+@pytest.mark.asyncio
+async def test_generate_quality_mcq_returns_none_when_exhausted() -> None:
     db = MagicMock()
     bad = {
         "question": "Which is NOT correct?",
@@ -172,10 +175,10 @@ def test_generate_quality_mcq_returns_none_when_exhausted() -> None:
     bad_block = f'```zv-mcq\n{json.dumps(bad)}\n```'
 
     with patch(
-        "app.services.mcq_quality._complete_chat_sync",
-        side_effect=[bad_block, critic_fail, bad_block, critic_fail, bad_block, critic_fail],
+        "app.services.mcq_quality._complete_chat",
+        new=AsyncMock(side_effect=[bad_block, critic_fail, bad_block, critic_fail, bad_block, critic_fail]),
     ):
-        result = generate_quality_mcq(
+        result = await generate_quality_mcq(
             db,
             page_text="Some page text.",
             page_number=1,
@@ -186,12 +189,14 @@ def test_generate_quality_mcq_returns_none_when_exhausted() -> None:
     assert result is None
 
 
-def test_generate_quality_mcq_empty_page_text() -> None:
+@pytest.mark.asyncio
+async def test_generate_quality_mcq_empty_page_text() -> None:
     db = MagicMock()
-    assert generate_quality_mcq(db, page_text="", page_number=1, sequence=1) is None
+    assert await generate_quality_mcq(db, page_text="", page_number=1, sequence=1) is None
 
 
-def test_generate_quality_mcq_embedding_gate_retries() -> None:
+@pytest.mark.asyncio
+async def test_generate_quality_mcq_embedding_gate_retries() -> None:
     db = MagicMock()
     similar = {
         "question": "How does chlorophyll function during photosynthesis?",
@@ -224,14 +229,14 @@ def test_generate_quality_mcq_embedding_gate_retries() -> None:
 
     # Fast-path control flow: a clean draft skips the critic entirely. So the
     # call sequence is: draft(similar) -> embedding gate rejects -> rewrite
-    # (distinct) -> embedding gate accepts. Two _complete_chat_sync calls, no
+    # (distinct) -> embedding gate accepts. Two _complete_chat calls, no
     # critic calls. The earlier 4-call chain desynced because it assumed the
     # critic ran on every draft (pre-deferred-critic behavior).
     with (
-        patch("app.services.mcq_quality._complete_chat_sync", side_effect=[similar_block, distinct_block]),
+        patch("app.services.mcq_quality._complete_chat", new=AsyncMock(side_effect=[similar_block, distinct_block])),
         patch("app.services.mcq_quality.is_mcq_too_similar", side_effect=[(True, 0.95), (False, 0.4)]),
     ):
-        result = generate_quality_mcq(
+        result = await generate_quality_mcq(
             db,
             page_text="Chlorophyll and Calvin cycle on page 3.",
             page_number=3,

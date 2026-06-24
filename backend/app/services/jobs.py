@@ -76,7 +76,7 @@ def enqueue_generate(
     job = enqueue_job(
         db,
         name="generate.questions",
-        workload=JobWorkload.cpu,
+        workload=JobWorkload.io,
         payload=payload,
         account_id=account_id,
     )

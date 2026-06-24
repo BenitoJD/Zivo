@@ -59,6 +59,11 @@ CREATE INDEX IF NOT EXISTS jobs_activity_idx ON qb.jobs (activity_id);
 CREATE INDEX IF NOT EXISTS jobs_execution_idx ON qb.jobs (execution_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_execution_node_key
   ON qb.jobs (execution_id, node_key) WHERE execution_id IS NOT NULL AND node_key IS NOT NULL;
+-- Expression index for the generate.questions guard queries (active-job / cancel /
+-- per-page dedup checks) that filter on payload->>'document_id' + payload->>'page_number'.
+CREATE INDEX IF NOT EXISTS jobs_generate_lookup_idx
+  ON qb.jobs ((payload->>'document_id'), (payload->>'page_number'))
+  WHERE name = 'generate.questions';
 
 CREATE TABLE IF NOT EXISTS qb.eta_executions (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -176,6 +181,9 @@ END $$;
 CREATE INDEX IF NOT EXISTS ix_llm_response_cache_embedding_hnsw
   ON qb.llm_response_cache USING hnsw (embedding vector_cosine_ops)
   WHERE embedding IS NOT NULL;
+-- Backs the TTL purge job (created_at filter for stale-response eviction).
+CREATE INDEX IF NOT EXISTS llm_response_cache_created_idx
+  ON qb.llm_response_cache (created_at);
 
 -- intel.embedding uses variable-dimension vectors; per-model HNSW indexes belong in a migration
 -- once dimensions are fixed per model_concept_id.

@@ -91,10 +91,10 @@ def _fetch_focused_context(
         return page_text[:12_000]
 
 
-def run_generation(db: Session, document_id: uuid.UUID, options: dict[str, Any]) -> dict[str, Any]:
+async def run_generation(db: Session, document_id: uuid.UUID, options: dict[str, Any]) -> dict[str, Any]:
     mode = options.get("mode", "page_batch")
     if mode == "page_triage":
-        return run_page_triage(
+        return await run_page_triage(
             db,
             document_id,
             page_number=int(options["page_number"]),
@@ -102,8 +102,8 @@ def run_generation(db: Session, document_id: uuid.UUID, options: dict[str, Any])
             precompute=bool(options.get("precompute")),
         )
     if mode == "page_batch":
-        return _run_page_batch(db, document_id, options)
-    return _run_legacy_pool(db, document_id, options)
+        return await _run_page_batch(db, document_id, options)
+    return await _run_legacy_pool(db, document_id, options)
 
 
 def _assertion_sequence_exists(
@@ -215,7 +215,7 @@ def _speculative_aspects(page_text: str, page_number: int, n: int) -> list[dict[
     return targets
 
 
-def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]) -> dict[str, Any]:
+async def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]) -> dict[str, Any]:
     activity_id = options.get("activity_id")
     page_number = int(options["page_number"])
     batch_size = int(options.get("batch_size", 5))
@@ -276,7 +276,7 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
     # batch generator runs the per-MCQ quality gate (heuristics + embedding
     # similarity) and intra-batch dedup internally. A single call collapses N
     # TTFTs to one and lets the model self-coordinate distractor diversity.
-    kept = generate_quality_mcq_batch(
+    kept = await generate_quality_mcq_batch(
         db,
         page_text=context,
         page_number=page_number,
@@ -315,13 +315,13 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
     return {"questions_saved": saved, "page_number": page_number}
 
 
-def _run_legacy_pool(db: Session, document_id: uuid.UUID, options: dict[str, Any]) -> dict[str, Any]:
+async def _run_legacy_pool(db: Session, document_id: uuid.UUID, options: dict[str, Any]) -> dict[str, Any]:
     """Backward-compatible small pool (unused in normal flow)."""
     activity_id = options.get("activity_id")
     pool_size = int(options.get("pool_size", 5))
     saved = 0
     for i in range(pool_size):
-        payload = _generate_one_for_page(
+        payload = await _generate_one_for_page(
             db,
             page_text="",
             page_number=1,
@@ -344,7 +344,7 @@ def _run_legacy_pool(db: Session, document_id: uuid.UUID, options: dict[str, Any
     return {"questions_saved": saved}
 
 
-def _generate_one_for_page(
+async def _generate_one_for_page(
     db: Session,
     *,
     page_text: str,
@@ -354,7 +354,7 @@ def _generate_one_for_page(
     target_aspect: dict[str, Any] | None = None,
     prior_mcqs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
-    payload = generate_quality_mcq(
+    payload = await generate_quality_mcq(
         db,
         page_text=page_text,
         page_number=page_number,

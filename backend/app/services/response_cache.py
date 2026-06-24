@@ -137,3 +137,28 @@ def store_response(
     except Exception:
         logger.exception("failed to store cached response")
         db.rollback()
+
+
+def purge_stale_cache(db: Session, *, max_age_days: int) -> int:
+    """Delete cached responses older than ``max_age_days``. Returns rows deleted.
+
+    Backed by llm_response_cache_created_idx. Without periodic eviction the
+    table and its HNSW index grow with every cached chat reply, slowing every
+    cache lookup. ``max_age_days <= 0`` is a no-op (eviction disabled).
+    """
+    if max_age_days <= 0:
+        return 0
+    try:
+        result = db.execute(
+            text("DELETE FROM llm_response_cache WHERE created_at < now() - :max_age"),
+            {"max_age": f"{int(max_age_days)} days"},
+        )
+        db.commit()
+        deleted = int(result.rowcount or 0)
+        if deleted:
+            logger.info("purged stale llm_response_cache rows", extra={"deleted": deleted, "max_age_days": max_age_days})
+        return deleted
+    except Exception:
+        logger.exception("failed to purge stale llm_response_cache rows")
+        db.rollback()
+        return 0

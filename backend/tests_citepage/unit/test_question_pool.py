@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from app.services.question_pool import (
     REFILL_AFTER_ANSWERED,
+    EAGER_TRIAGE_LOOKAHEAD,
     _merge_progress,
     clear_stale_generation_pending,
     ensure_question_pool,
@@ -418,3 +419,43 @@ def test_maybe_transition_prefetch_enqueues_once() -> None:
         maybe_transition_prefetch(db, doc_id)
 
     enqueue.assert_called_once()
+
+
+def test_eager_triage_lookahead_default_is_one() -> None:
+    # 3 was pure waste (transition_prep already fires next-page triage at 40%
+    # progress); 1 stays ahead without duplicating that work.
+    assert EAGER_TRIAGE_LOOKAHEAD == 1
+
+
+def test_page_assertion_summary_derives_all_counts_from_one_query() -> None:
+    from app.services.question_pool import page_assertion_summary
+
+    doc_id = uuid.uuid4()
+    db = MagicMock()
+    # Simulate 5 generated, 2 answered (id-1, id-2), so 3 available, next = id-3.
+    db.execute.return_value.scalars.return_value.all.return_value = [
+        "id-1", "id-2", "id-3", "id-4", "id-5"
+    ]
+
+    summary = page_assertion_summary(db, doc_id, page=7, answered_ids=["id-1", "id-2"])
+
+    assert summary == {
+        "generated": 5,
+        "answered": 2,
+        "available": 3,
+        "next_id": "id-3",
+    }
+    # One query, not four — the hot path no longer fans out.
+    db.execute.assert_called_once()
+
+
+def test_page_assertion_summary_handles_empty_page() -> None:
+    from app.services.question_pool import page_assertion_summary
+
+    doc_id = uuid.uuid4()
+    db = MagicMock()
+    db.execute.return_value.scalars.return_value.all.return_value = []
+
+    summary = page_assertion_summary(db, doc_id, page=1, answered_ids=[])
+
+    assert summary == {"generated": 0, "answered": 0, "available": 0, "next_id": None}

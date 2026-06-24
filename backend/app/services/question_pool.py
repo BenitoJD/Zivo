@@ -28,10 +28,11 @@ TRANSITION_PREFETCH_RATIO = 0.40
 # Eagerly triage the current page + this many pages ahead at init, so the document
 # is understood before the reader arrives. Triage only (cheap, ~1 call/page);
 # batches stay on-demand + next-page prefetch, so we don't burn tokens generating
-# pages the reader never reaches. 3 is enough to stay ahead of the transition
-# prefetch (which fires at 40% page progress) without triaging pages that are
-# never opened — 10 was pure waste (~7 unused triage calls/doc).
-EAGER_TRIAGE_LOOKAHEAD = int(os.getenv("ZIVO_EAGER_TRIAGE_LOOKAHEAD", "3"))
+# pages the reader never reaches. 1 (just the immediate next page) is enough:
+# transition_prep_job already fires next-page triage at 40% page progress, so a
+# larger lookahead duplicates that work for pages the reader may never reach —
+# 10 was ~7 wasted triage calls/doc, 3 still ~2. Bump via env for bulk precompute.
+EAGER_TRIAGE_LOOKAHEAD = int(os.getenv("ZIVO_EAGER_TRIAGE_LOOKAHEAD", "1"))
 ABSOLUTE_MAX_QUESTIONS_PER_PAGE = 150
 # Backward-compatible alias for API consumers
 MAX_QUESTIONS_PER_PAGE = ABSOLUTE_MAX_QUESTIONS_PER_PAGE
@@ -245,6 +246,54 @@ def next_assertion_id(db: Session, document_id: uuid.UUID, progress: dict[str, A
     return None
 
 
+def page_assertion_summary(
+    db: Session,
+    document_id: uuid.UUID,
+    *,
+    page: int,
+    answered_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """All per-page pool counts from ONE indexed query.
+
+    build_learn_queue_state / is_page_complete previously fired 4-6 round trips
+    to intel.assertion for the same (document, page) filters (count_generated,
+    count_answered, _count_available, next_assertion_id, and is_page_complete
+    re-calling two of those). This collapses them into a single lookup that the
+    assertion_artifact_page_idx serves, deriving everything in Python:
+
+    returns {generated, answered, available, next_id}.
+    """
+    answered = {str(x) for x in (answered_ids or [])}
+    rows = db.execute(
+        text(
+            """
+            SELECT id::text FROM intel.assertion
+            WHERE payload->>'artifact_id' = :artifact_id
+              AND status = 'active'
+              AND (payload->>'page_number')::int = :page
+            ORDER BY (payload->>'sequence')::int ASC
+            """
+        ),
+        {"artifact_id": str(document_id), "page": page},
+    ).scalars().all()
+    generated = len(rows)
+    answered_count = sum(1 for r in rows if r in answered)
+    next_id: str | None = None
+    available = 0
+    for row_id in rows:
+        if row_id in answered:
+            continue
+        available += 1
+        if next_id is None:
+            next_id = row_id
+    return {
+        "generated": generated,
+        "answered": answered_count,
+        "available": available,
+        "next_id": next_id,
+    }
+
+
 def selected_page_list(doc: Document) -> list[int]:
     """Ordered study pages — explicit list or contiguous from/to range."""
     selected = (doc.meta or {}).get("selected_range") or {}
@@ -288,12 +337,27 @@ def build_learn_queue_state(
     study_pages = selected_page_list(doc)
     page_from, page_to = page_range_bounds(doc)
     answered_ids = [str(x) for x in progress.get("answered_ids") or []]
-    questions_generated = count_assertions_on_page(db, document_id, page)
-    questions_answered = count_answered_on_page(db, document_id, page, answered_ids)
+    # One indexed query replaces the four round trips below (count_generated,
+    # count_answered, _count_available, next_assertion_id) plus the two that
+    # is_page_complete re-issued. The assertion_artifact_page_idx backs it.
+    summary = page_assertion_summary(db, document_id, page=page, answered_ids=answered_ids)
+    questions_generated = summary["generated"]
+    questions_answered = summary["answered"]
+    next_id = summary["next_id"]
     budget = get_question_budget(doc, page)
-    next_id = next_assertion_id(db, document_id, progress)
     coverage_complete = is_coverage_complete(doc, page)
-    page_complete = is_page_complete(db, doc, progress)
+    # page_complete inlined from is_page_complete's logic, reusing `summary`
+    # instead of re-querying. generation_pending short-circuits first.
+    if progress.get("generation_pending"):
+        page_complete = False
+    elif next_id is not None:
+        page_complete = False
+    elif questions_generated == 0:
+        page_complete = False
+    elif coverage_complete:
+        page_complete = True
+    else:
+        page_complete = questions_generated >= budget
     last_study_page = study_pages[-1] if study_pages else page_to
     document_complete = page_complete and page == last_study_page
 
@@ -316,7 +380,7 @@ def build_learn_queue_state(
         "coverage_complete": coverage_complete,
         "page_complete": page_complete,
         "document_complete": document_complete,
-        "pool_available": _count_available(db, document_id, progress),
+        "pool_available": summary["available"],
         "generated_on_page": questions_generated,
         "answered_on_page": questions_answered,
         "max_per_page": budget,
@@ -779,7 +843,14 @@ def release_stuck_generation(db: Session, document_id: uuid.UUID) -> None:
 
 
 def kick_generation_sync(db: Session, document_id: uuid.UUID) -> None:
-    """Run triage + first batch inline when the pool is empty and no worker job is active."""
+    """Run triage + first batch inline when the pool is empty and no worker job is active.
+
+    Dead in production (generation runs in the async IO worker now); retained for
+    the e2e probe and tests that mock it. run_generation is async, so this sync
+    entrypoint bridges it with asyncio.run.
+    """
+    import asyncio
+
     if _has_active_generate_job(db, document_id):
         return
 
@@ -798,26 +869,24 @@ def kick_generation_sync(db: Session, document_id: uuid.UUID) -> None:
     from app.graphs.generation_graph import run_generation
 
     if not get_page_coverage(doc, page):
-        run_generation(
-            db,
-            document_id,
-            {"mode": "page_triage", "page_number": page},
-        )
+        asyncio.run(run_generation(db, document_id, {"mode": "page_triage", "page_number": page}))
         db.refresh(doc)
 
     if count_assertions_on_page(db, document_id, page) == 0 and not _has_active_generate_job(
         db, document_id
     ):
         budget = get_question_budget(doc, page)
-        run_generation(
-            db,
-            document_id,
-            {
-                "mode": "page_batch",
-                "page_number": page,
-                "batch_size": min(FIRST_QUESTION_BATCH_SIZE, budget),
-                "start_sequence": 0,
-            },
+        asyncio.run(
+            run_generation(
+                db,
+                document_id,
+                {
+                    "mode": "page_batch",
+                    "page_number": page,
+                    "batch_size": min(FIRST_QUESTION_BATCH_SIZE, budget),
+                    "start_sequence": 0,
+                },
+            )
         )
 
 

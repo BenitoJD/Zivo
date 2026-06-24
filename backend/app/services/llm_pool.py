@@ -160,6 +160,13 @@ def litellm_provider_kwargs(resolved: ResolvedLlmModel) -> dict[str, str]:
       reasoning trace by default that we discard — disabling it is a ~5× latency win).
     - ``max_tokens`` (int): hard cap on completion tokens.
     - ``temperature`` (float): sampling temperature.
+
+    Anthropic prompt caching: when the provider is Anthropic, the
+    ``prompt-caching-2024-07-31`` beta is opted in via ``extra_headers``. This is
+    a no-op for OpenAI-compatible providers (GLM/stepfun/MiMo), which cache
+    prefixes automatically with no request-side knob — but wires the explicit
+    opt-in so adding a Claude model later pays cached-token rates on the stable
+    ~12k-char page prefix instead of full input on every generation call.
     """
     provider = resolved.provider
     params: dict[str, str] = {}
@@ -171,6 +178,11 @@ def litellm_provider_kwargs(resolved: ResolvedLlmModel) -> dict[str, str]:
     meta = resolved.record.meta or {}
     if not isinstance(meta, dict):
         meta = {}
+
+    if provider.slug == "anthropic":
+        # Explicit opt-in for Anthropic prompt caching. Without this, Claude
+        # re-processes the full prefix on every call (no automatic caching).
+        params["extra_headers"] = {"anthropic-beta": "prompt-caching-2024-07-31"}
 
     if meta.get("thinking_disabled"):
         # Z.AI native form (honored by the GLM 4.x OpenAI-compatible endpoint).
@@ -200,3 +212,28 @@ def log_failover(resolved: ResolvedLlmModel, exc: BaseException, *, log_tag: str
         resolved.provider.slug,
         exc,
     )
+
+
+def mark_cache_breakpoint(message: dict, *, provider_slug: str) -> dict:
+    """Annotate a stable-prefix message as an Anthropic prompt-cache breakpoint.
+
+    Generation/triage build messages as [system, page-text, variable-instructions].
+    The system + page-text prefix is byte-identical across every question on a
+    page, so it's the ideal cache prefix — but Anthropic only caches when a
+    ``cache_control`` breakpoint marks the end of the prefix, and only when the
+    message content is a content-block list rather than a plain string.
+
+    This helper converts ``message["content"]`` to the cached block form when the
+    provider is Anthropic, and returns the message unchanged for OpenAI-compatible
+    providers (which cache automatically and would ignore a content-block rewrite).
+    No-op for empty content.
+    """
+    if provider_slug != "anthropic":
+        return message
+    content = message.get("content")
+    if not content or not isinstance(content, str):
+        return message
+    return {
+        **message,
+        "content": [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}],
+    }

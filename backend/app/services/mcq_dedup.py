@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from typing import Any
 
 from app.services.embed import embed_texts
@@ -31,6 +32,20 @@ def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     if norm_a == 0.0 or norm_b == 0.0:
         return 0.0
     return dot / (norm_a * norm_b)
+
+
+@lru_cache(maxsize=2048)
+def _embed_signature_cached(signature: str) -> tuple[float, ...]:
+    """Embed one MCQ/aspect signature, memoized on the string.
+
+    is_mcq_too_similar is called once per draft in a batch, and each call used to
+    re-embed every prior signature via embed_texts([...]) — O(N) redundant ONNX
+    encodes per draft, O(N²) across a batch. Since mcq_signature()/aspect_signature()
+    are deterministic strings, caching on them collapses the re-encode cost: priors
+    hit the cache, only the new candidate is embedded. Bounded at 2048 entries.
+    """
+    vec = embed_texts([signature])[0]
+    return tuple(float(x) for x in vec)
 
 
 def normalize_stem(text: str) -> str:
@@ -135,13 +150,13 @@ def dedupe_aspects(
         }
 
     signatures = [aspect_signature(a) for a in aspects]
-    vectors = embed_texts(signatures)
 
     kept: list[dict[str, Any]] = []
     kept_vectors: list[list[float]] = []
     merged_keys: list[str] = []
 
-    for aspect, vec in zip(aspects, vectors, strict=True):
+    for aspect, sig in zip(aspects, signatures, strict=True):
+        vec = list(_embed_signature_cached(sig))
         duplicate = False
         for kept_vec in kept_vectors:
             if cosine_similarity(vec, kept_vec) >= threshold:
@@ -180,10 +195,13 @@ def is_mcq_too_similar(
         )
         for p in prior_mcqs
     ]
-    vectors = embed_texts([candidate_sig, *prior_sigs])
-    candidate_vec = vectors[0]
+    # Per-signature cached embeds: priors hit the cache across batch drafts, so
+    # only the new candidate is encoded each call (was: re-encoding every prior
+    # on every draft — O(N²) redundant ONNX work across a batch).
+    candidate_vec = list(_embed_signature_cached(candidate_sig))
     max_sim = 0.0
-    for prior_vec in vectors[1:]:
+    for prior_sig in prior_sigs:
+        prior_vec = list(_embed_signature_cached(prior_sig))
         sim = cosine_similarity(candidate_vec, prior_vec)
         max_sim = max(max_sim, sim)
     return max_sim >= threshold, max_sim

@@ -10,6 +10,7 @@ Prints pass/reject rates and per-question attempt counts. Cleans up test data.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 import uuid
@@ -103,7 +104,7 @@ def main() -> int:
         print(f"  chunks indexed: {ingest_result.get('chunks', 0)}")
 
         print("Running page triage…")
-        triage = run_page_triage(db, doc_id, page_number=1)
+        triage = asyncio.run(run_page_triage(db, doc_id, page_number=1))
         aspects = triage.get("aspects") or []
         budget = triage.get("question_budget", len(aspects))
         print(f"  question_budget={budget}, aspects={len(aspects)}")
@@ -127,13 +128,15 @@ def main() -> int:
         for i, aspect in enumerate(aspects[:max_n], start=1):
             label = aspect.get("label") or aspect.get("key")
             print(f"[{i}/{max_n}] aspect: {label}")
-            payload = generate_quality_mcq(
-                db,
-                page_text=page_text,
-                page_number=1,
-                sequence=i,
-                target_aspect=aspect,
-                prior_mcqs=prior_mcqs,
+            payload = asyncio.run(
+                generate_quality_mcq(
+                    db,
+                    page_text=page_text,
+                    page_number=1,
+                    sequence=i,
+                    target_aspect=aspect,
+                    prior_mcqs=prior_mcqs,
+                )
             )
             if payload is None:
                 print("  → REJECTED (exhausted 3 attempts)")

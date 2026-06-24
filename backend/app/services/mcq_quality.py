@@ -156,7 +156,23 @@ def has_fatal_heuristic_flaws(flaws: list[dict[str, str]]) -> bool:
 def _complete_chat_sync(
     db: Session, messages: list[dict], *, log_tag: str, model_id: uuid.UUID | None = None
 ) -> str:
+    # Legacy sync shim — retained for kick_generation_sync and the e2e probe
+    # which run outside an event loop. The async generation chain (generate_*)
+    # awaits complete_chat directly via _complete_chat; this wrapper is only
+    # for non-worker callers that still need a blocking call.
     return asyncio.run(complete_chat(messages, db, log_tag=log_tag, model_id=model_id))
+
+
+async def _complete_chat(
+    db: Session, messages: list[dict], *, log_tag: str, model_id: uuid.UUID | None = None
+) -> str:
+    """Await complete_chat directly — no asyncio.run, no per-call event loop.
+
+    The async worker awaits the handler on its running loop, so awaiting
+    complete_chat here reuses that loop instead of spawning/destroying a fresh
+    one per LLM call (the old _complete_chat_sync did that up to ~10×/batch).
+    """
+    return await complete_chat(messages, db, log_tag=log_tag, model_id=model_id)
 
 
 def _parse_mcq_json(raw: str) -> dict[str, Any] | None:
@@ -357,7 +373,7 @@ def _merge_critique_for_rewrite(
     }
 
 
-def _generate_draft_mcq(
+async def _generate_draft_mcq(
     db: Session,
     *,
     page_text: str,
@@ -394,7 +410,7 @@ def _generate_draft_mcq(
         f"{prior_block}"
         "Return only one ```zv-mcq``` JSON block. Include primary_concept_key matching the target aspect."
     )
-    raw = _complete_chat_sync(
+    raw = await _complete_chat(
         db,
         [
             {"role": "system", "content": system},
@@ -413,7 +429,7 @@ def _generate_draft_mcq(
         return None
 
 
-def _rewrite_mcq(
+async def _rewrite_mcq(
     db: Session,
     *,
     draft: dict[str, Any],
@@ -440,7 +456,7 @@ def _rewrite_mcq(
         f"Current MCQ:\n{json.dumps(draft, ensure_ascii=False)}\n\n"
         "Return only one ```zv-mcq``` JSON block."
     )
-    raw = _complete_chat_sync(
+    raw = await _complete_chat(
         db,
         [
             {"role": "system", "content": system},
@@ -459,7 +475,7 @@ def _rewrite_mcq(
         return None
 
 
-def critique_mcq(
+async def critique_mcq(
     db: Session,
     *,
     mcq: dict[str, Any],
@@ -494,7 +510,7 @@ def critique_mcq(
             ensure_ascii=False,
         ),
     )
-    raw = _complete_chat_sync(
+    raw = await _complete_chat(
         db,
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         log_tag="critic_mcq",
@@ -512,7 +528,7 @@ def critique_mcq(
     return parsed
 
 
-def generate_quality_mcq(
+async def generate_quality_mcq(
     db: Session,
     *,
     page_text: str,
@@ -545,7 +561,7 @@ def generate_quality_mcq(
 
     for attempt in range(max_attempts):
         if attempt == 0:
-            draft = _generate_draft_mcq(
+            draft = await _generate_draft_mcq(
                 db,
                 page_text=page_text,
                 page_number=page_number,
@@ -556,7 +572,7 @@ def generate_quality_mcq(
             )
         else:
             if draft is None:
-                draft = _generate_draft_mcq(
+                draft = await _generate_draft_mcq(
                     db,
                     page_text=page_text,
                     page_number=page_number,
@@ -566,7 +582,7 @@ def generate_quality_mcq(
                     model_id=model_id,
                 )
             elif last_critique_bundle.get("flaws") or last_critique_bundle.get("rewrite_hints"):
-                draft = _rewrite_mcq(
+                draft = await _rewrite_mcq(
                     db,
                     draft=draft,
                     page_text=page_text,
@@ -577,7 +593,7 @@ def generate_quality_mcq(
                     model_id=model_id,
                 )
             else:
-                draft = _generate_draft_mcq(
+                draft = await _generate_draft_mcq(
                     db,
                     page_text=page_text,
                     page_number=page_number,
@@ -626,7 +642,7 @@ def generate_quality_mcq(
                 draft["cognitive_angle"] = target_aspect["cognitive_angle"]
             return draft
 
-        critique = critique_mcq(
+        critique = await critique_mcq(
             db,
             mcq=draft,
             page_text=page_text,
@@ -726,7 +742,7 @@ class _BatchDraftCache:
 _batch_draft_cache = _BatchDraftCache()
 
 
-def _generate_batch_drafts(
+async def _generate_batch_drafts(
     db: Session,
     *,
     page_text: str,
@@ -758,7 +774,7 @@ def _generate_batch_drafts(
         "Each block's primary_concept_key must match its target aspect key. "
         "Be economical with tokens: no commentary, explanation at most ONE short sentence."
     )
-    raw = _complete_chat_sync(
+    raw = await _complete_chat(
         db,
         [
             {"role": "system", "content": system},
@@ -782,7 +798,7 @@ def _generate_batch_drafts(
     return normalized
 
 
-def generate_quality_mcq_batch(
+async def generate_quality_mcq_batch(
     db: Session,
     *,
     page_text: str,
@@ -819,7 +835,7 @@ def generate_quality_mcq_batch(
     # value for rapid re-queries (demo doc, same page within the process TTL).
     drafts = _batch_draft_cache.get(page_text, targets)
     if drafts is None:
-        drafts = _generate_batch_drafts(
+        drafts = await _generate_batch_drafts(
             db,
             page_text=page_text,
             page_number=page_number,

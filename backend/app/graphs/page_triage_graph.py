@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import uuid
@@ -23,7 +22,7 @@ from app.services.question_pool import (
 from app.services.retrieval import fetch_chunks_for_page_range
 
 
-def run_page_triage(
+async def run_page_triage(
     db: Session,
     document_id: uuid.UUID,
     *,
@@ -38,7 +37,7 @@ def run_page_triage(
         page_end=page_number,
     )
     page_text = "\n\n".join(c["text"] for c in chunks if c.get("text")).strip()
-    result = _triage_page(db, page_text=page_text, page_number=page_number)
+    result = await _triage_page(db, page_text=page_text, page_number=page_number)
 
     save_page_coverage(
         db,
@@ -67,11 +66,6 @@ def run_page_triage(
     db.commit()
     return result
 
-
-def _complete_chat_sync(
-    db: Session, messages: list[dict], *, model_id: uuid.UUID | None = None
-) -> str:
-    return asyncio.run(complete_chat(messages, db, log_tag="page_triage", model_id=model_id))
 
 
 def _parse_triage_json(raw: str) -> dict[str, Any] | None:
@@ -167,7 +161,7 @@ def _finalize_triage(
     }
 
 
-def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, Any]:
+async def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, Any]:
     excerpt = page_text[:14_000] if page_text else ""
     if excerpt:
         try:
@@ -186,13 +180,14 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
             # + page text lead (byte-identical across pages only by page, but
             # stable across retries/lookahead on the SAME page), with the
             # variable JSON instructions in the trailing message.
-            raw = _complete_chat_sync(
+            raw = await complete_chat(
                 db,
                 [
                     {"role": "system", "content": system},
                     {"role": "user", "content": f"Page text:\n{excerpt}"},
                     {"role": "user", "content": instructions},
                 ],
+                log_tag="page_triage",
                 model_id=model_id,
             )
             parsed = _parse_triage_json(raw)

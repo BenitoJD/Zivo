@@ -10,6 +10,29 @@ from app.services.jobs import enqueue_job
 from app.services.storage import delete_object, get_json, ingest_tmp_key
 
 
+@eta(name="generate.questions", workload=JobWorkload.io)
+async def generate_questions_job(payload: dict) -> dict:
+    """Question generation is LLM-I/O-bound (multi-second HTTP calls), not CPU.
+
+    Routed to the async IO worker (16-concurrency semaphore) instead of the
+    4-thread CPU pool, where each thread blocked on the LLM call and spawned a
+    fresh event loop per complete_chat via asyncio.run. The handler awaits
+    run_generation directly on the worker's running loop — no to_thread, no
+    per-call loop churn.
+    """
+    from app.graphs.generation_graph import run_generation
+    from app.services.question_pool import on_batch_failed
+
+    document_id = UUID(payload["document_id"])
+    page_number = int(payload.get("page_number") or 0)
+    with SessionLocal() as db:
+        try:
+            return await run_generation(db, document_id, payload)
+        except Exception:
+            on_batch_failed(db, document_id, page=page_number)
+            raise
+
+
 @eta(name="ingest.fetch_file", workload=JobWorkload.io)
 def fetch_file(payload: dict) -> dict:
     document_id = UUID(payload["document_id"])
