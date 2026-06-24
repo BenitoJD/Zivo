@@ -4,6 +4,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import app.eta  # noqa: F401 — register ETA handlers
@@ -50,6 +52,12 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Zivo API", version="0.1.0", lifespan=lifespan)
+
+
+@app.exception_handler(SQLAlchemyError)
+async def database_error_handler(_: Request, exc: SQLAlchemyError) -> JSONResponse:
+    logger.exception("database error: %s", exc)
+    return JSONResponse(status_code=503, content={"detail": "Database unavailable"})
 
 
 class HstsMiddleware(BaseHTTPMiddleware):

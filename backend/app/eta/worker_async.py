@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import aliased
 
 from app.config import get_settings
+from app.db_search_path import attach_search_path
 from app.eta import context as eta_context
 from app.eta.execution_state import cancel_descendants_async, update_execution_state_async
 from app.eta.handlers import io as _io_handlers  # noqa: F401
@@ -100,8 +101,8 @@ engine = create_async_engine(
     pool_pre_ping=True,
     pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
     max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "10")),
-    connect_args={"server_settings": {"search_path": "qb,intel,public"}},
 )
+attach_search_path(engine.sync_engine)
 AsyncSessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
 
 
@@ -270,9 +271,7 @@ async def _listen_for_job_notifications() -> None:
     while True:
         conn = None
         try:
-            conn = await asyncpg.connect(
-                _notify_dsn(), server_settings={"search_path": "qb,intel,public"}
-            )
+            conn = await asyncpg.connect(_notify_dsn())
 
             def _on_notify(*_args) -> None:
                 _job_wake.set()
