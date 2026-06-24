@@ -80,7 +80,7 @@ for release in zivo-worker-io zivo-worker-cpu; do
     --set "workloads.io.enabled=${io}" \
     --set "workloads.cpu.enabled=${cpu}" \
     --wait --timeout 10m
-  rollout_wait deployment "$release" 10m
+  rollout_wait deployment "${release#zivo-}" 10m
 done
 
 helm_record zivo-api
