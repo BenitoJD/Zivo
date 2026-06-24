@@ -48,7 +48,9 @@ echo "Deploying $(git rev-parse --short HEAD) as ${TAG}"
 if [[ "${PREBUILT:-0}" != "1" ]]; then
   docker build --pull -t "${API_IMAGE}" -f backend/Dockerfile --target runtime backend/
   docker build --pull -t "${WEB_IMAGE}" -f frontend/Dockerfile --target runtime \
-    --build-arg NEXT_PUBLIC_API_URL=https://api.zivo.fyi frontend/
+    --build-arg NEXT_PUBLIC_API_URL= \
+    --build-arg API_PROXY_URL=http://zivo-api:8000 \
+    frontend/
   docker save "${API_IMAGE}" | sudo k3s ctr images import -
   docker save "${WEB_IMAGE}" | sudo k3s ctr images import -
 else

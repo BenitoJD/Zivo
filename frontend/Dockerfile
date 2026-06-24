@@ -1,8 +1,10 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 
-ARG NEXT_PUBLIC_API_URL=https://api.zivo.fyi
+ARG NEXT_PUBLIC_API_URL=
+ARG API_PROXY_URL=http://zivo-api:8000
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV API_PROXY_URL=$API_PROXY_URL
 
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --prefer-offline

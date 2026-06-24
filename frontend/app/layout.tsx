@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import Script from "next/script";
 import { Plus_Jakarta_Sans, Newsreader } from "next/font/google";
 import "@mantine/core/styles.css";
 import "@mantine/dropzone/styles.css";
@@ -40,6 +41,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
           data-mantine-script
           dangerouslySetInnerHTML={{ __html: MANTINE_COLOR_SCHEME_SCRIPT }}
         />
+        <Script id="unregister-stale-sw" strategy="beforeInteractive">
+          {`if("serviceWorker" in navigator){navigator.serviceWorker.getRegistrations().then((rs)=>{rs.forEach((r)=>r.unregister())})}`}
+        </Script>
       </head>
       <body
         className={`${plusJakartaSans.variable} ${newsreader.variable}`}
