@@ -17,8 +17,8 @@ from app.repositories import workspace as workspace_repo
 from app.services.jobs import enqueue_generate, enqueue_rag_window, enqueue_transition_prep
 
 INITIAL_BATCH_SIZE = 5
-# The first batch after triage fills the whole warm pool in one parallel cycle.
-# _generate_batch_parallel runs the batch concurrently, so a batch of 5 takes
+# The first batch after triage fills the whole warm pool in one LLM call
+# (generate_quality_mcq_batch produces N MCQs per call), so a batch of 5 takes
 # ~the same wall-clock as a batch of 1 — generating just one question first and
 # the remaining four in a second job cycle only added a queue handoff + wait.
 FIRST_QUESTION_BATCH_SIZE = INITIAL_BATCH_SIZE
@@ -28,8 +28,10 @@ TRANSITION_PREFETCH_RATIO = 0.40
 # Eagerly triage the current page + this many pages ahead at init, so the document
 # is understood before the reader arrives. Triage only (cheap, ~1 call/page);
 # batches stay on-demand + next-page prefetch, so we don't burn tokens generating
-# pages the reader never reaches.
-EAGER_TRIAGE_LOOKAHEAD = int(os.getenv("ZIVO_EAGER_TRIAGE_LOOKAHEAD", "10"))
+# pages the reader never reaches. 3 is enough to stay ahead of the transition
+# prefetch (which fires at 40% page progress) without triaging pages that are
+# never opened — 10 was pure waste (~7 unused triage calls/doc).
+EAGER_TRIAGE_LOOKAHEAD = int(os.getenv("ZIVO_EAGER_TRIAGE_LOOKAHEAD", "3"))
 ABSOLUTE_MAX_QUESTIONS_PER_PAGE = 150
 # Backward-compatible alias for API consumers
 MAX_QUESTIONS_PER_PAGE = ABSOLUTE_MAX_QUESTIONS_PER_PAGE

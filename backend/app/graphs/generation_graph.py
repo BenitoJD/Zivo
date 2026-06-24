@@ -5,13 +5,11 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
 from app.graphs.page_triage_graph import run_page_triage
 from app.models import Document
 from app.repositories.intel import update_activity
@@ -26,13 +24,6 @@ from app.services.question_pool import (
 )
 from app.services.embed import embed_texts
 from app.services.retrieval import fetch_chunks_for_page_range, search_chunks
-from app.services.mcq_dedup import prior_mcq_from_payload
-
-# How many questions in a batch to generate concurrently. The model is a hosted
-# API (serves concurrent requests), so a batch's wall-clock collapses from the
-# sum of per-question times to roughly the slowest single question. Bounded to
-# stay under the provider's per-key rate limit; override with the env var.
-GENERATION_CONCURRENCY = int(os.getenv("ZIVO_GENERATION_CONCURRENCY", "5"))
 
 # Retrieval-first context: instead of sending the whole page (~12k chars) to the
 # model, embed the target aspect labels and retrieve only the semantically
@@ -224,84 +215,6 @@ def _speculative_aspects(page_text: str, page_number: int, n: int) -> list[dict[
     return targets
 
 
-def _generate_batch_parallel(
-    *,
-    page_text: str,
-    page_number: int,
-    targets: list[dict[str, Any]],
-    prior_mcqs: list[dict[str, Any]],
-    start_sequence: int,
-) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    """Generate one MCQ per target concurrently.
-
-    Each task gets its own DB session (Sessions are not thread-safe); the hosted
-    model serves the calls in parallel, so the batch's wall-clock is ~one question
-    instead of the sum. Returns (target, payload) pairs for successful generations.
-    """
-    if not targets:
-        return []
-
-    def _work(item: tuple[int, dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any] | None]:
-        idx, target = item
-        thread_db = SessionLocal()
-        try:
-            payload = generate_quality_mcq(
-                thread_db,
-                page_text=page_text,
-                page_number=page_number,
-                sequence=start_sequence + idx + 1,
-                target_aspect=target,
-                prior_mcqs=prior_mcqs,
-            )
-            return target, payload
-        finally:
-            thread_db.close()
-
-    max_workers = max(1, min(len(targets), GENERATION_CONCURRENCY))
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        results = list(pool.map(_work, enumerate(targets)))
-    return [(t, p) for t, p in results if p is not None]
-
-
-def _reconcile_batch(
-    results: list[tuple[dict[str, Any], dict[str, Any]]],
-) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    """Drop intra-batch near-duplicates.
-
-    Parallel questions can't see each other's output, so each was deduped only
-    against prior questions on the page. Reconcile the new batch against itself.
-
-    Embeds once for the whole batch (vs one embed call per item): we embed every
-    candidate signature up front, then compare in-memory, collapsing N embed
-    round-trips to one.
-    """
-    from app.services.embed import embed_texts
-    from app.services.mcq_dedup import cosine_similarity, mcq_signature
-
-    if not results:
-        return []
-    if len(results) == 1:
-        return list(results)
-
-    # Embed all candidate signatures in a single batch call.
-    sigs = [mcq_signature(payload) for _, payload in results]
-    vectors = embed_texts(sigs)
-
-    kept: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    kept_vectors: list[list[float]] = []
-    for (target, payload), vec in zip(results, vectors, strict=True):
-        duplicate = False
-        for kept_vec in kept_vectors:
-            if cosine_similarity(vec, kept_vec) >= 0.92:
-                duplicate = True
-                break
-        if duplicate:
-            continue
-        kept.append((target, payload))
-        kept_vectors.append(vec)
-    return kept
-
-
 def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]) -> dict[str, Any]:
     activity_id = options.get("activity_id")
     page_number = int(options["page_number"])
@@ -361,10 +274,8 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
     context = _fetch_focused_context(db, document_id, page_number, targets, page_text)
     # One LLM call produces up to N MCQs (N = len(targets), capped at 5). The
     # batch generator runs the per-MCQ quality gate (heuristics + embedding
-    # similarity) internally, so this replaces both the N-way parallel
-    # _generate_batch_parallel AND the post-hoc _reconcile_batch dedup. A single
-    # call collapses N TTFTs to one and lets the model self-coordinate distractor
-    # diversity across the batch.
+    # similarity) and intra-batch dedup internally. A single call collapses N
+    # TTFTs to one and lets the model self-coordinate distractor diversity.
     kept = generate_quality_mcq_batch(
         db,
         page_text=context,
