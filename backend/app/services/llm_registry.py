@@ -523,6 +523,22 @@ def refresh_llm_registry_from_env(
             provider.api_key = settings.anthropic_api_key
             dirty = True
 
+    # Self-healing: disable any enabled chat model whose provider has no API key.
+    # Prevents keyless models (e.g. Gemini/Anthropic when no key is configured)
+    # from sitting enabled in the pool, where they'd only ever fail. A model is
+    # re-enabled the moment its provider gets a key (the blocks above set it).
+    for model in (
+        db.query(LlmModel)
+        .join(LlmProvider)
+        .filter(LlmModel.kind == LlmModelKind.chat, LlmModel.is_enabled.is_(True))
+        .all()
+    ):
+        if not _provider_has_api_key(model.provider) and model.provider.slug != "local":
+            model.is_enabled = False
+            if model.is_default:
+                model.is_default = False
+            dirty = True
+
     if sync_default_chat_model_from_env(db, settings):
         dirty = True
 
@@ -725,6 +741,8 @@ def bootstrap_llm_registry_from_env(db: Session, settings: Settings | None = Non
             litellm_prefix="gemini",
             api_key=settings.gemini_api_key or None,
         )
+        # Only enable when a key is configured — a keyless model in the pool
+        # only ever fails and adds noise to the admin UI.
         _upsert_model(
             db,
             provider=gemini,
@@ -732,6 +750,7 @@ def bootstrap_llm_registry_from_env(db: Session, settings: Settings | None = Non
             litellm_model="gemini/gemini-2.0-flash",
             display_name="Gemini 2.0 Flash",
             kind=LlmModelKind.chat,
+            is_enabled=bool(settings.gemini_api_key),
             is_default=settings.litellm_model == "gemini/gemini-2.0-flash",
             supports_image_input=True,
             sort_order=20,
@@ -753,6 +772,7 @@ def bootstrap_llm_registry_from_env(db: Session, settings: Settings | None = Non
             litellm_model="anthropic/claude-3-5-sonnet-20241022",
             display_name="Claude 3.5 Sonnet",
             kind=LlmModelKind.chat,
+            is_enabled=bool(settings.anthropic_api_key),
             is_default=settings.litellm_model.startswith("anthropic/"),
             supports_image_input=True,
             sort_order=30,
