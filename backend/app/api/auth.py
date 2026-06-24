@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -16,8 +17,8 @@ from app.services.auth import (
     validate_username,
 )
 from app.services.guest import claim_guest_documents
-from app.services.guest_session import GUEST_ID_HEADER, read_guest_id
-from app.services.usage import DEMO_COOKIE
+from app.services.guest_session import publish_guest_id, read_guest_id_from_cookie
+from app.services.usage import DEMO_COOKIE, ensure_demo_cookie
 
 router = APIRouter()
 
@@ -41,13 +42,23 @@ class AuthResponse(BaseModel):
     is_admin: bool = False
 
 
+@router.post("/guest")
+def mint_guest_session(
+    response: Response,
+    zivo_demo_id: str | None = Cookie(default=None, alias=DEMO_COOKIE),
+) -> dict[str, str]:
+    """Mint or refresh the anonymous guest cookie without listing sources."""
+    guest_id = ensure_demo_cookie(response, read_guest_id_from_cookie(zivo_demo_id))
+    publish_guest_id(response, guest_id)
+    return {"guest_id": guest_id}
+
+
 @router.post("/signup", response_model=AuthResponse)
 def signup(
     body: SignUpRequest,
     response: Response,
     db: Session = Depends(get_db),
     zivo_demo_id: str | None = Cookie(default=None, alias=DEMO_COOKIE),
-    x_zivo_guest_id: str | None = Header(default=None, alias=GUEST_ID_HEADER),
 ) -> AuthResponse:
     if not body.accept_terms:
         raise HTTPException(status_code=400, detail="Terms must be accepted")
@@ -62,13 +73,17 @@ def signup(
         raise HTTPException(status_code=409, detail="Username taken")
 
     user = User(username=body.username, password_hash=hash_password(body.password))
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+    try:
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Username taken") from None
 
-    claim_guest_documents(db, user.id, read_guest_id(zivo_demo_id, x_zivo_guest_id))
+    claim_guest_documents(db, user.id, read_guest_id_from_cookie(zivo_demo_id))
 
-    token, csrf = create_session_token(user.id)
+    token, csrf = create_session_token(user.id, int(getattr(user, "session_version", 0) or 0))
     set_session_cookie(response, token, remember=False)
     return AuthResponse(username=user.username, csrf_token=csrf, is_admin=user.is_admin)
 
@@ -79,15 +94,16 @@ def login(
     response: Response,
     db: Session = Depends(get_db),
     zivo_demo_id: str | None = Cookie(default=None, alias=DEMO_COOKIE),
-    x_zivo_guest_id: str | None = Header(default=None, alias=GUEST_ID_HEADER),
 ) -> AuthResponse:
     user = authenticate_user(db, body.username, body.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    claim_guest_documents(db, user.id, read_guest_id(zivo_demo_id, x_zivo_guest_id))
+    claim_guest_documents(db, user.id, read_guest_id_from_cookie(zivo_demo_id))
 
-    token, csrf = create_session_token(user.id, remember=body.remember_me)
+    token, csrf = create_session_token(
+        user.id, int(getattr(user, "session_version", 0) or 0), remember=body.remember_me
+    )
     set_session_cookie(response, token, remember=body.remember_me)
     return AuthResponse(username=user.username, csrf_token=csrf, is_admin=user.is_admin)
 
@@ -103,6 +119,13 @@ def get_session(
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout(response: Response, _: None = Depends(require_csrf)) -> Response:
+def logout(
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    _: None = Depends(require_csrf),
+) -> Response:
+    user.session_version = int(getattr(user, "session_version", 0) or 0) + 1
+    db.commit()
     response.delete_cookie("zivo_session")
     return response

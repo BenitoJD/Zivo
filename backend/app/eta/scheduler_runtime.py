@@ -229,10 +229,29 @@ class EtaSchedulerService:
         except Exception:
             logger.exception("ETA scheduler reconcile failed during startup")
 
+        cache_cleanup_counter = 0
+        job_cleanup_counter = 0
         while not self._stop_event.is_set():
+            triggered = 0
             try:
                 with SessionLocal() as db:
                     triggered = run_due_schedules(db)
+                    cache_cleanup_counter += 1
+                    job_cleanup_counter += 1
+                    if cache_cleanup_counter >= 720:  # ~1h at 5s poll
+                        from app.services.response_cache import cleanup_stale_cache
+
+                        removed = cleanup_stale_cache(db, max_age_days=30)
+                        cache_cleanup_counter = 0
+                        if removed:
+                            logger.info("LLM response cache cleanup", extra={"removed": removed})
+                    if job_cleanup_counter >= 720:
+                        from app.services.job_retention import cleanup_terminal_jobs
+
+                        jobs_removed = cleanup_terminal_jobs(db, max_age_days=14)
+                        job_cleanup_counter = 0
+                        if jobs_removed:
+                            logger.info("ETA job retention cleanup", extra={"removed": jobs_removed})
                 if triggered:
                     logger.info("ETA scheduler dispatched runs", extra={"count": triggered})
             except Exception:

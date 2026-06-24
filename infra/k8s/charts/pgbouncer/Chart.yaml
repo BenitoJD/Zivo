@@ -1,0 +1,6 @@
+apiVersion: v2
+name: pgbouncer
+description: Connection pooler in front of Zivo Postgres
+type: application
+version: 0.1.0
+appVersion: "1.22"

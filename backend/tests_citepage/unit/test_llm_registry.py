@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 from unittest.mock import MagicMock
 
@@ -36,9 +35,9 @@ def _provider(**kwargs) -> LlmProvider:
 
 def test_configure_litellm_maps_openai_provider() -> None:
     provider = _provider(api_base_url="https://example.com/v1/", api_key="secret")
-    configure_litellm(provider)
-    assert os.environ["OPENAI_API_BASE"] == "https://example.com/v1"
-    assert os.environ["OPENAI_API_KEY"] == "secret"
+    kwargs = configure_litellm(provider)
+    assert kwargs["api_base"] == "https://example.com/v1"
+    assert kwargs["api_key"] == "secret"
 
 
 def test_bootstrap_llm_registry_from_env_seeds_empty_db() -> None:

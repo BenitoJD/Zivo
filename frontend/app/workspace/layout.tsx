@@ -32,7 +32,9 @@ import { useForm } from "@mantine/form";
 import { useDisclosure, useLocalStorage, useMediaQuery, useMounted } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
 import { IconCpu, IconFileText, IconLayoutSidebarLeftCollapse, IconLink, IconLogin, IconMoon, IconSun, IconTrash, IconUpload, IconX } from "@tabler/icons-react";
-import { apiDelete, apiGet, apiPost, apiPostForm, ensureGuestSession, isArtifactId, setCsrfToken } from "@/lib/api/client";
+import { useQueryClient } from "@tanstack/react-query";
+import { apiDelete, apiPost, apiUploadFile, ensureGuestSession, isArtifactId, setCsrfToken } from "@/lib/api/client";
+import { queryKeys, useInvalidateSources, useSessionQuery, useSourcesQuery } from "@/lib/api/queries";
 import { BRAND_LOGO_SRC, BRAND_NAME, BRAND_LOGO_WIDTH, BRAND_LOGO_HEIGHT } from "@/lib/brand";
 import { STORAGE_LIMIT_BYTES } from "@/lib/constants";
 import type { SourceDocument } from "@/lib/types";
@@ -203,9 +205,13 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   const [authOpen, setAuthOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<SourceDocument | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
-  const [username, setUsername] = useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [documents, setDocuments] = useState<SourceDocument[]>([]);
+  const invalidateSources = useInvalidateSources();
+  const queryClient = useQueryClient();
+  const sourcesQuery = useSourcesQuery();
+  const sessionQuery = useSessionQuery();
+  const documents = sourcesQuery.data ?? [];
+  const username = sessionQuery.data?.username ?? null;
+  const isAdmin = Boolean(sessionQuery.data?.is_admin);
 
   const [importUrl, setImportUrl] = useState("");
   const [importPaste, setImportPaste] = useState("");
@@ -214,6 +220,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [addSourceTab, setAddSourceTab] = useState<AddSourceTab>("file");
   const uploadInFlight = useRef(false);
+  const uploadAbortRef = useRef<AbortController | null>(null);
 
   const [authMode, setAuthMode] = useState<"login" | "signup">("login");
   const [authError, setAuthError] = useState("");
@@ -227,55 +234,28 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   });
 
   const loadDocs = useCallback(async () => {
-    try {
-      setDocuments(await apiGet<SourceDocument[]>("/api/sources"));
-    } catch {
-      /* empty */
-    }
-  }, []);
+    await invalidateSources();
+  }, [invalidateSources]);
 
   useEffect(() => {
     void ensureGuestSession();
-    apiGet<{ username: string; csrf_token: string; is_admin?: boolean }>("/api/auth/session")
-      .then((s) => {
-        setUsername(s.username);
-        setIsAdmin(Boolean(s.is_admin));
-        setCsrfToken(s.csrf_token);
-      })
-      .catch(() => {
-        setUsername(null);
-        setIsAdmin(false);
+  }, []);
+
+  useEffect(() => {
+    if (sourcesQuery.error) {
+      notifications.show({
+        title: "Could not load library",
+        message: sourcesQuery.error instanceof Error ? sourcesQuery.error.message : "Unknown error",
+        color: "red",
       });
-  }, []);
+    }
+  }, [sourcesQuery.error]);
 
   useEffect(() => {
-    let cancelled = false;
-    apiGet<SourceDocument[]>("/api/sources")
-      .then((docs) => {
-        if (!cancelled) setDocuments(docs);
-      })
-      .catch(() => {});
     return () => {
-      cancelled = true;
+      uploadAbortRef.current?.abort();
     };
   }, []);
-
-  useEffect(() => {
-    if (artifactId) return;
-    let timer: number | undefined;
-    const tick = () => {
-      if (document.visibilityState !== "visible") {
-        timer = window.setTimeout(tick, 4000);
-        return;
-      }
-      if (documents.some((d) => d.status === "indexing")) void loadDocs();
-      timer = window.setTimeout(tick, 4000);
-    };
-    tick();
-    return () => {
-      if (timer) window.clearTimeout(timer);
-    };
-  }, [artifactId, documents, loadDocs]);
 
   useEffect(() => {
     if (isMobile) closeMobile();
@@ -302,13 +282,15 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   async function uploadFile(file: File) {
     if (uploadInFlight.current) return;
     uploadInFlight.current = true;
+    uploadAbortRef.current?.abort();
+    const abort = new AbortController();
+    uploadAbortRef.current = abort;
     setImportBusy(true);
     setUploadProgress(0);
     try {
       await ensureGuestSession();
-      const form = new FormData();
-      form.append("file", file);
-      const data = await apiPostForm<{ id: string }>("/api/sources", form, {
+      const data = await apiUploadFile<{ id: string }>(file, {
+        signal: abort.signal,
         onProgress: (loaded, total) => {
           if (total > 0) setUploadProgress(Math.round((loaded / total) * 100));
         },
@@ -320,6 +302,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
       onUploaded(data.id);
       setAddOpen(false);
     } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
       const message =
         e instanceof Error && e.name === "TimeoutError"
           ? "Upload timed out. Try a smaller file or check your connection."
@@ -332,6 +315,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
         color: "red",
       });
     } finally {
+      if (uploadAbortRef.current === abort) uploadAbortRef.current = null;
       uploadInFlight.current = false;
       setImportBusy(false);
       setUploadProgress(null);
@@ -388,8 +372,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
             };
       const res = await apiPost<{ username: string; csrf_token: string; is_admin?: boolean }>(path, payload);
       setCsrfToken(res.csrf_token);
-      setUsername(res.username);
-      setIsAdmin(Boolean(res.is_admin));
+      queryClient.setQueryData(queryKeys.session, res);
       authForm.reset();
       setAuthOpen(false);
     } catch (err) {
@@ -801,8 +784,10 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
         opened={addOpen}
         onClose={() => {
           if (importBusy) {
+            uploadAbortRef.current?.abort();
             uploadInFlight.current = false;
             setImportBusy(false);
+            setUploadProgress(null);
           }
           setAddOpen(false);
         }}

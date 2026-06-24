@@ -57,6 +57,9 @@ CREATE INDEX IF NOT EXISTS jobs_priority_idx ON qb.jobs (priority);
 CREATE INDEX IF NOT EXISTS jobs_account_idx ON qb.jobs (account_id);
 CREATE INDEX IF NOT EXISTS jobs_activity_idx ON qb.jobs (activity_id);
 CREATE INDEX IF NOT EXISTS jobs_execution_idx ON qb.jobs (execution_id);
+CREATE INDEX IF NOT EXISTS ix_jobs_queued_pick
+  ON qb.jobs (workload, priority DESC, created_at)
+  WHERE status = 'queued';
 CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_execution_node_key
   ON qb.jobs (execution_id, node_key) WHERE execution_id IS NOT NULL AND node_key IS NOT NULL;
 
@@ -217,6 +220,9 @@ CREATE TABLE IF NOT EXISTS qb.documents (
 CREATE INDEX IF NOT EXISTS documents_account_idx ON qb.documents (account_id);
 CREATE INDEX IF NOT EXISTS documents_slug_idx ON qb.documents (slug);
 CREATE INDEX IF NOT EXISTS documents_artifact_idx ON qb.documents (artifact_id, artifact_captured_at);
+CREATE INDEX IF NOT EXISTS documents_guest_id_idx
+  ON qb.documents ((meta->>'guest_id'))
+  WHERE account_id IS NULL;
 
 CREATE TABLE IF NOT EXISTS qb.document_chunks (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),

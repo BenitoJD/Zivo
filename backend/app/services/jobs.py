@@ -16,6 +16,29 @@ def _wake_workers(db: Session) -> None:
         pass
 
 
+def batch_enqueue_jobs(
+    db: Session,
+    specs: list[dict],
+    *,
+    chunk_size: int = 50,
+) -> list[Job]:
+    """Enqueue many jobs with batched commits and one NOTIFY per chunk."""
+    jobs: list[Job] = []
+    for offset in range(0, len(specs), chunk_size):
+        chunk = specs[offset : offset + chunk_size]
+        batch: list[Job] = []
+        for spec in chunk:
+            job = build_job(**spec)
+            db.add(job)
+            batch.append(job)
+        db.commit()
+        _wake_workers(db)
+        for job in batch:
+            db.refresh(job)
+        jobs.extend(batch)
+    return jobs
+
+
 def enqueue_job(
     db: Session,
     *,

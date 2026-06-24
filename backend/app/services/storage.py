@@ -68,6 +68,47 @@ def save_upload(account_id: uuid.UUID | None, filename: str, data: bytes, conten
     return key
 
 
+def start_multipart_upload(storage_key: str, content_type: str) -> str:
+    client = _internal_client()
+    resp = client.create_multipart_upload(
+        Bucket=settings.minio_bucket,
+        Key=storage_key,
+        ContentType=content_type,
+    )
+    return resp["UploadId"]
+
+
+def upload_multipart_part(storage_key: str, upload_id: str, part_number: int, data: bytes) -> str:
+    client = _internal_client()
+    resp = client.upload_part(
+        Bucket=settings.minio_bucket,
+        Key=storage_key,
+        UploadId=upload_id,
+        PartNumber=part_number,
+        Body=data,
+    )
+    return resp["ETag"]
+
+
+def complete_multipart_upload(storage_key: str, upload_id: str, parts: list[dict]) -> None:
+    client = _internal_client()
+    client.complete_multipart_upload(
+        Bucket=settings.minio_bucket,
+        Key=storage_key,
+        UploadId=upload_id,
+        MultipartUpload={"Parts": parts},
+    )
+
+
+def abort_multipart_upload(storage_key: str, upload_id: str) -> None:
+    client = _internal_client()
+    client.abort_multipart_upload(
+        Bucket=settings.minio_bucket,
+        Key=storage_key,
+        UploadId=upload_id,
+    )
+
+
 def fetch_object(storage_key: str) -> bytes:
     client = _internal_client()
     resp = client.get_object(Bucket=settings.minio_bucket, Key=storage_key)

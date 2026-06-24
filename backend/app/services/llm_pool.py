@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.config import get_settings
 from app.models.llm import LlmModel, LlmModelKind, LlmProvider
-from app.services.llm_registry import ResolvedLlmModel
+from app.services.llm_registry import ResolvedLlmModel, configure_litellm
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +162,7 @@ def litellm_provider_kwargs(resolved: ResolvedLlmModel) -> dict[str, str]:
     - ``temperature`` (float): sampling temperature.
     """
     provider = resolved.provider
-    params: dict[str, str] = {}
+    params: dict = dict(configure_litellm(provider))
     if provider.api_key:
         params["api_key"] = provider.api_key
     if provider.api_base_url:

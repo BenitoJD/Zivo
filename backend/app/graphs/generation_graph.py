@@ -419,3 +419,13 @@ def _persist_assertion(
             "payload": json.dumps(payload),
         },
     )
+    from app.services.mcq_assertion_facets import upsert_facet
+
+    upsert_facet(
+        db,
+        assertion_id=assertion_id,
+        artifact_id=document_id,
+        page_number=page_number,
+        sequence=sequence,
+        payload=payload,
+    )

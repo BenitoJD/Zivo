@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://zivo:zivo@localhost:5455/zivo"
     secret_key: str = "dev-secret-change-me"
     csrf_secret: str = "dev-csrf-change-me"
+    csrf_disabled: bool = False
+    trusted_proxy_ips: str = ""
+    rate_limit_per_minute: int = 60
+    hsts_max_age_seconds: int = 31_536_000
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
     minio_endpoint: str = "localhost:9020"
@@ -95,6 +99,8 @@ class Settings(BaseSettings):
             raise ValueError("SECRET_KEY must be set when ENVIRONMENT != 'development'")
         if self.csrf_secret == _DEV_CSRF_SECRET:
             raise ValueError("CSRF_SECRET must be set when ENVIRONMENT != 'development'")
+        if self.minio_access_key == "zivo" or self.minio_secret_key == "zivo-secret":
+            raise ValueError("MINIO credentials must be changed when ENVIRONMENT != 'development'")
         return self
 
 

@@ -2,8 +2,9 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 import app.eta  # noqa: F401 — register ETA handlers
 from app.api.router import api_router
@@ -50,7 +51,19 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Zivo API", version="0.1.0", lifespan=lifespan)
 
+
+class HstsMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        if settings.is_production and request.url.scheme == "https":
+            response.headers["Strict-Transport-Security"] = (
+                f"max-age={settings.hsts_max_age_seconds}; includeSubDomains"
+            )
+        return response
+
+
 if settings.is_production:
+    app.add_middleware(HstsMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,

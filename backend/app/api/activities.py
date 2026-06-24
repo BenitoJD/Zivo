@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sse_starlette.sse import EventSourceResponse
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.db import SessionLocal, get_db
 from app.repositories.intel import get_activity
 
 router = APIRouter()
@@ -35,21 +35,25 @@ def get_job_status(activity_id: uuid.UUID, db: Session = Depends(get_db)) -> dic
 
 
 @router.get("/{activity_id}/stream")
-async def stream_activity(activity_id: uuid.UUID, db: Session = Depends(get_db)):
+async def stream_activity(activity_id: uuid.UUID):
     async def gen():
         import asyncio
 
         for _ in range(120):
-            row = get_activity(db, activity_id)
-            if not row:
-                yield {"event": "error", "data": json.dumps({"detail": "not found"})}
-                return
-            stats = row.get("stats") or {}
-            payload = {"status": row["status"], "stats": stats}
-            yield {"event": "progress", "data": json.dumps(payload, default=str)}
-            if row["status"] in ("succeeded", "failed", "cancelled"):
-                yield {"event": "done", "data": json.dumps(payload, default=str)}
-                return
+            db = SessionLocal()
+            try:
+                row = get_activity(db, activity_id)
+                if not row:
+                    yield {"event": "error", "data": json.dumps({"detail": "not found"})}
+                    return
+                stats = row.get("stats") or {}
+                payload = {"status": row["status"], "stats": stats}
+                yield {"event": "progress", "data": json.dumps(payload, default=str)}
+                if row["status"] in ("succeeded", "failed", "cancelled"):
+                    yield {"event": "done", "data": json.dumps(payload, default=str)}
+                    return
+            finally:
+                db.close()
             await asyncio.sleep(1)
 
     return EventSourceResponse(gen())

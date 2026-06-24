@@ -1,0 +1,31 @@
+replicaCount: 1
+namespace: zivo
+
+image:
+  repository: ghcr.io/benitojd/zivo-api
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+service:
+  port: 8000
+
+ingress:
+  enabled: false
+  className: traefik
+  host: api.example.com
+  tls: true
+  entrypoint: websecure
+
+resources: {}
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1

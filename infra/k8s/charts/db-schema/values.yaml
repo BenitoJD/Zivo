@@ -18,6 +18,8 @@ migration:
   timeoutSeconds: 600
   lockTimeoutSeconds: 120
   verifyHead: true
+  # Alembic uses advisory locks — connect to Postgres directly, not PgBouncer.
+  databaseUrlSecretKey: DATABASE_URL_DIRECT
 
 resources:
   requests:

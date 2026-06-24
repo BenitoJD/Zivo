@@ -1,19 +1,29 @@
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
-import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
 
 const PDFJS_VERSION = "4.10.38";
 const MAX_CONCURRENT_RENDERS = 6;
 const THUMB_WIDTH_BUCKET = 12;
 
-if (typeof window !== "undefined") {
-  try {
-    GlobalWorkerOptions.workerSrc = new URL(
-      "pdfjs-dist/build/pdf.worker.min.mjs",
-      import.meta.url,
-    ).toString();
-  } catch {
-    GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
+let pdfjsInit: Promise<typeof import("pdfjs-dist")> | null = null;
+
+async function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
+  if (!pdfjsInit) {
+    pdfjsInit = (async () => {
+      const pdfjs = await import("pdfjs-dist");
+      if (typeof window !== "undefined") {
+        try {
+          pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+            "pdfjs-dist/build/pdf.worker.min.mjs",
+            import.meta.url,
+          ).toString();
+        } catch {
+          pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
+        }
+      }
+      return pdfjs;
+    })();
   }
+  return pdfjsInit;
 }
 
 const activeRenderTasks = new WeakMap<HTMLCanvasElement, RenderTask>();
@@ -77,6 +87,7 @@ function releaseRenderSlot(): void {
 }
 
 async function loadPdfDocument(data: ArrayBuffer): Promise<PDFDocumentProxy> {
+  const { getDocument } = await loadPdfjs();
   return getDocument({ data }).promise;
 }
 
@@ -92,6 +103,7 @@ export async function loadPdfForArtifact(
 
   const loadPromise = (async () => {
     try {
+      const { getDocument } = await loadPdfjs();
       const doc = await getDocument({
         url: options.url,
         withCredentials: true,

@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
@@ -25,7 +26,8 @@ from app.services.prompts import get_prompt
 from app.services.guest import can_access_document
 from app.services.guest_session import guest_session_for_read, optional_guest_session
 from app.services.response_cache import get_cached_response, store_response
-from app.services.usage import check_message_allowed, increment_message_count
+from app.services.rate_limit import rate_limit_dependency
+from app.services.usage import reserve_message_slot
 from app.services.vision import build_user_message, is_image_document
 
 logger = logging.getLogger(__name__)
@@ -36,6 +38,7 @@ router = APIRouter()
 # (cacheable) prefix and the per-turn input-token cost; recent context
 # dominates answer quality in a tutor chat.
 _HISTORY_LIMIT = 6
+_LIST_MESSAGES_LIMIT = 100
 
 # Matches messages that look like a quiz/test request. Only when this hits do
 # we inject the ~300-token mcq_format prompt — otherwise it's dead weight on
@@ -145,19 +148,38 @@ def _get_or_create_thread(db: Session, account_id: uuid.UUID | None, doc: Docume
         artifact_captured_at=captured_at,
         version=1,
     )
-    db.add(thread)
-    db.commit()
-    db.refresh(thread)
-    return thread
+    try:
+        db.add(thread)
+        db.commit()
+        db.refresh(thread)
+        return thread
+    except IntegrityError:
+        db.rollback()
+        existing = (
+            db.query(ChatThread)
+            .filter(
+                ChatThread.artifact_id == artifact_id,
+                ChatThread.artifact_captured_at == captured_at,
+                ChatThread.account_id == account_id,
+                ChatThread.version == 1,
+            )
+            .first()
+        )
+        if existing:
+            return existing
+        raise
 
 
 @router.get("/threads/{document_id}/messages", response_model=list[MessageOut])
 def list_messages(
     document_id: uuid.UUID,
+    offset: int = 0,
     db: Session = Depends(get_db),
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> list[ChatMessage]:
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0")
     doc = db.get(Document, document_id)
     if not doc or not can_access_document(doc, user, guest_id):
         raise HTTPException(status_code=404, detail="Document not found")
@@ -166,6 +188,8 @@ def list_messages(
         db.query(ChatMessage)
         .filter(ChatMessage.thread_id == thread.id)
         .order_by(ChatMessage.created_at.asc())
+        .offset(offset)
+        .limit(_LIST_MESSAGES_LIMIT)
         .all()
     )
 
@@ -194,7 +218,7 @@ def clear_thread(
     return {"version": new_version}
 
 
-@router.post("", dependencies=[Depends(require_csrf_or_guest)])
+@router.post("", dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)])
 async def chat_stream(
     body: ChatRequest,
     request: Request,
@@ -230,7 +254,7 @@ async def chat_stream(
         except Exception as exc:
             raise HTTPException(status_code=503, detail="No chat model available") from exc
 
-    check_message_allowed(db, user=user, request=request, demo_cookie=guest_id)
+    reserve_message_slot(db, user=user, request=request, demo_cookie=guest_id)
 
     thread = _get_or_create_thread(db, user.id if user else None, doc)
     history = (
@@ -318,6 +342,7 @@ async def chat_stream(
                     current_page=scope.get("current_page"),
                     page_start=scope.get("page_start"),
                     page_end=scope.get("page_end"),
+                    db=stream_db,
                 )
                 trailer_parts: list[str] = []
                 learn_context = build_learn_chat_context(
@@ -371,9 +396,6 @@ async def chat_stream(
                         )
                     )
                     stream_db.commit()
-                    increment_message_count(
-                        stream_db, user=user, request=request, demo_cookie=guest_id
-                    )
                     yield {"event": "sources", "data": json.dumps({"citations": cache_citations})}
                     yield {"event": "done", "data": "{}"}
                 except Exception as exc:
@@ -403,9 +425,6 @@ async def chat_stream(
                     )
                 )
                 stream_db.commit()
-                increment_message_count(
-                    stream_db, user=user, request=request, demo_cookie=guest_id
-                )
                 if cache_eligible:
                     await asyncio.to_thread(
                         store_response,
@@ -441,7 +460,7 @@ async def chat_stream(
     return EventSourceResponse(event_generator())
 
 
-@router.post("/mcq/grade", response_model=McqGradeResponse)
+@router.post("/mcq/grade", response_model=McqGradeResponse, dependencies=[Depends(rate_limit_dependency)])
 async def grade_mcq(
     body: McqGradeRequest,
     db: Session = Depends(get_db),

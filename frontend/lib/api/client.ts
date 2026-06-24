@@ -1,11 +1,19 @@
 /** Same-origin in dev (Next rewrites → API). Set NEXT_PUBLIC_API_URL in production. */
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
+export function apiUrl(path: string): string {
+  return `${API_BASE}${path}`;
+}
+
+const CHUNKED_UPLOAD_THRESHOLD = 8 * 1024 * 1024;
+const CHUNKED_RESUME_PREFIX = "zivo-chunked-upload:";
+
 const GUEST_HEADER = "X-Zivo-Guest-Id";
 const CSRF_HEADER = "X-CSRF-Token";
 
 let csrfToken: string | null = null;
 let guestId: string | null = null;
+let guestSessionPromise: Promise<void> | null = null;
 
 const ARTIFACT_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -77,14 +85,23 @@ function buildHeaders(extra?: HeadersInit): Headers {
 /** Bootstrap anonymous guest session (sets httponly cookie + header). */
 export async function ensureGuestSession(): Promise<void> {
   if (guestId) return;
-  const res = await fetch(`${API_BASE}/api/sources`, {
-    credentials: "include",
-    headers: buildHeaders(),
-  });
-  captureResponseMeta(res);
-  // 200 = listed docs; either way optional_guest_session ran on the backend.
-  if (!res.ok && res.status !== 401) {
-    await res.text();
+  if (guestSessionPromise) return guestSessionPromise;
+  guestSessionPromise = (async () => {
+    const res = await fetch(`${API_BASE}/api/auth/guest`, {
+      method: "POST",
+      credentials: "include",
+      headers: buildHeaders({ "Content-Type": "application/json" }),
+      body: "{}",
+    });
+    captureResponseMeta(res);
+    if (!res.ok && res.status !== 401) {
+      await res.text();
+    }
+  })();
+  try {
+    await guestSessionPromise;
+  } finally {
+    guestSessionPromise = null;
   }
 }
 
@@ -138,15 +155,26 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
 
 export type UploadProgressHandler = (loaded: number, total: number) => void;
 
+export type ApiPostFormOptions = {
+  onProgress?: UploadProgressHandler;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+};
+
 export async function apiPostForm<T>(
   path: string,
   form: FormData,
-  options?: { onProgress?: UploadProgressHandler; timeoutMs?: number },
+  options?: ApiPostFormOptions,
 ): Promise<T> {
   const timeoutMs = options?.timeoutMs ?? 30 * 60 * 1000;
   const onProgress = options?.onProgress;
+  const signal = options?.signal;
 
   if (onProgress && typeof XMLHttpRequest !== "undefined") {
+    if (signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+
     return new Promise<T>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", `${API_BASE}${path}`);
@@ -154,10 +182,21 @@ export async function apiPostForm<T>(
       xhr.timeout = timeoutMs;
       const headers = buildHeaders();
       headers.forEach((value, key) => xhr.setRequestHeader(key, value));
+
+      const onAbort = () => {
+        xhr.abort();
+      };
+      signal?.addEventListener("abort", onAbort);
+
+      const cleanup = () => {
+        signal?.removeEventListener("abort", onAbort);
+      };
+
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable) onProgress(event.loaded, event.total);
       };
       xhr.onload = () => {
+        cleanup();
         const headerGuest = xhr.getResponseHeader(GUEST_HEADER);
         if (headerGuest) guestId = headerGuest;
         if (xhr.status >= 200 && xhr.status < 300) {
@@ -181,8 +220,18 @@ export async function apiPostForm<T>(
           reject(new Error(humanizeApiFailure(xhr.status, xhr.responseText)));
         })();
       };
-      xhr.onerror = () => reject(new Error("Upload failed"));
-      xhr.ontimeout = () => reject(new Error("Upload timed out"));
+      xhr.onerror = () => {
+        cleanup();
+        reject(new Error("Upload failed"));
+      };
+      xhr.ontimeout = () => {
+        cleanup();
+        reject(new Error("Upload timed out"));
+      };
+      xhr.onabort = () => {
+        cleanup();
+        reject(new DOMException("Aborted", "AbortError"));
+      };
       xhr.send(form);
     });
   }
@@ -196,10 +245,148 @@ export async function apiPostForm<T>(
       body: form,
     },
     timeoutMs,
+    signal,
   );
   captureResponseMeta(res);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json() as Promise<T>;
+}
+
+type ChunkedResume = {
+  sessionId: string;
+  filename: string;
+  contentType: string;
+  totalSize: number;
+  chunkSize: number;
+  expectedParts: number;
+  uploadedParts: number[];
+};
+
+function chunkedResumeKey(file: File): string {
+  return `${CHUNKED_RESUME_PREFIX}${file.name}:${file.size}:${file.lastModified}`;
+}
+
+function readChunkedResume(file: File): ChunkedResume | null {
+  if (typeof localStorage === "undefined") return null;
+  const raw = localStorage.getItem(chunkedResumeKey(file));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as ChunkedResume;
+  } catch {
+    return null;
+  }
+}
+
+function writeChunkedResume(file: File, resume: ChunkedResume) {
+  if (typeof localStorage === "undefined") return;
+  localStorage.setItem(chunkedResumeKey(file), JSON.stringify(resume));
+}
+
+function clearChunkedResume(file: File) {
+  if (typeof localStorage === "undefined") return;
+  localStorage.removeItem(chunkedResumeKey(file));
+}
+
+export async function apiUploadChunked<T extends { id: string }>(
+  file: File,
+  options?: ApiPostFormOptions,
+): Promise<T> {
+  const signal = options?.signal;
+  const onProgress = options?.onProgress;
+  const contentType = file.type || "application/octet-stream";
+
+  let resume = readChunkedResume(file);
+  let sessionId = resume?.sessionId;
+  let chunkSize = resume?.chunkSize ?? 0;
+  let expectedParts = resume?.expectedParts ?? 0;
+  const uploaded = new Set(resume?.uploadedParts ?? []);
+
+  if (sessionId) {
+    try {
+      const status = await apiGet<{
+        received_parts: number[];
+        chunk_size: number;
+        expected_parts: number;
+      }>(`/api/sources/chunked/${sessionId}`);
+      chunkSize = status.chunk_size;
+      expectedParts = status.expected_parts;
+      status.received_parts.forEach((p) => uploaded.add(p));
+    } catch {
+      sessionId = undefined;
+      uploaded.clear();
+    }
+  }
+
+  if (!sessionId) {
+    const init = await apiPost<{
+      session_id: string;
+      chunk_size: number;
+      expected_parts: number;
+    }>("/api/sources/chunked/init", {
+      filename: file.name,
+      content_type: contentType,
+      total_size: file.size,
+    });
+    sessionId = init.session_id;
+    chunkSize = init.chunk_size;
+    expectedParts = init.expected_parts;
+    writeChunkedResume(file, {
+      sessionId,
+      filename: file.name,
+      contentType,
+      totalSize: file.size,
+      chunkSize,
+      expectedParts,
+      uploadedParts: [],
+    });
+  }
+
+  for (let part = 1; part <= expectedParts; part += 1) {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    if (uploaded.has(part)) {
+      if (onProgress) onProgress(Math.min(file.size, part * chunkSize), file.size);
+      continue;
+    }
+    const start = (part - 1) * chunkSize;
+    const end = Math.min(start + chunkSize, file.size);
+    const blob = file.slice(start, end);
+    const res = await fetch(`${API_BASE}/api/sources/chunked/${sessionId}/parts/${part}`, {
+      method: "PUT",
+      credentials: "include",
+      headers: buildHeaders({ "Content-Type": "application/octet-stream" }),
+      body: blob,
+      signal,
+    });
+    captureResponseMeta(res);
+    if (!res.ok) throw new Error(await readApiError(res));
+    uploaded.add(part);
+    writeChunkedResume(file, {
+      sessionId,
+      filename: file.name,
+      contentType,
+      totalSize: file.size,
+      chunkSize,
+      expectedParts,
+      uploadedParts: [...uploaded].sort((a, b) => a - b),
+    });
+    if (onProgress) onProgress(end, file.size);
+  }
+
+  const done = await apiPost<T>(`/api/sources/chunked/${sessionId}/complete`, {});
+  clearChunkedResume(file);
+  return done;
+}
+
+export async function apiUploadFile<T extends { id: string }>(
+  file: File,
+  options?: ApiPostFormOptions,
+): Promise<T> {
+  if (file.size >= CHUNKED_UPLOAD_THRESHOLD) {
+    return apiUploadChunked<T>(file, options);
+  }
+  const form = new FormData();
+  form.append("file", file);
+  return apiPostForm<T>("/api/sources", form, options);
 }
 
 export async function apiDelete(path: string): Promise<void> {

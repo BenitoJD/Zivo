@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 from sqlalchemy.orm import Session
@@ -15,6 +16,7 @@ from app.services.token_budget import count_tokens, truncate_to_tokens
 _CHUNK_MAP_MAX_TOKENS = 1_500
 _ROLLUP_INPUT_MAX_TOKENS = 8_000
 _SINGLE_SHOT_MAX_TOKENS = 28_000
+_CHUNK_SUMMARY_CONCURRENCY = 6
 
 
 async def _summarize_chunk(db: Session, text: str, *, system: str) -> str:
@@ -57,11 +59,15 @@ async def generate_whole_doc_summary(db: Session, document_id: uuid.UUID) -> str
         ]
         return await complete_chat(messages, db, log_tag="summarize_doc")
 
-    section_summaries: list[str] = []
-    for text in chunk_texts:
-        summary = await _summarize_chunk(db, text, system=system)
-        if summary:
-            section_summaries.append(summary)
+    section_sem = asyncio.Semaphore(_CHUNK_SUMMARY_CONCURRENCY)
+
+    async def _summarize_one(text: str) -> str:
+        async with section_sem:
+            return await _summarize_chunk(db, text, system=system)
+
+    section_summaries = [
+        s for s in await asyncio.gather(*[_summarize_one(text) for text in chunk_texts]) if s
+    ]
 
     if not section_summaries:
         return ""

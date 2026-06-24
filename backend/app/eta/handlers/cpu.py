@@ -8,7 +8,7 @@ from app.models import Document, JobWorkload
 from app.services.chunking import chunk_pages
 from app.services.chunks import finalize_image_document, persist_document_index, upsert_page_chunks
 from app.services.embed import embed_texts
-from app.services.jobs import enqueue_job
+from app.services.jobs import batch_enqueue_jobs, enqueue_job
 from app.services.parse import parse_document, parse_document_page
 from app.services.rag_window import (
     chat_rag_window,
@@ -214,12 +214,21 @@ def ingest_rag_window_job(payload: dict) -> dict:
         db.commit()
         pages_to_ingest = sync_rag_window(db, document_id, target)
         db.commit()
-        for page in pages_to_ingest:
-            enqueue_job(
+        if pages_to_ingest:
+            batch_enqueue_jobs(
                 db,
-                name="ingest.page",
-                workload=JobWorkload.cpu,
-                payload={"document_id": str(document_id), "page_number": page},
+                [
+                    {
+                        "name": "ingest.page",
+                        "workload": JobWorkload.cpu,
+                        "payload": {
+                            "document_id": str(document_id),
+                            "page_number": page,
+                        },
+                    }
+                    for page in pages_to_ingest
+                ],
+                chunk_size=50,
             )
         if not pages_to_ingest:
             refresh_rag_window_status(db, document_id)

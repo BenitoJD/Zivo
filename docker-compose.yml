@@ -1,4 +1,4 @@
-# Local dev dependencies only (Postgres + MinIO).
+# Local dev dependencies only (Postgres + MinIO + PgBouncer).
 # API and workers run on the host via ./scripts/dev.sh — same pattern as citepage.
 # Production deploys to K3s on the VPS (see infra/k8s/).
 services:
@@ -17,6 +17,25 @@ services:
       test: ["CMD-SHELL", "pg_isready -U zivo"]
       interval: 5s
       retries: 5
+
+  pgbouncer:
+    image: edoburu/pgbouncer:1.22.1-p0
+    container_name: zivo-pgbouncer
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: zivo
+      DB_PASSWORD: zivo
+      DB_NAME: zivo
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 100
+      DEFAULT_POOL_SIZE: 10
+      AUTH_TYPE: scram-sha-256
+    ports:
+      - "6432:5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   minio:
     image: minio/minio:RELEASE.2023-03-20T20-16-18Z

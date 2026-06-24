@@ -122,3 +122,62 @@ def create_document_record(
     if is_image:
         enqueue_ingest(db, doc.id)
     return doc
+
+
+def create_document_from_storage(
+    db: Session,
+    *,
+    user: Account | None,
+    guest_id: str | None,
+    filename: str,
+    content_type: str,
+    storage_key: str,
+    size_bytes: int,
+    meta: dict | None = None,
+    guest_id_override: str | None = None,
+) -> Document:
+    settings = get_settings()
+    if size_bytes > settings.max_upload_bytes:
+        limit_gb = settings.max_upload_bytes // _GB
+        raise HTTPException(status_code=413, detail=f"File too large (max {limit_gb}GB)")
+
+    is_image = content_type.startswith("image/")
+    doc_guest_id = guest_id_override
+    if doc_guest_id is None:
+        doc_guest_id = assert_storage_available(
+            db,
+            user=user,
+            guest_id=guest_id,
+            size_bytes=size_bytes,
+            counts_toward_guest_cap=not is_image,
+        )
+
+    slug = slugify_filename(filename)
+    doc_meta: dict = dict(meta or {})
+    if doc_guest_id:
+        doc_meta["guest_id"] = doc_guest_id
+
+    ct_lower = (content_type or "").lower()
+    if "pdf" in ct_lower:
+        from app.services.storage import fetch_object
+
+        data = fetch_object(storage_key)
+        if data[:4] == b"%PDF":
+            doc_meta["page_count"] = count_pdf_pages(data)
+
+    doc = Document(
+        account_id=user.id if user else None,
+        slug=slug,
+        filename=filename,
+        content_type=content_type,
+        size_bytes=size_bytes,
+        storage_key=storage_key,
+        status="indexing" if is_image else "pending",
+        meta=doc_meta,
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    if is_image:
+        enqueue_ingest(db, doc.id)
+    return doc

@@ -16,7 +16,7 @@ import hashlib
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -128,3 +128,14 @@ def store_response(
     except Exception:
         logger.exception("failed to store cached response")
         db.rollback()
+
+
+def cleanup_stale_cache(db: Session, max_age_days: int = 30) -> int:
+    """Delete cache rows older than ``max_age_days``. Returns rows removed."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    result = db.execute(
+        text("DELETE FROM llm_response_cache WHERE created_at < :cutoff"),
+        {"cutoff": cutoff},
+    )
+    db.commit()
+    return int(result.rowcount or 0)

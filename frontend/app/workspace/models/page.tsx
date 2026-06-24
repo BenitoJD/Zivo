@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Badge,
   Box,
@@ -35,45 +36,43 @@ type AdminModelList = {
 };
 
 export default function WorkspaceModelsPage() {
-  const [loading, setLoading] = useState(true);
-  const [forbidden, setForbidden] = useState(false);
-  const [models, setModels] = useState<AdminModel[]>([]);
-  const [poolEnabled, setPoolEnabled] = useState(false);
+  const queryClient = useQueryClient();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [poolBusy, setPoolBusy] = useState(false);
 
+  const modelsQuery = useQuery({
+    queryKey: ["models", "admin"],
+    queryFn: () => apiGet<AdminModelList>("/api/models/admin"),
+    retry: false,
+  });
+
+  const models = modelsQuery.data?.models ?? [];
+  const poolEnabled = modelsQuery.data?.pool_enabled ?? false;
+  const loading = modelsQuery.isLoading;
+  const forbidden =
+    modelsQuery.isError &&
+    (modelsQuery.error instanceof Error
+      ? modelsQuery.error.message.toLowerCase().includes("admin")
+      : false);
+
   useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      setLoading(true);
-      try {
-        const data = await apiGet<AdminModelList>("/api/models/admin");
-        if (cancelled) return;
-        setModels(data.models);
-        setPoolEnabled(data.pool_enabled);
-        setForbidden(false);
-      } catch (e) {
-        if (cancelled) return;
-        const message = e instanceof Error ? e.message : "Could not load models";
-        if (message.toLowerCase().includes("admin")) {
-          setForbidden(true);
-        } else {
-          notifications.show({ title: "Models", message, color: "red" });
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    if (!modelsQuery.isError || forbidden) return;
+    notifications.show({
+      title: "Models",
+      message: modelsQuery.error instanceof Error ? modelsQuery.error.message : "Unknown error",
+      color: "red",
+    });
+  }, [modelsQuery.isError, modelsQuery.error, forbidden]);
 
   async function toggleModel(model: AdminModel, enabled: boolean) {
     setBusyId(model.id);
     try {
       const updated = await apiPatch<AdminModel>(`/api/models/${model.id}`, { is_enabled: enabled });
-      setModels((prev) => prev.map((m) => (m.id === updated.id ? { ...m, ...updated } : m)));
+      queryClient.setQueryData<AdminModelList>(["models", "admin"], (prev) =>
+        prev
+          ? { ...prev, models: prev.models.map((m) => (m.id === updated.id ? { ...m, ...updated } : m)) }
+          : prev,
+      );
     } catch (e) {
       notifications.show({
         title: model.display_name,
@@ -89,7 +88,9 @@ export default function WorkspaceModelsPage() {
     setPoolBusy(true);
     try {
       const data = await apiPatch<{ pool_enabled: boolean }>("/api/models/pool", { pool_enabled: enabled });
-      setPoolEnabled(data.pool_enabled);
+      queryClient.setQueryData<AdminModelList>(["models", "admin"], (prev) =>
+        prev ? { ...prev, pool_enabled: data.pool_enabled } : prev,
+      );
     } catch (e) {
       notifications.show({
         title: "Model pool",

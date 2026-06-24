@@ -12,12 +12,15 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.services.embed import embed_texts
 from app.services.llm_router import complete_chat
 from app.services.mcq_dedup import (
     coerce_mcq_options,
     format_prior_mcqs_block,
     has_page_reference_stem,
     is_mcq_too_similar,
+    mcq_signature,
+    prior_mcq_embeddings,
     sanitize_mcq_stem,
     stems_match,
 )
@@ -694,16 +697,32 @@ class _BatchDraftCache:
         self._store: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
         self._max = max_entries
 
-    def _key(self, page_text: str, targets: list[dict[str, Any]]) -> str:
+    def _key(
+        self,
+        page_text: str,
+        targets: list[dict[str, Any]],
+        prior_mcqs: list[dict[str, Any]] | None,
+    ) -> str:
         aspect_keys = sorted(str(t.get("key") or "") for t in targets)
         h = hashlib.sha256()
         h.update(page_text.encode("utf-8", "ignore"))
         h.update(b"\x1f")
         h.update("\x1e".join(aspect_keys).encode("utf-8", "ignore"))
+        if prior_mcqs:
+            prior_digest = hashlib.sha256(
+                json.dumps(prior_mcqs, sort_keys=True, default=str).encode("utf-8")
+            ).hexdigest()
+            h.update(b"\x1f")
+            h.update(prior_digest.encode("ascii"))
         return h.hexdigest()
 
-    def get(self, page_text: str, targets: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
-        key = self._key(page_text, targets)
+    def get(
+        self,
+        page_text: str,
+        targets: list[dict[str, Any]],
+        prior_mcqs: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]] | None:
+        key = self._key(page_text, targets, prior_mcqs)
         hits = self._store.get(key)
         if hits is None:
             return None
@@ -712,10 +731,16 @@ class _BatchDraftCache:
         # Return deep copies so callers can't mutate the cache.
         return [dict(d) for d in hits]
 
-    def put(self, page_text: str, targets: list[dict[str, Any]], drafts: list[dict[str, Any]]) -> None:
+    def put(
+        self,
+        page_text: str,
+        targets: list[dict[str, Any]],
+        prior_mcqs: list[dict[str, Any]] | None,
+        drafts: list[dict[str, Any]],
+    ) -> None:
         if not drafts:
             return
-        key = self._key(page_text, targets)
+        key = self._key(page_text, targets, prior_mcqs)
         self._store[key] = [dict(d) for d in drafts]
         self._store.move_to_end(key)
         while len(self._store) > self._max:
@@ -816,7 +841,7 @@ def generate_quality_mcq_batch(
     # drafts for this (page context, aspect set). The quality gate below still
     # runs on every retrieval — only the generation call is skipped. Highest
     # value for rapid re-queries (demo doc, same page within the process TTL).
-    drafts = _batch_draft_cache.get(page_text, targets)
+    drafts = _batch_draft_cache.get(page_text, targets, prior_mcqs)
     if drafts is None:
         drafts = _generate_batch_drafts(
             db,
@@ -827,7 +852,7 @@ def generate_quality_mcq_batch(
             model_id=model_id,
         )
         if drafts:
-            _batch_draft_cache.put(page_text, targets, drafts)
+            _batch_draft_cache.put(page_text, targets, prior_mcqs, drafts)
     if not drafts:
         return []
 
@@ -835,6 +860,7 @@ def generate_quality_mcq_batch(
     # caught by tracking accepted drafts as the "prior" for the next check.
     accepted: list[tuple[dict[str, Any], dict[str, Any]]] = []
     accepted_payloads: list[dict[str, Any]] = []
+    prior_embeddings = prior_mcq_embeddings(list(prior_mcqs or []))
     for idx, draft in enumerate(drafts):
         target = targets[idx] if idx < len(targets) else None
         check_against = list(prior_mcqs or []) + accepted_payloads
@@ -843,7 +869,11 @@ def generate_quality_mcq_batch(
         if has_fatal_heuristic_flaws(heuristic_flaws):
             continue
 
-        too_similar, max_sim = is_mcq_too_similar(draft, check_against)
+        too_similar, max_sim = is_mcq_too_similar(
+            draft,
+            check_against,
+            prior_embeddings=prior_embeddings,
+        )
         if too_similar:
             continue
 
@@ -860,5 +890,6 @@ def generate_quality_mcq_batch(
             draft["cognitive_angle"] = target["cognitive_angle"]
         accepted.append((target, draft))
         accepted_payloads.append(draft)
+        prior_embeddings.append(embed_texts([mcq_signature(draft)])[0])
 
     return accepted

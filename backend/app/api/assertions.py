@@ -16,6 +16,7 @@ from app.services.auth import get_current_user, get_optional_user, require_csrf
 from app.services.guest import can_access_document
 from app.services.guest_session import guest_session_for_read
 from app.services.jobs import enqueue_generate
+from app.services.rate_limit import rate_limit_dependency
 
 router = APIRouter()
 
@@ -95,12 +96,16 @@ def list_assertions(
     return [dict(r) for r in rows]
 
 
-@router.post("/generate", dependencies=[Depends(require_csrf)])
+@router.post("/generate", dependencies=[Depends(require_csrf), Depends(rate_limit_dependency)])
 def generate_assertions(
     body: GenerateIn,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    guest_id: str | None = Depends(guest_session_for_read),
 ) -> dict:
+    doc = db.get(Document, body.artifact_id)
+    if not doc or not can_access_document(doc, user, guest_id):
+        raise HTTPException(status_code=404, detail="Not found")
     activity_id = create_activity(
         db,
         type_uri="/vocab/activity/generate_questions",
@@ -119,14 +124,16 @@ def generate_assertions(
     return {"activity_id": str(activity_id), "job_id": str(job.id)}
 
 
-@router.post("/{assertion_id}/flag")
+@router.post("/{assertion_id}/flag", dependencies=[Depends(rate_limit_dependency)])
 def flag_assertion(
     assertion_id: uuid.UUID,
     body: FlagIn,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    guest_id: str | None = Depends(guest_session_for_read),
     _: None = Depends(require_csrf),
 ) -> dict:
+    _assertion_access(db, assertion_id, user, guest_id)
     db.execute(
         text(
             """
@@ -140,16 +147,22 @@ def flag_assertion(
     return {"ok": True}
 
 
-@router.post("/{assertion_id}/remediate")
+@router.post("/{assertion_id}/remediate", dependencies=[Depends(rate_limit_dependency)])
 def remediate(
     assertion_id: uuid.UUID,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    guest_id: str | None = Depends(guest_session_for_read),
     _: None = Depends(require_csrf),
 ) -> dict:
+    row = _assertion_access(db, assertion_id, user, guest_id)
+    artifact_raw = (row.get("payload") or {}).get("artifact_id")
+    if not artifact_raw:
+        raise HTTPException(status_code=404, detail="Not found")
+    artifact_id = uuid.UUID(str(artifact_raw))
     job = enqueue_generate(
         db,
-        document_id=assertion_id,
+        document_id=artifact_id,
         account_id=user.id,
         activity_id=create_activity(
             db,

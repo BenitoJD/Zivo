@@ -1,0 +1,11 @@
+# Use managed S3 instead of in-cluster MinIO:
+#   helm upgrade --install minio ./infra/k8s/charts/minio -n zivo -f infra/k8s/environments/prod/minio-external-s3-values.yaml
+# Then set zivo-secrets MINIO_* to the provider credentials and disable the MinIO chart.
+namespace: zivo
+enabled: false
+external:
+  endpoint: s3.amazonaws.com
+  bucket: zivo-artifacts-prod
+  region: us-east-1
+  secure: true
+  publicUrl: https://zivo-artifacts-prod.s3.amazonaws.com

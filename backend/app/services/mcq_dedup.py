@@ -158,17 +158,10 @@ def dedupe_aspects(
     }
 
 
-def is_mcq_too_similar(
-    mcq: dict[str, Any],
-    prior_mcqs: list[dict[str, Any]] | None,
-    *,
-    threshold: float = MCQ_SIMILARITY_THRESHOLD,
-) -> tuple[bool, float]:
-    """Return (too_similar, max_cosine) vs prior MCQs on the same page."""
+def prior_mcq_embeddings(prior_mcqs: list[dict[str, Any]]) -> list[list[float]]:
+    """Embed prior MCQ signatures once for repeated similarity checks."""
     if not prior_mcqs:
-        return False, 0.0
-
-    candidate_sig = mcq_signature(mcq)
+        return []
     prior_sigs = [
         mcq_signature(
             {
@@ -179,10 +172,31 @@ def is_mcq_too_similar(
         )
         for p in prior_mcqs
     ]
-    vectors = embed_texts([candidate_sig, *prior_sigs])
-    candidate_vec = vectors[0]
+    return embed_texts(prior_sigs)
+
+
+def is_mcq_too_similar(
+    mcq: dict[str, Any],
+    prior_mcqs: list[dict[str, Any]] | None,
+    *,
+    threshold: float = MCQ_SIMILARITY_THRESHOLD,
+    prior_embeddings: list[list[float]] | None = None,
+) -> tuple[bool, float]:
+    """Return (too_similar, max_cosine) vs prior MCQs on the same page."""
+    if not prior_mcqs and not prior_embeddings:
+        return False, 0.0
+
+    candidate_sig = mcq_signature(mcq)
+    candidate_vec = embed_texts([candidate_sig])[0]
+    if prior_embeddings is not None:
+        prior_vecs = prior_embeddings
+    else:
+        prior_vecs = prior_mcq_embeddings(prior_mcqs or [])
+    if not prior_vecs:
+        return False, 0.0
+
     max_sim = 0.0
-    for prior_vec in vectors[1:]:
+    for prior_vec in prior_vecs:
         sim = cosine_similarity(candidate_vec, prior_vec)
         max_sim = max(max_sim, sim)
     return max_sim >= threshold, max_sim

@@ -11,6 +11,9 @@ import {
   type VariantColorsResolver,
 } from "@mantine/core";
 import { Notifications } from "@mantine/notifications";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { useState } from "react";
+import { createQueryClient } from "@/lib/api/query-client";
 
 /** Mantine default dark scale — borders, modals, inputs, and disabled states stay readable. */
 const DARK_PALETTE = [
@@ -75,10 +78,13 @@ const theme = mergeMantineTheme(
 );
 
 export default function Providers({ children }: { children: React.ReactNode }) {
+  const [queryClient] = useState(createQueryClient);
   return (
-    <MantineProvider theme={theme} defaultColorScheme="dark">
-      <Notifications position="top-right" />
-      {children}
-    </MantineProvider>
+    <QueryClientProvider client={queryClient}>
+      <MantineProvider theme={theme} defaultColorScheme="dark">
+        <Notifications position="top-right" />
+        {children}
+      </MantineProvider>
+    </QueryClientProvider>
   );
 }

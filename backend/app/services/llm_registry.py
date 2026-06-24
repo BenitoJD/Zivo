@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 from dataclasses import dataclass
 
@@ -123,19 +122,27 @@ def default_chat_model_id(db: Session) -> uuid.UUID | None:
     return model.id if model else None
 
 
-def configure_litellm(provider: LlmProvider) -> None:
-    """Push provider credentials into env vars LiteLLM reads at call time."""
+def configure_litellm(provider: LlmProvider) -> dict[str, str]:
+    """Return per-request LiteLLM kwargs for a provider (no os.environ mutation)."""
+    kwargs: dict[str, str] = {}
     mappings = _PREFIX_ENV_FIELDS.get(provider.litellm_prefix, ())
+    mapped_env_keys = {m[1] for m in mappings}
+
     for field, env_key in mappings:
-        value = getattr(provider, field, None) or provider.extra_env.get(env_key)
-        if value:
-            if field == "api_base_url":
-                value = str(value).rstrip("/")
-            os.environ[env_key] = str(value)
+        value = getattr(provider, field, None) or (provider.extra_env or {}).get(env_key)
+        if not value:
+            continue
+        if field == "api_key":
+            kwargs["api_key"] = str(value)
+        elif field == "api_base_url":
+            kwargs["api_base"] = str(value).rstrip("/")
 
     for env_key, value in (provider.extra_env or {}).items():
-        if value and env_key not in {m[1] for m in mappings}:
-            os.environ[env_key] = str(value)
+        if value and env_key not in mapped_env_keys:
+            # LiteLLM accepts many provider-specific params as call-time kwargs.
+            kwargs[env_key.lower()] = str(value)
+
+    return kwargs
 
 
 def list_admin_chat_models(db: Session) -> list[LlmModel]:

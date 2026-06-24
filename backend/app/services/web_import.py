@@ -9,14 +9,16 @@ import socket
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
 READER_PAGE_CHARS = 3200
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 FETCH_TIMEOUT_S = 15.0
+MAX_REDIRECTS = 3
 USER_AGENT = "zivo/1.0 (+https://zivo.dev; article import)"
+_METADATA_IP = ipaddress.ip_address("169.254.169.254")
 
 _WS_RE = re.compile(r"[ \t]+\n")
 _BLANK_RE = re.compile(r"\n{3,}")
@@ -126,9 +128,21 @@ def normalize_public_url(raw: str) -> str:
     return parsed.geturl()
 
 
+def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if ip == _METADATA_IP:
+        return True
+    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+        return True
+    if isinstance(ip, ipaddress.IPv4Address):
+        return ip in ipaddress.ip_network("10.0.0.0/8") or ip in ipaddress.ip_network(
+            "172.16.0.0/12"
+        ) or ip in ipaddress.ip_network("192.168.0.0/16")
+    return False
+
+
 def _assert_public_host(hostname: str) -> None:
     host = hostname.lower().rstrip(".")
-    if host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".local"):
+    if host in {"localhost", "127.0.0.1", "::1", "169.254.169.254"} or host.endswith(".local"):
         raise WebImportError("That link points to a private address", code="blocked_url")
     try:
         infos = socket.getaddrinfo(host, None)
@@ -136,7 +150,7 @@ def _assert_public_host(hostname: str) -> None:
         raise WebImportError("Could not resolve that link", code="fetch_failed") from exc
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+        if _is_blocked_ip(ip):
             raise WebImportError("That link points to a private address", code="blocked_url")
 
 
@@ -234,30 +248,52 @@ async def fetch_and_extract(url: str) -> ImportedArticle:
     normalized = normalize_public_url(url)
     headers = {"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8"}
 
+    current_url = normalized
     try:
         async with httpx.AsyncClient(
-            follow_redirects=True,
+            follow_redirects=False,
             timeout=FETCH_TIMEOUT_S,
             headers=headers,
         ) as client:
-            async with client.stream("GET", normalized) as response:
-                if response.status_code >= 400:
-                    raise WebImportError(
-                        "This page could not be fetched. Try pasting the article instead.",
-                        code="fetch_failed",
-                    )
-                final_url = str(response.url)
-                if final_url != normalized:
-                    normalize_public_url(final_url)
-                content_type = response.headers.get("content-type", "text/html")
-                chunks: list[bytes] = []
-                total = 0
-                async for chunk in response.aiter_bytes():
-                    total += len(chunk)
-                    if total > MAX_RESPONSE_BYTES:
-                        raise WebImportError("This page is too large to import", code="too_large")
-                    chunks.append(chunk)
-                body = b"".join(chunks)
+            for redirect_count in range(MAX_REDIRECTS + 1):
+                async with client.stream("GET", current_url) as response:
+                    if response.status_code in {301, 302, 303, 307, 308}:
+                        if redirect_count >= MAX_REDIRECTS:
+                            raise WebImportError(
+                                "Too many redirects while fetching this page",
+                                code="fetch_failed",
+                            )
+                        location = response.headers.get("location")
+                        if not location:
+                            raise WebImportError(
+                                "This page could not be fetched. Try pasting the article instead.",
+                                code="fetch_failed",
+                            )
+                        await response.aread()
+                        current_url = normalize_public_url(urljoin(current_url, location))
+                        continue
+
+                    if response.status_code >= 400:
+                        raise WebImportError(
+                            "This page could not be fetched. Try pasting the article instead.",
+                            code="fetch_failed",
+                        )
+                    final_url = current_url
+                    content_type = response.headers.get("content-type", "text/html")
+                    chunks: list[bytes] = []
+                    total = 0
+                    async for chunk in response.aiter_bytes():
+                        total += len(chunk)
+                        if total > MAX_RESPONSE_BYTES:
+                            raise WebImportError("This page is too large to import", code="too_large")
+                        chunks.append(chunk)
+                    body = b"".join(chunks)
+                    break
+            else:
+                raise WebImportError(
+                    "This page could not be fetched. Try pasting the article instead.",
+                    code="fetch_failed",
+                )
     except WebImportError:
         raise
     except httpx.HTTPError as exc:

@@ -1,8 +1,13 @@
 replicaCount: 1
+namespace: zivo
 
 image:
   repository: ghcr.io/benitojd/zivo-api
   tag: latest
+  pullPolicy: IfNotPresent
+
+secretName: zivo-secrets
+imagePullSecrets: []
 
 workloads:
   io:
@@ -15,3 +20,15 @@ workloads:
     command: ["python", "run_eta_worker_cpu.py"]
     env:
       ETA_WORKER_WORKLOADS: cpu
+
+resources: {}
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1

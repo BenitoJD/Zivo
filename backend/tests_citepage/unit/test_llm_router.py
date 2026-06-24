@@ -50,15 +50,16 @@ def test_stream_chat_completion_uses_registry() -> None:
                 "app.services.llm_router.iter_chat_model_attempts",
                 return_value=iter([resolved]),
             ) as attempts,
-            patch("app.services.llm_router.configure_litellm") as configure,
+            patch("app.services.llm_router.litellm_provider_kwargs", return_value={"api_key": "test-key"}) as provider_kwargs,
             patch.dict(sys.modules, {"litellm": mock_litellm}),
         ):
             async for token in llm_router.stream_chat_completion([{"role": "user", "content": "x"}], db):
                 tokens.append(token)
         attempts.assert_called_once_with(db, model_id=None, require_vision=False)
-        configure.assert_called_once_with(resolved.provider)
+        provider_kwargs.assert_called_once_with(resolved)
         mock_litellm.acompletion.assert_awaited_once()
         assert mock_litellm.acompletion.await_args.kwargs["api_key"] == "test-key"
+        assert mock_litellm.acompletion.await_args.kwargs["max_tokens"] == llm_router.CHAT_DEFAULT_MAX_TOKENS
         return tokens
 
     assert asyncio.run(run()) == ["hi"]

@@ -8,8 +8,11 @@ from app.config import get_settings
 
 settings = get_settings()
 
-_pool_size = int(os.getenv("DB_POOL_SIZE", "20"))
-_max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "20"))
+# Keep pool small per process — PgBouncer (or similar) should multiplex
+# client connections to Postgres in production; each API/worker pod only
+# needs a handful of real server connections.
+_pool_size = int(os.getenv("DB_POOL_SIZE", "5"))
+_max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "10"))
 
 engine = create_engine(
     settings.database_url,

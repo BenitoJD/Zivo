@@ -1,4 +1,5 @@
 import os
+import threading
 from functools import lru_cache
 
 from fastembed import TextEmbedding
@@ -11,6 +12,8 @@ settings = get_settings()
 DEFAULT_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 
 _active_embed_model: str | None = None
+_EMBED_BATCH_CONCURRENCY = int(os.getenv("ZIVO_EMBED_BATCH_CONCURRENCY", "2"))
+_embed_batch_semaphore = threading.Semaphore(_EMBED_BATCH_CONCURRENCY)
 
 
 def clear_query_cache() -> None:
@@ -50,10 +53,11 @@ def _parallel_workers() -> int | None:
 def embed_texts(texts: list[str]) -> list[list[float]]:
     if not texts:
         return []
-    embedder = get_embedder()
-    # Single text -> skip data-parallel overhead; batches benefit from it.
-    parallel = 1 if len(texts) <= 1 else _parallel_workers()
-    return [vec.tolist() for vec in embedder.embed(texts, parallel=parallel)]
+    with _embed_batch_semaphore:
+        embedder = get_embedder()
+        # Single text -> skip data-parallel overhead; batches benefit from it.
+        parallel = 1 if len(texts) <= 1 else _parallel_workers()
+        return [vec.tolist() for vec in embedder.embed(texts, parallel=parallel)]
 
 
 # Bounded query cache: chat messages tend to repeat (greetings, follow-ups

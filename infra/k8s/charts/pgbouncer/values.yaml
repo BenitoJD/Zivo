@@ -1,0 +1,8 @@
+namespace: zivo
+image: edoburu/pgbouncer:1.22.1-p0
+replicas: 1
+postgresHost: postgres
+postgresPort: 5432
+poolMode: transaction
+maxClientConn: 200
+defaultPoolSize: 20

@@ -1,3 +1,4 @@
+import hashlib
 import re
 import secrets
 import uuid
@@ -31,21 +32,46 @@ def validate_password(password: str) -> None:
         raise HTTPException(status_code=400, detail="Password must include a letter and a number")
 
 
+def _password_bytes(password: str) -> bytes:
+    raw = password.encode("utf-8")
+    if len(raw) > 72:
+        return hashlib.sha256(raw).digest()
+    return raw
+
+
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    return bcrypt.hashpw(_password_bytes(password), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+    return bcrypt.checkpw(_password_bytes(password), password_hash.encode("utf-8"))
 
 
-def create_session_token(account_id: uuid.UUID, remember: bool = False) -> tuple[str, str]:
+_DUMMY_HASH = bcrypt.hashpw(b"timing-oracle-guard", bcrypt.gensalt()).decode("utf-8")
+
+
+def create_session_token(
+    account_id: uuid.UUID,
+    session_version: int = 0,
+    *,
+    remember: bool = False,
+) -> tuple[str, str]:
     days = settings.session_remember_days if remember else settings.session_days
     exp = datetime.now(timezone.utc) + timedelta(days=days)
     csrf = secrets.token_urlsafe(32)
-    payload = {"sub": str(account_id), "exp": exp, "csrf": csrf}
+    payload = {"sub": str(account_id), "exp": exp, "csrf": csrf, "sv": int(session_version)}
     token = jwt.encode(payload, settings.secret_key, algorithm="HS256")
     return token, csrf
+
+
+def _session_version_matches(user: Account, payload: dict) -> bool:
+    token_sv = payload.get("sv", 0)
+    try:
+        token_sv = int(token_sv)
+    except (TypeError, ValueError):
+        token_sv = 0
+    user_sv = int(getattr(user, "session_version", 0) or 0)
+    return token_sv == user_sv
 
 
 def set_session_cookie(response: Response, token: str, remember: bool) -> None:
@@ -76,6 +102,8 @@ def get_current_user(
     user = db.get(Account, account_id)
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if not _session_version_matches(user, payload):
+        raise HTTPException(status_code=401, detail="Session revoked")
     return user
 
 
@@ -96,7 +124,12 @@ def get_optional_user(
         account_id = uuid.UUID(payload["sub"])
     except (JWTError, ValueError):
         return None
-    return db.get(Account, account_id)
+    user = db.get(Account, account_id)
+    if not user:
+        return None
+    if not _session_version_matches(user, payload):
+        return None
+    return user
 
 
 def csrf_from_session_token(zivo_session: str) -> str:
@@ -114,7 +147,7 @@ def require_csrf(
     x_csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
     zivo_session: str | None = Cookie(default=None),
 ) -> None:
-    if settings.environment == "development" and not x_csrf_token:
+    if settings.csrf_disabled:
         return
     if not zivo_session or not x_csrf_token:
         raise HTTPException(status_code=403, detail="CSRF token required")
@@ -141,6 +174,9 @@ def require_csrf_or_guest(
 
 def authenticate_user(db: Session, username: str, password: str) -> Account | None:
     user = db.query(User).filter(User.username == username).first()
-    if not user or not verify_password(password, user.password_hash):
+    if not user:
+        bcrypt.checkpw(b"timing-oracle-guard", _DUMMY_HASH.encode("utf-8"))
+        return None
+    if not verify_password(password, user.password_hash):
         return None
     return user

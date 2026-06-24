@@ -49,6 +49,11 @@ def read_guest_id(cookie_id: str | None, header_id: str | None) -> str | None:
     return _pick_guest_id(cookie_id, header_id)
 
 
+def read_guest_id_from_cookie(cookie_id: str | None) -> str | None:
+    """Read guest id from httponly cookie only (claim / auth flows)."""
+    return normalize_guest_id(cookie_id)
+
+
 def guest_id_for_user(
     user: Account | None,
     response: Response,

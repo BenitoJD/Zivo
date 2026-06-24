@@ -1,3 +1,8 @@
 namespace: zivo
 image: pgvector/pgvector:pg16
 storage: 20Gi
+backup:
+  enabled: true
+  schedule: "0 3 * * *"
+  retentionDays: 14
+  storage: 10Gi

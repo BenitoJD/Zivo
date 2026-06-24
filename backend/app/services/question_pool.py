@@ -13,6 +13,9 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.models import Document, Job
 from app.repositories.intel import create_activity
+from app.services.document_learn_state import load_progress as load_learn_state_row
+from app.services.document_learn_state import save_progress_row
+from app.services.mcq_assertion_facets import page_assertion_ids_from_facets
 from app.repositories import workspace as workspace_repo
 from app.services.jobs import enqueue_generate, enqueue_rag_window, enqueue_transition_prep
 
@@ -55,7 +58,16 @@ def default_progress(doc: Document) -> dict[str, Any]:
 
 def get_progress(doc: Document) -> dict[str, Any]:
     meta = dict(doc.meta or {})
-    progress = meta.get("question_progress")
+    progress: dict[str, Any] | None = None
+    if isinstance(doc, Document):
+        session = Session.object_session(doc)
+        if session is not None:
+            try:
+                progress = load_learn_state_row(session, doc.id)
+            except Exception:
+                progress = None
+    if not isinstance(progress, dict):
+        progress = meta.get("question_progress")
     if not isinstance(progress, dict):
         progress = default_progress(doc)
     progress.setdefault("current_page", default_progress(doc)["current_page"])
@@ -91,6 +103,10 @@ def save_progress(db: Session, doc: Document, progress: dict[str, Any]) -> None:
     except Exception:
         db.refresh(doc)
     merged = _merge_progress(get_progress(doc), progress)
+    try:
+        save_progress_row(db, doc.id, merged)
+    except Exception:
+        pass
     meta = dict(doc.meta or {})
     meta["question_progress"] = merged
     doc.meta = meta
@@ -169,7 +185,10 @@ def count_assertions_on_page(db: Session, document_id: uuid.UUID, page: int) -> 
 
 
 def page_assertion_ids(db: Session, document_id: uuid.UUID, page: int) -> list[str]:
-    """Ordered assertion ids for a page — single query, reused across learn state."""
+    """Ordered assertion ids for a page — facet table first, JSONB fallback."""
+    from_facets = page_assertion_ids_from_facets(db, document_id, page)
+    if from_facets:
+        return from_facets
     return list(
         db.execute(
             text(

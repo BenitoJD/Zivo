@@ -11,6 +11,11 @@ metadata:
     workload: {{ $name }}
 spec:
   replicas: {{ $wl.replicaCount | default $.Values.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: {{ $.Chart.Name }}-{{ $name }}
@@ -24,6 +29,15 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: {{ $.Chart.Name }}-{{ $name }}
+                topologyKey: kubernetes.io/hostname
       containers:
         - name: worker
           image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
@@ -37,6 +51,18 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-f", {{ index $wl.command 1 | quote }}]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["pgrep", "-f", {{ index $wl.command 1 | quote }}]
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
           {{- with $wl.resources | default $.Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

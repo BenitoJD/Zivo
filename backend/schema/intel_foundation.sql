@@ -705,7 +705,7 @@ CREATE TABLE intel.embedding (
   resource_id     UUID NOT NULL,
   model_concept_id UUID NOT NULL REFERENCES intel.concept(id),
   dimensions      INTEGER NOT NULL,
-  embedding       vector NOT NULL,
+  embedding       vector(384) NOT NULL,
   content_hash    TEXT,
   activity_id     UUID REFERENCES intel.activity(id),
   recorded_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -718,6 +718,9 @@ CREATE TABLE intel.embedding (
 );
 
 CREATE INDEX embedding_model_idx ON intel.embedding (model_concept_id, resource_kind);
+CREATE INDEX embedding_hnsw_idx ON intel.embedding
+  USING hnsw (embedding vector_cosine_ops)
+  WHERE dimensions = 384;
 
 -- -----------------------------------------------------------------------------
 -- intel.interchange_registry

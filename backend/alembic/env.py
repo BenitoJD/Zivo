@@ -21,6 +21,7 @@ _RAW_SQL_OBJECTS = {
     "index": {
         "document_chunks_embedding_hnsw_idx",
         "ix_llm_response_cache_embedding_hnsw",
+        "embedding_hnsw_idx",
         "uq_llm_models_default_per_kind",
     },
     "unique_constraint": {"uq_llm_providers_slug"},

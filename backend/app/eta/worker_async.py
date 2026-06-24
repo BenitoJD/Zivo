@@ -14,6 +14,7 @@ from app.config import get_settings
 from app.eta import context as eta_context
 from app.eta.execution_state import cancel_descendants_async, update_execution_state_async
 from app.eta.handlers import io as _io_handlers  # noqa: F401
+from app.eta.llm_concurrency import LLM_MAX_CONCURRENT, get_llm_semaphore
 from app.eta.priority import priority_sort_key
 from app.eta.registry import get_handler, normalize_result
 from app.models import EtaJobDependency, Job, JobStatus, JobWorkload
@@ -27,6 +28,15 @@ POLL_INTERVAL = float(os.getenv("ETA_WORKER_POLL_INTERVAL", "0.3"))
 RETRY_DELAY_SECONDS = float(os.getenv("ETA_WORKER_RETRY_DELAY_SECONDS", "5.0"))
 _ETA_NOTIFY_CHANNEL = "zivo_eta_job"
 _job_wake = asyncio.Event()
+_background_tasks: set[asyncio.Task] = set()
+_STALE_REAPER_INTERVAL = float(os.getenv("ETA_STALE_REAPER_INTERVAL", "60"))
+
+
+def _spawn(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
 
 
 def _parse_workloads(value: str) -> Sequence[JobWorkload]:
@@ -55,7 +65,6 @@ async def _reclaim_stale_jobs(session: AsyncSession) -> int:
 
     Only reclaims jobs whose workload matches this worker's WORKLOADS.
     """
-    from datetime import datetime, timedelta, timezone
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=STALE_RUNNING_TIMEOUT_SECONDS)
     workload_filter = [w.value for w in WORKLOADS]
     result = await session.execute(
@@ -84,11 +93,13 @@ def _async_url() -> str:
     return url
 
 
+# Keep pool small per process — PgBouncer (or similar) should multiplex
+# client connections to Postgres in production.
 engine = create_async_engine(
     _async_url(),
     pool_pre_ping=True,
-    pool_size=int(os.getenv("DB_POOL_SIZE", "20")),
-    max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "20")),
+    pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
+    max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "10")),
     connect_args={"server_settings": {"search_path": "qb,intel,public"}},
 )
 AsyncSessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
@@ -241,32 +252,68 @@ async def _handle_job(job_id: object, execution_id: object, semaphore: asyncio.S
         semaphore.release()
 
 
+def _notify_dsn() -> str:
+    dsn = settings.database_url
+    for prefix in ("postgresql+psycopg://", "postgresql+asyncpg://", "postgresql://"):
+        if dsn.startswith(prefix):
+            return "postgresql://" + dsn[len(prefix) :]
+    return dsn
+
+
 async def _listen_for_job_notifications() -> None:
-    """LISTEN/NOTIFY wake — sub-second dispatch when jobs enqueue."""
-    try:
-        import asyncpg
+    """LISTEN/NOTIFY wake — reconnects on connection loss."""
+    import asyncpg
 
-        dsn = settings.database_url
-        for prefix in ("postgresql+psycopg://", "postgresql+asyncpg://", "postgresql://"):
-            if dsn.startswith(prefix):
-                dsn = "postgresql://" + dsn[len(prefix) :]
-                break
-        conn = await asyncpg.connect(dsn, server_settings={"search_path": "qb,intel,public"})
+    backoff = 1.0
+    while True:
+        conn = None
+        try:
+            conn = await asyncpg.connect(
+                _notify_dsn(), server_settings={"search_path": "qb,intel,public"}
+            )
 
-        def _on_notify(*_args) -> None:
-            _job_wake.set()
+            def _on_notify(*_args) -> None:
+                _job_wake.set()
 
-        await conn.add_listener(_ETA_NOTIFY_CHANNEL, _on_notify)
-        while True:
-            await asyncio.sleep(3600)
-    except Exception:
-        logger.exception("ETA job NOTIFY listener failed — polling only")
+            await conn.add_listener(_ETA_NOTIFY_CHANNEL, _on_notify)
+            logger.info("ETA NOTIFY listener connected", extra={"channel": _ETA_NOTIFY_CHANNEL})
+            backoff = 1.0
+            while not conn.is_closed():
+                await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("ETA job NOTIFY listener failed — reconnecting")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60.0)
+        finally:
+            if conn is not None and not conn.is_closed():
+                try:
+                    await conn.close()
+                except Exception:
+                    pass
+
+
+async def _periodic_stale_reaper() -> None:
+    while True:
+        await asyncio.sleep(_STALE_REAPER_INTERVAL)
+        try:
+            async with AsyncSessionLocal() as session, session.begin():
+                reclaimed = await _reclaim_stale_jobs(session)
+            if reclaimed:
+                logger.info(
+                    "Reclaimed stale running job(s)",
+                    extra={"count": reclaimed},
+                )
+        except Exception:
+            logger.exception("Periodic stale job reaper failed")
 
 
 async def run_eta_worker_async() -> None:
+    get_llm_semaphore()
     semaphore = asyncio.Semaphore(CONCURRENCY)
-    asyncio.create_task(_listen_for_job_notifications())
-    # Reclaim jobs orphaned by a prior worker crash before entering the loop.
+    _spawn(_listen_for_job_notifications())
+    _spawn(_periodic_stale_reaper())
     try:
         async with AsyncSessionLocal() as session, session.begin():
             reclaimed = await _reclaim_stale_jobs(session)
@@ -274,7 +321,14 @@ async def run_eta_worker_async() -> None:
             logger.info("Reclaimed stale running job(s) on startup", extra={"count": reclaimed})
     except Exception:
         logger.exception("Failed to reclaim stale jobs on startup")
-    logger.info("IO ETA worker starting", extra={"workloads": [w.value for w in WORKLOADS], "concurrency": CONCURRENCY})
+    logger.info(
+        "IO ETA worker starting",
+        extra={
+            "workloads": [w.value for w in WORKLOADS],
+            "concurrency": CONCURRENCY,
+            "llm_max_concurrent": LLM_MAX_CONCURRENT,
+        },
+    )
     while True:
         await semaphore.acquire()
         try:
@@ -301,7 +355,7 @@ async def run_eta_worker_async() -> None:
                 await update_execution_state_async(session, execution_id)
 
         logger.info("ETA async job reserved", extra={"job_id": str(job_id)})
-        asyncio.create_task(_handle_job(job_id, execution_id, semaphore))
+        _spawn(_handle_job(job_id, execution_id, semaphore))
 
 
 def run_eta_worker_async_entrypoint() -> None:

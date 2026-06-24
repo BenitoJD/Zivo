@@ -33,6 +33,8 @@ class TestSecretKeyValidation:
         s = _make_settings(
             secret_key="real-prod-secret-32chars-or-more",
             csrf_secret="real-prod-csrf-32chars-or-more",
+            minio_access_key="prod-access",
+            minio_secret_key="prod-secret-value",
         )
         assert s.secret_key == "real-prod-secret-32chars-or-more"
         assert s.csrf_secret == "real-prod-csrf-32chars-or-more"

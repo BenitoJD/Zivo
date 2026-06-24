@@ -55,7 +55,13 @@ import {
   IconZoomOut,
 } from "@tabler/icons-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import { apiFetchBytes, apiGet, apiPost, apiPostSSE, ensureGuestSession, humanizeApiFailure, isArtifactId } from "@/lib/api/client";
+import { apiFetchBytes, apiGet, apiPost, apiPostSSE, apiUrl, ensureGuestSession, humanizeApiFailure, isArtifactId } from "@/lib/api/client";
+import {
+  useArtifactPagesQuery,
+  useArtifactQuery,
+  useAssertionQuery,
+  useChatMessagesQuery,
+} from "@/lib/api/queries";
 import { BRAND_LOGO_HEIGHT, BRAND_LOGO_SRC, BRAND_LOGO_WIDTH, ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import { AssistantMarkdown } from "@/lib/chatMarkdown";
 import { indexingStage } from "@/lib/constants";
@@ -220,81 +226,41 @@ export default function WorkspaceArtifactPage({
     }
   }, [invalidArtifactId, router]);
 
+  const artifactQuery = useArtifactQuery(artifactId, !invalidArtifactId);
+  const pagesQuery = useArtifactPagesQuery(artifactId, !invalidArtifactId);
+  const assertionQuery = useAssertionQuery(queue?.current_assertion_id);
+  const chatMessagesQuery = useChatMessagesQuery(artifactId, !invalidArtifactId);
+
   useEffect(() => {
-    if (invalidArtifactId) return;
+    if (artifactQuery.data) setArtifact(artifactQuery.data);
+    if (artifactQuery.error) {
+      setSetupError(artifactQuery.error instanceof Error ? artifactQuery.error.message : "Could not load source");
+    }
+  }, [artifactQuery.data, artifactQuery.error]);
+
+  useEffect(() => {
+    if (pagesQuery.data) {
+      setPages(pagesQuery.data);
+      setSelectedPages([]);
+      setLastClickedPage(null);
+    }
+  }, [pagesQuery.data]);
+
+  useEffect(() => {
     void ensureGuestSession();
-    let cancelled = false;
-    Promise.all([
-      apiGet<ArtifactMeta>(`/api/artifacts/${artifactId}`),
-      apiGet<PagesInfo>(`/api/artifacts/${artifactId}/pages`),
-    ])
-      .then(([art, pg]) => {
-        if (!cancelled) {
-          setArtifact(art);
-          setPages(pg);
-          setSelectedPages([]);
-          setLastClickedPage(null);
-        }
-      })
-      .catch((e) => {
-        if (!cancelled) setSetupError(e instanceof Error ? e.message : "Could not load source");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [artifactId, invalidArtifactId]);
+  }, []);
 
   const queueRef = useRef(queue);
   queueRef.current = queue;
 
   useEffect(() => {
-    if (invalidArtifactId || artifact?.status !== "indexing") return;
-    let cancelled = false;
-    let timer: number | undefined;
-    const poll = () => {
-      if (cancelled) return;
-      if (document.visibilityState !== "visible") {
-        timer = window.setTimeout(poll, 2500);
-        return;
-      }
-      apiGet<ArtifactMeta>(`/api/artifacts/${artifactId}`)
-        .then((art) => {
-          if (!cancelled) setArtifact(art);
-        })
-        .catch(() => {});
-      timer = window.setTimeout(poll, 2500);
-    };
-    poll();
-    return () => {
-      cancelled = true;
-      if (timer) window.clearTimeout(timer);
-    };
-  }, [artifact?.status, artifactId, invalidArtifactId]);
-
-  useEffect(() => {
-    if (invalidArtifactId) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        await ensureGuestSession();
-        const history = await apiGet<{ role: string; content: string }[]>(
-          `/api/chat/threads/${artifactId}/messages`,
-        );
-        if (!cancelled) {
-          setChatMessages(
-            history
-              .filter((m) => (m.content || "").trim())
-              .map((m) => ({ role: m.role, content: m.content })),
-          );
-        }
-      } catch {
-        /* thread may not exist yet */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [artifactId, invalidArtifactId]);
+    if (!chatMessagesQuery.data) return;
+    setChatMessages(
+      chatMessagesQuery.data
+        .filter((m) => (m.content || "").trim())
+        .map((m) => ({ role: m.role, content: m.content })),
+    );
+  }, [chatMessagesQuery.data]);
 
   const isPdf = artifact?.content_type === "application/pdf";
 
@@ -393,72 +359,57 @@ export default function WorkspaceArtifactPage({
   useEffect(() => {
     if (invalidArtifactId || !selectedRange || artifact?.status === "indexing") return;
     let cancelled = false;
-    apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`)
-      .then((data) => {
-        if (!cancelled) setQueue(data);
-      })
-      .catch(() => {
-        if (!cancelled) setQuestion("Sign in or reload to load questions.");
-      })
-      .finally(() => {
-        if (!cancelled) setMcqLoading(false);
-      });
+    const url = apiUrl(`/api/artifacts/${artifactId}/learn-queue/stream`);
+    const es = new EventSource(url, { withCredentials: true });
+    es.addEventListener("queue", (ev) => {
+      if (cancelled) return;
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as McqState;
+        setQueue(data);
+        setMcqLoading(false);
+      } catch {
+        /* ignore malformed */
+      }
+    });
+    es.addEventListener("done", (ev) => {
+      if (cancelled) return;
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as McqState;
+        setQueue(data);
+      } catch {
+        /* ignore */
+      }
+      es.close();
+    });
+    es.addEventListener("error", () => {
+      if (cancelled) return;
+      setQuestion("Sign in or reload to load questions.");
+      setMcqLoading(false);
+    });
     return () => {
       cancelled = true;
+      es.close();
     };
   }, [artifactId, invalidArtifactId, selectedRange, artifact?.status]);
 
   useEffect(() => {
-    if (invalidArtifactId || !selectedRange || artifact?.status !== "ready") return;
-    if (queue?.current_assertion_id) return;
-    let cancelled = false;
-    let delay = 1000;
-    let timer: number | undefined;
-    const poll = () => {
-      if (cancelled) return;
-      if (document.visibilityState !== "visible") {
-        timer = window.setTimeout(poll, Math.max(delay, 2000));
-        return;
-      }
-      apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`)
-        .then((data) => {
-          if (!cancelled) setQueue(data);
-        })
-        .catch(() => {});
-      const q = queueRef.current;
-      const stagnant = Boolean(q?.generation_pending) && (q?.questions_generated ?? 0) === 0;
-      if (stagnant) {
-        delay = Math.min(8000, Math.round(delay * 1.4 + Math.random() * 400));
-      } else {
-        delay = 1000;
-      }
-      timer = window.setTimeout(poll, delay);
-    };
-    poll();
-    return () => {
-      cancelled = true;
-      if (timer) window.clearTimeout(timer);
-    };
-  }, [artifactId, invalidArtifactId, selectedRange, artifact?.status, queue?.current_assertion_id, queue?.generation_pending]);
-
-  useEffect(() => {
     if (invalidArtifactId || !queue?.current_assertion_id) return;
-    apiGet<{ payload: AssertionPayload; title?: string }>(`/api/assertions/${queue.current_assertion_id}`)
-      .then((row) => {
-        const p = row.payload ?? {};
-        setQuestion(sanitizeMcqStem(p.question ?? p.stem ?? row.title ?? "Question"));
-        setOptions(normalizeMcqOptions(p.options, p.choices));
-        setQuestionSequence(typeof p.sequence === "number" ? p.sequence : null);
-        setSelected(null);
-        setFeedback(null);
-        setGradeState(null);
-      })
-      .catch(() => {
-        setQuestion("Could not load question.");
-        setOptions([]);
-        setQuestionSequence(null);
-      });
-  }, [queue?.current_assertion_id, invalidArtifactId]);
+    if (assertionQuery.isError) {
+      setQuestion("Could not load question.");
+      setOptions([]);
+      setQuestionSequence(null);
+      return;
+    }
+    if (!assertionQuery.data) return;
+    const row = assertionQuery.data;
+    const p = (row.payload ?? {}) as AssertionPayload;
+    setQuestion(sanitizeMcqStem(p.question ?? p.stem ?? row.title ?? "Question"));
+    setOptions(normalizeMcqOptions(p.options, p.choices));
+    setQuestionSequence(typeof p.sequence === "number" ? p.sequence : null);
+    setSelected(null);
+    setFeedback(null);
+    setGradeState(null);
+  }, [assertionQuery.data, assertionQuery.isError, queue?.current_assertion_id, invalidArtifactId]);
 
   useEffect(() => {
     setGradeState(null);
@@ -622,9 +573,13 @@ export default function WorkspaceArtifactPage({
           assistant += chunk;
           setChatMessages((m) => {
             const copy = [...m];
-            const last = copy[copy.length - 1];
-            if (last?.role === "assistant") last.content = assistant;
-            else copy.push({ role: "assistant", content: assistant });
+            const i = copy.length - 1;
+            const last = copy[i];
+            if (last?.role === "assistant") {
+              copy[i] = { ...last, content: assistant };
+            } else {
+              copy.push({ role: "assistant", content: assistant });
+            }
             return copy;
           });
         },
@@ -652,9 +607,10 @@ export default function WorkspaceArtifactPage({
           : `${ZIVO_ASSISTANT_NAME} could not reply right now. Try again in a moment.`;
       setChatMessages((m) => {
         const copy = [...m];
-        const last = copy[copy.length - 1];
+        const i = copy.length - 1;
+        const last = copy[i];
         if (last?.role === "assistant") {
-          last.content = detail;
+          copy[i] = { ...last, content: detail };
         } else {
           copy.push({ role: "assistant", content: detail });
         }

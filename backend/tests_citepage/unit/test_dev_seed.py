@@ -12,6 +12,8 @@ def test_assert_local_dev_seed_allowed_rejects_non_development(monkeypatch) -> N
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://citepage:citepage@localhost:5453/citepage")
     monkeypatch.setenv("SECRET_KEY", "real-prod-secret-32chars-or-more")
     monkeypatch.setenv("CSRF_SECRET", "real-prod-csrf-32chars-or-more")
+    monkeypatch.setenv("MINIO_ACCESS_KEY", "prod-access")
+    monkeypatch.setenv("MINIO_SECRET_KEY", "prod-secret-value")
     from app.config import get_settings
 
     get_settings.cache_clear()

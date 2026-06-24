@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
+from sse_starlette.sse import EventSourceResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.db import SessionLocal, get_db
 from app.models import Account, Document
 from app.repositories import workspace as workspace_repo
 from app.services.auth import get_optional_user, require_csrf_or_guest
@@ -102,6 +105,50 @@ def learn_queue(
         db.refresh(doc)
 
     return _learn_queue_payload(db, artifact_id, doc, user)
+
+
+@router.get("/{artifact_id}/learn-queue/stream")
+async def learn_queue_stream(
+    artifact_id: uuid.UUID,
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+):
+    db = SessionLocal()
+    try:
+        doc = db.get(Document, artifact_id)
+        if not doc or not can_access_document(doc, user, guest_id):
+            raise HTTPException(status_code=404, detail="Not found")
+    finally:
+        db.close()
+
+    async def gen():
+        delay = 1.0
+        for _ in range(600):
+            db = SessionLocal()
+            try:
+                doc = db.get(Document, artifact_id)
+                if not doc or not can_access_document(doc, user, guest_id):
+                    yield {"event": "error", "data": json.dumps({"detail": "not found"})}
+                    return
+                if doc.status == "ready":
+                    ensure_question_pool(db, artifact_id)
+                    db.refresh(doc)
+                payload = _learn_queue_payload(db, artifact_id, doc, user)
+                yield {"event": "queue", "data": json.dumps(payload, default=str)}
+                if payload.get("current_assertion_id") and not payload.get("generation_pending"):
+                    delay = 2.0
+                elif payload.get("generation_pending") and (payload.get("questions_generated") or 0) == 0:
+                    delay = min(8.0, delay * 1.4)
+                else:
+                    delay = 1.0
+                if payload.get("document_complete"):
+                    yield {"event": "done", "data": json.dumps(payload, default=str)}
+                    return
+            finally:
+                db.close()
+            await asyncio.sleep(delay)
+
+    return EventSourceResponse(gen())
 
 
 @router.get("/{artifact_id}/mastery")

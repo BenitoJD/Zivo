@@ -22,6 +22,8 @@ from app.services.storage import presigned_get_url
 
 router = APIRouter()
 
+_LIST_SEGMENTS_LIMIT = 500
+
 
 class PageRangeIn(BaseModel):
     from_page: int = Field(alias="from", ge=1)
@@ -156,8 +158,9 @@ def list_segments(
             FROM qb.document_chunks
             WHERE document_id = :doc_id
             ORDER BY page_start, id
+            LIMIT :limit
             """
         ),
-        {"doc_id": doc.id},
+        {"doc_id": doc.id, "limit": _LIST_SEGMENTS_LIMIT},
     ).mappings().all()
     return [dict(r) for r in rows]

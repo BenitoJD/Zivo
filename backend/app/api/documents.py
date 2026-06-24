@@ -2,7 +2,7 @@ import asyncio
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -26,8 +26,16 @@ from app.services.web_import import (
     paginate_reader_text,
 )
 
+from app.config import get_settings
+from app.services.rate_limit import rate_limit_dependency
+
 router = APIRouter()
+settings = get_settings()
 logger = logging.getLogger(__name__)
+
+_READ_CHUNK_BYTES = 1024 * 1024
+_LIST_DOCUMENTS_LIMIT = 100
+_CHUNK_PAGE_LIMIT = 500
 
 DEMO_DOC_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
 ALLOWED_TYPES = {
@@ -100,7 +108,13 @@ def list_documents(
     guest_id: str | None = Depends(optional_guest_session),
 ) -> list[Document]:
     if user:
-        return db.query(Document).filter(Document.account_id == user.id).order_by(Document.created_at.desc()).all()
+        return (
+            db.query(Document)
+            .filter(Document.account_id == user.id)
+            .order_by(Document.created_at.desc())
+            .limit(_LIST_DOCUMENTS_LIMIT)
+            .all()
+        )
 
     assert guest_id is not None
     return (
@@ -108,6 +122,7 @@ def list_documents(
         .filter(Document.account_id.is_(None))
         .filter(Document.meta["guest_id"].astext == guest_id)
         .order_by(Document.created_at.desc())
+        .limit(_LIST_DOCUMENTS_LIMIT)
         .all()
     )
 
@@ -156,6 +171,7 @@ def get_document_pages(
         db.query(DocumentChunk)
         .filter(DocumentChunk.document_id == document_id)
         .order_by(DocumentChunk.page_start.asc())
+        .limit(_CHUNK_PAGE_LIMIT)
         .all()
     )
     pages: dict[int, str] = {}
@@ -165,15 +181,39 @@ def get_document_pages(
     return {"pages": [{"page": p, "text": t} for p, t in sorted(pages.items())]}
 
 
-@router.post("", response_model=DocumentOut, dependencies=[Depends(require_csrf_or_guest)])
+async def _read_upload_capped(request: Request, file: UploadFile) -> bytes:
+    max_bytes = settings.max_upload_bytes
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared = int(content_length)
+        except ValueError as exc:
+            raise HTTPException(status_code=413, detail="File too large") from exc
+        if declared > max_bytes:
+            raise HTTPException(status_code=413, detail="File too large")
+
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(status_code=413, detail="File too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+@router.post("", response_model=DocumentOut, dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)])
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(optional_guest_session),
 ) -> Document:
-    data = await file.read()
-    from app.services.document_create import create_document_record
+    data = await _read_upload_capped(request, file)
 
     ct = (file.content_type or "application/octet-stream").lower()
     if ct not in ALLOWED_TYPES:
@@ -192,7 +232,7 @@ async def upload_document(
     )
 
 
-@router.post("/import-url", response_model=DocumentOut, dependencies=[Depends(require_csrf_or_guest)])
+@router.post("/import-url", response_model=DocumentOut, dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)])
 async def import_document_from_url(
     body: ImportUrlIn,
     db: Session = Depends(get_db),
@@ -221,7 +261,7 @@ async def import_document_from_url(
     )
 
 
-@router.post("/import-text", response_model=DocumentOut, dependencies=[Depends(require_csrf_or_guest)])
+@router.post("/import-text", response_model=DocumentOut, dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)])
 async def import_document_from_text(
     body: ImportTextIn,
     db: Session = Depends(get_db),
@@ -250,7 +290,7 @@ async def import_document_from_text(
     )
 
 
-@router.post("/import-github", response_model=DocumentOut, dependencies=[Depends(require_csrf_or_guest)])
+@router.post("/import-github", response_model=DocumentOut, dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)])
 async def import_document_from_github(
     body: ImportGithubIn,
     db: Session = Depends(get_db),

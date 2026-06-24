@@ -7,16 +7,59 @@ on:
         description: Branch to deploy
         required: false
         default: main
+      prebuilt:
+        description: Skip VPS docker build (images already in GHCR/containerd)
+        required: false
+        default: "0"
 
 permissions:
   contents: write
+  packages: write
 
 concurrency:
   group: deploy-zivo
   cancel-in-progress: false
 
 jobs:
+  build-images:
+    if: ${{ github.event.inputs.prebuilt != '1' }}
+    runs-on: [self-hosted, zivo]
+    timeout-minutes: 45
+    outputs:
+      image_tag: ${{ steps.tag.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.branch || 'main' }}
+
+      - id: tag
+        run: echo "image_tag=Zivo_0.1.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push API image
+        env:
+          TAG: ${{ steps.tag.outputs.image_tag }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          API_IMAGE="ghcr.io/${OWNER,,}/zivo-api:${TAG}"
+          docker build --pull -t "${API_IMAGE}" -f backend/Dockerfile --target runtime backend/
+          docker push "${API_IMAGE}"
+
+      - name: Build and push Web image
+        env:
+          TAG: ${{ steps.tag.outputs.image_tag }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          WEB_IMAGE="ghcr.io/${OWNER,,}/zivo-web:${TAG}"
+          docker build --pull -t "${WEB_IMAGE}" -f frontend/Dockerfile --target runtime \
+            --build-arg NEXT_PUBLIC_API_URL=https://api.zivo.fyi frontend/
+          docker push "${WEB_IMAGE}"
+
   deploy:
+    needs: build-images
+    if: always() && (needs.build-images.result == 'success' || needs.build-images.result == 'skipped')
     runs-on: [self-hosted, zivo]
     timeout-minutes: 60
     env:
@@ -28,9 +71,16 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - id: tag
-        run: echo "image_tag=Zivo_0.1.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+        run: |
+          if [[ "${{ github.event.inputs.prebuilt }}" == "1" ]]; then
+            echo "image_tag=Zivo_0.1.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          else
+            echo "image_tag=${{ needs.build-images.outputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build and deploy on VPS
+        env:
+          PREBUILT: ${{ (github.event.inputs.prebuilt == '1' || needs.build-images.result == 'success') && '1' || '0' }}
         run: |
           chmod +x scripts/deploy-vps-local-build.sh scripts/promote-prod-image-tags.sh
           REPO="${{ github.workspace }}" bash scripts/deploy-vps-local-build.sh "${{ steps.tag.outputs.image_tag }}"
