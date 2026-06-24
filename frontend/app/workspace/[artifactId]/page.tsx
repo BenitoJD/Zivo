@@ -205,6 +205,9 @@ export default function WorkspaceArtifactPage({
   const [reselectOpen, setReselectOpen] = useState(false);
 
   const selectedRange = artifact?.meta?.selected_range;
+  const studyRangeKey = selectedRange
+    ? `${selectedRange.from}:${selectedRange.to}:${(selectedRange.pages ?? []).join(",")}`
+    : "";
   const apiPageCount = pages?.page_count ?? artifact?.meta?.page_count ?? 1;
   const pageCount = Math.max(apiPageCount, pdfDoc?.numPages ?? 0, 1);
   const sortedSelection = useMemo(
@@ -369,8 +372,22 @@ export default function WorkspaceArtifactPage({
   }, []);
 
   useEffect(() => {
-    if (invalidArtifactId || !selectedRange || artifact?.status === "indexing") return;
+    if (invalidArtifactId || !studyRangeKey || artifact?.status === "indexing") return;
     let cancelled = false;
+
+    void (async () => {
+      await ensureGuestSession();
+      if (cancelled) return;
+      try {
+        const data = await apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`);
+        if (cancelled) return;
+        setQueue(data);
+        setMcqLoading(false);
+      } catch {
+        /* stream + retry below */
+      }
+    })();
+
     const url = apiUrl(`/api/artifacts/${artifactId}/learn-queue/stream`);
     const es = new EventSource(url, { withCredentials: true });
     es.addEventListener("queue", (ev) => {
@@ -396,14 +413,23 @@ export default function WorkspaceArtifactPage({
     es.addEventListener("error", () => {
       if (cancelled) return;
       es.close();
-      setQuestion("Sign in or reload to load questions.");
-      setMcqLoading(false);
+      void (async () => {
+        try {
+          const data = await apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`);
+          if (cancelled) return;
+          setQueue(data);
+        } catch {
+          setQuestion("Sign in or reload to load questions.");
+        } finally {
+          if (!cancelled) setMcqLoading(false);
+        }
+      })();
     });
     return () => {
       cancelled = true;
       es.close();
     };
-  }, [artifactId, invalidArtifactId, selectedRange, artifact?.status]);
+  }, [artifactId, invalidArtifactId, studyRangeKey, artifact?.status]);
 
   useEffect(() => {
     if (invalidArtifactId || !queue?.current_assertion_id) return;
