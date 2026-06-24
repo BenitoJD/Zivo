@@ -175,11 +175,12 @@ def effective_question_budget(
 
 def is_coverage_complete(doc: Document, page: int) -> bool:
     cov = get_page_coverage(doc, page)
-    if cov.get("coverage_complete"):
-        return True
     aspects = cov.get("aspects") or []
     if not aspects:
+        # coverage_complete without triage aspects is stale (e.g. pre-index race).
         return False
+    if cov.get("coverage_complete"):
+        return True
     return all(a.get("asked") for a in aspects)
 
 
@@ -678,8 +679,32 @@ def set_coverage_complete(db: Session, document_id: uuid.UUID, page: int) -> Non
     if not doc:
         return
     entry = dict(get_page_coverage(doc, page))
+    if not entry.get("aspects"):
+        return
     entry["coverage_complete"] = True
     save_progress(db, doc, {"page_coverage": {_page_key(page): entry}})
+
+
+def clear_stale_coverage_complete(db: Session, document_id: uuid.UUID, page: int) -> bool:
+    """Drop coverage_complete when triage never landed (pre-index race poison)."""
+    doc = db.get(Document, document_id)
+    if not doc:
+        return False
+    entry = dict(get_page_coverage(doc, page))
+    if not entry.get("coverage_complete") or entry.get("aspects"):
+        return False
+    if count_assertions_on_page(db, document_id, page) > 0:
+        return False
+    entry.pop("coverage_complete", None)
+    if entry:
+        save_progress(db, doc, {"page_coverage": {_page_key(page): entry}})
+    else:
+        progress = get_progress(doc)
+        coverage = dict(progress.get("page_coverage") or {})
+        coverage.pop(_page_key(page), None)
+        save_progress(db, doc, {"page_coverage": coverage})
+    db.commit()
+    return True
 
 
 def _reclaim_stale_generate_jobs(db: Session, document_id: uuid.UUID | None = None) -> int:
@@ -930,6 +955,8 @@ def ensure_question_pool(db: Session, document_id: uuid.UUID) -> Job | None:
 
     progress = get_progress(doc)
     page = int(progress.get("current_page") or page_range_bounds(doc)[0])
+    clear_stale_coverage_complete(db, document_id, page)
+    db.refresh(doc)
 
     from app.services.rag_window import is_rag_window_ready
 

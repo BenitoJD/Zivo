@@ -18,6 +18,12 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.execute(
         """
+        ALTER TABLE alembic_version
+        ALTER COLUMN version_num TYPE VARCHAR(64)
+        """
+    )
+    op.execute(
+        """
         ALTER TABLE intel.embedding
         ALTER COLUMN embedding TYPE vector(384)
         USING CASE

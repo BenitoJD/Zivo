@@ -189,8 +189,12 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
     key: "zivo-sidebar-expanded",
     defaultValue: false,
   });
-  const isMobile = useMediaQuery("(max-width: 48em)");
-  const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  const isMobile = useMediaQuery("(max-width: 48em)", false, {
+    getInitialValueInEffect: true,
+  });
+  const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)", false, {
+    getInitialValueInEffect: true,
+  });
   const sidebarWide = isMobile ? mobileOpened : sidebarExpanded;
   const sidebarWidth = isMobile
     ? "100%"

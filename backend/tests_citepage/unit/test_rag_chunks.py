@@ -21,4 +21,4 @@ def test_upsert_page_chunks_inserts() -> None:
     chunks = [{"page_start": 2, "page_end": 2, "text": "page two"}]
     count = upsert_page_chunks(db, doc_id, 2, chunks, [[0.0] * 384])
     assert count == 1
-    assert db.execute.call_count == 2
+    assert db.execute.call_count == 3

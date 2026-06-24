@@ -9,9 +9,9 @@ from sqlalchemy.orm import Session
 
 from app.services.chat_retrieval import retrieve_document_chunks
 from app.services.retrieval_gate import needs_retrieval
-from app.services.token_budget import truncate_to_tokens
+from app.services.token_budget import CHAT_INPUT_MAX_TOKENS, truncate_to_tokens
 
-_CHAT_CONTEXT_MAX_TOKENS = 4_000
+_CHAT_CONTEXT_MAX_TOKENS = CHAT_INPUT_MAX_TOKENS
 
 
 class ChatState(TypedDict, total=False):

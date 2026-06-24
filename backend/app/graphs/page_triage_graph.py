@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import uuid
 from collections import OrderedDict
@@ -22,9 +23,9 @@ from app.services.question_pool import (
     save_page_coverage,
 )
 from app.services.retrieval import fetch_chunks_for_page_range
-from app.services.token_budget import truncate_to_tokens
+from app.services.token_budget import PAGE_INPUT_MAX_TOKENS, truncate_to_tokens
 
-_TRIAGE_PAGE_MAX_TOKENS = 4_000
+_TRIAGE_PAGE_MAX_TOKENS = PAGE_INPUT_MAX_TOKENS
 
 
 class _TriageCache:

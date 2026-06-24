@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.config import Settings, get_settings
 from app.models.llm import LlmModel, LlmModelKind, LlmProvider
+from app.services.token_budget import MIN_MODEL_META_MAX_TOKENS
 
 # LiteLLM reads these env vars by convention (https://docs.litellm.ai/docs/providers)
 _PREFIX_ENV_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
@@ -209,7 +210,6 @@ def list_public_models(db: Session) -> tuple[list[LlmModel], uuid.UUID | None, u
 # ~5× latency / ~14× token reduction for generation. See llm_pool.litellm_provider_kwargs.
 GLM_THINKING_DISABLED_META = {
     "thinking_disabled": True,
-    "max_tokens": 600,
 }
 
 
@@ -387,17 +387,27 @@ def ensure_registry_providers(db: Session, settings: Settings | None = None) -> 
     )
     if before == 0:
         dirty = True
-    # When a Step Fun key is configured, pin step-3.5-flash as the default chat
-    # model (and thus the pinned generation model) on existing DBs too. This
-    # runs on every boot, so it tracks key presence without a manual admin step.
-    # Note: no thinking_disabled meta — Step Fun's reasoning is already cheap
-    # (~5-80 tokens), and the thinking={"type":"disabled"} param is not cleanly
-    # honored (empirically it inflated tokens). Tested baseline latency ~1.4-2.3s.
     stepfun_model = (
         db.query(LlmModel)
         .filter(LlmModel.provider_id == stepfun.id, LlmModel.slug == "step-3.5-flash")
         .first()
     )
+    if stepfun_model:
+        meta = dict(stepfun_model.meta or {})
+        changed = False
+        if meta.pop("thinking_disabled", None) is not None:
+            changed = True
+        # Stale low caps (e.g. 800) exhaust reasoning tokens before content.
+        cap = meta.get("max_tokens")
+        if isinstance(cap, int) and cap < MIN_MODEL_META_MAX_TOKENS:
+            meta.pop("max_tokens", None)
+            changed = True
+        if changed:
+            stepfun_model.meta = meta or None
+            dirty = True
+    # When a Step Fun key is configured, pin step-3.5-flash as the default chat
+    # model (and thus the pinned generation model) on existing DBs too. This
+    # runs on every boot, so it tracks key presence without a manual admin step.
     if settings.stepfun_api_key and stepfun_model and not stepfun_model.is_default:
         _clear_defaults_for_kind(db, LlmModelKind.chat)
         stepfun_model.is_default = True
@@ -540,7 +550,7 @@ def refresh_llm_registry_from_env(
         .filter(LlmModel.kind == LlmModelKind.chat, LlmModel.is_enabled.is_(True))
         .all()
     ):
-        if not _provider_has_api_key(model.provider) and model.provider.slug != "local":
+        if not provider_has_api_key(model.provider) and model.provider.slug != "local":
             model.is_enabled = False
             if model.is_default:
                 model.is_default = False

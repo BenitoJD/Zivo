@@ -29,9 +29,9 @@ from app.services.mcq_dedup import (
     stems_match,
 )
 from app.services.prompts import get_prompt
-from app.services.token_budget import truncate_to_tokens
+from app.services.token_budget import PAGE_INPUT_MAX_TOKENS, truncate_to_tokens
 
-_PAGE_EXCERPT_MAX_TOKENS = 3_500
+_PAGE_EXCERPT_MAX_TOKENS = PAGE_INPUT_MAX_TOKENS
 
 MAX_GENERATION_ATTEMPTS = 3
 
@@ -880,12 +880,46 @@ def generate_quality_mcq_batch(
             )
             critic_meta = critique
             if not _critique_passes(critique):
-                continue
+                rewritten = _rewrite_mcq(
+                    db,
+                    draft=draft,
+                    page_text=page_text,
+                    page_number=page_number,
+                    target_aspect=target,
+                    critique_bundle=_merge_critique_for_rewrite(heuristic_flaws, critique),
+                    prior_mcqs=check_against,
+                    model_id=model_id,
+                )
+                if not rewritten:
+                    continue
+                draft = rewritten
+                heuristic_flaws = run_heuristic_checks(draft, prior_mcqs=check_against)
+                if has_fatal_heuristic_flaws(heuristic_flaws):
+                    continue
+                too_similar, max_sim = is_mcq_too_similar(
+                    draft,
+                    check_against,
+                    prior_embeddings=prior_embeddings,
+                )
+                if too_similar:
+                    continue
+                critique = critique_mcq(
+                    db,
+                    mcq=draft,
+                    page_text=page_text,
+                    page_number=page_number,
+                    target_aspect=target,
+                    prior_mcqs=check_against,
+                    model_id=model_id,
+                )
+                critic_meta = critique
+                if not _critique_passes(critique):
+                    continue
 
         draft["quality"] = {
             "pass": True,
             "flaw_count": len(heuristic_flaws),
-            "attempts": 1,
+            "attempts": 2 if run_critic and critic_meta else 1,
             "fast_path": not run_critic,
             "batch": True,
             "critic_sampled": run_critic,

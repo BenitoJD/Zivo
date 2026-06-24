@@ -10,12 +10,18 @@ from sqlalchemy.orm import Session
 from app.models import Document, DocumentChunk
 from app.services.llm_router import complete_chat
 from app.services.prompts import get_prompt
-from app.services.token_budget import count_tokens, truncate_to_tokens
+from app.services.token_budget import (
+    SUMMARIZE_CHUNK_INPUT_MAX_TOKENS,
+    SUMMARIZE_ROLLUP_INPUT_MAX_TOKENS,
+    SUMMARIZE_SINGLE_SHOT_MAX_TOKENS,
+    count_tokens,
+    truncate_to_tokens,
+)
 
 # Per-chunk map step + roll-up over section summaries (cacheable prefix on roll-up).
-_CHUNK_MAP_MAX_TOKENS = 1_500
-_ROLLUP_INPUT_MAX_TOKENS = 8_000
-_SINGLE_SHOT_MAX_TOKENS = 28_000
+_CHUNK_MAP_MAX_TOKENS = SUMMARIZE_CHUNK_INPUT_MAX_TOKENS
+_ROLLUP_INPUT_MAX_TOKENS = SUMMARIZE_ROLLUP_INPUT_MAX_TOKENS
+_SINGLE_SHOT_MAX_TOKENS = SUMMARIZE_SINGLE_SHOT_MAX_TOKENS
 _CHUNK_SUMMARY_CONCURRENCY = 6
 
 

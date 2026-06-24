@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -88,9 +89,10 @@ def grade(
                 """
                 INSERT INTO intel.measurement (
                   metric_concept_id, subject_entity_id, source_assertion_id,
-                  value_numeric, payload
+                  value_numeric, value_json, observed_at
                 )
-                SELECT c.id, ae.entity_id, :assertion_id, :correct, CAST(:payload AS jsonb)
+                SELECT c.id, ae.entity_id, :assertion_id, :correct,
+                       CAST(:value_json AS jsonb), now()
                 FROM intel.concept c
                 LEFT JOIN qb.account_entity ae ON ae.account_id = :account_id
                 WHERE c.uri = '/vocab/metric/answer.correct'
@@ -101,7 +103,7 @@ def grade(
                 "assertion_id": body.assertion_id,
                 "account_id": user.id,
                 "correct": 1 if result.get("correct") else 0,
-                "payload": '{"choice_index": %d}' % body.choice_index,
+                "value_json": json.dumps({"choice_index": body.choice_index}),
             },
         )
         db.commit()

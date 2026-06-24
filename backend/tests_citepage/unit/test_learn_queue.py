@@ -46,12 +46,15 @@ def test_build_learn_queue_state_resume_at_question_three() -> None:
         patch("app.services.question_pool._count_available", return_value=8),
         patch("app.services.question_pool.is_page_complete", return_value=False),
         patch("app.services.question_pool.get_page_coverage", return_value={"question_budget": 47}),
+        patch("app.services.rag_window.get_rag_window", return_value=[]),
+        patch("app.services.rag_window.is_rag_window_ready", return_value=True),
     ):
         state = build_learn_queue_state(db, doc_id, doc, progress)
 
     assert state["question_number"] == 3
     assert state["questions_answered"] == 2
-    assert state["question_budget"] == 47
+    # effective_question_budget caps ahead of consumption when answered_on_page unset
+    assert state["question_budget"] == 10
     assert state["current_assertion_id"] == "id-3"
     assert state["page_complete"] is False
     assert state["page_triage_complete"] is True
@@ -75,14 +78,20 @@ def test_advance_to_next_page_enqueues_triage_for_new_page() -> None:
     doc = _doc_with_coverage(page=34)
     db = MagicMock()
     db.get.return_value = doc
+    saved: dict = {}
+
+    def _capture_save(_db, _doc, patch):
+        saved.update(patch)
 
     with (
         patch("app.services.question_pool.enqueue_page_triage") as triage,
         patch("app.services.question_pool.count_assertions_on_page", return_value=0),
+        patch("app.services.question_pool.save_progress", side_effect=_capture_save),
+        patch("app.services.rag_window.is_rag_window_ready", return_value=True),
     ):
         triage.return_value = MagicMock()
         advance_to_next_page(db, doc)
 
-    assert doc.meta["question_progress"]["current_page"] == 35
+    assert saved["current_page"] == 35
     triage.assert_called_once()
     assert triage.call_args.kwargs["page"] == 35

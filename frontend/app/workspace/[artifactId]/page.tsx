@@ -54,9 +54,11 @@ import {
   IconZoomIn,
   IconZoomOut,
 } from "@tabler/icons-react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { apiFetchBytes, apiGet, apiPost, apiPostSSE, apiUrl, ensureGuestSession, humanizeApiFailure, isArtifactId } from "@/lib/api/client";
 import {
+  queryKeys,
   useArtifactPagesQuery,
   useArtifactQuery,
   useAssertionQuery,
@@ -149,11 +151,12 @@ export default function WorkspaceArtifactPage({
   params: Promise<{ artifactId: string }>;
 }) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { artifactId } = use(params);
   const invalidArtifactId = !isArtifactId(artifactId);
-  const isLg = useMediaQuery(STUDY_DESKTOP_BP);
-  const isCompact = useMediaQuery(STUDY_COMPACT_BP);
-  const useOverlayRails = useMediaQuery(STUDY_OVERLAY_BP);
+  const isLg = useMediaQuery(STUDY_DESKTOP_BP, false, { getInitialValueInEffect: true });
+  const isCompact = useMediaQuery(STUDY_COMPACT_BP, false, { getInitialValueInEffect: true });
+  const useOverlayRails = useMediaQuery(STUDY_OVERLAY_BP, false, { getInitialValueInEffect: true });
   const mounted = useMounted();
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
@@ -496,6 +499,8 @@ export default function WorkspaceArtifactPage({
         to,
         pages: sortedSelection,
       });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.artifact(artifactId) });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.artifactPages(artifactId) });
       setReselectOpen(false);
       setQueue(null);
       setMcqLoading(true);

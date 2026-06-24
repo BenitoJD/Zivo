@@ -29,6 +29,11 @@ from app.services.llm_pool import (
 )
 from app.services.llm_prompt_cache import apply_prompt_cache
 from app.services.llm_registry import ResolvedLlmModel
+from app.services.token_budget import (
+    CHAT_OUTPUT_MAX_TOKENS,
+    OUTPUT_MAX_TOKENS_BATCH,
+    OUTPUT_MAX_TOKENS_DEFAULT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +41,7 @@ logger = logging.getLogger(__name__)
 # so a concurrency spike degrades into a brief wait instead of a wasted/failed
 # call — protects both reliability and token spend. LiteLLM handles the backoff.
 LLM_NUM_RETRIES = int(os.getenv("ZIVO_LLM_NUM_RETRIES", "2"))
-CHAT_DEFAULT_MAX_TOKENS = int(os.getenv("ZIVO_CHAT_MAX_TOKENS", "1024"))
+CHAT_DEFAULT_MAX_TOKENS = CHAT_OUTPUT_MAX_TOKENS
 
 # Structured JSON / extraction tasks — pin low temperature when model meta omits it.
 STRUCTURED_LOG_TAGS = frozenset(
@@ -55,14 +60,15 @@ STRUCTURED_LOG_TAGS = frozenset(
 
 # Per-call-type output caps when model metadata does not set max_output_tokens.
 LOG_TAG_MAX_TOKENS: dict[str, int] = {
-    "page_triage": 512,
-    "critic_mcq": 512,
-    "rewrite_mcq": 768,
-    "generate_mcq": 768,
-    "generate_mcq_batch": 2_048,
-    "summarize_chunk": 512,
-    "summarize_doc": 1_024,
-    "summarize_rollup": 1_024,
+    "page_triage": OUTPUT_MAX_TOKENS_DEFAULT,
+    "critic_mcq": OUTPUT_MAX_TOKENS_DEFAULT,
+    "rewrite_mcq": OUTPUT_MAX_TOKENS_DEFAULT,
+    "generate_mcq": OUTPUT_MAX_TOKENS_DEFAULT,
+    "generate_mcq_batch": OUTPUT_MAX_TOKENS_BATCH,
+    "summarize_chunk": OUTPUT_MAX_TOKENS_DEFAULT,
+    "summarize_doc": OUTPUT_MAX_TOKENS_DEFAULT,
+    "summarize_rollup": OUTPUT_MAX_TOKENS_DEFAULT,
+    "grade_mcq": OUTPUT_MAX_TOKENS_DEFAULT,
     "chat": CHAT_DEFAULT_MAX_TOKENS,
     "complete": CHAT_DEFAULT_MAX_TOKENS,
 }
@@ -138,8 +144,12 @@ def _log_usage(
 
 def _apply_model(resolved: ResolvedLlmModel, *, log_tag: str = "complete") -> dict:
     kwargs = litellm_provider_kwargs(resolved)
-    if "max_tokens" not in kwargs:
-        kwargs["max_tokens"] = LOG_TAG_MAX_TOKENS.get(log_tag, CHAT_DEFAULT_MAX_TOKENS)
+    tag_cap = LOG_TAG_MAX_TOKENS.get(log_tag, CHAT_DEFAULT_MAX_TOKENS)
+    meta_cap = kwargs.get("max_tokens")
+    if isinstance(meta_cap, int) and meta_cap > 0:
+        kwargs["max_tokens"] = max(meta_cap, tag_cap)
+    else:
+        kwargs["max_tokens"] = tag_cap
     if log_tag in STRUCTURED_LOG_TAGS and "temperature" not in kwargs:
         kwargs["temperature"] = 0.0
     return kwargs

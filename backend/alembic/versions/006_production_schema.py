@@ -89,6 +89,12 @@ def upgrade() -> None:
     op.execute("DROP TABLE IF EXISTS qb.session")
     op.execute(
         """
+        ALTER TABLE qb.jobs
+        ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ
+        """
+    )
+    op.execute(
+        """
         CREATE INDEX IF NOT EXISTS ix_jobs_terminal_finished
         ON qb.jobs (finished_at)
         WHERE status IN ('succeeded', 'failed', 'cancelled')

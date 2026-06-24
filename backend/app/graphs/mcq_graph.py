@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.services.llm_router import complete_chat
 from app.services.prompts import get_prompt
-from app.services.token_budget import truncate_to_tokens
+from app.services.token_budget import GRADE_CONTEXT_MAX_TOKENS, truncate_to_tokens
 
 _LEARN_FEEDBACK_MAX = 280
 
@@ -172,7 +172,7 @@ async def _teach_feedback(state: McqGradeState, *, db: Session) -> dict[str, Any
         messages.append(
             {
                 "role": "user",
-                "content": f"Document context (stable across grading on this page):\n{truncate_to_tokens(doc_ctx, 1_500)}",
+                "content": f"Document context (stable across grading on this page):\n{truncate_to_tokens(doc_ctx, GRADE_CONTEXT_MAX_TOKENS)}",
             }
         )
     messages.append({"role": "user", "content": user})

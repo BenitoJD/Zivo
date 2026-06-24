@@ -16,6 +16,7 @@ from app.repositories.intel import update_activity
 from app.services.mcq_dedup import prior_mcq_from_payload
 from app.services.mcq_quality import generate_quality_mcq_batch
 from app.services.question_pool import (
+    clear_stale_coverage_complete,
     effective_question_budget,
     get_page_coverage,
     get_progress,
@@ -26,10 +27,10 @@ from app.services.question_pool import (
 )
 from app.services.embed import embed_texts
 from app.services.retrieval import fetch_chunks_for_page_range, search_chunks
-from app.services.token_budget import truncate_to_tokens
+from app.services.token_budget import PAGE_INPUT_MAX_TOKENS, truncate_to_tokens
 
 # Stable full-page prefix for provider prompt caching; aspect hints live in the tail message.
-_PAGE_CONTEXT_MAX_TOKENS = 3_500
+_PAGE_CONTEXT_MAX_TOKENS = PAGE_INPUT_MAX_TOKENS
 _page_context_cache: dict[tuple[str, int], str] = {}
 
 
@@ -330,20 +331,29 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
         page_end=page_number,
     )
     page_text = "\n\n".join(c["text"] for c in chunks if c.get("text")).strip()
+    if not page_text:
+        on_batch_completed(db, document_id, page=page_number, saved=0)
+        db.commit()
+        return {
+            "questions_saved": 0,
+            "page_number": page_number,
+            "error": "page_not_indexed",
+        }
+
+    clear_stale_coverage_complete(db, document_id, page_number)
+    doc = db.get(Document, document_id)
+    if not doc:
+        return {"questions_saved": 0, "page_number": page_number}
+
     progress = get_progress(doc)
     budget = effective_question_budget(doc, page_number, progress)
 
     remaining = budget - start_sequence
     targets = _next_aspects(doc, page_number, min(batch_size, max(0, remaining)))
     if not targets:
-        # No unasked aspects. If triage has already run (coverage exists), the
-        # page is genuinely complete. If triage hasn't landed yet, synthesize
-        # speculative aspect targets from the page text so the first batch can
-        # start immediately instead of blocking on the triage LLM call. Real
-        # triage overwrites coverage afterward and refines later batches.
         coverage = get_page_coverage(doc, page_number)
-        triage_ran = bool(coverage.get("aspects")) or coverage.get("coverage_complete")
-        if triage_ran or not page_text:
+        triage_ran = bool(coverage.get("aspects"))
+        if triage_ran:
             set_coverage_complete(db, document_id, page_number)
             on_batch_completed(db, document_id, page=page_number, saved=0)
             if activity_id:
@@ -360,10 +370,9 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
             page_text, page_number, min(batch_size, max(0, remaining))
         )
         if not targets:
-            set_coverage_complete(db, document_id, page_number)
             on_batch_completed(db, document_id, page=page_number, saved=0)
             db.commit()
-            return {"questions_saved": 0, "page_number": page_number}
+            return {"questions_saved": 0, "page_number": page_number, "error": "no_targets"}
 
     prior_mcqs = _prior_mcqs_on_page(db, document_id, page_number)
     page_hash = _page_content_hash(page_text)
@@ -422,7 +431,44 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
             saved_total=saved,
         )
 
-    if saved == 0 and start_sequence + batch_size >= budget:
+    if saved == 0 and targets:
+        from app.services.mcq_quality import generate_quality_mcq
+
+        for target in targets:
+            if target.get("asked"):
+                continue
+            sequence += 1
+            if sequence > budget:
+                break
+            if _assertion_sequence_exists(db, document_id, page_number, sequence):
+                continue
+            payload = generate_quality_mcq(
+                db,
+                page_text=stable_context,
+                page_number=page_number,
+                sequence=sequence,
+                target_aspect=target,
+                prior_mcqs=prior_mcqs,
+            )
+            if not payload:
+                continue
+            payload = dict(payload)
+            payload["page_content_hash"] = page_hash
+            _persist_assertion(db, document_id, payload, page_number=page_number, sequence=sequence)
+            if target.get("key"):
+                mark_aspect_asked(db, document_id, page_number, str(target["key"]))
+            saved += 1
+            prior_mcqs = _prior_mcqs_on_page(db, document_id, page_number)
+            checkpoint_after_save(
+                db,
+                page_number=page_number,
+                sequence=sequence,
+                saved_total=saved,
+            )
+
+    if saved == 0 and start_sequence + batch_size >= budget and not targets and bool(
+        get_page_coverage(doc, page_number).get("aspects")
+    ):
         set_coverage_complete(db, document_id, page_number)
 
     on_batch_completed(db, document_id, page=page_number, saved=saved)
@@ -431,11 +477,14 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
         update_activity(
             db,
             uuid.UUID(str(activity_id)),
-            status="succeeded",
+            status="succeeded" if saved > 0 or not targets else "failed",
             stats={"questions_saved": saved, "page_number": page_number},
             finished=True,
+            error_summary=None if saved > 0 or not targets else "No questions passed quality gates",
         )
     db.commit()
+    if saved == 0 and targets:
+        return {"questions_saved": 0, "page_number": page_number, "error": "generation_empty"}
     return {"questions_saved": saved, "page_number": page_number}
 
 

@@ -7,6 +7,22 @@ import os
 
 _CHARS_PER_TOKEN = float(os.getenv("ZIVO_CHARS_PER_TOKEN", "3.5"))
 
+# Completion caps — generous floors so reasoning models finish with parseable content.
+OUTPUT_MAX_TOKENS_DEFAULT = int(os.getenv("ZIVO_LLM_OUTPUT_MAX_TOKENS", "8192"))
+OUTPUT_MAX_TOKENS_BATCH = int(os.getenv("ZIVO_LLM_OUTPUT_MAX_TOKENS_BATCH", "16384"))
+CHAT_OUTPUT_MAX_TOKENS = int(os.getenv("ZIVO_CHAT_MAX_TOKENS", "4096"))
+
+# Input context sent to models (page text, RAG excerpts, chat blocks).
+PAGE_INPUT_MAX_TOKENS = int(os.getenv("ZIVO_PAGE_INPUT_MAX_TOKENS", "32000"))
+CHAT_INPUT_MAX_TOKENS = int(os.getenv("ZIVO_CHAT_INPUT_MAX_TOKENS", "16000"))
+GRADE_CONTEXT_MAX_TOKENS = int(os.getenv("ZIVO_GRADE_CONTEXT_MAX_TOKENS", "8000"))
+SUMMARIZE_CHUNK_INPUT_MAX_TOKENS = int(os.getenv("ZIVO_SUMMARIZE_CHUNK_INPUT_MAX_TOKENS", "8000"))
+SUMMARIZE_ROLLUP_INPUT_MAX_TOKENS = int(os.getenv("ZIVO_SUMMARIZE_ROLLUP_INPUT_MAX_TOKENS", "32000"))
+SUMMARIZE_SINGLE_SHOT_MAX_TOKENS = int(os.getenv("ZIVO_SUMMARIZE_SINGLE_SHOT_MAX_TOKENS", "100000"))
+
+# Model meta below this is treated as stale and ignored at seed / apply time.
+MIN_MODEL_META_MAX_TOKENS = int(os.getenv("ZIVO_MIN_MODEL_META_MAX_TOKENS", "8192"))
+
 
 @functools.lru_cache(maxsize=1)
 def _tiktoken_encoding():

@@ -201,7 +201,7 @@ def litellm_provider_kwargs(resolved: ResolvedLlmModel) -> dict[str, str]:
     if not isinstance(meta, dict):
         meta = {}
 
-    if meta.get("thinking_disabled"):
+    if meta.get("thinking_disabled") and resolved.provider.slug == "zai":
         # Z.AI native form (honored by the GLM 4.x OpenAI-compatible endpoint).
         params["thinking"] = {"type": "disabled"}
         # OpenAI-compatible / vLLM fallback for the same switch.
