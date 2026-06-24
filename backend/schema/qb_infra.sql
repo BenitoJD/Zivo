@@ -46,8 +46,9 @@ CREATE TABLE IF NOT EXISTS qb.jobs (
   max_attempts INTEGER NOT NULL DEFAULT 3,
   locked_by    VARCHAR(64),
   locked_at    TIMESTAMPTZ,
-  run_after    TIMESTAMPTZ,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    run_after    TIMESTAMPTZ,
+    finished_at  TIMESTAMPTZ,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -60,6 +61,11 @@ CREATE INDEX IF NOT EXISTS jobs_execution_idx ON qb.jobs (execution_id);
 CREATE INDEX IF NOT EXISTS ix_jobs_queued_pick
   ON qb.jobs (workload, priority DESC, created_at)
   WHERE status = 'queued';
+CREATE INDEX IF NOT EXISTS ix_jobs_payload_document_id
+  ON qb.jobs ((payload->>'document_id'));
+CREATE INDEX IF NOT EXISTS ix_jobs_terminal_finished
+  ON qb.jobs (finished_at)
+  WHERE status IN ('succeeded', 'failed', 'cancelled');
 CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_execution_node_key
   ON qb.jobs (execution_id, node_key) WHERE execution_id IS NOT NULL AND node_key IS NOT NULL;
 

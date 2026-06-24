@@ -57,8 +57,19 @@ def retrieve_document_chunks(
 
     page_start = query_start if has_query_ref else (int(scope_start) if has_scope else None)
     page_end = query_end if has_query_ref else (int(scope_end) if has_scope else None)
+    current_page = scope.get("current_page")
+    if current_page is not None and page_start is None:
+        page_start = int(current_page)
+        page_end = page_start
     if page_start is not None and page_end is None:
         page_end = page_start
+
+    pinned_single_page = (
+        page_start is not None
+        and page_end is not None
+        and page_start == page_end
+        and (has_scope or current_page is not None or has_query_ref)
+    )
 
     page_chunks: list[dict] = []
     if page_start is not None:
@@ -68,6 +79,9 @@ def retrieve_document_chunks(
             page_start=page_start,
             page_end=page_end or page_start,
         )
+
+    if pinned_single_page and page_chunks:
+        return page_chunks
 
     if has_query_ref and page_chunks and page_start == page_end:
         return rerank_chunks(query, page_chunks, top_n=_TOP_N)

@@ -461,20 +461,20 @@ def critique_mcq(
     prior_mcqs: list[dict[str, Any]] | None = None,
     model_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
-    excerpt = page_text[:8_000]
+    excerpt = truncate_to_tokens(page_text, _PAGE_EXCERPT_MAX_TOKENS)
     aspect = target_aspect or {}
     angle = (aspect.get("cognitive_angle") or "").strip()
     cognitive_angle_line = f"Cognitive angle: {angle}." if angle else ""
     prior_block = format_prior_mcqs_block(prior_mcqs) or "(none yet)"
 
     system = get_prompt(db, "mcq_critic_system")
-    user = get_prompt(
+    critique_body = get_prompt(
         db,
         "mcq_critic_format",
         aspect_label=aspect.get("label") or mcq.get("primary_concept") or "aspect",
         aspect_key=aspect.get("key") or mcq.get("primary_concept_key") or "aspect",
         cognitive_angle_line=cognitive_angle_line,
-        page_excerpt=excerpt,
+        page_excerpt="",
         prior_mcqs_block=f"Prior questions on this page:\n{prior_block}",
         mcq_json=json.dumps(
             {
@@ -488,7 +488,11 @@ def critique_mcq(
     )
     raw = _complete_chat_sync(
         db,
-        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": f"Page text:\n{excerpt}"},
+            {"role": "user", "content": critique_body},
+        ],
         log_tag="critic_mcq",
         model_id=model_id,
     )
@@ -649,9 +653,6 @@ def generate_quality_mcq(
             draft["quality"] = {
                 "pass": True,
                 "flaw_count": critique.get("flaw_count", 0),
-                "cognitive_level": critique.get("cognitive_level"),
-                "matches_aspect": critique.get("matches_aspect"),
-                "provokes_understanding": critique.get("provokes_understanding"),
                 "attempts": attempt + 1,
                 "heuristic_flaws": heuristic_flaws,
                 "max_similarity_to_prior": max_sim,

@@ -134,6 +134,7 @@ def _mark_succeeded(db: Session, job_id: str, result: dict, execution_id: object
             error=None,
             locked_by=None,
             locked_at=None,
+            finished_at=func.now(),
             updated_at=func.now(),
         )
     )
@@ -165,6 +166,7 @@ def _mark_failed(
             run_after=run_after,
             locked_by=None,
             locked_at=None,
+            finished_at=func.now() if status == JobStatus.failed else None,
             updated_at=func.now(),
         )
     )

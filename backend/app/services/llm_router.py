@@ -21,10 +21,13 @@ from app.eta.llm_concurrency import llm_slot_async
 from app.services.llm_usage_log import record_llm_usage
 from app.services.llm_pool import (
     is_failover_eligible,
+    is_llm_pool_enabled,
     iter_chat_model_attempts,
+    iter_failover_attempts,
     litellm_provider_kwargs,
     log_failover,
 )
+from app.services.llm_prompt_cache import apply_prompt_cache
 from app.services.llm_registry import ResolvedLlmModel
 
 logger = logging.getLogger(__name__)
@@ -34,6 +37,21 @@ logger = logging.getLogger(__name__)
 # call — protects both reliability and token spend. LiteLLM handles the backoff.
 LLM_NUM_RETRIES = int(os.getenv("ZIVO_LLM_NUM_RETRIES", "2"))
 CHAT_DEFAULT_MAX_TOKENS = int(os.getenv("ZIVO_CHAT_MAX_TOKENS", "1024"))
+
+# Structured JSON / extraction tasks — pin low temperature when model meta omits it.
+STRUCTURED_LOG_TAGS = frozenset(
+    {
+        "page_triage",
+        "critic_mcq",
+        "rewrite_mcq",
+        "generate_mcq",
+        "generate_mcq_batch",
+        "summarize_chunk",
+        "summarize_doc",
+        "summarize_rollup",
+        "grade_mcq",
+    }
+)
 
 # Per-call-type output caps when model metadata does not set max_output_tokens.
 LOG_TAG_MAX_TOKENS: dict[str, int] = {
@@ -122,7 +140,30 @@ def _apply_model(resolved: ResolvedLlmModel, *, log_tag: str = "complete") -> di
     kwargs = litellm_provider_kwargs(resolved)
     if "max_tokens" not in kwargs:
         kwargs["max_tokens"] = LOG_TAG_MAX_TOKENS.get(log_tag, CHAT_DEFAULT_MAX_TOKENS)
+    if log_tag in STRUCTURED_LOG_TAGS and "temperature" not in kwargs:
+        kwargs["temperature"] = 0.0
     return kwargs
+
+
+def _prepare_messages(messages: list[dict], resolved: ResolvedLlmModel) -> list[dict]:
+    return apply_prompt_cache(messages, provider_slug=resolved.provider.slug)
+
+
+def _model_attempts(
+    db: Session,
+    *,
+    model_id: uuid.UUID | None,
+    require_vision: bool,
+    first: ResolvedLlmModel | None = None,
+) -> list[ResolvedLlmModel]:
+    if model_id is not None:
+        return list(iter_chat_model_attempts(db, model_id=model_id, require_vision=require_vision))
+    if not is_llm_pool_enabled():
+        return list(iter_chat_model_attempts(db, require_vision=require_vision))
+    if first is not None:
+        return list(iter_failover_attempts(db, start=first, require_vision=require_vision))
+    first_model = next(iter(iter_chat_model_attempts(db, require_vision=require_vision)))
+    return list(iter_failover_attempts(db, start=first_model, require_vision=require_vision))
 
 
 async def _stream_chat_impl(
@@ -138,13 +179,15 @@ async def _stream_chat_impl(
     import litellm
 
     last_exc: BaseException | None = None
-    for resolved in iter_chat_model_attempts(db, model_id=model_id, require_vision=require_vision):
+    attempts = _model_attempts(db, model_id=model_id, require_vision=require_vision)
+    for resolved in attempts:
         provider_kwargs = _apply_model(resolved, log_tag=log_tag)
+        cached_messages = _prepare_messages(messages, resolved)
         started = time.perf_counter()
         try:
             response = await litellm.acompletion(
                 model=resolved.litellm_model,
-                messages=messages,
+                messages=cached_messages,
                 stream=True,
                 stream_options={"include_usage": True},
                 num_retries=LLM_NUM_RETRIES,
@@ -217,13 +260,15 @@ async def acomplete_chat(
     import litellm
 
     last_exc: BaseException | None = None
-    for resolved in iter_chat_model_attempts(db, model_id=model_id, require_vision=require_vision):
+    attempts = _model_attempts(db, model_id=model_id, require_vision=require_vision)
+    for resolved in attempts:
         provider_kwargs = _apply_model(resolved, log_tag=log_tag)
+        cached_messages = _prepare_messages(messages, resolved)
         started = time.perf_counter()
         try:
             response = await litellm.acompletion(
                 model=resolved.litellm_model,
-                messages=messages,
+                messages=cached_messages,
                 stream=False,
                 num_retries=LLM_NUM_RETRIES,
                 **provider_kwargs,

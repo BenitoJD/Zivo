@@ -19,7 +19,9 @@ _SINGLE_SHOT_MAX_TOKENS = 28_000
 _CHUNK_SUMMARY_CONCURRENCY = 6
 
 
-async def _summarize_chunk(db: Session, text: str, *, system: str) -> str:
+async def _summarize_chunk(
+    db: Session, text: str, *, system: str, model_id: uuid.UUID | None
+) -> str:
     excerpt = truncate_to_tokens(text, _CHUNK_MAP_MAX_TOKENS)
     messages = [
         {"role": "system", "content": system},
@@ -31,7 +33,7 @@ async def _summarize_chunk(db: Session, text: str, *, system: str) -> str:
             ),
         },
     ]
-    return (await complete_chat(messages, db, log_tag="summarize_chunk")).strip()
+    return (await complete_chat(messages, db, log_tag="summarize_chunk", model_id=model_id)).strip()
 
 
 async def generate_whole_doc_summary(db: Session, document_id: uuid.UUID) -> str:
@@ -50,6 +52,9 @@ async def generate_whole_doc_summary(db: Session, document_id: uuid.UUID) -> str
         return ""
 
     system = get_prompt(db, "summarize_system")
+    from app.services.llm_registry import default_chat_model_id
+
+    model_id = default_chat_model_id(db)
     body = "\n\n".join(chunk_texts)
 
     if count_tokens(body) <= _SINGLE_SHOT_MAX_TOKENS:
@@ -57,13 +62,13 @@ async def generate_whole_doc_summary(db: Session, document_id: uuid.UUID) -> str
             {"role": "system", "content": system},
             {"role": "user", "content": f"Summarize this document:\n\n{truncate_to_tokens(body, _SINGLE_SHOT_MAX_TOKENS)}"},
         ]
-        return await complete_chat(messages, db, log_tag="summarize_doc")
+        return await complete_chat(messages, db, log_tag="summarize_doc", model_id=model_id)
 
     section_sem = asyncio.Semaphore(_CHUNK_SUMMARY_CONCURRENCY)
 
     async def _summarize_one(text: str) -> str:
         async with section_sem:
-            return await _summarize_chunk(db, text, system=system)
+            return await _summarize_chunk(db, text, system=system, model_id=model_id)
 
     section_summaries = [
         s for s in await asyncio.gather(*[_summarize_one(text) for text in chunk_texts]) if s
@@ -81,4 +86,4 @@ async def generate_whole_doc_summary(db: Session, document_id: uuid.UUID) -> str
             "content": "Write one cohesive document summary from these section summaries.",
         },
     ]
-    return await complete_chat(messages, db, log_tag="summarize_rollup")
+    return await complete_chat(messages, db, log_tag="summarize_rollup", model_id=model_id)

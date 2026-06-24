@@ -65,6 +65,35 @@ def list_pool_chat_models(
     return out
 
 
+def iter_failover_attempts(
+    db: Session,
+    *,
+    start: ResolvedLlmModel,
+    require_vision: bool = False,
+) -> Iterator[ResolvedLlmModel]:
+    """Yield models to try after a transient error — same provider first.
+
+    Cross-provider failover re-bills the full uncached prefix; exhausting
+    same-provider siblings first preserves provider-side prefix caches.
+    """
+    pool = list_pool_chat_models(db, require_vision=require_vision)
+    if not pool:
+        yield start
+        return
+
+    provider_id = start.provider.id
+    same_provider = [m for m in pool if m.provider.id == provider_id]
+    other_provider = [m for m in pool if m.provider.id != provider_id]
+
+    seen: set[uuid.UUID] = set()
+    for candidate in (start, *same_provider, *other_provider):
+        mid = candidate.record.id
+        if mid in seen:
+            continue
+        seen.add(mid)
+        yield candidate
+
+
 def iter_chat_model_attempts(
     db: Session,
     *,

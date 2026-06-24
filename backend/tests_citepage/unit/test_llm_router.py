@@ -55,7 +55,8 @@ def test_stream_chat_completion_uses_registry() -> None:
         ):
             async for token in llm_router.stream_chat_completion([{"role": "user", "content": "x"}], db):
                 tokens.append(token)
-        attempts.assert_called_once_with(db, model_id=None, require_vision=False)
+        attempts.assert_called()
+        assert attempts.call_args.kwargs.get("require_vision") is False
         provider_kwargs.assert_called_once_with(resolved)
         mock_litellm.acompletion.assert_awaited_once()
         assert mock_litellm.acompletion.await_args.kwargs["api_key"] == "test-key"

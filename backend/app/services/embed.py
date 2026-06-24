@@ -71,4 +71,6 @@ def _embed_query_cached(text: str) -> tuple[float, ...]:
 
 
 def embed_query(text: str) -> list[float]:
-    return list(_embed_query_cached(text))
+    # Match passage: prefix used at index time so query vectors share the same space.
+    prefixed = f"query: {text}" if text and not text.startswith("query:") else text
+    return list(_embed_query_cached(prefixed))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -36,30 +37,24 @@ def assert_storage_available(
     doc_guest_id: str | None = None
 
     if user:
-        # Row-lock the user's existing documents so concurrent uploads can't
-        # both pass the quota check before either commits.
-        rows = (
-            db.query(Document.size_bytes)
+        used = (
+            db.query(func.coalesce(func.sum(Document.size_bytes), 0))
             .filter(Document.account_id == user.id)
-            .with_for_update()
-            .all()
+            .scalar()
         )
-        used = sum(row[0] for row in rows)
+        used = int(used or 0)
     else:
         assert guest_id is not None
         doc_guest_id = guest_id
         if counts_toward_guest_cap:
-            # Same race protection for guests: lock their existing rows
-            # before counting toward the per-guest cap.
-            existing = (
-                db.query(Document)
+            non_image_count = (
+                db.query(func.count(Document.id))
                 .filter(Document.account_id.is_(None))
                 .filter(Document.meta["guest_id"].astext == doc_guest_id)
-                .with_for_update()
-                .all()
+                .filter(~Document.content_type.startswith("image/"))
+                .scalar()
             )
-            non_image = [d for d in existing if not d.content_type.startswith("image/")]
-            if len(non_image) >= settings.guest_document_limit:
+            if int(non_image_count or 0) >= settings.guest_document_limit:
                 raise HTTPException(status_code=409, detail="Sign in to add more documents")
         used = guest_storage_used(db, doc_guest_id)
 

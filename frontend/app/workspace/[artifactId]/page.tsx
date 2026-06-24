@@ -357,6 +357,12 @@ export default function WorkspaceArtifactPage({
   }, [tutorPanelMax, tutorPanelWidth, setTutorPanelWidth]);
 
   useEffect(() => {
+    return () => {
+      chatAbortRef.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
     if (invalidArtifactId || !selectedRange || artifact?.status === "indexing") return;
     let cancelled = false;
     const url = apiUrl(`/api/artifacts/${artifactId}/learn-queue/stream`);
@@ -383,6 +389,7 @@ export default function WorkspaceArtifactPage({
     });
     es.addEventListener("error", () => {
       if (cancelled) return;
+      es.close();
       setQuestion("Sign in or reload to load questions.");
       setMcqLoading(false);
     });

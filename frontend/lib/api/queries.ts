@@ -52,7 +52,7 @@ export function useArtifactQuery(artifactId: string, enabled = true) {
     enabled: enabled && Boolean(artifactId),
     refetchInterval: (query) => {
       if (query.state.data?.status !== "indexing") return false;
-      return document.visibilityState === "visible" ? 2500 : false;
+      return document.visibilityState === "visible" ? 5000 : false;
     },
   });
 }

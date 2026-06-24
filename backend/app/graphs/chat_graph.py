@@ -9,6 +9,9 @@ from sqlalchemy.orm import Session
 
 from app.services.chat_retrieval import retrieve_document_chunks
 from app.services.retrieval_gate import needs_retrieval
+from app.services.token_budget import truncate_to_tokens
+
+_CHAT_CONTEXT_MAX_TOKENS = 4_000
 
 
 class ChatState(TypedDict, total=False):
@@ -56,7 +59,7 @@ def retrieve_context(state: ChatState, *, db: Session) -> dict[str, Any]:
     parts: list[str] = []
     for c in chunks:
         parts.append(c["text"])
-    context_block = "\n\n".join(parts)
+    context_block = truncate_to_tokens("\n\n".join(parts), _CHAT_CONTEXT_MAX_TOKENS)
     # Context is returned separately rather than injected as a mid-list system
     # message. The caller folds it into the final user turn so the leading
     # [system, ...history] prefix stays byte-stable across turns — which is

@@ -1,6 +1,6 @@
 namespace: zivo
 image: edoburu/pgbouncer:1.22.1-p0
-replicas: 1
+replicas: 2
 postgresHost: postgres
 postgresPort: 5432
 poolMode: transaction

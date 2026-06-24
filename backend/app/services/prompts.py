@@ -139,10 +139,7 @@ Fatal flaws (always fail):
 - too_similar_to_prior — same fact, paraphrased stem, or overlapping correct answer vs a prior question on this page
 - meta_page_reference — stem opens with "according to the page/text" or similar instead of asking the concept directly
 
-Also judge:
-- cognitive_level: recall | comprehension | application | analysis
-- matches_aspect: tests the assigned aspect
-- provokes_understanding: rewards attention and thought, not trivia spam
+Also judge fatal flaws only — do not emit extra metadata fields.
 
 Return JSON only — no markdown.""",
     "mcq_critic_format": """Review this MCQ against the page source.
@@ -151,14 +148,14 @@ Target aspect: {aspect_label} (key: {aspect_key})
 {cognitive_angle_line}
 
 Page excerpt:
-{page_excerpt}
+(page text provided in the prior message)
 
 MCQ JSON:
 {mcq_json}
 
 {prior_mcqs_block}
 Return exactly one JSON object:
-{{"pass": <bool>, "flaw_count": <int>, "fatal_flaws": ["<slug>"], "flaws": [{{"code": "<slug>", "message": "<short>"}}], "cognitive_level": "<level>", "matches_aspect": <bool>, "provokes_understanding": <bool>, "rewrite_hints": "<concrete fixes if fail, else empty>"}}""",
+{{"pass": <bool>, "flaw_count": <int>, "fatal_flaws": ["<slug>"], "flaws": [{{"code": "<slug>", "message": "<short>"}}], "rewrite_hints": "<concrete fixes if fail, else empty>"}}""",
     "mcq_rewrite_system": """You rewrite a multiple-choice question to fix item-writing flaws while keeping the same target aspect and page grounding.
 
 Apply the rewrite hints. Keep one best answer, plausible distractors, and a clear stem.

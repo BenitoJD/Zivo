@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import json
+import hashlib
 import re
 import uuid
+from collections import OrderedDict
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -24,6 +25,36 @@ from app.services.retrieval import fetch_chunks_for_page_range
 from app.services.token_budget import truncate_to_tokens
 
 _TRIAGE_PAGE_MAX_TOKENS = 4_000
+
+
+class _TriageCache:
+    """In-process LRU cache of triage JSON keyed by page-text hash."""
+
+    def __init__(self, max_entries: int = 128) -> None:
+        self._store: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._max = max_entries
+
+    def _key(self, page_text: str, page_number: int) -> str:
+        digest = hashlib.sha256(page_text.encode("utf-8", "ignore")).hexdigest()
+        return f"{page_number}:{digest}"
+
+    def get(self, page_text: str, page_number: int) -> dict[str, Any] | None:
+        key = self._key(page_text, page_number)
+        hit = self._store.get(key)
+        if hit is None:
+            return None
+        self._store.move_to_end(key)
+        return dict(hit)
+
+    def put(self, page_text: str, page_number: int, result: dict[str, Any]) -> None:
+        key = self._key(page_text, page_number)
+        self._store[key] = dict(result)
+        self._store.move_to_end(key)
+        while len(self._store) > self._max:
+            self._store.popitem(last=False)
+
+
+_triage_cache = _TriageCache()
 
 
 def run_page_triage(
@@ -173,6 +204,10 @@ def _finalize_triage(
 
 
 def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, Any]:
+    cached = _triage_cache.get(page_text, page_number)
+    if cached is not None:
+        return cached
+
     excerpt = truncate_to_tokens(page_text, _TRIAGE_PAGE_MAX_TOKENS) if page_text else ""
     if excerpt:
         try:
@@ -214,11 +249,15 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
                     return _fallback_triage(page_text, page_number)
                 if budget < len(aspects):
                     budget = min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, len(aspects))
-                return _finalize_triage(
+                result = _finalize_triage(
                     aspects=aspects[:budget],
                     budget=budget,
                     rationale=(parsed.get("rationale") or "").strip(),
                 )
+                _triage_cache.put(page_text, page_number, result)
+                return result
         except Exception:
             pass
-    return _fallback_triage(page_text, page_number)
+    result = _fallback_triage(page_text, page_number)
+    _triage_cache.put(page_text, page_number, result)
+    return result
