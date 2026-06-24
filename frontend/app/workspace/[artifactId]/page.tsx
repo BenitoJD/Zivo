@@ -2297,10 +2297,25 @@ function McqHeroPanel({
   }, [waitStatus.rotateKey]);
 
   if (waiting) {
+    // Determinate progress during generation: turn the vague spinner into a
+    // moving bar the user can watch fill toward the page's question budget.
+    // Known waits feel ~30% shorter than unknown waits (HCI research). Falls
+    // back to an animated indeterminate bar when no budget is known yet.
+    const generated = queue?.questions_generated ?? 0;
+    const budget = queue?.question_budget ?? 0;
+    const hasDeterminate = budget > 0;
+    const progressPct = hasDeterminate ? Math.min(100, Math.round((generated / budget) * 100)) : 0;
     return (
       <Center py={compact ? "lg" : "xl"}>
         <Stack align="center" gap="sm" maw={320}>
-          <Loader type="oval" size="sm" />
+          <Progress
+            value={hasDeterminate ? progressPct : 100}
+            size="sm"
+            radius="xl"
+            w={180}
+            animated
+            color={progressPct >= 100 && hasDeterminate ? "teal" : "blue"}
+          />
           <Text
             size="lg"
             fw={500}
@@ -2313,6 +2328,11 @@ function McqHeroPanel({
           <Text size="sm" c="dimmed" ta="center" lh={1.55} maw={280}>
             {waitStatus.detail}
           </Text>
+          {hasDeterminate && generated > 0 && (
+            <Text size="xs" c="dimmed" fw={500}>
+              {generated} of {budget} ready
+            </Text>
+          )}
         </Stack>
       </Center>
     );
