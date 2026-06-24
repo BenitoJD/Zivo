@@ -1,0 +1,145 @@
+"""DB-backed generation cache — shared across workers, survives restarts.
+
+Replaces the in-process _BatchDraftCache and _page_context_cache so that:
+  - the 4 CPU workers share one cache instead of 4 private copies,
+  - a worker crash no longer forces the demo doc (or a re-queried page) to
+    re-pay the LLM generation cost.
+
+Two `kind` values are stored:
+  - 'batch_drafts'   — the raw MCQ draft list from generate_quality_mcq_batch
+  - 'page_context'   — stable truncated page text used as the cached LLM prefix
+
+Entries carry a created_at; TTL is enforced on read and swept opportunistically
+on write. Default TTL (24h) is conservative — drafts are cheap to regenerate and
+the quality gate still runs on every retrieval, so a stale hit only risks
+slightly less-fresh LLM output.
+"""
+
+from __future__ import annotations
+
+import json
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+DEFAULT_TTL_SECONDS = 24 * 60 * 60
+# Sweep at most this many expired rows per write to bound write latency.
+SWEEP_BATCH = 50
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _expired_expr(ttl_seconds: int) -> str:
+    cutoff = _now() - timedelta(seconds=ttl_seconds)
+    return cutoff.isoformat()
+
+
+def get(
+    db: Session,
+    *,
+    kind: str,
+    cache_key: str,
+    ttl_seconds: int = DEFAULT_TTL_SECONDS,
+) -> Any | None:
+    row = db.execute(
+        text(
+            """
+            SELECT value FROM qb.generation_cache
+            WHERE cache_key = :key AND kind = :kind
+              AND created_at >= :cutoff
+            """
+        ),
+        {"key": cache_key, "kind": kind, "cutoff": _expired_expr(ttl_seconds)},
+    ).first()
+    if not row:
+        return None
+    # psycopg decodes JSONB to native Python (list/dict/str/int/bool) already,
+    # so no json.loads needed here — just hand back whatever JSONB gave us.
+    return row[0]
+
+
+def put(
+    db: Session,
+    *,
+    kind: str,
+    cache_key: str,
+    value: Any,
+    ttl_seconds: int = DEFAULT_TTL_SECONDS,
+) -> None:
+    db.execute(
+        text(
+            """
+            INSERT INTO qb.generation_cache (cache_key, kind, value, created_at)
+            VALUES (:key, :kind, CAST(:value AS jsonb), now())
+            ON CONFLICT (cache_key) DO UPDATE SET
+              kind = EXCLUDED.kind,
+              value = EXCLUDED.value,
+              created_at = now()
+            """
+        ),
+        {
+            "key": cache_key,
+            "kind": kind,
+            "value": json.dumps(value, default=str),
+        },
+    )
+    _opportunistic_sweep(db, ttl_seconds)
+
+
+def _opportunistic_sweep(db: Session, ttl_seconds: int) -> None:
+    """Delete a bounded batch of expired rows. Best-effort; ignore errors."""
+    try:
+        db.execute(
+            text(
+                """
+                DELETE FROM qb.generation_cache
+                WHERE ctid IN (
+                    SELECT ctid FROM qb.generation_cache
+                    WHERE created_at < :cutoff
+                    LIMIT :batch
+                )
+                """
+            ),
+            {"cutoff": _expired_expr(ttl_seconds), "batch": SWEEP_BATCH},
+        )
+    except Exception:
+        pass
+
+
+# --- key builders (mirror the in-process cache hashing) ---------------------
+
+
+def batch_drafts_key(
+    page_number: int,
+    targets: list[dict[str, Any]],
+    prior_mcqs: list[dict[str, Any]] | None,
+) -> str:
+    """Deterministic key for a batch-draft cache entry.
+
+    Page number + sorted aspect keys define the page-context intent; the prior
+    MCQ digest is included so two batches with different "don't repeat these"
+    histories don't collide. Matches the semantics of the old _BatchDraftCache.
+    """
+    import hashlib
+
+    aspect_keys = sorted(str(t.get("key") or "") for t in targets)
+    h = hashlib.sha256()
+    h.update(str(page_number).encode("ascii"))
+    h.update(b"\x1f")
+    h.update("\x1e".join(aspect_keys).encode("utf-8", "ignore"))
+    if prior_mcqs:
+        prior_digest = hashlib.sha256(
+            json.dumps(prior_mcqs, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        h.update(b"\x1f")
+        h.update(prior_digest.encode("ascii"))
+    return h.hexdigest()
+
+
+def page_context_key(document_id: uuid.UUID, page_number: int) -> str:
+    return f"ctx:{document_id}:{page_number}"

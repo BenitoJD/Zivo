@@ -12,8 +12,15 @@ settings = get_settings()
 DEFAULT_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 
 _active_embed_model: str | None = None
-_EMBED_BATCH_CONCURRENCY = int(os.getenv("ZIVO_EMBED_BATCH_CONCURRENCY", "2"))
-_embed_batch_semaphore = threading.Semaphore(_EMBED_BATCH_CONCURRENCY)
+# Two separate pools so a large ingest (hundreds of chunks) can't starve the
+# interactive path. Ingest is batch and can tolerate waiting; query serves
+# chat/generation and needs low latency. The query pool stays small because
+# single-text embeds are cheap and we don't want to oversubscribe the ONNX
+# runtime, which serializes across threads anyway.
+_EMBED_INGEST_CONCURRENCY = int(os.getenv("ZIVO_EMBED_INGEST_CONCURRENCY", "2"))
+_EMBED_QUERY_CONCURRENCY = int(os.getenv("ZIVO_EMBED_QUERY_CONCURRENCY", "2"))
+_embed_ingest_semaphore = threading.Semaphore(_EMBED_INGEST_CONCURRENCY)
+_embed_query_semaphore = threading.Semaphore(_EMBED_QUERY_CONCURRENCY)
 
 
 def clear_query_cache() -> None:
@@ -53,7 +60,12 @@ def _parallel_workers() -> int | None:
 def embed_texts(texts: list[str]) -> list[list[float]]:
     if not texts:
         return []
-    with _embed_batch_semaphore:
+    # Heuristic pool selection: large batches are ingest (bulk re-embed),
+    # small lists are query/generation (interactive). Keeps a big doc's
+    # embedding pass from blocking chat.
+    is_ingest = len(texts) >= 8
+    semaphore = _embed_ingest_semaphore if is_ingest else _embed_query_semaphore
+    with semaphore:
         embedder = get_embedder()
         # Single text -> skip data-parallel overhead; batches benefit from it.
         parallel = 1 if len(texts) <= 1 else _parallel_workers()

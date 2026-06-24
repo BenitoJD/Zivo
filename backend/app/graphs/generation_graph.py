@@ -20,8 +20,8 @@ from app.services.question_pool import (
     effective_question_budget,
     get_page_coverage,
     get_progress,
-    get_question_budget,
     mark_aspect_asked,
+    mark_aspects_asked,
     on_batch_completed,
     set_coverage_complete,
 )
@@ -31,7 +31,6 @@ from app.services.token_budget import PAGE_INPUT_MAX_TOKENS, truncate_to_tokens
 
 # Stable full-page prefix for provider prompt caching; aspect hints live in the tail message.
 _PAGE_CONTEXT_MAX_TOKENS = PAGE_INPUT_MAX_TOKENS
-_page_context_cache: dict[tuple[str, int], str] = {}
 
 
 def _stable_page_context(page_text: str) -> str:
@@ -39,15 +38,25 @@ def _stable_page_context(page_text: str) -> str:
     return truncate_to_tokens(page_text, _PAGE_CONTEXT_MAX_TOKENS)
 
 
-def get_cacheable_page_context(document_id: uuid.UUID, page_number: int, page_text: str) -> str:
-    key = (str(document_id), page_number)
-    cached = _page_context_cache.get(key)
-    if cached is not None:
-        return cached
+def get_cacheable_page_context(
+    db: Session, document_id: uuid.UUID, page_number: int, page_text: str
+) -> str:
+    """Stable truncated page text, DB-cached so it survives worker restart and
+    is shared across the 4 CPU workers.
+
+    Replaces the old in-process dict: every worker used to compute and hold its
+    own copy, and a crash dropped it — forcing the next batch on that page to
+    re-truncate (cheap) but also lose provider-prompt-cache prefix stability
+    hints across process boundaries. The DB cache is keyed per (doc, page).
+    """
+    from app.services.generation_cache import get as cache_get, page_context_key, put as cache_put
+
+    key = page_context_key(document_id, page_number)
+    cached = cache_get(db, kind="page_context", cache_key=key)
+    if cached:
+        return str(cached)
     ctx = _stable_page_context(page_text)
-    _page_context_cache[key] = ctx
-    if len(_page_context_cache) > 256:
-        _page_context_cache.pop(next(iter(_page_context_cache)))
+    cache_put(db, kind="page_context", cache_key=key, value=ctx)
     return ctx
 
 
@@ -162,6 +171,9 @@ def _clone_reusable_mcqs(
 
     saved = 0
     sequence = start_sequence
+    facet_rows: list[dict[str, Any]] = []
+    asked_keys: list[str] = []
+    payloads: list[tuple[dict[str, Any], int]] = []
     for target, template in zip(targets, reusable):
         sequence += 1
         if sequence > budget:
@@ -175,10 +187,21 @@ def _clone_reusable_mcqs(
         }
         payload["page_content_hash"] = page_hash
         payload["reused_from_shared"] = True
-        _persist_assertion(db, document_id, payload, page_number=page_number, sequence=sequence)
+        payloads.append((payload, sequence))
         if target and target.get("key"):
-            mark_aspect_asked(db, document_id, page_number, str(target["key"]))
+            asked_keys.append(str(target["key"]))
         saved += 1
+
+    if payloads:
+        _persist_assertions(
+            db,
+            document_id,
+            payloads,
+            page_number=page_number,
+            facet_rows=facet_rows,
+        )
+    if asked_keys:
+        mark_aspects_asked(db, document_id, page_number, asked_keys)
     if saved:
         from app.services.generation_checkpoint import checkpoint_after_save
 
@@ -398,7 +421,7 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
         db.commit()
         return {"questions_saved": cloned, "page_number": page_number, "reused": True}
 
-    stable_context = get_cacheable_page_context(document_id, page_number, page_text)
+    stable_context = get_cacheable_page_context(db, document_id, page_number, page_text)
     aspect_hints = _aspect_retrieval_hints(db, document_id, page_number, targets, page_text)
     kept = generate_quality_mcq_batch(
         db,
@@ -411,28 +434,47 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
 
     saved = 0
     sequence = start_sequence
+    facet_rows: list[dict[str, Any]] = []
+    asked_keys: list[str] = []
+    payloads_to_persist: list[tuple[dict[str, Any], int]] = []
+    hit_budget = False
     for target, payload in kept:
         sequence += 1
         if sequence > budget:
-            set_coverage_complete(db, document_id, page_number)
+            hit_budget = True
             break
         if _assertion_sequence_exists(db, document_id, page_number, sequence):
             continue
         payload = dict(payload)
         payload["page_content_hash"] = page_hash
-        _persist_assertion(db, document_id, payload, page_number=page_number, sequence=sequence)
+        payloads_to_persist.append((payload, sequence))
         if target and target.get("key"):
-            mark_aspect_asked(db, document_id, page_number, str(target["key"]))
+            asked_keys.append(str(target["key"]))
         saved += 1
+
+    if payloads_to_persist:
+        _persist_assertions(
+            db,
+            document_id,
+            payloads_to_persist,
+            page_number=page_number,
+            facet_rows=facet_rows,
+        )
+    if asked_keys:
+        mark_aspects_asked(db, document_id, page_number, asked_keys)
+    if saved:
         checkpoint_after_save(
             db,
             page_number=page_number,
             sequence=sequence,
             saved_total=saved,
         )
+    if hit_budget:
+        set_coverage_complete(db, document_id, page_number)
 
     if saved == 0 and targets:
         from app.services.mcq_quality import generate_quality_mcq
+        from app.services.mcq_dedup import prior_mcq_from_payload
 
         for target in targets:
             if target.get("asked"):
@@ -454,11 +496,18 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
                 continue
             payload = dict(payload)
             payload["page_content_hash"] = page_hash
-            _persist_assertion(db, document_id, payload, page_number=page_number, sequence=sequence)
+            _persist_assertion(
+                db, document_id, payload, page_number=page_number, sequence=sequence
+            )
             if target.get("key"):
                 mark_aspect_asked(db, document_id, page_number, str(target["key"]))
             saved += 1
-            prior_mcqs = _prior_mcqs_on_page(db, document_id, page_number)
+            # O(n^2) fix: mutate the in-memory list instead of re-querying all
+            # MCQs on the page after every save. The next target's generation
+            # sees this new question as a prior, which is all the DB query did.
+            prior_mcqs = list(prior_mcqs or []) + [
+                prior_mcq_from_payload(payload)
+            ]
             checkpoint_after_save(
                 db,
                 page_number=page_number,
@@ -540,3 +589,84 @@ def _persist_assertion(
         sequence=sequence,
         payload=payload,
     )
+
+
+def _persist_assertions(
+    db: Session,
+    document_id: uuid.UUID,
+    payloads: list[tuple[dict[str, Any], int]],
+    *,
+    page_number: int,
+    facet_rows: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Batched persist — one executemany INSERT for assertions + one for facets.
+
+    Replaces N sequential _persist_assertion calls (each = 1 assertion INSERT +
+    1 facet UPSERT = 2N round trips for a batch of N) with two batched writes.
+    Concept/source ids are resolved once. Returns the finalized payload dicts
+    (with assertion_id set) so callers can append them to prior_mcqs in memory.
+    """
+    from app.repositories.intel import _concept_id, _source_id
+    from app.services.mcq_assertion_facets import upsert_facets
+
+    if not payloads:
+        return []
+
+    type_id = _concept_id(db, "/vocab/assertion/question.mcq")
+    source_id = _source_id(db, "user-upload")
+
+    assertion_rows: list[dict[str, Any]] = []
+    finalized: list[dict[str, Any]] = []
+    facet_input: list[dict[str, Any]] = []
+    for payload, sequence in payloads:
+        assertion_id = uuid.uuid4()
+        payload = {
+            **payload,
+            "artifact_id": str(document_id),
+            "format": "qb.mcq.v1",
+            "page_number": page_number,
+            "sequence": sequence,
+        }
+        assertion_rows.append(
+            {
+                "id": assertion_id,
+                "type_id": type_id,
+                "source_id": source_id,
+                "uri": f"qb://assertion/{assertion_id}",
+                "fp": f"{document_id}:{page_number}:{sequence}",
+                "title": (payload.get("question") or "")[:200],
+                "summary": payload.get("explanation"),
+                "payload": json.dumps(payload),
+            }
+        )
+        payload["_assertion_id"] = str(assertion_id)
+        finalized.append(payload)
+        facet_input.append(
+            {
+                "assertion_id": assertion_id,
+                "artifact_id": document_id,
+                "page_number": page_number,
+                "sequence": sequence,
+                "payload": payload,
+            }
+        )
+
+    db.execute(
+        text(
+            """
+            INSERT INTO intel.assertion (
+              id, type_concept_id, source_id, canonical_uri, fingerprint,
+              title, summary, payload, status
+            )
+            VALUES (
+              :id, :type_id, :source_id, :uri, :fp,
+              :title, :summary, CAST(:payload AS jsonb), 'active'
+            )
+            """
+        ),
+        assertion_rows,
+    )
+    upsert_facets(db, facet_input)
+    if facet_rows is not None:
+        facet_rows.extend(facet_input)
+    return finalized
