@@ -119,7 +119,8 @@ async def chunked_complete(
 
     def _run() -> DocumentOut:
         with SessionLocal() as session:
-            return complete_upload_session(session, session_id, user=user, guest_id=guest_id)
+            doc = complete_upload_session(session, session_id, user=user, guest_id=guest_id)
+            return DocumentOut.model_validate(doc)
 
     return await asyncio.to_thread(_run)
 
