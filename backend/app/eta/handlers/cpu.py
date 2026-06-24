@@ -243,10 +243,13 @@ def ingest_rag_window_job(payload: dict) -> dict:
 def transition_prep_job(payload: dict) -> dict:
     from app.services.question_pool import (
         FIRST_QUESTION_BATCH_SIZE,
+        TRANSITION_GENERATION_RATIO,
         count_assertions_on_page,
+        effective_question_budget,
         enqueue_page_batch,
         enqueue_page_triage,
         get_page_coverage,
+        get_progress,
         get_question_budget,
         mark_transition_prep_done,
         selected_page_list,
@@ -259,7 +262,8 @@ def transition_prep_job(payload: dict) -> dict:
         if not doc:
             return {"skipped": True}
 
-        budget = get_question_budget(doc, current_page)
+        progress = get_progress(doc)
+        budget = effective_question_budget(doc, current_page, progress)
         generated = count_assertions_on_page(db, document_id, current_page)
         if generated < budget:
             remaining = budget - generated
@@ -278,11 +282,20 @@ def transition_prep_job(payload: dict) -> dict:
             if idx < len(study) - 1:
                 next_page = study[idx + 1]
 
+        answered_on_page = int(progress.get("answered_on_page") or 0)
+        triage_budget = get_question_budget(doc, current_page)
+        allow_next_page_generation = (
+            triage_budget > 0 and answered_on_page / triage_budget >= TRANSITION_GENERATION_RATIO
+        )
+
         if next_page is not None:
             if not get_page_coverage(doc, next_page):
                 enqueue_page_triage(db, doc, page=next_page)
-            elif count_assertions_on_page(db, document_id, next_page) == 0:
-                next_budget = get_question_budget(doc, next_page)
+            elif (
+                allow_next_page_generation
+                and count_assertions_on_page(db, document_id, next_page) == 0
+            ):
+                next_budget = effective_question_budget(doc, next_page, progress)
                 enqueue_page_batch(
                     db,
                     doc,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import uuid
@@ -11,7 +10,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.repositories.intel import update_activity
-from app.services.llm_router import complete_chat
+from app.services.llm_router import acomplete_chat
+from app.services.llm_sync import run_coro_in_worker
 from app.services.mcq_dedup import dedupe_aspects
 from app.services.prompts import get_prompt
 from app.services.question_pool import (
@@ -74,7 +74,9 @@ def run_page_triage(
 def _complete_chat_sync(
     db: Session, messages: list[dict], *, model_id: uuid.UUID | None = None
 ) -> str:
-    return asyncio.run(complete_chat(messages, db, log_tag="page_triage", model_id=model_id))
+    return run_coro_in_worker(
+        acomplete_chat(messages, db, log_tag="page_triage", model_id=model_id)
+    )
 
 
 def _parse_triage_json(raw: str) -> dict[str, Any] | None:

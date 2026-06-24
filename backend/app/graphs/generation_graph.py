@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from typing import Any
 
@@ -14,9 +13,11 @@ from app.graphs.page_triage_graph import run_page_triage
 from app.models import Document
 from app.repositories.intel import update_activity
 from app.services.mcq_dedup import prior_mcq_from_payload
-from app.services.mcq_quality import generate_quality_mcq, generate_quality_mcq_batch
+from app.services.mcq_quality import generate_quality_mcq_batch
 from app.services.question_pool import (
+    effective_question_budget,
     get_page_coverage,
+    get_progress,
     get_question_budget,
     mark_aspect_asked,
     on_batch_completed,
@@ -26,55 +27,44 @@ from app.services.embed import embed_texts
 from app.services.retrieval import fetch_chunks_for_page_range, search_chunks
 from app.services.token_budget import truncate_to_tokens
 
-# Retrieval-first context: instead of sending the whole page (~12k chars) to the
-# model, embed the target aspect labels and retrieve only the semantically
-# relevant chunks. ~75% less input processing = much faster generation, and
-# tighter/grounded questions (less noise for the model to wade through). The
-# fallback is a window around the best-matching chunk if retrieval is sparse.
-CONTEXT_CHAR_BUDGET = int(os.getenv("ZIVO_CONTEXT_CHAR_BUDGET", "4000"))
-CONTEXT_MIN_CHUNKS = 3
+# Stable full-page prefix for provider prompt caching; aspect hints live in the tail message.
 _PAGE_CONTEXT_MAX_TOKENS = 3_500
+_page_context_cache: dict[tuple[str, int], str] = {}
 
 
-def _window_around_chunk(page_text: str, anchor: str, *, window_chars: int = 4_000) -> str:
-    """Return a local window of page text centered on anchor text."""
-    if not page_text:
-        return ""
-    if not anchor:
-        return truncate_to_tokens(page_text, _PAGE_CONTEXT_MAX_TOKENS)
-    idx = page_text.find(anchor[: min(200, len(anchor))])
-    if idx < 0:
-        return truncate_to_tokens(page_text, _PAGE_CONTEXT_MAX_TOKENS)
-    half = window_chars // 2
-    start = max(0, idx - half)
-    end = min(len(page_text), idx + half)
-    return truncate_to_tokens(page_text[start:end], _PAGE_CONTEXT_MAX_TOKENS)
+def _stable_page_context(page_text: str) -> str:
+    """Byte-stable truncated page text — cacheable LLM prefix across batches."""
+    return truncate_to_tokens(page_text, _PAGE_CONTEXT_MAX_TOKENS)
 
 
-def _fetch_focused_context(
+def get_cacheable_page_context(document_id: uuid.UUID, page_number: int, page_text: str) -> str:
+    key = (str(document_id), page_number)
+    cached = _page_context_cache.get(key)
+    if cached is not None:
+        return cached
+    ctx = _stable_page_context(page_text)
+    _page_context_cache[key] = ctx
+    if len(_page_context_cache) > 256:
+        _page_context_cache.pop(next(iter(_page_context_cache)))
+    return ctx
+
+
+def _aspect_retrieval_hints(
     db: Session,
     document_id: uuid.UUID,
     page_number: int,
     targets: list[dict[str, Any]],
     page_text: str,
 ) -> str:
-    """Aspect-relevant page context for generation, instead of the whole page.
-
-    Embeds the target aspect labels, retrieves the top matching chunks via
-    pgvector, and concatenates up to CONTEXT_CHAR_BUDGET chars. Falls back to the
-    full page text if retrieval misses (so generation never fails for lack of
-    context — the model always has something grounded to work from).
-    """
-    if not targets:
-        return truncate_to_tokens(page_text, _PAGE_CONTEXT_MAX_TOKENS)
+    """Short per-aspect retrieval snippets for the variable tail message (not cached prefix)."""
+    if not targets or not page_text:
+        return ""
 
     try:
-        # Embed all aspect labels in one batch; use the mean vector as the query
-        # so we retrieve chunks relevant to the WHOLE set, not just one aspect.
         labels = [str(t.get("label") or t.get("key") or "") for t in targets]
         vecs = embed_texts(labels)
         if not vecs:
-            return truncate_to_tokens(page_text, _PAGE_CONTEXT_MAX_TOKENS)
+            return ""
         dims = len(vecs[0])
         mean_vec = [sum(v[i] for v in vecs) / len(vecs) for i in range(dims)]
         hits = search_chunks(
@@ -83,28 +73,19 @@ def _fetch_focused_context(
             query_embedding=mean_vec,
             page_start=page_number,
             page_end=page_number,
-            limit=10,
+            limit=5,
         )
-        # Dedupe by text, keep order by score, accumulate up to the char budget.
-        seen: set[str] = set()
         parts: list[str] = []
-        total = 0
+        seen: set[str] = set()
         for chunk in hits:
             t = (chunk.get("text") or "").strip()
             if not t or t in seen:
                 continue
             seen.add(t)
-            if total + len(t) > CONTEXT_CHAR_BUDGET and len(parts) >= CONTEXT_MIN_CHUNKS:
-                break
-            parts.append(t)
-            total += len(t)
-        if len(parts) < CONTEXT_MIN_CHUNKS:
-            best = (hits[0].get("text") or "").strip() if hits else ""
-            return _window_around_chunk(page_text, best)
-        return "\n\n".join(parts)
+            parts.append(t[:600])
+        return "\n---\n".join(parts)
     except Exception:
-        # Any retrieval failure must not block generation.
-        return truncate_to_tokens(page_text, _PAGE_CONTEXT_MAX_TOKENS)
+        return ""
 
 
 def run_generation(db: Session, document_id: uuid.UUID, options: dict[str, Any]) -> dict[str, Any]:
@@ -119,7 +100,7 @@ def run_generation(db: Session, document_id: uuid.UUID, options: dict[str, Any])
         )
     if mode == "page_batch":
         return _run_page_batch(db, document_id, options)
-    return _run_legacy_pool(db, document_id, options)
+    return {"questions_saved": 0, "error": f"unknown generation mode: {mode}"}
 
 
 def _assertion_sequence_exists(
@@ -240,7 +221,8 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
         page_end=page_number,
     )
     page_text = "\n\n".join(c["text"] for c in chunks if c.get("text")).strip()
-    budget = get_question_budget(doc, page_number)
+    progress = get_progress(doc)
+    budget = effective_question_budget(doc, page_number, progress)
 
     remaining = budget - start_sequence
     targets = _next_aspects(doc, page_number, min(batch_size, max(0, remaining)))
@@ -275,21 +257,15 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
             return {"questions_saved": 0, "page_number": page_number}
 
     prior_mcqs = _prior_mcqs_on_page(db, document_id, page_number)
-    # Retrieval-first: instead of the whole page, send only the chunks relevant
-    # to these target aspects. ~75% less input for the model to process, and
-    # tighter/grounded questions. Falls back to full page text if retrieval
-    # returns too little.
-    context = _fetch_focused_context(db, document_id, page_number, targets, page_text)
-    # One LLM call produces up to N MCQs (N = len(targets), capped at 5). The
-    # batch generator runs the per-MCQ quality gate (heuristics + embedding
-    # similarity) and intra-batch dedup internally. A single call collapses N
-    # TTFTs to one and lets the model self-coordinate distractor diversity.
+    stable_context = get_cacheable_page_context(document_id, page_number, page_text)
+    aspect_hints = _aspect_retrieval_hints(db, document_id, page_number, targets, page_text)
     kept = generate_quality_mcq_batch(
         db,
-        page_text=context,
+        page_text=stable_context,
         page_number=page_number,
         targets=targets,
         prior_mcqs=prior_mcqs,
+        aspect_hints=aspect_hints,
     )
 
     saved = 0
@@ -321,60 +297,6 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
         )
     db.commit()
     return {"questions_saved": saved, "page_number": page_number}
-
-
-def _run_legacy_pool(db: Session, document_id: uuid.UUID, options: dict[str, Any]) -> dict[str, Any]:
-    """Backward-compatible small pool (unused in normal flow)."""
-    activity_id = options.get("activity_id")
-    pool_size = int(options.get("pool_size", 5))
-    saved = 0
-    for i in range(pool_size):
-        payload = _generate_one_for_page(
-            db,
-            page_text="",
-            page_number=1,
-            sequence=i + 1,
-            document_id=document_id,
-        )
-        if payload is None:
-            continue
-        _persist_assertion(db, document_id, payload, page_number=1, sequence=i + 1)
-        saved += 1
-    if activity_id:
-        update_activity(
-            db,
-            uuid.UUID(str(activity_id)),
-            status="succeeded",
-            stats={"questions_saved": saved},
-            finished=True,
-        )
-    db.commit()
-    return {"questions_saved": saved}
-
-
-def _generate_one_for_page(
-    db: Session,
-    *,
-    page_text: str,
-    page_number: int,
-    sequence: int,
-    document_id: uuid.UUID,
-    target_aspect: dict[str, Any] | None = None,
-    prior_mcqs: list[dict[str, Any]] | None = None,
-) -> dict[str, Any] | None:
-    payload = generate_quality_mcq(
-        db,
-        page_text=page_text,
-        page_number=page_number,
-        sequence=sequence,
-        target_aspect=target_aspect,
-        prior_mcqs=prior_mcqs,
-    )
-    if payload is None:
-        return None
-    payload["page_number"] = page_number
-    payload["sequence"] = sequence
-    return payload
 
 
 def _persist_assertion(

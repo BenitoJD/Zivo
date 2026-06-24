@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -27,6 +28,34 @@ from app.services.question_pool import (
 )
 
 router = APIRouter()
+
+_CONCEPTS_CACHE_TTL_SECONDS = 30.0
+_concepts_cache: dict[str, tuple[float, list[dict]]] = {}
+
+
+def _artifact_concepts(db: Session, artifact_id: uuid.UUID) -> list[dict]:
+    key = str(artifact_id)
+    now = time.monotonic()
+    cached = _concepts_cache.get(key)
+    if cached and now - cached[0] < _CONCEPTS_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    concepts = db.execute(
+        text(
+            """
+            SELECT DISTINCT payload->>'primary_concept_key' AS concept_key,
+                   payload->>'primary_concept' AS label
+            FROM intel.assertion
+            WHERE payload->>'artifact_id' = :aid
+              AND status = 'active'
+              AND payload->>'primary_concept_key' IS NOT NULL
+            """
+        ),
+        {"aid": key},
+    ).mappings().all()
+    rows = [dict(c) for c in concepts]
+    _concepts_cache[key] = (now, rows)
+    return rows
 
 
 def _workspace_state(
@@ -67,22 +96,9 @@ def _learn_queue_payload(
     state = build_learn_queue_state(db, artifact_id, doc, progress)
     ws = _workspace_state(db, doc, user)
 
-    concepts = db.execute(
-        text(
-            """
-            SELECT DISTINCT payload->>'primary_concept_key' AS concept_key,
-                   payload->>'primary_concept' AS label
-            FROM intel.assertion
-            WHERE payload->>'artifact_id' = :aid
-              AND payload->>'primary_concept_key' IS NOT NULL
-            """
-        ),
-        {"aid": str(artifact_id)},
-    ).mappings().all()
-
     return {
         **state,
-        "concepts": [dict(c) for c in concepts],
+        "concepts": _artifact_concepts(db, artifact_id),
         "page_mastered": state["page_complete"],
         "page_ready": ws.get("status") == "page_ready",
         "can_advance": state["page_complete"] and not ws.get("status") == "page_ready",
@@ -123,6 +139,7 @@ async def learn_queue_stream(
 
     async def gen():
         delay = 1.0
+        tick = 0
         for _ in range(600):
             db = SessionLocal()
             try:
@@ -130,7 +147,8 @@ async def learn_queue_stream(
                 if not doc or not can_access_document(doc, user, guest_id):
                     yield {"event": "error", "data": json.dumps({"detail": "not found"})}
                     return
-                if doc.status == "ready":
+                tick += 1
+                if doc.status == "ready" and (tick == 1 or tick % 5 == 0):
                     ensure_question_pool(db, artifact_id)
                     db.refresh(doc)
                 payload = _learn_queue_payload(db, artifact_id, doc, user)

@@ -36,7 +36,7 @@ def test_get_question_budget_from_triage() -> None:
             "page_coverage": {"34": {"question_budget": 47, "aspects": []}},
         }
     }
-    assert get_question_budget(doc, 34) == 47
+    assert get_question_budget(doc, 34) == 40
 
 
 def test_record_answer_increments_counter() -> None:
@@ -60,10 +60,13 @@ def test_record_answer_increments_counter() -> None:
     db.get.return_value = doc
     db.execute.return_value.mappings.return_value.first.return_value = None
 
-    with patch("app.services.question_pool.maybe_refill_pool", return_value=None):
+    with (
+        patch("app.services.question_pool.maybe_refill_pool", return_value=None),
+        patch("app.services.question_pool.save_progress_row") as save_row,
+    ):
         record_answer(db, doc_id, assertion_id)
 
-    progress = doc.meta["question_progress"]
+    progress = save_row.call_args[0][2]
     assert progress["answered_on_page"] == 1
     assert str(assertion_id) in progress["answered_ids"]
     db.commit.assert_called_once()
@@ -183,15 +186,17 @@ def test_reset_for_new_page_range_clears_pool_state() -> None:
 
     from app.services.question_pool import reset_for_new_page_range
 
-    reset_for_new_page_range(db, doc, {"from": 51, "to": 100})
+    with patch("app.services.question_pool.save_progress_row") as save_row:
+        reset_for_new_page_range(db, doc, {"from": 51, "to": 100})
 
     assert doc.meta["selected_range"] == {"from": 51, "to": 100}
     assert "question_pool_initialized" not in doc.meta
-    assert doc.meta["question_progress"]["current_page"] == 51
-    assert doc.meta["question_progress"]["answered_ids"] == []
-    assert doc.meta["question_progress"]["page_coverage"] == {}
+    progress = save_row.call_args[0][2]
+    assert progress["current_page"] == 51
+    assert progress["answered_ids"] == []
+    assert progress["page_coverage"] == {}
     assert doc.index_progress == 0
-    db.execute.assert_called_once()
+    assert db.execute.call_count == 2
 
     doc_id = uuid.uuid4()
     doc = MagicMock()
@@ -391,9 +396,9 @@ def test_ensure_question_pool_refills_when_pool_exhausted() -> None:
     kick.assert_not_called()
 
 
-def test_should_transition_prefetch_after_forty_percent() -> None:
-    assert should_transition_prefetch(6, 15) is False
-    assert should_transition_prefetch(7, 15) is True
+def test_should_transition_prefetch_after_seventy_percent() -> None:
+    assert should_transition_prefetch(10, 15) is False
+    assert should_transition_prefetch(11, 15) is True
 
 
 def test_maybe_transition_prefetch_enqueues_once() -> None:

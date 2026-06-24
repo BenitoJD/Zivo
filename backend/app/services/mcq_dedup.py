@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import re
+from collections import OrderedDict
 from typing import Any
 
 from app.services.embed import embed_texts
 
 ASPECT_CLUSTER_THRESHOLD = 0.88
 MCQ_SIMILARITY_THRESHOLD = 0.92
+_SIGNATURE_EMBED_CACHE_MAX = 2_048
+
+_signature_embed_cache: OrderedDict[str, list[float]] = OrderedDict()
 
 _NON_WORD_RE = re.compile(r"[^\w\s]+", re.UNICODE)
 _OPTION_LETTER_PREFIX = re.compile(r"^(?:[A-Da-d]|[1-4])[.)]\s+")
@@ -158,6 +162,20 @@ def dedupe_aspects(
     }
 
 
+def embed_signature_cached(signature: str) -> list[float]:
+    """Return embedding for an MCQ signature, reusing in-process cache."""
+    cached = _signature_embed_cache.get(signature)
+    if cached is not None:
+        _signature_embed_cache.move_to_end(signature)
+        return cached
+    vec = embed_texts([signature])[0]
+    _signature_embed_cache[signature] = vec
+    _signature_embed_cache.move_to_end(signature)
+    while len(_signature_embed_cache) > _SIGNATURE_EMBED_CACHE_MAX:
+        _signature_embed_cache.popitem(last=False)
+    return vec
+
+
 def prior_mcq_embeddings(prior_mcqs: list[dict[str, Any]]) -> list[list[float]]:
     """Embed prior MCQ signatures once for repeated similarity checks."""
     if not prior_mcqs:
@@ -172,7 +190,14 @@ def prior_mcq_embeddings(prior_mcqs: list[dict[str, Any]]) -> list[list[float]]:
         )
         for p in prior_mcqs
     ]
-    return embed_texts(prior_sigs)
+    missing = [s for s in prior_sigs if s not in _signature_embed_cache]
+    if missing:
+        for sig, vec in zip(missing, embed_texts(missing), strict=True):
+            _signature_embed_cache[sig] = vec
+            _signature_embed_cache.move_to_end(sig)
+        while len(_signature_embed_cache) > _SIGNATURE_EMBED_CACHE_MAX:
+            _signature_embed_cache.popitem(last=False)
+    return [embed_signature_cached(s) for s in prior_sigs]
 
 
 def is_mcq_too_similar(
@@ -187,7 +212,7 @@ def is_mcq_too_similar(
         return False, 0.0
 
     candidate_sig = mcq_signature(mcq)
-    candidate_vec = embed_texts([candidate_sig])[0]
+    candidate_vec = embed_signature_cached(candidate_sig)
     if prior_embeddings is not None:
         prior_vecs = prior_embeddings
     else:

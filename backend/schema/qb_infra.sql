@@ -199,6 +199,26 @@ CREATE TABLE IF NOT EXISTS qb.demo_usage (
   CONSTRAINT uq_demo_usage UNIQUE (ip_hash, cookie_id, usage_date)
 );
 
+CREATE TABLE IF NOT EXISTS qb.llm_usage_event (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tag               VARCHAR(64) NOT NULL,
+  model             VARCHAR(256) NOT NULL,
+  prompt_tokens     INT NOT NULL DEFAULT 0,
+  completion_tokens INT NOT NULL DEFAULT 0,
+  cached_tokens     INT NOT NULL DEFAULT 0,
+  latency_ms        INT NOT NULL DEFAULT 0,
+  account_id        UUID REFERENCES qb.account (id) ON DELETE SET NULL,
+  document_id       UUID,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS llm_usage_event_created_at_idx
+  ON qb.llm_usage_event (created_at DESC);
+
+CREATE INDEX IF NOT EXISTS llm_usage_event_document_idx
+  ON qb.llm_usage_event (document_id, created_at DESC)
+  WHERE document_id IS NOT NULL;
+
 -- Citepage-compatible document/chunk tables (ORM port layer; canonical evidence in intel.artifact)
 CREATE TABLE IF NOT EXISTS qb.documents (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),

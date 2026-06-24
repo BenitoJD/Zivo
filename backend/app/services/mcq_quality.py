@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
+import os
+import random
 import re
 import uuid
 from collections import OrderedDict
@@ -13,12 +14,15 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.services.embed import embed_texts
-from app.services.llm_router import complete_chat
+from app.services.llm_router import acomplete_chat
+from app.services.llm_sync import run_coro_in_worker
 from app.services.mcq_dedup import (
     coerce_mcq_options,
+    embed_signature_cached,
     format_prior_mcqs_block,
     has_page_reference_stem,
     is_mcq_too_similar,
+    mcq_signature,
     mcq_signature,
     prior_mcq_embeddings,
     sanitize_mcq_stem,
@@ -158,7 +162,9 @@ def has_fatal_heuristic_flaws(flaws: list[dict[str, str]]) -> bool:
 def _complete_chat_sync(
     db: Session, messages: list[dict], *, log_tag: str, model_id: uuid.UUID | None = None
 ) -> str:
-    return asyncio.run(complete_chat(messages, db, log_tag=log_tag, model_id=model_id))
+    return run_coro_in_worker(
+        acomplete_chat(messages, db, log_tag=log_tag, model_id=model_id)
+    )
 
 
 def _parse_mcq_json(raw: str) -> dict[str, Any] | None:
@@ -182,23 +188,7 @@ def _parse_mcq_json(raw: str) -> dict[str, Any] | None:
 
 
 def _parse_critic_json(raw: str) -> dict[str, Any] | None:
-    if not raw or not raw.strip():
-        return None
-    text_block = raw.strip()
-    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text_block, re.DOTALL)
-    if fence:
-        text_block = fence.group(1)
-    elif not text_block.startswith("{"):
-        start = text_block.find("{")
-        end = text_block.rfind("}")
-        if start >= 0 and end > start:
-            text_block = text_block[start : end + 1]
-        else:
-            return None
-    try:
-        return json.loads(text_block)
-    except json.JSONDecodeError:
-        return None
+    return _parse_mcq_json(raw)
 
 
 # Fenced-block splitter: captures the JSON inside each ```zv-mcq ... ``` block.
@@ -680,6 +670,7 @@ def generate_quality_mcq(
 # distractors). 5 is safely within the reliable range. For budgets > 5, call
 # this multiple times — prompt caching makes the repeat calls cheap.
 BATCH_MCQ_CAP = 5
+CRITIC_SAMPLE_RATE = float(os.getenv("ZIVO_CRITIC_SAMPLE_RATE", "0.25"))
 
 
 class _BatchDraftCache:
@@ -699,13 +690,13 @@ class _BatchDraftCache:
 
     def _key(
         self,
-        page_text: str,
+        page_number: int,
         targets: list[dict[str, Any]],
         prior_mcqs: list[dict[str, Any]] | None,
     ) -> str:
         aspect_keys = sorted(str(t.get("key") or "") for t in targets)
         h = hashlib.sha256()
-        h.update(page_text.encode("utf-8", "ignore"))
+        h.update(str(page_number).encode("ascii"))
         h.update(b"\x1f")
         h.update("\x1e".join(aspect_keys).encode("utf-8", "ignore"))
         if prior_mcqs:
@@ -718,11 +709,11 @@ class _BatchDraftCache:
 
     def get(
         self,
-        page_text: str,
+        page_number: int,
         targets: list[dict[str, Any]],
         prior_mcqs: list[dict[str, Any]] | None,
     ) -> list[dict[str, Any]] | None:
-        key = self._key(page_text, targets, prior_mcqs)
+        key = self._key(page_number, targets, prior_mcqs)
         hits = self._store.get(key)
         if hits is None:
             return None
@@ -733,14 +724,14 @@ class _BatchDraftCache:
 
     def put(
         self,
-        page_text: str,
+        page_number: int,
         targets: list[dict[str, Any]],
         prior_mcqs: list[dict[str, Any]] | None,
         drafts: list[dict[str, Any]],
     ) -> None:
         if not drafts:
             return
-        key = self._key(page_text, targets, prior_mcqs)
+        key = self._key(page_number, targets, prior_mcqs)
         self._store[key] = [dict(d) for d in drafts]
         self._store.move_to_end(key)
         while len(self._store) > self._max:
@@ -758,6 +749,7 @@ def _generate_batch_drafts(
     targets: list[dict[str, Any]],
     prior_mcqs: list[dict[str, Any]] | None,
     model_id: uuid.UUID | None = None,
+    aspect_hints: str = "",
 ) -> list[dict[str, Any]]:
     """One LLM call producing up to N MCQs (one per target aspect).
 
@@ -771,6 +763,7 @@ def _generate_batch_drafts(
         for i, t in enumerate(targets)
     )
     prior_block = format_prior_mcqs_block(prior_mcqs)
+    hints_block = f"\n\nAspect focus hints (variable — not part of cached prefix):\n{aspect_hints}" if aspect_hints else ""
 
     system = get_prompt(db, "mcq_page_generate_system")
     instructions = (
@@ -778,6 +771,7 @@ def _generate_batch_drafts(
         f"Each must test a distinct idea from the page.\n\n"
         f"Target aspects:\n{targets_block}\n\n"
         f"{prior_block}"
+        f"{hints_block}\n"
         f"Return ONLY {len(targets)} ```zv-mcq``` JSON blocks, one per aspect, in order. "
         "Each block's primary_concept_key must match its target aspect key. "
         "Be economical with tokens: no commentary, explanation at most ONE short sentence."
@@ -814,19 +808,12 @@ def generate_quality_mcq_batch(
     targets: list[dict[str, Any]],
     prior_mcqs: list[dict[str, Any]] | None = None,
     model_id: uuid.UUID | None = None,
+    aspect_hints: str = "",
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    """Generate N MCQs in ONE LLM call, then run the quality gate on each.
+    """Generate N MCQs in ONE LLM call, then run quality gates on each.
 
-    Returns (target_aspect, payload) pairs for the MCQs that pass the fast-path
-    quality gate (heuristic checks + embedding-similarity vs priors). MCQs that
-    fail a gate are dropped individually — a bad one never poisons the batch.
-
-    Unlike generate_quality_mcq's per-question critic/rewrite loop, batch mode
-    uses the fast path only: heuristics + embedding similarity. The critic is
-    deferred (same principle as the single-MCQ fast path) because the heuristics
-    catch the structural flaws and embedding similarity catches near-dupes. This
-    keeps the batch to a single LLM call for latency; any question that needs a
-    critic or rewrite will be caught later by the quality gate on refill.
+    Returns (target_aspect, payload) pairs for MCQs that pass heuristics,
+    embedding similarity, and sampled LLM critic checks.
     """
     if not page_text or not page_text.strip() or not targets:
         return []
@@ -841,7 +828,7 @@ def generate_quality_mcq_batch(
     # drafts for this (page context, aspect set). The quality gate below still
     # runs on every retrieval — only the generation call is skipped. Highest
     # value for rapid re-queries (demo doc, same page within the process TTL).
-    drafts = _batch_draft_cache.get(page_text, targets, prior_mcqs)
+    drafts = _batch_draft_cache.get(page_number, targets, prior_mcqs)
     if drafts is None:
         drafts = _generate_batch_drafts(
             db,
@@ -850,9 +837,10 @@ def generate_quality_mcq_batch(
             targets=targets,
             prior_mcqs=prior_mcqs,
             model_id=model_id,
+            aspect_hints=aspect_hints,
         )
         if drafts:
-            _batch_draft_cache.put(page_text, targets, prior_mcqs, drafts)
+            _batch_draft_cache.put(page_number, targets, prior_mcqs, drafts)
     if not drafts:
         return []
 
@@ -865,7 +853,7 @@ def generate_quality_mcq_batch(
         target = targets[idx] if idx < len(targets) else None
         check_against = list(prior_mcqs or []) + accepted_payloads
 
-        heuristic_flaws = run_heuristic_checks(draft, prior_mcqs=prior_mcqs)
+        heuristic_flaws = run_heuristic_checks(draft, prior_mcqs=check_against)
         if has_fatal_heuristic_flaws(heuristic_flaws):
             continue
 
@@ -877,19 +865,40 @@ def generate_quality_mcq_batch(
         if too_similar:
             continue
 
+        run_critic = bool(heuristic_flaws) or idx == 0 or random.random() < CRITIC_SAMPLE_RATE
+        critic_meta: dict[str, Any] | None = None
+        if run_critic:
+            critique = critique_mcq(
+                db,
+                mcq=draft,
+                page_text=page_text,
+                page_number=page_number,
+                target_aspect=target,
+                prior_mcqs=check_against,
+                model_id=model_id,
+            )
+            critic_meta = critique
+            if not _critique_passes(critique):
+                continue
+
         draft["quality"] = {
             "pass": True,
             "flaw_count": len(heuristic_flaws),
             "attempts": 1,
-            "fast_path": True,
+            "fast_path": not run_critic,
             "batch": True,
+            "critic_sampled": run_critic,
             "heuristic_flaws": heuristic_flaws,
             "max_similarity_to_prior": max_sim,
         }
+        if critic_meta:
+            draft["quality"]["cognitive_level"] = critic_meta.get("cognitive_level")
+            draft["quality"]["matches_aspect"] = critic_meta.get("matches_aspect")
+            draft["quality"]["provokes_understanding"] = critic_meta.get("provokes_understanding")
         if target and target.get("cognitive_angle"):
             draft["cognitive_angle"] = target["cognitive_angle"]
         accepted.append((target, draft))
         accepted_payloads.append(draft)
-        prior_embeddings.append(embed_texts([mcq_signature(draft)])[0])
+        prior_embeddings.append(embed_signature_cached(mcq_signature(draft)))
 
     return accepted

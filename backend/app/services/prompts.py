@@ -1,8 +1,13 @@
 """System prompts — code defaults with Postgres overrides."""
 
+import time
+
 from sqlalchemy.orm import Session
 
 from app.models import SystemPrompt
+
+_PROMPT_CACHE_TTL_SECONDS = 60.0
+_prompt_template_cache: dict[str, tuple[float, str]] = {}
 
 DEFAULTS: dict[str, str] = {
     "tutor_system": """You are Zivo, a helpful document tutor.
@@ -72,7 +77,7 @@ Use headings and bullet points. Do not cite page numbers.""",
 
 Each aspect is one angle on understanding — recall, precise detail, mechanism, application, comparison, or exception.
 Together the aspects should give a learner a full-circle view of the page, not redundant trivia.
-Dense pages may warrant many questions (e.g. 30–80); sparse pages fewer (e.g. 5–12).
+Dense pages may warrant more questions (e.g. 15–25); sparse pages fewer (e.g. 5–12).
 Return valid JSON only.""",
     "page_triage_format": """Analyze this PDF page and return JSON:
 
@@ -164,12 +169,23 @@ Keep explanations in plain language with no page-number references.""",
 }
 
 
-def get_prompt(db: Session, key: str, **fmt: object) -> str:
+def _load_prompt_template(db: Session, key: str) -> str:
+    now = time.monotonic()
+    cached = _prompt_template_cache.get(key)
+    if cached and now - cached[0] < _PROMPT_CACHE_TTL_SECONDS:
+        return cached[1]
+
     row = db.query(SystemPrompt).filter(SystemPrompt.key == key).first()
     if row and row.content.strip():
         text = row.content
     else:
         text = DEFAULTS.get(key, DEFAULTS["tutor_system"])
+    _prompt_template_cache[key] = (now, text)
+    return text
+
+
+def get_prompt(db: Session, key: str, **fmt: object) -> str:
+    text = _load_prompt_template(db, key)
     if fmt:
         from app.services.question_pool import ABSOLUTE_MAX_QUESTIONS_PER_PAGE
 

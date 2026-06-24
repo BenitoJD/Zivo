@@ -27,7 +27,9 @@ INITIAL_BATCH_SIZE = 5
 FIRST_QUESTION_BATCH_SIZE = INITIAL_BATCH_SIZE
 REFILL_BATCH_SIZE = 5
 REFILL_AFTER_ANSWERED = 2
-TRANSITION_PREFETCH_RATIO = 0.40
+TRANSITION_PREFETCH_RATIO = float(os.getenv("ZIVO_TRANSITION_PREFETCH_RATIO", "0.70"))
+TRANSITION_GENERATION_RATIO = float(os.getenv("ZIVO_TRANSITION_GENERATION_RATIO", "0.70"))
+GENERATION_AHEAD_BUFFER = int(os.getenv("ZIVO_GENERATION_AHEAD_BUFFER", "10"))
 # Eagerly triage the current page + this many pages ahead at init, so the document
 # is understood before the reader arrives. Triage only (cheap, ~1 call/page);
 # batches stay on-demand + next-page prefetch, so we don't burn tokens generating
@@ -35,7 +37,7 @@ TRANSITION_PREFETCH_RATIO = 0.40
 # prefetch (which fires at 40% page progress) without triaging pages that are
 # never opened — 10 was pure waste (~7 unused triage calls/doc).
 EAGER_TRIAGE_LOOKAHEAD = int(os.getenv("ZIVO_EAGER_TRIAGE_LOOKAHEAD", "3"))
-ABSOLUTE_MAX_QUESTIONS_PER_PAGE = 150
+ABSOLUTE_MAX_QUESTIONS_PER_PAGE = int(os.getenv("ZIVO_MAX_QUESTIONS_PER_PAGE", "40"))
 # Backward-compatible alias for API consumers
 MAX_QUESTIONS_PER_PAGE = ABSOLUTE_MAX_QUESTIONS_PER_PAGE
 # A generate job left in 'running' after a worker crash blocks recovery until reclaimed.
@@ -94,23 +96,9 @@ def _merge_progress(existing: dict[str, Any], patch: dict[str, Any]) -> dict[str
 
 def save_progress(db: Session, doc: Document, progress: dict[str, Any]) -> None:
     db.flush()
-    # Lock the document row for the read-modify-write of the meta JSON blob.
-    # With per-page parallel generation (multiple CPU workers touching the same
-    # document), an unlocked read-modify-write of question_progress could lose a
-    # page's coverage. SELECT ... FOR UPDATE serializes only this brief write.
-    try:
-        db.refresh(doc, with_for_update=True)
-    except Exception:
-        db.refresh(doc)
+    db.refresh(doc, with_for_update=True)
     merged = _merge_progress(get_progress(doc), progress)
-    try:
-        save_progress_row(db, doc.id, merged)
-    except Exception:
-        pass
-    meta = dict(doc.meta or {})
-    meta["question_progress"] = merged
-    doc.meta = meta
-    flag_modified(doc, "meta")
+    save_progress_row(db, doc.id, merged)
     user = doc.account_id
     if user:
         captured = doc.artifact_captured_at or doc.created_at
@@ -168,6 +156,21 @@ def get_question_budget(doc: Document, page: int) -> int:
     cov = get_page_coverage(doc, page)
     budget = int(cov.get("question_budget") or INITIAL_BATCH_SIZE)
     return max(INITIAL_BATCH_SIZE, min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, budget))
+
+
+def effective_question_budget(
+    doc: Document,
+    page: int,
+    progress: dict[str, Any] | None = None,
+) -> int:
+    """Cap generation ahead of observed learner consumption."""
+    cap = get_question_budget(doc, page)
+    if progress is None:
+        return cap
+    answered = int(progress.get("answered_on_page") or 0)
+    if answered <= 0:
+        return min(cap, max(INITIAL_BATCH_SIZE * 2, GENERATION_AHEAD_BUFFER))
+    return min(cap, answered + GENERATION_AHEAD_BUFFER)
 
 
 def is_coverage_complete(doc: Document, page: int) -> bool:
@@ -277,14 +280,20 @@ def page_range_bounds(doc: Document) -> tuple[int, int]:
     return pages[0], pages[-1]
 
 
-def is_page_complete(db: Session, doc: Document, progress: dict[str, Any]) -> bool:
+def is_page_complete(
+    db: Session,
+    doc: Document,
+    progress: dict[str, Any],
+    *,
+    page_ids: list[str] | None = None,
+) -> bool:
     if progress.get("generation_pending"):
         return False
-    if next_assertion_id(db, doc.id, progress):
+    if next_assertion_id(db, doc.id, progress, page_ids=page_ids):
         return False
     page = int(progress.get("current_page") or 1)
-    budget = get_question_budget(doc, page)
-    generated = count_assertions_on_page(db, doc.id, page)
+    budget = effective_question_budget(doc, page, progress)
+    generated = len(page_ids) if page_ids is not None else count_assertions_on_page(db, doc.id, page)
     if generated == 0:
         return False
     if is_coverage_complete(doc, page):
@@ -306,10 +315,10 @@ def build_learn_queue_state(
     page_ids = page_assertion_ids(db, document_id, page)
     questions_generated = len(page_ids)
     questions_answered = sum(1 for row_id in page_ids if row_id in answered_set)
-    budget = get_question_budget(doc, page)
+    budget = effective_question_budget(doc, page, progress)
     next_id = next((row_id for row_id in page_ids if row_id not in answered_set), None)
     coverage_complete = is_coverage_complete(doc, page)
-    page_complete = is_page_complete(db, doc, progress)
+    page_complete = is_page_complete(db, doc, progress, page_ids=page_ids)
     last_study_page = study_pages[-1] if study_pages else page_to
     document_complete = page_complete and page == last_study_page
 
@@ -332,7 +341,7 @@ def build_learn_queue_state(
         "coverage_complete": coverage_complete,
         "page_complete": page_complete,
         "document_complete": document_complete,
-        "pool_available": _count_available(db, document_id, progress, page_ids=page_ids),
+        "pool_available": sum(1 for row_id in page_ids if row_id not in answered_set),
         "generated_on_page": questions_generated,
         "answered_on_page": questions_answered,
         "max_per_page": budget,
@@ -380,7 +389,8 @@ def enqueue_page_batch(
 ) -> Job | None:
     generated = count_assertions_on_page(db, doc.id, page)
     start_sequence = max(start_sequence, generated)
-    budget = get_question_budget(doc, page)
+    progress = get_progress(doc)
+    budget = effective_question_budget(doc, page, progress)
     remaining = budget - generated
     if remaining <= 0:
         save_progress(db, doc, {"generation_pending": False})
@@ -579,7 +589,7 @@ def reset_for_new_page_range(db: Session, doc: Document, selected: dict[str, Any
     meta.pop("question_pool_initialized", None)
     meta.pop("rag_window", None)
     meta.pop("rag_window_ready", None)
-    meta["question_progress"] = progress
+    save_progress_row(db, doc.id, progress)
     doc.meta = meta
     flag_modified(doc, "meta")
     doc.index_progress = 0
@@ -594,6 +604,20 @@ def reset_for_new_page_range(db: Session, doc: Document, selected: dict[str, Any
             """
         ),
         {"document_id": str(doc.id)},
+    )
+
+    study_pages_list = range_meta.get("pages") or list(range(page_from, page_to + 1))
+    db.execute(
+        text(
+            """
+            UPDATE intel.assertion
+            SET status = 'retracted'
+            WHERE payload->>'artifact_id' = :artifact_id
+              AND status = 'active'
+              AND NOT ((payload->>'page_number')::int = ANY(:pages))
+            """
+        ),
+        {"artifact_id": str(doc.id), "pages": [int(p) for p in study_pages_list]},
     )
 
     if doc.account_id:
@@ -764,7 +788,6 @@ def _cancel_queued_generate_jobs(db: Session, document_id: uuid.UUID) -> None:
 
 def release_stuck_generation(db: Session, document_id: uuid.UUID) -> None:
     """Clear a stale generation_pending flag when no job is queued or running."""
-    _reclaim_stale_generate_jobs(db, document_id)
     if _has_active_generate_job(db, document_id):
         return
     doc = db.get(Document, document_id)
@@ -1050,7 +1073,7 @@ def maybe_refill_pool(db: Session, document_id: uuid.UUID) -> Job | None:
     # Triage must populate page_coverage before batch generation can run.
     if not get_page_coverage(doc, page):
         return None
-    budget = get_question_budget(doc, page)
+    budget = effective_question_budget(doc, page, progress)
     generated_on_page = count_assertions_on_page(db, document_id, page)
     answered_ids = [str(x) for x in progress.get("answered_ids") or []]
     answered_on_page = count_answered_on_page(db, document_id, page, answered_ids)
