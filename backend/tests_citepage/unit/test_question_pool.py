@@ -391,9 +391,9 @@ def test_ensure_question_pool_refills_when_pool_exhausted() -> None:
     kick.assert_not_called()
 
 
-def test_should_transition_prefetch_after_seventy_percent() -> None:
-    assert should_transition_prefetch(10, 15) is False
-    assert should_transition_prefetch(11, 15) is True
+def test_should_transition_prefetch_after_forty_percent() -> None:
+    assert should_transition_prefetch(6, 15) is False
+    assert should_transition_prefetch(7, 15) is True
 
 
 def test_maybe_transition_prefetch_enqueues_once() -> None:

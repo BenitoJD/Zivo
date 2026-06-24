@@ -127,6 +127,9 @@ def ingest_page_job(payload: dict) -> dict:
             upsert_page_chunks(db, document_id, page_number, chunks, vectors)
         db.commit()
         refresh_rag_window_status(db, document_id)
+        from app.services.question_pool import maybe_enqueue_early_page_triage
+
+        maybe_enqueue_early_page_triage(db, document_id, page_number=page_number)
     return {"document_id": str(document_id), "page_number": page_number, "chunks": len(chunks)}
 
 
@@ -165,7 +168,7 @@ def ingest_rag_window_job(payload: dict) -> dict:
 @eta(name="learn.transition_prep", workload=JobWorkload.cpu)
 def transition_prep_job(payload: dict) -> dict:
     from app.services.question_pool import (
-        INITIAL_BATCH_SIZE,
+        FIRST_QUESTION_BATCH_SIZE,
         count_assertions_on_page,
         enqueue_page_batch,
         enqueue_page_triage,
@@ -210,7 +213,7 @@ def transition_prep_job(payload: dict) -> dict:
                     db,
                     doc,
                     page=next_page,
-                    batch_size=min(INITIAL_BATCH_SIZE, next_budget),
+                    batch_size=min(FIRST_QUESTION_BATCH_SIZE, next_budget),
                     start_sequence=0,
                 )
             enqueue_job(

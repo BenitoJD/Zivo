@@ -57,7 +57,11 @@ export function learnWaitStatus(ctx: LearnWaitContext, tick: number): LearnWaitS
     const line =
       GENERATING_LINES[((tick % GENERATING_LINES.length) + GENERATING_LINES.length) % GENERATING_LINES.length];
     if (generated === 0) {
-      return { title: line.title, detail: line.detail, rotateKey: "gen-first" };
+      return {
+        title: "Writing your first question",
+        detail: "One question first — more follow while you study",
+        rotateKey: "gen-first",
+      };
     }
     const progress =
       budget > 0 ? `${generated} ready · working toward ${budget} on this page` : `${generated} ready · writing more`;

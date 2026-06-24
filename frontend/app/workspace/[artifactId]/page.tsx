@@ -174,6 +174,7 @@ export default function WorkspaceArtifactPage({
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<{ role: string; content: string }[]>([]);
   const [chatBusy, setChatBusy] = useState(false);
+  const [chatThinking, setChatThinking] = useState(false);
   const [sourceOpen, { open: openSource, close: closeSource }] = useDisclosure(false);
   const [tutorOpen, { open: openTutor, close: closeTutor }] = useDisclosure(false);
   const studyRowRef = useRef<HTMLDivElement>(null);
@@ -406,12 +407,12 @@ export default function WorkspaceArtifactPage({
         .catch(() => {});
     };
     poll();
-    const id = window.setInterval(poll, 3000);
+    const id = window.setInterval(poll, 1000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [artifactId, invalidArtifactId, selectedRange, artifact?.status, queue?.current_assertion_id]);
+  }, [artifactId, invalidArtifactId, selectedRange, artifact?.status, queue?.current_assertion_id, queue?.generation_pending]);
 
   useEffect(() => {
     if (invalidArtifactId || !queue?.current_assertion_id) return;
@@ -561,6 +562,7 @@ export default function WorkspaceArtifactPage({
     const userMsg = chatInput.trim();
     setChatInput("");
     setChatBusy(true);
+    setChatThinking(true);
     setChatMessages((m) => [...m, { role: "user", content: userMsg }, { role: "assistant", content: "" }]);
     try {
       await ensureGuestSession();
@@ -576,15 +578,17 @@ export default function WorkspaceArtifactPage({
       }
       let assistant = "";
       let gotToken = false;
-      await apiPostSSE(
-        "/api/chat",
-        {
-          document_id: artifactId,
-          message: userMsg,
-          scope,
+      await apiPostSSE("/api/chat", {
+        document_id: artifactId,
+        message: userMsg,
+        scope,
+      }, {
+        onStatus: (phase) => {
+          if (phase === "thinking") setChatThinking(true);
         },
-        (chunk) => {
+        onChunk: (chunk) => {
           gotToken = true;
+          setChatThinking(false);
           assistant += chunk;
           setChatMessages((m) => {
             const copy = [...m];
@@ -594,7 +598,7 @@ export default function WorkspaceArtifactPage({
             return copy;
           });
         },
-      );
+      });
       if (!gotToken || !assistant.trim()) {
         throw new Error("empty response");
       }
@@ -618,6 +622,7 @@ export default function WorkspaceArtifactPage({
       });
     } finally {
       setChatBusy(false);
+      setChatThinking(false);
     }
   }
 
@@ -937,6 +942,7 @@ export default function WorkspaceArtifactPage({
                 messages={chatMessages}
                 input={chatInput}
                 busy={chatBusy}
+                thinking={chatThinking}
                 contextReady={chatContextReady}
                 onInputChange={setChatInput}
                 onSend={() => void sendChat()}
@@ -965,6 +971,7 @@ export default function WorkspaceArtifactPage({
               messages={chatMessages}
               input={chatInput}
               busy={chatBusy}
+              thinking={chatThinking}
               contextReady={chatContextReady}
               onInputChange={setChatInput}
               onSend={() => void sendChat()}
@@ -2284,7 +2291,7 @@ function McqHeroPanel({
   );
   useInterval(() => {
     if (waiting) setStatusTick((t) => t + 1);
-  }, 3200);
+  }, 1200);
   useEffect(() => {
     setStatusTick(0);
   }, [waitStatus.rotateKey]);
@@ -2451,6 +2458,7 @@ function TutorPanel({
   messages,
   input,
   busy,
+  thinking = false,
   contextReady = true,
   onInputChange,
   onSend,
@@ -2458,6 +2466,7 @@ function TutorPanel({
   messages: { role: string; content: string }[];
   input: string;
   busy: boolean;
+  thinking?: boolean;
   contextReady?: boolean;
   onInputChange: (value: string) => void;
   onSend: () => void;
@@ -2534,6 +2543,9 @@ function TutorPanel({
                   message={m}
                   isUser={m.role === "user"}
                   streaming={!busy ? false : m.role === "assistant" && i === messages.length - 1}
+                  thinking={
+                    thinking && m.role === "assistant" && i === messages.length - 1 && !m.content
+                  }
                   isDark={isDark}
                 />
               ))}
@@ -2661,11 +2673,13 @@ function ChatMessage({
   message,
   isUser,
   streaming,
+  thinking = false,
   isDark,
 }: {
   message: { role: string; content: string };
   isUser: boolean;
   streaming: boolean;
+  thinking?: boolean;
   isDark: boolean;
 }) {
   if (isUser) {
@@ -2690,8 +2704,13 @@ function ChatMessage({
     <Group align="flex-start" gap="sm" wrap="nowrap" maw="100%">
       <AssistantLogo size={28} />
       <Box pt={4} style={{ flex: 1, minWidth: 0 }}>
-        {streaming && !message.content ? (
-          <Loader type="dots" size="sm" />
+        {thinking || (streaming && !message.content) ? (
+          <Group gap="xs" align="center">
+            <Loader type="dots" size="sm" />
+            <Text size="sm" c="dimmed">
+              Thinking…
+            </Text>
+          </Group>
         ) : (
           <AssistantMarkdown
             content={message.content}

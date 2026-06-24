@@ -17,14 +17,15 @@ from app.repositories import workspace as workspace_repo
 from app.services.jobs import enqueue_generate, enqueue_rag_window, enqueue_transition_prep
 
 INITIAL_BATCH_SIZE = 5
+FIRST_QUESTION_BATCH_SIZE = 1
 REFILL_BATCH_SIZE = 5
-REFILL_AFTER_ANSWERED = 3
-TRANSITION_PREFETCH_RATIO = 0.70
+REFILL_AFTER_ANSWERED = 2
+TRANSITION_PREFETCH_RATIO = 0.40
 # Eagerly triage the current page + this many pages ahead at init, so the document
 # is understood before the reader arrives. Triage only (cheap, ~1 call/page);
 # batches stay on-demand + next-page prefetch, so we don't burn tokens generating
 # pages the reader never reaches.
-EAGER_TRIAGE_LOOKAHEAD = int(os.getenv("ZIVO_EAGER_TRIAGE_LOOKAHEAD", "5"))
+EAGER_TRIAGE_LOOKAHEAD = int(os.getenv("ZIVO_EAGER_TRIAGE_LOOKAHEAD", "10"))
 ABSOLUTE_MAX_QUESTIONS_PER_PAGE = 150
 # Backward-compatible alias for API consumers
 MAX_QUESTIONS_PER_PAGE = ABSOLUTE_MAX_QUESTIONS_PER_PAGE
@@ -404,6 +405,72 @@ def enqueue_page_batch(
     return job
 
 
+def _initial_pool_target(doc: Document, page: int) -> int:
+    return min(INITIAL_BATCH_SIZE, get_question_budget(doc, page))
+
+
+def _maybe_enqueue_initial_pool_remainder(
+    db: Session, doc: Document, *, page: int
+) -> Job | None:
+    """After the first question lands, fill the warm pool up to INITIAL_BATCH_SIZE."""
+    generated = count_assertions_on_page(db, doc.id, page)
+    target = _initial_pool_target(doc, page)
+    if generated >= target:
+        return None
+    if _has_active_generate_job_for_page(db, doc.id, page):
+        return None
+    remaining = min(REFILL_BATCH_SIZE, target - generated)
+    if remaining <= 0:
+        return None
+    return enqueue_page_batch(
+        db,
+        doc,
+        page=page,
+        batch_size=remaining,
+        start_sequence=generated,
+    )
+
+
+def _enqueue_first_question_batch(
+    db: Session, doc: Document, *, page: int
+) -> Job | None:
+    generated = count_assertions_on_page(db, doc.id, page)
+    if generated > 0:
+        return _maybe_enqueue_initial_pool_remainder(db, doc, page=page)
+    budget = get_question_budget(doc, page)
+    batch = min(FIRST_QUESTION_BATCH_SIZE, budget)
+    if batch <= 0:
+        return None
+    return enqueue_page_batch(db, doc, page=page, batch_size=batch, start_sequence=0)
+
+
+def maybe_enqueue_early_page_triage(
+    db: Session, document_id: uuid.UUID, *, page_number: int
+) -> Job | None:
+    """Overlap triage with RAG page ingest so Learn does not wait on triage after ready."""
+    doc = db.get(Document, document_id)
+    if not doc:
+        return None
+    meta = dict(doc.meta or {})
+    if meta.get("no_searchable_text") or not meta.get("selected_range"):
+        return None
+    page_from, _ = page_range_bounds(doc)
+    if page_number != page_from:
+        return None
+    if get_page_coverage(doc, page_number):
+        return None
+    if _has_active_generate_job_for_page(db, document_id, page_number):
+        return None
+    progress = get_progress(doc)
+    progress.setdefault("current_page", page_from)
+    if not meta.get("question_pool_initialized"):
+        meta["question_progress"] = progress
+        doc.meta = meta
+        flag_modified(doc, "meta")
+        db.commit()
+    return enqueue_page_triage(db, doc, page=page_number)
+
+
 def on_triage_completed(
     db: Session, document_id: uuid.UUID, *, page: int, precompute: bool = False
 ) -> Job | None:
@@ -426,7 +493,7 @@ def on_triage_completed(
     generated = count_assertions_on_page(db, document_id, page)
     if generated > 0:
         return None
-    batch = min(INITIAL_BATCH_SIZE, budget)
+    batch = min(FIRST_QUESTION_BATCH_SIZE, budget)
     return enqueue_page_batch(db, doc, page=page, batch_size=batch, start_sequence=0)
 
 
@@ -450,7 +517,10 @@ def enqueue_initial_pool(db: Session, document_id: uuid.UUID) -> Job | None:
     flag_modified(doc, "meta")
     db.commit()
 
-    job = enqueue_page_triage(db, doc, page=page_from)
+    if get_page_coverage(doc, page_from):
+        job = _enqueue_first_question_batch(db, doc, page=page_from)
+    else:
+        job = enqueue_page_triage(db, doc, page=page_from)
     # Eagerly triage the next few pages in the background so the document is
     # understood ahead of the reader and transitions never wait on triage.
     study = selected_page_list(doc)
@@ -518,10 +588,13 @@ def on_batch_completed(db: Session, document_id: uuid.UUID, *, page: int, saved:
         return
     progress = get_progress(doc)
     patch: dict[str, Any] = {"generation_pending": False}
-    if int(progress.get("current_page") or 0) == page:
+    current_page = int(progress.get("current_page") or 0)
+    if current_page == page:
         patch["generated_on_page"] = count_assertions_on_page(db, document_id, page)
     save_progress(db, doc, patch)
     db.commit()
+    if current_page == page:
+        _maybe_enqueue_initial_pool_remainder(db, doc, page=page)
 
 
 def on_batch_failed(db: Session, document_id: uuid.UUID, *, page: int) -> None:
@@ -725,7 +798,7 @@ def kick_generation_sync(db: Session, document_id: uuid.UUID) -> None:
             {
                 "mode": "page_batch",
                 "page_number": page,
-                "batch_size": min(INITIAL_BATCH_SIZE, budget),
+                "batch_size": min(FIRST_QUESTION_BATCH_SIZE, budget),
                 "start_sequence": 0,
             },
         )
@@ -746,14 +819,7 @@ def _enqueue_pool_work(db: Session, document_id: uuid.UUID, doc: Document) -> Jo
 
     generated = count_assertions_on_page(db, document_id, page)
     if generated == 0:
-        budget = get_question_budget(doc, page)
-        return enqueue_page_batch(
-            db,
-            doc,
-            page=page,
-            batch_size=min(INITIAL_BATCH_SIZE, budget),
-            start_sequence=0,
-        )
+        return _enqueue_first_question_batch(db, doc, page=page)
     return None
 
 
@@ -789,14 +855,9 @@ def advance_to_next_page(db: Session, doc: Document) -> Job | None:
         return enqueue_page_triage(db, doc, page=new_page)
     generated = count_assertions_on_page(db, doc.id, new_page)
     if generated == 0:
-        budget = get_question_budget(doc, new_page)
-        return enqueue_page_batch(
-            db,
-            doc,
-            page=new_page,
-            batch_size=min(INITIAL_BATCH_SIZE, budget),
-            start_sequence=0,
-        )
+        job = _enqueue_first_question_batch(db, doc, page=new_page)
+        if job is not None:
+            return job
     from app.services.rag_window import is_rag_window_ready
 
     if not is_rag_window_ready(db, doc.id, doc):
@@ -824,18 +885,34 @@ def ensure_question_pool(db: Session, document_id: uuid.UUID) -> Job | None:
     db.refresh(doc)
 
     progress = get_progress(doc)
+    page = int(progress.get("current_page") or page_range_bounds(doc)[0])
+
+    from app.services.rag_window import is_rag_window_ready
+
+    rag_job: Job | None = None
+    if not is_rag_window_ready(db, document_id, doc):
+        rag_job = enqueue_rag_window(
+            db,
+            document_id,
+            account_id=doc.account_id,
+            current_page=page,
+        )
+        db.commit()
+
     if next_assertion_id(db, document_id, progress):
-        return None
+        return rag_job
 
     # Request path is read-only: only ENQUEUE background work, never generate
     # inline. Generation runs in the parallel CPU workers (and is pre-warmed by
     # eager precompute at index-ready), so the learn-queue request returns fast
     # and the client reads from a warm pool — the ≤5s seamless guarantee.
-    job: Job | None = None
+    job: Job | None = rag_job
     if not _has_active_generate_job(db, document_id):
-        job = maybe_refill_pool(db, document_id)
-        if job is None:
-            job = _enqueue_pool_work(db, document_id, doc)
+        pool_job = maybe_refill_pool(db, document_id)
+        if pool_job is None:
+            pool_job = _enqueue_pool_work(db, document_id, doc)
+        if pool_job is not None:
+            job = pool_job
 
     return job
 

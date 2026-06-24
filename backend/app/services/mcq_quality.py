@@ -454,6 +454,33 @@ def generate_quality_mcq(
             last_critique_bundle = _merge_critique_for_rewrite(heuristic_flaws, None)
             continue
 
+        if not heuristic_flaws:
+            too_similar, max_sim = is_mcq_too_similar(draft, prior_mcqs)
+            if too_similar:
+                last_critique_bundle = {
+                    "flaws": [
+                        {
+                            "code": "too_similar_to_prior",
+                            "message": f"Embedding similarity {max_sim:.2f} to a prior question",
+                        }
+                    ],
+                    "rewrite_hints": "Test a different fact and use a clearly different stem from all prior questions.",
+                    "fatal_flaws": ["too_similar_to_prior"],
+                }
+                continue
+
+            draft["quality"] = {
+                "pass": True,
+                "flaw_count": 0,
+                "attempts": attempt + 1,
+                "fast_path": True,
+                "heuristic_flaws": [],
+                "max_similarity_to_prior": max_sim,
+            }
+            if target_aspect and target_aspect.get("cognitive_angle"):
+                draft["cognitive_angle"] = target_aspect["cognitive_angle"]
+            return draft
+
         critique = critique_mcq(
             db,
             mcq=draft,

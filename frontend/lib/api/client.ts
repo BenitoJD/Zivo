@@ -165,11 +165,22 @@ function parseSseEventBlock(part: string): { event: string; data: string } | nul
   return { event, data: dataLine };
 }
 
+export type ChatSseHandlers = {
+  onChunk: (text: string) => void;
+  /** Backend emits `status` before retrieval / first token (e.g. phase: "thinking"). */
+  onStatus?: (phase: string) => void;
+};
+
 export async function apiPostSSE(
   path: string,
   body: unknown,
-  onChunk: (text: string) => void,
+  onChunkOrHandlers: ((text: string) => void) | ChatSseHandlers,
 ): Promise<void> {
+  const handlers: ChatSseHandlers =
+    typeof onChunkOrHandlers === "function"
+      ? { onChunk: onChunkOrHandlers }
+      : onChunkOrHandlers;
+  const { onChunk, onStatus } = handlers;
   const res = await fetchWithTimeout(
     `${API_BASE}${path}`,
     {
@@ -202,7 +213,14 @@ export async function apiPostSSE(
       const parsed = parseSseEventBlock(part);
       if (!parsed) continue;
       const { event, data } = parsed;
-      if (event === "token") {
+      if (event === "status") {
+        try {
+          const payload = JSON.parse(data) as { phase?: string };
+          if (payload.phase) onStatus?.(payload.phase);
+        } catch {
+          /* ignore malformed status */
+        }
+      } else if (event === "token") {
         try {
           const payload = JSON.parse(data) as { text?: string };
           if (payload.text) onChunk(payload.text);
