@@ -41,8 +41,8 @@ import type { SourceDocument } from "@/lib/types";
 
 /** Frosted backdrop for modals. */
 const MODAL_OVERLAY_PROPS = {
-  backgroundOpacity: 0.55,
-  blur: 4,
+  backgroundOpacity: 0.6,
+  blur: 8,
 } as const;
 
 const SIDEBAR_MINI_WIDTH = 56;
@@ -156,13 +156,13 @@ function MiniRailButton({
         border: emphasized ? "1px solid var(--mantine-color-default-border)" : "none",
         borderRadius: "var(--mantine-radius-md)",
         background: active
-          ? "var(--mantine-color-blue-light)"
+          ? "var(--mantine-color-lavender-light)"
           : emphasized
             ? "var(--mantine-color-body)"
             : "transparent",
         cursor: disabled ? "default" : "pointer",
         padding: 0,
-        color: active ? "var(--mantine-color-blue-filled)" : "var(--mantine-color-dimmed)",
+        color: active ? "var(--mantine-color-lavender-filled)" : "var(--mantine-color-dimmed)",
         opacity: disabled ? 0.45 : 1,
       }}
       aria-label={label}

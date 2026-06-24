@@ -137,6 +137,40 @@ Deploy: GitHub → Actions → **Deploy Zivo** → Run workflow.
 | **Non-UI code** | `frontend/lib/` — API client, types, constants only |
 | **Theming** | `createTheme` in `app/providers.tsx` — Mantine theme API, not custom stylesheets |
 
+### Wispr Flow Style System
+
+Zivo utilizes an **editorial, human-centric, tactile UI/UX system** inspired by `wisprflow.ai`. When editing or creating new interface files, you **MUST** strictly adhere to the following layout, spacing, and styling tokens:
+
+#### 1. Typography
+- **Headings**: Use `var(--font-serif)` (Newsreader) with a lighter font weight (`500` or `400`). Use serif typography for high-impact titles, section labels, and empty-state headings. Incorporate italics (`fs="italic"`) sparingly for highlights.
+- **Body & UI**: Use `var(--font-sans)` (Plus Jakarta Sans) for standard body copy, interactive controls, inputs, buttons, and navigation elements. Keep text size compact, high density, and clean.
+
+#### 2. Color Palette
+The colors are automatically resolved via `cssVariablesResolver` based on the active color scheme:
+- **Primary Color**: `lavender` (brand purple/lilac). Use `var(--mantine-color-lavender-filled)` or `var(--mantine-color-lavender-light)` for primary buttons, active states, and highlights.
+- **Light Scheme**:
+  - Background (`--mantine-color-body`): `#FAF7EE` (Warm editorial cream)
+  - Text (`--mantine-color-text`): `#1C1C1A` (Near black/charcoal text)
+  - Borders (`--mantine-color-default-border`): `#E5E1D3` (Soft warm beige)
+  - Hover states (`--mantine-color-default-hover`): `#F0EDE2`
+- **Dark Scheme**:
+  - Background (`--mantine-color-body`): `#121211` (Soft warm off-black)
+  - Text (`--mantine-color-text`): `#FAF7EE` (Cream text)
+  - Borders (`--mantine-color-default-border`): `#2E2D2B` (Soft charcoal border)
+  - Hover states (`--mantine-color-default-hover`): `#1C1C1A`
+- **Theme Overrides**: Avoid hardcoded hex colors. Rely on Mantine's theme variables or color scale tokens (e.g. `dark.0` through `dark.9` which maps to the warm cream/charcoal scale).
+
+#### 3. Border Radii
+Components must feel soft and tactile:
+- **Pills**: Use `radius="xl"` (or `9999px`) for `Button`, `TextInput`, `PasswordInput`, and `SegmentedControl`.
+- **Cards & Modals**: Use `radius="xl"` for containers, cards, and modal panels (`Paper` defaults to `xl` / `28px`).
+- **Lists & Mini components**: Use `radius="md"` (`14px`) or `radius="lg"` (`20px`).
+
+#### 4. Frosted Modals
+All modals must have frosted glass backdrop filters. Ensure `overlayProps` uses:
+- `backgroundOpacity: 0.6`
+- `blur: 8`
+
 Workspace routes:
 
 - `/workspace` — empty library (`app/workspace/page.tsx`)
