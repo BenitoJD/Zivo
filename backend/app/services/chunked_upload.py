@@ -187,11 +187,11 @@ def upload_part(
         text(
             """
             UPDATE qb.upload_session
-            SET parts = COALESCE(parts, '{}'::jsonb) || jsonb_build_object(:part, to_jsonb(CAST(:etag AS text)))
+            SET parts = CAST(:parts AS jsonb)
             WHERE id = :id
             """
         ),
-        {"id": session_id, "part": str(part_number), "etag": etag},
+        {"id": session_id, "parts": json.dumps(parts)},
     )
     db.commit()
     return {"part_number": part_number, "etag": etag}
