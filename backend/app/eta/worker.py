@@ -265,6 +265,9 @@ def run_eta_worker(should_stop: Callable[[], bool] | None = None) -> None:
         except Exception:
             logger.exception("Failed to preload embedding model")
     # Reclaim jobs orphaned by a prior worker crash before entering the loop.
+    from app.eta.job_notify import ensure_eta_notify_listener, wait_eta_job_notify
+
+    ensure_eta_notify_listener()
     try:
         with SessionLocal.begin() as db:
             reclaimed = _reclaim_stale_jobs(db)
@@ -313,14 +316,14 @@ def run_eta_worker(should_stop: Callable[[], bool] | None = None) -> None:
                 if running_jobs:
                     _wait_for_job_activity(running_jobs, timeout=POLL_INTERVAL)
                 else:
-                    time.sleep(POLL_INTERVAL)
+                    wait_eta_job_notify(POLL_INTERVAL)
                 continue
 
             if not reserved:
                 if running_jobs:
                     _wait_for_job_activity(running_jobs, timeout=POLL_INTERVAL)
                 else:
-                    time.sleep(POLL_INTERVAL)
+                    wait_eta_job_notify(POLL_INTERVAL)
                 continue
 
             job_id, execution_id = reserved

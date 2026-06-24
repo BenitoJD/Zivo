@@ -99,23 +99,37 @@ def _reusable_mcq_payloads(
     page_hash: str,
     page_number: int,
     limit: int,
+    exclude_artifact_id: uuid.UUID,
 ) -> list[dict[str, Any]]:
-    """Reuse MCQs from shared/demo sources with identical page text."""
+    """Reuse MCQs from other documents with identical page text."""
+    from app.config import get_settings
+
+    scope = (get_settings().mcq_reuse_scope or "all").lower()
+    if scope == "off":
+        return []
+
+    demo_filter = "AND d.account_id IS NULL" if scope == "demo" else ""
     rows = db.execute(
         text(
-            """
+            f"""
             SELECT a.payload
             FROM intel.assertion a
             JOIN qb.documents d ON d.id::text = a.payload->>'artifact_id'
             WHERE a.status = 'active'
               AND a.payload->>'page_content_hash' = :page_hash
               AND (a.payload->>'page_number')::int = :page
-              AND d.account_id IS NULL
+              AND a.payload->>'artifact_id' != :exclude_artifact
+              {demo_filter}
             ORDER BY (a.payload->>'sequence')::int ASC
             LIMIT :limit
             """
         ),
-        {"page_hash": page_hash, "page": page_number, "limit": limit},
+        {
+            "page_hash": page_hash,
+            "page": page_number,
+            "limit": limit,
+            "exclude_artifact": str(exclude_artifact_id),
+        },
     ).scalars().all()
     out: list[dict[str, Any]] = []
     for raw in rows:
@@ -140,6 +154,7 @@ def _clone_reusable_mcqs(
         page_hash=page_hash,
         page_number=page_number,
         limit=len(targets),
+        exclude_artifact_id=document_id,
     )
     if not reusable:
         return 0
@@ -163,6 +178,15 @@ def _clone_reusable_mcqs(
         if target and target.get("key"):
             mark_aspect_asked(db, document_id, page_number, str(target["key"]))
         saved += 1
+    if saved:
+        from app.services.generation_checkpoint import checkpoint_after_save
+
+        checkpoint_after_save(
+            db,
+            page_number=page_number,
+            sequence=sequence,
+            saved_total=saved,
+        )
     return saved
 
 
@@ -283,10 +307,17 @@ def _speculative_aspects(page_text: str, page_number: int, n: int) -> list[dict[
 
 
 def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]) -> dict[str, Any]:
+    from app.services.generation_checkpoint import checkpoint_after_save, resolve_start_sequence
+
     activity_id = options.get("activity_id")
     page_number = int(options["page_number"])
     batch_size = int(options.get("batch_size", 5))
-    start_sequence = int(options.get("start_sequence", 0))
+    start_sequence = resolve_start_sequence(
+        db,
+        document_id,
+        page_number=page_number,
+        options=options,
+    )
 
     doc = db.get(Document, document_id)
     if not doc:
@@ -384,6 +415,12 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
         if target and target.get("key"):
             mark_aspect_asked(db, document_id, page_number, str(target["key"]))
         saved += 1
+        checkpoint_after_save(
+            db,
+            page_number=page_number,
+            sequence=sequence,
+            saved_total=saved,
+        )
 
     if saved == 0 and start_sequence + batch_size >= budget:
         set_coverage_complete(db, document_id, page_number)

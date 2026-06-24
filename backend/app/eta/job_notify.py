@@ -1,0 +1,65 @@
+"""Postgres LISTEN/NOTIFY wake for ETA workers."""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+
+from app.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+ETA_NOTIFY_CHANNEL = "zivo_eta_job"
+
+_wake = threading.Event()
+_listener_started = False
+_listener_lock = threading.Lock()
+
+
+def _conninfo() -> str:
+    url = get_settings().database_url
+    for prefix in ("postgresql+psycopg://", "postgresql+asyncpg://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql://" + url[len(prefix) :]
+    return url
+
+
+def wake_eta_workers() -> None:
+    _wake.set()
+
+
+def wait_eta_job_notify(timeout: float) -> bool:
+    """Block up to *timeout* seconds for a job NOTIFY; returns True if woken."""
+    signaled = _wake.wait(timeout=timeout)
+    if signaled:
+        _wake.clear()
+    return signaled
+
+
+def _listen_loop() -> None:
+    import psycopg
+
+    backoff = 1.0
+    while True:
+        try:
+            with psycopg.connect(_conninfo(), autocommit=True) as conn:
+                conn.execute(f"LISTEN {ETA_NOTIFY_CHANNEL}")
+                logger.info("ETA NOTIFY listener connected", extra={"channel": ETA_NOTIFY_CHANNEL})
+                backoff = 1.0
+                for _notify in conn.notifies():
+                    _wake.set()
+        except Exception:
+            logger.exception("ETA NOTIFY listener failed — reconnecting")
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 60.0)
+
+
+def ensure_eta_notify_listener() -> None:
+    global _listener_started
+    with _listener_lock:
+        if _listener_started:
+            return
+        thread = threading.Thread(target=_listen_loop, name="eta-notify-listener", daemon=True)
+        thread.start()
+        _listener_started = True

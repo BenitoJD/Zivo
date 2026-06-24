@@ -106,22 +106,47 @@ def _learn_queue_payload(
     }
 
 
+def _learn_queue_handler(
+    artifact_id: uuid.UUID,
+    user: Account | None,
+    guest_id: str | None,
+) -> dict:
+    with SessionLocal() as db:
+        doc = db.get(Document, artifact_id)
+        if not doc or not can_access_document(doc, user, guest_id):
+            raise HTTPException(status_code=404, detail="Not found")
+        if doc.status == "ready":
+            ensure_question_pool(db, artifact_id)
+            db.refresh(doc)
+        return _learn_queue_payload(db, artifact_id, doc, user)
+
+
+def _learn_stream_tick(
+    artifact_id: uuid.UUID,
+    user: Account | None,
+    guest_id: str | None,
+    *,
+    ensure_pool: bool,
+) -> dict:
+    with SessionLocal() as db:
+        doc = db.get(Document, artifact_id)
+        if not doc or not can_access_document(doc, user, guest_id):
+            raise HTTPException(status_code=404, detail="not found")
+        if ensure_pool and doc.status == "ready":
+            ensure_question_pool(db, artifact_id)
+            db.refresh(doc)
+        return _learn_queue_payload(db, artifact_id, doc, user)
+
+
 @router.get("/{artifact_id}/learn-queue")
-def learn_queue(
+async def learn_queue(
     artifact_id: uuid.UUID,
     db: Session = Depends(get_db),
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> dict:
-    doc = db.get(Document, artifact_id)
-    if not doc or not can_access_document(doc, user, guest_id):
-        raise HTTPException(status_code=404, detail="Not found")
-
-    if doc.status == "ready":
-        ensure_question_pool(db, artifact_id)
-        db.refresh(doc)
-
-    return _learn_queue_payload(db, artifact_id, doc, user)
+    db.close()
+    return await asyncio.to_thread(_learn_queue_handler, artifact_id, user, guest_id)
 
 
 @router.get("/{artifact_id}/learn-queue/stream")
@@ -143,29 +168,28 @@ async def learn_queue_stream(
         tick = 0
         max_ticks = 180
         while tick < max_ticks:
-            db = SessionLocal()
+            tick += 1
             try:
-                doc = db.get(Document, artifact_id)
-                if not doc or not can_access_document(doc, user, guest_id):
-                    yield {"event": "error", "data": json.dumps({"detail": "not found"})}
-                    return
-                tick += 1
-                if doc.status == "ready" and tick == 1:
-                    ensure_question_pool(db, artifact_id)
-                    db.refresh(doc)
-                payload = _learn_queue_payload(db, artifact_id, doc, user)
-                yield {"event": "queue", "data": json.dumps(payload, default=str)}
-                if payload.get("document_complete"):
-                    yield {"event": "done", "data": json.dumps(payload, default=str)}
-                    return
-                if payload.get("current_assertion_id") and not payload.get("generation_pending"):
-                    delay = 3.0
-                elif payload.get("generation_pending"):
-                    delay = min(8.0, delay * 1.15)
-                else:
-                    delay = 2.0
-            finally:
-                db.close()
+                payload = await asyncio.to_thread(
+                    _learn_stream_tick,
+                    artifact_id,
+                    user,
+                    guest_id,
+                    ensure_pool=tick == 1,
+                )
+            except HTTPException:
+                yield {"event": "error", "data": json.dumps({"detail": "not found"})}
+                return
+            yield {"event": "queue", "data": json.dumps(payload, default=str)}
+            if payload.get("document_complete"):
+                yield {"event": "done", "data": json.dumps(payload, default=str)}
+                return
+            if payload.get("current_assertion_id") and not payload.get("generation_pending"):
+                delay = 3.0
+            elif payload.get("generation_pending"):
+                delay = min(8.0, delay * 1.15)
+            else:
+                delay = 2.0
             woke = await asyncio.to_thread(wait_learn_notify, artifact_id, timeout=delay)
             if not woke:
                 continue
@@ -174,13 +198,14 @@ async def learn_queue_stream(
 
 
 @router.get("/{artifact_id}/mastery")
-def mastery(
+async def mastery(
     artifact_id: uuid.UUID,
     db: Session = Depends(get_db),
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> dict:
-    q = learn_queue(artifact_id, db, user, guest_id)
+    db.close()
+    q = await asyncio.to_thread(_learn_queue_handler, artifact_id, user, guest_id)
     return {
         "page": q["current_page"],
         "concepts": q["concepts"],

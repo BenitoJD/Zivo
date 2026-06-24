@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.documents import DocumentOut
-from app.db import get_db
+from app.db import SessionLocal, get_db
 from app.models import Account
 from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.services.chunked_upload import (
@@ -34,31 +34,43 @@ class ChunkedInitIn(BaseModel):
 
 
 @router.post("/init", dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)])
-def chunked_init(
+async def chunked_init(
     body: ChunkedInitIn,
     db: Session = Depends(get_db),
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(optional_guest_session),
 ) -> dict:
-    return init_upload_session(
-        db,
-        user=user,
-        guest_id=guest_id,
-        filename=body.filename,
-        content_type=body.content_type.lower(),
-        total_size=body.total_size,
-        chunk_size=body.chunk_size,
-    )
+    db.close()
+
+    def _run() -> dict:
+        with SessionLocal() as session:
+            return init_upload_session(
+                session,
+                user=user,
+                guest_id=guest_id,
+                filename=body.filename,
+                content_type=body.content_type.lower(),
+                total_size=body.total_size,
+                chunk_size=body.chunk_size,
+            )
+
+    return await asyncio.to_thread(_run)
 
 
 @router.get("/{session_id}", dependencies=[Depends(rate_limit_dependency)])
-def chunked_status(
+async def chunked_status(
     session_id: uuid.UUID,
     db: Session = Depends(get_db),
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(optional_guest_session),
 ) -> dict:
-    return upload_session_status(db, session_id, user=user, guest_id=guest_id)
+    db.close()
+
+    def _run() -> dict:
+        with SessionLocal() as session:
+            return upload_session_status(session, session_id, user=user, guest_id=guest_id)
+
+    return await asyncio.to_thread(_run)
 
 
 @router.put(
@@ -76,15 +88,20 @@ async def chunked_part(
     data = await request.body()
     if not data:
         raise HTTPException(status_code=400, detail="Empty part body")
-    return await asyncio.to_thread(
-        upload_part,
-        db,
-        session_id,
-        part_number,
-        data,
-        user=user,
-        guest_id=guest_id,
-    )
+    db.close()
+
+    def _run() -> dict:
+        with SessionLocal() as session:
+            return upload_part(
+                session,
+                session_id,
+                part_number,
+                data,
+                user=user,
+                guest_id=guest_id,
+            )
+
+    return await asyncio.to_thread(_run)
 
 
 @router.post(
@@ -92,13 +109,19 @@ async def chunked_part(
     response_model=DocumentOut,
     dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)],
 )
-def chunked_complete(
+async def chunked_complete(
     session_id: uuid.UUID,
     db: Session = Depends(get_db),
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(optional_guest_session),
 ) -> DocumentOut:
-    return complete_upload_session(db, session_id, user=user, guest_id=guest_id)
+    db.close()
+
+    def _run() -> DocumentOut:
+        with SessionLocal() as session:
+            return complete_upload_session(session, session_id, user=user, guest_id=guest_id)
+
+    return await asyncio.to_thread(_run)
 
 
 @router.delete(

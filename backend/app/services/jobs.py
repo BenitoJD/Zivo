@@ -14,6 +14,12 @@ def _wake_workers(db: Session) -> None:
         db.execute(text("SELECT pg_notify(:channel, '')"), {"channel": _ETA_NOTIFY_CHANNEL})
     except Exception:
         pass
+    try:
+        from app.eta.job_notify import wake_eta_workers
+
+        wake_eta_workers()
+    except Exception:
+        pass
 
 
 def batch_enqueue_jobs(

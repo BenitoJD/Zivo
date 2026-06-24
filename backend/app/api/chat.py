@@ -218,6 +218,73 @@ def clear_thread(
     return {"version": new_version}
 
 
+    return {"version": new_version}
+
+
+def _prepare_chat_stream(
+    body: ChatRequest,
+    request: Request,
+    user: Account | None,
+    guest_id: str | None,
+) -> dict[str, Any]:
+    """Sync DB work for chat stream setup — run via asyncio.to_thread."""
+    with SessionLocal() as db:
+        doc = db.get(Document, body.document_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        if not can_access_document(doc, user, guest_id):
+            raise HTTPException(status_code=404, detail="Document not found")
+        if doc.status != "ready":
+            raise HTTPException(status_code=409, detail="Document not ready")
+
+        scope_preview = body.scope.model_dump() if body.scope else {}
+        if scope_preview.get("current_page") is not None:
+            from app.services.rag_window import is_rag_window_ready
+
+            if not is_rag_window_ready(db, doc.id, doc):
+                raise HTTPException(status_code=409, detail="Preparing chat context…")
+
+        include_image = body.use_vision or is_image_document(doc)
+        if body.model_id is not None:
+            from app.services.llm_registry import resolve_chat_model
+
+            try:
+                resolve_chat_model(db, model_id=body.model_id, require_vision=include_image)
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(status_code=503, detail="No chat model available") from exc
+
+        reserve_message_slot(db, user=user, request=request, demo_cookie=guest_id)
+
+        thread = _get_or_create_thread(db, user.id if user else None, doc)
+        history = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.thread_id == thread.id)
+            .order_by(ChatMessage.created_at.asc())
+            .limit(_HISTORY_LIMIT)
+            .all()
+        )
+        prior = [
+            {"role": m.role, "content": m.content}
+            for m in history
+            if (m.content or "").strip()
+        ]
+
+        db.add(ChatMessage(thread_id=thread.id, role="user", content=body.message))
+        db.commit()
+
+        return {
+            "doc_snapshot": doc,
+            "thread_id": thread.id,
+            "prior_messages": prior,
+            "request_message": body.message,
+            "request_model_id": body.model_id,
+            "request_scope": body.scope.model_dump() if body.scope else {},
+            "include_image": include_image,
+        }
+
+
 @router.post("", dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)])
 async def chat_stream(
     body: ChatRequest,
@@ -226,60 +293,15 @@ async def chat_stream(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(optional_guest_session),
 ) -> EventSourceResponse:
-    doc = db.get(Document, body.document_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    if not can_access_document(doc, user, guest_id):
-        raise HTTPException(status_code=404, detail="Document not found")
-    if doc.status != "ready":
-        raise HTTPException(status_code=409, detail="Document not ready")
-
-    scope_preview = body.scope.model_dump() if body.scope else {}
-    if scope_preview.get("current_page") is not None:
-        from app.services.rag_window import is_rag_window_ready
-
-        if not is_rag_window_ready(db, doc.id, doc):
-            raise HTTPException(status_code=409, detail="Preparing chat context…")
-
-    # Surface an explicit 404/503 before persisting the user turn so the
-    # thread doesn't accumulate orphan user messages when the model is wrong.
-    include_image = body.use_vision or is_image_document(doc)
-    if body.model_id is not None:
-        from app.services.llm_registry import resolve_chat_model
-
-        try:
-            resolve_chat_model(db, model_id=body.model_id, require_vision=include_image)
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail="No chat model available") from exc
-
-    reserve_message_slot(db, user=user, request=request, demo_cookie=guest_id)
-
-    thread = _get_or_create_thread(db, user.id if user else None, doc)
-    history = (
-        db.query(ChatMessage)
-        .filter(ChatMessage.thread_id == thread.id)
-        .order_by(ChatMessage.created_at.asc())
-        .limit(_HISTORY_LIMIT)
-        .all()
-    )
-    prior = [
-        {"role": m.role, "content": m.content}
-        for m in history
-        if (m.content or "").strip()
-    ]
-
-    db.add(ChatMessage(thread_id=thread.id, role="user", content=body.message))
-    db.commit()
-
-    doc_snapshot = doc
-    thread_id = thread.id
-    prior_messages = prior
-    request_message = body.message
-    request_model_id = body.model_id
-    request_scope = body.scope.model_dump() if body.scope else {}
     db.close()
+    setup = await asyncio.to_thread(_prepare_chat_stream, body, request, user, guest_id)
+    doc_snapshot = setup["doc_snapshot"]
+    thread_id = setup["thread_id"]
+    prior_messages = setup["prior_messages"]
+    request_message = setup["request_message"]
+    request_model_id = setup["request_model_id"]
+    request_scope = setup["request_scope"]
+    include_image = setup["include_image"]
 
     async def event_generator() -> Any:
         # Request-scoped `db` may close before this generator finishes; use a
@@ -468,9 +490,16 @@ async def grade_mcq(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> McqGradeResponse:
-    doc = db.get(Document, body.document_id)
-    if not doc or not can_access_document(doc, user, guest_id):
-        raise HTTPException(status_code=404, detail="Document not found")
+    db.close()
+
+    def _load_doc() -> Document:
+        with SessionLocal() as session:
+            doc = session.get(Document, body.document_id)
+            if not doc or not can_access_document(doc, user, guest_id):
+                raise HTTPException(status_code=404, detail="Document not found")
+            return doc
+
+    doc = await asyncio.to_thread(_load_doc)
     if body.correct_index >= len(body.options) or body.selected_index >= len(body.options):
         raise HTTPException(status_code=400, detail="Invalid option index")
 

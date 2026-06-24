@@ -14,7 +14,7 @@ from app.config import get_settings
 from app.eta import context as eta_context
 from app.eta.execution_state import cancel_descendants_async, update_execution_state_async
 from app.eta.handlers import io as _io_handlers  # noqa: F401
-from app.eta.llm_concurrency import LLM_MAX_CONCURRENT, get_llm_semaphore
+from app.eta.llm_concurrency import LLM_MAX_CONCURRENT
 from app.eta.priority import priority_sort_key
 from app.eta.registry import get_handler, normalize_result
 from app.models import EtaJobDependency, Job, JobStatus, JobWorkload
@@ -312,7 +312,6 @@ async def _periodic_stale_reaper() -> None:
 
 
 async def run_eta_worker_async() -> None:
-    get_llm_semaphore()
     semaphore = asyncio.Semaphore(CONCURRENCY)
     _spawn(_listen_for_job_notifications())
     _spawn(_periodic_stale_reaper())

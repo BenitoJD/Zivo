@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     # When true, chat/MCQ calls without an explicit model_id rotate across all
     # configured chat models and fail over on transient provider errors.
     llm_pool_enabled: bool = True
+    # MCQ reuse across documents with identical page text: all | demo | off
+    mcq_reuse_scope: str = "all"
     embed_model: str = "BAAI/bge-small-en-v1.5"
     embed_dimension: int = 384
     rerank_enabled: bool = True

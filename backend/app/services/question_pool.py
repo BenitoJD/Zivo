@@ -683,7 +683,11 @@ def set_coverage_complete(db: Session, document_id: uuid.UUID, page: int) -> Non
 
 
 def _reclaim_stale_generate_jobs(db: Session, document_id: uuid.UUID | None = None) -> int:
-    """Re-queue orphaned generate.questions jobs so learn mode can recover."""
+    """Re-queue orphaned generate.questions jobs so learn mode can recover.
+
+    Preserves ``result`` (incl. generation checkpoint) so a resumed run can
+    continue from the last saved sequence instead of redoing LLM work.
+    """
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=GENERATE_JOB_STALE_SECONDS)
     doc_filter = ""
     params: dict[str, Any] = {"cutoff": cutoff}
