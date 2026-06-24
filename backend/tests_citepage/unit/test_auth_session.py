@@ -18,7 +18,10 @@ def test_csrf_from_session_token_roundtrip() -> None:
 
 def test_get_session_returns_csrf_for_valid_cookie() -> None:
     token, csrf = create_session_token(uuid.uuid4())
-    fake_user = User(username="benito", password_hash="hashed")
+    # is_admin defaults at the DB layer (INSERT), not at instantiation — a User
+    # built outside a session leaves it None, which AuthResponse's bool field
+    # rejects. Set it explicitly so the test reflects a real (DB-loaded) user.
+    fake_user = User(username="benito", password_hash="hashed", is_admin=False)
 
     app.dependency_overrides[get_current_user] = lambda: fake_user
     try:

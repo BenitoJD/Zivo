@@ -120,41 +120,24 @@ def test_generate_quality_mcq_passes_on_first_attempt() -> None:
 
 def test_generate_quality_mcq_rewrites_then_passes() -> None:
     db = MagicMock()
+    # Stem trips the negative-wording heuristic ("which ... not"), which is a
+    # fatal flaw. Fatal heuristic flaws skip the critic and go straight to a
+    # rewrite on the next attempt. So the call sequence is: draft(bad) ->
+    # fatal heuristic -> rewrite(good) -> clean -> return on attempt 2.
     bad = {
-        "question": "What is the main outcome of mitosis?",
-        "options": ["Division", "Split", "Copy", "Merge"],
-        "correct_index": 0,
-        "explanation": "Mitosis divides.",
+        "question": "Which of the following is NOT a stage of mitosis?",
+        "options": ["Prophase", "Metaphase", "Anaphase", "Digestion"],
+        "correct_index": 3,
+        "explanation": "Digestion is not part of mitosis.",
     }
     good = _good_mcq()
     good["primary_concept_key"] = "mitosis"
-    critic_fail = json.dumps(
-        {
-            "pass": False,
-            "flaw_count": 2,
-            "fatal_flaws": ["negative_wording", "none_or_all_of_above"],
-            "flaws": [{"code": "negative_wording", "message": "Avoid NOT"}],
-            "rewrite_hints": "Use positive wording and real distractors.",
-        }
-    )
-    critic_pass = json.dumps(
-        {
-            "pass": True,
-            "flaw_count": 0,
-            "fatal_flaws": [],
-            "flaws": [],
-            "cognitive_level": "recall",
-            "matches_aspect": True,
-            "provokes_understanding": True,
-            "rewrite_hints": "",
-        }
-    )
     bad_block = f'```zv-mcq\n{json.dumps(bad)}\n```'
     good_block = f'```zv-mcq\n{json.dumps(good)}\n```'
 
     with patch(
         "app.services.mcq_quality._complete_chat_sync",
-        side_effect=[bad_block, critic_fail, good_block, critic_pass],
+        side_effect=[bad_block, good_block],
     ):
         result = generate_quality_mcq(
             db,
@@ -229,18 +212,6 @@ def test_generate_quality_mcq_embedding_gate_retries() -> None:
         "explanation": "Calvin cycle runs in the stroma.",
         "primary_concept_key": "calvin",
     }
-    critic_pass = json.dumps(
-        {
-            "pass": True,
-            "flaw_count": 0,
-            "fatal_flaws": [],
-            "flaws": [],
-            "cognitive_level": "recall",
-            "matches_aspect": True,
-            "provokes_understanding": True,
-            "rewrite_hints": "",
-        }
-    )
     similar_block = f'```zv-mcq\n{json.dumps(similar)}\n```'
     distinct_block = f'```zv-mcq\n{json.dumps(distinct)}\n```'
     prior = [
@@ -251,8 +222,13 @@ def test_generate_quality_mcq_embedding_gate_retries() -> None:
         }
     ]
 
+    # Fast-path control flow: a clean draft skips the critic entirely. So the
+    # call sequence is: draft(similar) -> embedding gate rejects -> rewrite
+    # (distinct) -> embedding gate accepts. Two _complete_chat_sync calls, no
+    # critic calls. The earlier 4-call chain desynced because it assumed the
+    # critic ran on every draft (pre-deferred-critic behavior).
     with (
-        patch("app.services.mcq_quality._complete_chat_sync", side_effect=[similar_block, critic_pass, distinct_block, critic_pass]),
+        patch("app.services.mcq_quality._complete_chat_sync", side_effect=[similar_block, distinct_block]),
         patch("app.services.mcq_quality.is_mcq_too_similar", side_effect=[(True, 0.95), (False, 0.4)]),
     ):
         result = generate_quality_mcq(
