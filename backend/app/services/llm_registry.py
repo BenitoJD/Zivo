@@ -383,6 +383,9 @@ def ensure_registry_providers(db: Session, settings: Settings | None = None) -> 
     # When a Step Fun key is configured, pin step-3.5-flash as the default chat
     # model (and thus the pinned generation model) on existing DBs too. This
     # runs on every boot, so it tracks key presence without a manual admin step.
+    # Note: no thinking_disabled meta — Step Fun's reasoning is already cheap
+    # (~5-80 tokens), and the thinking={"type":"disabled"} param is not cleanly
+    # honored (empirically it inflated tokens). Tested baseline latency ~1.4-2.3s.
     stepfun_model = (
         db.query(LlmModel)
         .filter(LlmModel.provider_id == stepfun.id, LlmModel.slug == "step-3.5-flash")
@@ -679,7 +682,7 @@ def bootstrap_llm_registry_from_env(db: Session, settings: Settings | None = Non
             api_key=settings.stepfun_api_key or None,
         )
         # step-3.5-flash becomes the pinned default generation model when a key
-        # is configured — fast, non-reasoning, ideal for high-volume MCQ cook.
+        # is configured — fast, ideal for high-volume MCQ cook.
         stepfun_is_default = bool(settings.stepfun_api_key)
         _upsert_model(
             db,
