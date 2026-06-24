@@ -1120,10 +1120,14 @@ def maybe_refill_pool(db: Session, document_id: uuid.UUID) -> Job | None:
     if not get_page_coverage(doc, page):
         return None
     budget = get_question_budget(doc, page)
-    generated_on_page = count_assertions_on_page(db, document_id, page)
     answered_ids = [str(x) for x in progress.get("answered_ids") or []]
-    answered_on_page = count_answered_on_page(db, document_id, page, answered_ids)
-    available = _count_available(db, doc.id, progress)
+    # One indexed query instead of three round-trips (count_assertions_on_page,
+    # count_answered_on_page, _count_available) — all hit the same (doc, page)
+    # filter and are derivable from page_assertion_summary.
+    summary = page_assertion_summary(db, document_id, page=page, answered_ids=answered_ids)
+    generated_on_page = summary["generated"]
+    answered_on_page = summary["answered"]
+    available = summary["available"]
 
     if is_coverage_complete(doc, page) or generated_on_page >= budget:
         return None

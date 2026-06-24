@@ -218,9 +218,15 @@ def test_reset_for_new_page_range_clears_pool_state() -> None:
     db.get.return_value = doc
 
     with (
-        patch("app.services.question_pool.count_assertions_on_page", return_value=5),
-        patch("app.services.question_pool.count_answered_on_page", return_value=REFILL_AFTER_ANSWERED),
-        patch("app.services.question_pool._count_available", return_value=2),
+        patch(
+            "app.services.question_pool.page_assertion_summary",
+            return_value={
+                "generated": 5,
+                "answered": REFILL_AFTER_ANSWERED,
+                "available": 2,
+                "next_id": None,
+            },
+        ),
         patch("app.services.question_pool.enqueue_page_batch") as enqueue,
     ):
         enqueue.return_value = MagicMock()

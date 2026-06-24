@@ -11,15 +11,24 @@ from app.services.storage import delete_object, get_json, ingest_tmp_key
 
 
 @eta(name="generate.questions", workload=JobWorkload.io)
-async def generate_questions_job(payload: dict) -> dict:
+def generate_questions_job(payload: dict) -> dict:
     """Question generation is LLM-I/O-bound (multi-second HTTP calls), not CPU.
 
-    Routed to the async IO worker (16-concurrency semaphore) instead of the
-    4-thread CPU pool, where each thread blocked on the LLM call and spawned a
-    fresh event loop per complete_chat via asyncio.run. The handler awaits
-    run_generation directly on the worker's running loop — no to_thread, no
-    per-call loop churn.
+    This is a SYNC handler. The async IO worker dispatches sync handlers to a
+    worker thread via asyncio.to_thread (worker_async._process_job), so each of
+    the CONCURRENCY=16 slots runs in its own OS thread. That lets up to 16
+    generations overlap on the multi-second LLM HTTP calls without any one
+    blocking the others — and crucially, without blocking the event loop that
+    drives the reservation loop and other handlers.
+
+    run_generation is async (it awaits litellm.acompletion). We drive it with
+    asyncio.run, which spins a fresh per-call loop. This is correct here
+    because the LLM call dominates latency by orders of magnitude — the loop
+    create/teardown cost (~microseconds) is negligible against the multi-second
+    completion, and a fresh loop avoids sharing state across concurrent threads.
     """
+    import asyncio
+
     from app.graphs.generation_graph import run_generation
     from app.services.question_pool import on_batch_failed
 
@@ -27,7 +36,7 @@ async def generate_questions_job(payload: dict) -> dict:
     page_number = int(payload.get("page_number") or 0)
     with SessionLocal() as db:
         try:
-            return await run_generation(db, document_id, payload)
+            return asyncio.run(run_generation(db, document_id, payload))
         except Exception:
             on_batch_failed(db, document_id, page=page_number)
             raise

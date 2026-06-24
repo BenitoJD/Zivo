@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 import uuid
 from collections import OrderedDict
@@ -24,6 +25,14 @@ from app.services.mcq_dedup import (
 from app.services.prompts import get_prompt
 
 MAX_GENERATION_ATTEMPTS = 3
+
+# Page excerpt length sent to every LLM call in the generate→critic→rewrite loop.
+# All three call sites slice page_text to this SAME length so the (system +
+# page text) prefix is byte-identical across the loop — which is what lets
+# provider prompt caching (OpenAI/Z.AI auto-prefix caching) actually hit. A
+# shorter slice on the critic previously broke the cacheable prefix and forced
+# the provider to re-process the full page on every attempt.
+MCQ_CONTEXT_CHAR_LIMIT = int(os.getenv("ZIVO_MCQ_CONTEXT_CHAR_LIMIT", "12000"))
 
 FATAL_FLAW_CODES = frozenset(
     {
@@ -383,7 +392,7 @@ async def _generate_draft_mcq(
     prior_mcqs: list[dict[str, Any]] | None,
     model_id: uuid.UUID | None = None,
 ) -> dict[str, Any] | None:
-    excerpt = page_text[:12_000]
+    excerpt = page_text[:MCQ_CONTEXT_CHAR_LIMIT]
     aspect_line = ""
     cognitive_line = ""
     if target_aspect:
@@ -440,7 +449,7 @@ async def _rewrite_mcq(
     prior_mcqs: list[dict[str, Any]] | None,
     model_id: uuid.UUID | None = None,
 ) -> dict[str, Any] | None:
-    excerpt = page_text[:12_000]
+    excerpt = page_text[:MCQ_CONTEXT_CHAR_LIMIT]
     aspect_label = (target_aspect or {}).get("label") or draft.get("primary_concept") or "aspect"
     flaws_json = json.dumps(critique_bundle.get("flaws") or [], ensure_ascii=False)
     hints = critique_bundle.get("rewrite_hints") or ""
@@ -485,7 +494,7 @@ async def critique_mcq(
     prior_mcqs: list[dict[str, Any]] | None = None,
     model_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
-    excerpt = page_text[:8_000]
+    excerpt = page_text[:MCQ_CONTEXT_CHAR_LIMIT]
     aspect = target_aspect or {}
     angle = (aspect.get("cognitive_angle") or "").strip()
     cognitive_angle_line = f"Cognitive angle: {angle}." if angle else ""
@@ -756,7 +765,7 @@ async def _generate_batch_drafts(
     Returns normalized payload dicts for every block the model emitted. The
     quality gates (heuristics, embedding similarity) run on each in the caller.
     """
-    excerpt = page_text[:12_000]
+    excerpt = page_text[:MCQ_CONTEXT_CHAR_LIMIT]
     targets_block = "\n".join(
         f"{i + 1}. {t.get('label')} (key: {t.get('key')})"
         + (f" — angle: {t.get('cognitive_angle')}" if t.get("cognitive_angle") else "")

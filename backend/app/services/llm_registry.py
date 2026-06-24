@@ -1,8 +1,12 @@
-"""LLM provider + model registry — resolve models and configure LiteLLM."""
+"""LLM provider + model registry — resolve models.
+
+Provider credentials are NOT pushed into os.environ here. litellm_provider_kwargs
+passes api_key/api_base explicitly to every litellm.acompletion call, so a shared
+os.environ would only race between concurrent jobs using different providers.
+"""
 
 from __future__ import annotations
 
-import os
 import uuid
 from dataclasses import dataclass
 
@@ -11,25 +15,6 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.config import Settings, get_settings
 from app.models.llm import LlmModel, LlmModelKind, LlmProvider
-
-# LiteLLM reads these env vars by convention (https://docs.litellm.ai/docs/providers)
-_PREFIX_ENV_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
-    "openai": (
-        ("api_key", "OPENAI_API_KEY"),
-        ("api_base_url", "OPENAI_API_BASE"),
-    ),
-    "openrouter": (
-        ("api_key", "OPENROUTER_API_KEY"),
-        ("api_base_url", "OPENROUTER_API_BASE"),
-    ),
-    "gemini": (("api_key", "GEMINI_API_KEY"),),
-    "anthropic": (("api_key", "ANTHROPIC_API_KEY"),),
-    "vertex_ai": (("api_key", "VERTEXAI_API_KEY"),),
-    "azure": (
-        ("api_key", "AZURE_API_KEY"),
-        ("api_base_url", "AZURE_API_BASE"),
-    ),
-}
 
 
 @dataclass(frozen=True)
@@ -121,21 +106,6 @@ def default_chat_model_id(db: Session) -> uuid.UUID | None:
         .first()
     )
     return model.id if model else None
-
-
-def configure_litellm(provider: LlmProvider) -> None:
-    """Push provider credentials into env vars LiteLLM reads at call time."""
-    mappings = _PREFIX_ENV_FIELDS.get(provider.litellm_prefix, ())
-    for field, env_key in mappings:
-        value = getattr(provider, field, None) or provider.extra_env.get(env_key)
-        if value:
-            if field == "api_base_url":
-                value = str(value).rstrip("/")
-            os.environ[env_key] = str(value)
-
-    for env_key, value in (provider.extra_env or {}).items():
-        if value and env_key not in {m[1] for m in mappings}:
-            os.environ[env_key] = str(value)
 
 
 def list_admin_chat_models(db: Session) -> list[LlmModel]:

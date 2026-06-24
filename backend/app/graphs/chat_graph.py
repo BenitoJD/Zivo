@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from typing import Any, TypedDict
 
@@ -10,6 +11,13 @@ from sqlalchemy.orm import Session
 
 from app.services.chat_retrieval import retrieve_document_chunks
 from app.services.retrieval_gate import needs_retrieval
+
+# Hard cap on the context_block chars assembled for the LLM. The MCQ generation
+# path enforces the same kind of budget (generation_graph.CONTEXT_CHAR_BUDGET);
+# chat previously joined every retrieved chunk's full text with no ceiling, so a
+# page-scoped turn (up to 48 fetched chunks) could ship unbounded tokens. The
+# citation list is unaffected — only the LLM-facing context_block is trimmed.
+CHAT_CONTEXT_CHAR_BUDGET = int(os.getenv("ZIVO_CHAT_CONTEXT_CHAR_BUDGET", "6000"))
 
 
 class ChatState(TypedDict, total=False):
@@ -55,8 +63,15 @@ def retrieve_context(state: ChatState, *, db: Session) -> dict[str, Any]:
         for c in chunks
     ]
     parts: list[str] = []
+    total = 0
     for c in chunks:
-        parts.append(c["text"])
+        t = (c.get("text") or "").strip()
+        if not t:
+            continue
+        if total + len(t) > CHAT_CONTEXT_CHAR_BUDGET and parts:
+            break
+        parts.append(t)
+        total += len(t)
     context_block = "\n\n".join(parts)
     # Context is returned separately rather than injected as a mid-list system
     # message. The caller folds it into the final user turn so the leading

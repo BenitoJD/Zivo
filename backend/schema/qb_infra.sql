@@ -225,6 +225,13 @@ CREATE TABLE IF NOT EXISTS qb.documents (
 CREATE INDEX IF NOT EXISTS documents_account_idx ON qb.documents (account_id);
 CREATE INDEX IF NOT EXISTS documents_slug_idx ON qb.documents (slug);
 CREATE INDEX IF NOT EXISTS documents_artifact_idx ON qb.documents (artifact_id, artifact_captured_at);
+-- Guest (anonymous) document lookups filter on meta->>'guest_id' with
+-- account_id IS NULL. Without this partial expression index those queries
+-- (guest_document_count, guest_storage_used, list_documents, claim_guest_documents)
+-- full-scan every anonymous document, which grows unbounded.
+CREATE INDEX IF NOT EXISTS documents_guest_id_idx
+    ON qb.documents ((meta->>'guest_id'))
+    WHERE account_id IS NULL;
 
 CREATE TABLE IF NOT EXISTS qb.document_chunks (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),

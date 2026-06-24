@@ -23,7 +23,7 @@ from app.services.llm_pool import (
     litellm_provider_kwargs,
     log_failover,
 )
-from app.services.llm_registry import ResolvedLlmModel, configure_litellm
+from app.services.llm_registry import ResolvedLlmModel
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,6 @@ def _log_usage(tag: str, model: str, usage: object, started: float) -> None:
 
 
 def _apply_model(resolved: ResolvedLlmModel) -> dict[str, str]:
-    configure_litellm(resolved.provider)
     return litellm_provider_kwargs(resolved)
 
 

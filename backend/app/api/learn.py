@@ -50,7 +50,13 @@ def _learn_queue_payload(
     user: Account | None,
 ) -> dict:
     progress = get_progress(doc)
-    if is_page_complete(db, doc, progress):
+    # build_learn_queue_state already computes page_complete internally (inlined
+    # from is_page_complete's logic) in a single indexed query. Calling
+    # is_page_complete separately first used to fire 2 extra round-trips that
+    # the state query already paid for. Build state once; if the page isn't yet
+    # complete we recompute only after a real page advance below.
+    state = build_learn_queue_state(db, artifact_id, doc, progress)
+    if state["page_complete"]:
         page = int(progress.get("current_page") or 1)
         _, page_to = page_range_bounds(doc)
         if page < page_to:
@@ -60,8 +66,7 @@ def _learn_queue_payload(
             ensure_question_pool(db, artifact_id)
             db.refresh(doc)
             progress = get_progress(doc)
-
-    state = build_learn_queue_state(db, artifact_id, doc, progress)
+            state = build_learn_queue_state(db, artifact_id, doc, progress)
     ws = _workspace_state(db, doc, user)
 
     concepts = db.execute(

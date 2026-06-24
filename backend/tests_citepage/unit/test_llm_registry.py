@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 from unittest.mock import MagicMock
 
 import pytest
 
-from app.models.llm import LlmProvider
-from app.services.llm_registry import (
-    bootstrap_llm_registry_from_env,
-    configure_litellm,
-)
+from app.models.llm import LlmModel, LlmModelKind, LlmProvider
+from app.services.llm_registry import ResolvedLlmModel, bootstrap_llm_registry_from_env
 
 
 @pytest.fixture(autouse=True)
@@ -34,11 +30,29 @@ def _provider(**kwargs) -> LlmProvider:
     )
 
 
-def test_configure_litellm_maps_openai_provider() -> None:
+def test_provider_credentials_passed_explicitly_not_via_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Credentials must flow through litellm_provider_kwargs (per-call) and never
+    # touch os.environ, which would race between concurrent jobs on different providers.
+    from app.services.llm_pool import litellm_provider_kwargs
+
     provider = _provider(api_base_url="https://example.com/v1/", api_key="secret")
-    configure_litellm(provider)
-    assert os.environ["OPENAI_API_BASE"] == "https://example.com/v1"
-    assert os.environ["OPENAI_API_KEY"] == "secret"
+    model = LlmModel(
+        id=uuid.uuid4(),
+        provider_id=provider.id,
+        provider=provider,
+        slug="test",
+        litellm_model="openai/test-model",
+        display_name="Test",
+        kind=LlmModelKind.chat.value,
+    )
+    resolved = ResolvedLlmModel(record=model, provider=provider)
+
+    kwargs = litellm_provider_kwargs(resolved)
+    assert kwargs["api_key"] == "secret"
+    assert kwargs["api_base"] == "https://example.com/v1"  # trailing slash stripped
+    # Nothing leaked into os.environ.
+    assert "OPENAI_API_KEY" not in __import__("os").environ
+    assert "OPENAI_API_BASE" not in __import__("os").environ
 
 
 def test_bootstrap_llm_registry_from_env_seeds_empty_db() -> None:
