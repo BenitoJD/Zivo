@@ -5,7 +5,7 @@ from sqlalchemy import MetaData, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import get_settings
-from app.db_search_path import attach_search_path
+from app.db_search_path import PGBOUNCER_PSYCOPG_CONNECT_ARGS, attach_search_path
 
 settings = get_settings()
 
@@ -20,6 +20,7 @@ engine = create_engine(
     pool_pre_ping=True,
     pool_size=_pool_size,
     max_overflow=_max_overflow,
+    connect_args=PGBOUNCER_PSYCOPG_CONNECT_ARGS,
 )
 attach_search_path(engine)
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)

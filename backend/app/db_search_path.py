@@ -1,12 +1,19 @@
-"""PgBouncer-safe search_path setup.
+"""PgBouncer-safe database engine helpers.
 
-Transaction-pooled PgBouncer rejects startup options like ``search_path`` in the
-connection string. Set the path at transaction begin instead.
+Transaction-pooled PgBouncer:
+- Rejects startup ``search_path`` options — set per transaction instead.
+- Breaks prepared / cached statements — disable on psycopg and asyncpg.
 """
 
 from sqlalchemy import event, text
 
 SEARCH_PATH_STMT = text("SET LOCAL search_path TO qb, intel, public")
+
+# psycopg3: disable server-side prepared statements (txn pooling reassigns backends).
+PGBOUNCER_PSYCOPG_CONNECT_ARGS = {"prepare_threshold": None}
+
+# asyncpg: disable statement cache (same reason).
+PGBOUNCER_ASYNCPG_CONNECT_ARGS = {"statement_cache_size": 0}
 
 
 def attach_search_path(engine) -> None:
