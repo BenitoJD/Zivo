@@ -24,6 +24,7 @@ spec:
       labels:
         app: {{ $.Chart.Name }}-{{ $name }}
         workload: {{ $name }}
+        app.kubernetes.io/component: worker
     spec:
       {{- with $.Values.imagePullSecrets }}
       imagePullSecrets:

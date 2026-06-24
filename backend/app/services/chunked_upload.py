@@ -184,8 +184,14 @@ def upload_part(
     parts = row["parts"] if isinstance(row["parts"], dict) else json.loads(row["parts"] or "{}")
     parts[str(part_number)] = etag
     db.execute(
-        text("UPDATE qb.upload_session SET parts = CAST(:parts AS jsonb) WHERE id = :id"),
-        {"id": session_id, "parts": json.dumps(parts)},
+        text(
+            """
+            UPDATE qb.upload_session
+            SET parts = COALESCE(parts, '{}'::jsonb) || jsonb_build_object(:part, to_jsonb(:etag::text))
+            WHERE id = :id
+            """
+        ),
+        {"id": session_id, "part": str(part_number), "etag": etag},
     )
     db.commit()
     return {"part_number": part_number, "etag": etag}

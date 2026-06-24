@@ -230,6 +230,7 @@ export default function WorkspaceArtifactPage({
   const pagesQuery = useArtifactPagesQuery(artifactId, !invalidArtifactId);
   const assertionQuery = useAssertionQuery(queue?.current_assertion_id);
   const chatMessagesQuery = useChatMessagesQuery(artifactId, !invalidArtifactId);
+  const chatHydratedRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (artifactQuery.data) setArtifact(artifactQuery.data);
@@ -254,13 +255,15 @@ export default function WorkspaceArtifactPage({
   queueRef.current = queue;
 
   useEffect(() => {
-    if (!chatMessagesQuery.data) return;
+    if (!chatMessagesQuery.data || chatBusy) return;
+    if (chatHydratedRef.current === artifactId) return;
+    chatHydratedRef.current = artifactId;
     setChatMessages(
       chatMessagesQuery.data
         .filter((m) => (m.content || "").trim())
         .map((m) => ({ role: m.role, content: m.content })),
     );
-  }, [chatMessagesQuery.data]);
+  }, [artifactId, chatBusy, chatMessagesQuery.data]);
 
   const isPdf = artifact?.content_type === "application/pdf";
 

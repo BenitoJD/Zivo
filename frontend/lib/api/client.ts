@@ -109,12 +109,23 @@ export function setCsrfToken(token: string | null) {
   csrfToken = token;
 }
 
+export function clearClientSessionState() {
+  csrfToken = null;
+  guestId = null;
+  guestSessionPromise = null;
+}
+
+function handleAuthFailure(res: Response) {
+  if (res.status === 401) clearClientSessionState();
+}
+
 export async function apiFetchBytes(path: string): Promise<ArrayBuffer> {
   const res = await fetch(`${API_BASE}${path}`, {
     credentials: "include",
     headers: buildHeaders(),
   });
   captureResponseMeta(res);
+  handleAuthFailure(res);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.arrayBuffer();
 }
@@ -125,6 +136,7 @@ export async function apiGet<T>(path: string): Promise<T> {
     headers: buildHeaders(),
   });
   captureResponseMeta(res);
+  handleAuthFailure(res);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json() as Promise<T>;
 }
@@ -271,7 +283,12 @@ function readChunkedResume(file: File): ChunkedResume | null {
   const raw = localStorage.getItem(chunkedResumeKey(file));
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as ChunkedResume;
+    const resume = JSON.parse(raw) as ChunkedResume & { savedAt?: number };
+    if (resume.savedAt && Date.now() - resume.savedAt > 7 * 24 * 60 * 60 * 1000) {
+      localStorage.removeItem(chunkedResumeKey(file));
+      return null;
+    }
+    return resume;
   } catch {
     return null;
   }
@@ -279,7 +296,10 @@ function readChunkedResume(file: File): ChunkedResume | null {
 
 function writeChunkedResume(file: File, resume: ChunkedResume) {
   if (typeof localStorage === "undefined") return;
-  localStorage.setItem(chunkedResumeKey(file), JSON.stringify(resume));
+  localStorage.setItem(
+    chunkedResumeKey(file),
+    JSON.stringify({ ...resume, savedAt: Date.now() }),
+  );
 }
 
 function clearChunkedResume(file: File) {

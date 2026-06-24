@@ -275,24 +275,24 @@ def run_eta_worker(should_stop: Callable[[], bool] | None = None) -> None:
     with ThreadPoolExecutor(
         max_workers=MAX_CONCURRENCY, thread_name_prefix="eta-cpu-worker"
     ) as executor:
-    running_jobs: dict[Future, str] = {}
-    reclaim_tick = 0
-    while True:
-        _reap_completed_jobs(running_jobs)
-        reclaim_tick += 1
-        if reclaim_tick % 200 == 0:
-            try:
-                from app.services.question_pool import _reclaim_stale_generate_jobs
+        running_jobs: dict[Future, str] = {}
+        reclaim_tick = 0
+        while True:
+            _reap_completed_jobs(running_jobs)
+            reclaim_tick += 1
+            if reclaim_tick % 200 == 0:
+                try:
+                    from app.services.question_pool import _reclaim_stale_generate_jobs
 
-                with SessionLocal.begin() as db:
-                    reclaimed_gen = _reclaim_stale_generate_jobs(db)
-                if reclaimed_gen:
-                    logger.info(
-                        "Reclaimed stale generate.questions job(s)",
-                        extra={"count": reclaimed_gen},
-                    )
-            except Exception:
-                logger.exception("Failed to reclaim stale generate jobs")
+                    with SessionLocal.begin() as db:
+                        reclaimed_gen = _reclaim_stale_generate_jobs(db)
+                    if reclaimed_gen:
+                        logger.info(
+                            "Reclaimed stale generate.questions job(s)",
+                            extra={"count": reclaimed_gen},
+                        )
+                except Exception:
+                    logger.exception("Failed to reclaim stale generate jobs")
 
             if stop_requested() and not running_jobs:
                 break
@@ -326,4 +326,11 @@ def run_eta_worker(should_stop: Callable[[], bool] | None = None) -> None:
             job_id, execution_id = reserved
             future = executor.submit(_handle_reserved_job, job_id, execution_id)
             running_jobs[future] = str(job_id)
-            logger.info("ETA job dispatched", extra={"job_id": str(job_id), "active_jobs": len(running_jobs), "max_concurrency": MAX_CONCURRENCY})
+            logger.info(
+                "ETA job dispatched",
+                extra={
+                    "job_id": str(job_id),
+                    "active_jobs": len(running_jobs),
+                    "max_concurrency": MAX_CONCURRENCY,
+                },
+            )

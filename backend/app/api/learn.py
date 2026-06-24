@@ -26,6 +26,7 @@ from app.services.question_pool import (
     is_page_complete,
     page_range_bounds,
 )
+from app.services.learn_notify import wait_learn_notify
 
 router = APIRouter()
 
@@ -138,9 +139,10 @@ async def learn_queue_stream(
         db.close()
 
     async def gen():
-        delay = 1.0
+        delay = 2.0
         tick = 0
-        for _ in range(600):
+        max_ticks = 180
+        while tick < max_ticks:
             db = SessionLocal()
             try:
                 doc = db.get(Document, artifact_id)
@@ -148,23 +150,25 @@ async def learn_queue_stream(
                     yield {"event": "error", "data": json.dumps({"detail": "not found"})}
                     return
                 tick += 1
-                if doc.status == "ready" and (tick == 1 or tick % 5 == 0):
+                if doc.status == "ready" and tick == 1:
                     ensure_question_pool(db, artifact_id)
                     db.refresh(doc)
                 payload = _learn_queue_payload(db, artifact_id, doc, user)
                 yield {"event": "queue", "data": json.dumps(payload, default=str)}
-                if payload.get("current_assertion_id") and not payload.get("generation_pending"):
-                    delay = 2.0
-                elif payload.get("generation_pending") and (payload.get("questions_generated") or 0) == 0:
-                    delay = min(8.0, delay * 1.4)
-                else:
-                    delay = 1.0
                 if payload.get("document_complete"):
                     yield {"event": "done", "data": json.dumps(payload, default=str)}
                     return
+                if payload.get("current_assertion_id") and not payload.get("generation_pending"):
+                    delay = 3.0
+                elif payload.get("generation_pending"):
+                    delay = min(8.0, delay * 1.15)
+                else:
+                    delay = 2.0
             finally:
                 db.close()
-            await asyncio.sleep(delay)
+            woke = await asyncio.to_thread(wait_learn_notify, artifact_id, timeout=delay)
+            if not woke:
+                continue
 
     return EventSourceResponse(gen())
 

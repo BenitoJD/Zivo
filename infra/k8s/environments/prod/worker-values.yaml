@@ -10,6 +10,7 @@ imagePullSecrets:
 workloads:
   io:
     enabled: true
+    replicaCount: 3
     command: ["python", "run_eta_worker_async.py"]
     env:
       ETA_WORKER_WORKLOADS: io

@@ -41,7 +41,37 @@ type CanvasRenderFingerprint = {
 const canvasFingerprints = new WeakMap<HTMLCanvasElement, CanvasRenderFingerprint>();
 
 const documentCache = new Map<string, PDFDocumentProxy>();
+const documentCacheOrder: string[] = [];
+const MAX_CACHED_PDF_DOCS = 3;
 const documentLoadPromises = new Map<string, Promise<PDFDocumentProxy>>();
+
+function rememberPdfDocument(artifactId: string, doc: PDFDocumentProxy): void {
+  if (documentCache.has(artifactId)) {
+    documentCache.set(artifactId, doc);
+    const idx = documentCacheOrder.indexOf(artifactId);
+    if (idx >= 0) documentCacheOrder.splice(idx, 1);
+    documentCacheOrder.push(artifactId);
+    return;
+  }
+  documentCache.set(artifactId, doc);
+  documentCacheOrder.push(artifactId);
+  while (documentCacheOrder.length > MAX_CACHED_PDF_DOCS) {
+    const evictId = documentCacheOrder.shift();
+    if (!evictId) break;
+    const evicted = documentCache.get(evictId);
+    documentCache.delete(evictId);
+    void evicted?.destroy();
+  }
+}
+
+export function clearPdfDocumentCache(): void {
+  for (const doc of documentCache.values()) {
+    void doc.destroy();
+  }
+  documentCache.clear();
+  documentCacheOrder.length = 0;
+  documentLoadPromises.clear();
+}
 
 let activeRenderCount = 0;
 const renderWaiters: Array<() => void> = [];
@@ -110,12 +140,12 @@ export async function loadPdfForArtifact(
         disableRange: false,
         disableStream: false,
       }).promise;
-      documentCache.set(artifactId, doc);
+      rememberPdfDocument(artifactId, doc);
       return doc;
     } catch {
       const data = await options.fetchBytes();
       const doc = await loadPdfDocument(data);
-      documentCache.set(artifactId, doc);
+      rememberPdfDocument(artifactId, doc);
       return doc;
     } finally {
       documentLoadPromises.delete(artifactId);

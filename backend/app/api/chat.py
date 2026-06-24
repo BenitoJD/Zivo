@@ -279,6 +279,7 @@ async def chat_stream(
     request_message = body.message
     request_model_id = body.model_id
     request_scope = body.scope.model_dump() if body.scope else {}
+    db.close()
 
     async def event_generator() -> Any:
         # Request-scoped `db` may close before this generator finishes; use a

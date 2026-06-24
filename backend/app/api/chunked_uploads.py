@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -75,7 +76,8 @@ async def chunked_part(
     data = await request.body()
     if not data:
         raise HTTPException(status_code=400, detail="Empty part body")
-    return upload_part(
+    return await asyncio.to_thread(
+        upload_part,
         db,
         session_id,
         part_number,

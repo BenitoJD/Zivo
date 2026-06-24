@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from typing import Any
@@ -86,6 +87,83 @@ def _aspect_retrieval_hints(
         return "\n---\n".join(parts)
     except Exception:
         return ""
+
+
+def _page_content_hash(page_text: str) -> str:
+    return hashlib.sha256((page_text or "").encode("utf-8")).hexdigest()
+
+
+def _reusable_mcq_payloads(
+    db: Session,
+    *,
+    page_hash: str,
+    page_number: int,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Reuse MCQs from shared/demo sources with identical page text."""
+    rows = db.execute(
+        text(
+            """
+            SELECT a.payload
+            FROM intel.assertion a
+            JOIN qb.documents d ON d.id::text = a.payload->>'artifact_id'
+            WHERE a.status = 'active'
+              AND a.payload->>'page_content_hash' = :page_hash
+              AND (a.payload->>'page_number')::int = :page
+              AND d.account_id IS NULL
+            ORDER BY (a.payload->>'sequence')::int ASC
+            LIMIT :limit
+            """
+        ),
+        {"page_hash": page_hash, "page": page_number, "limit": limit},
+    ).scalars().all()
+    out: list[dict[str, Any]] = []
+    for raw in rows:
+        payload = raw if isinstance(raw, dict) else json.loads(raw)
+        if payload.get("question") and payload.get("options"):
+            out.append(payload)
+    return out
+
+
+def _clone_reusable_mcqs(
+    db: Session,
+    document_id: uuid.UUID,
+    *,
+    page_number: int,
+    page_hash: str,
+    targets: list[dict[str, Any]],
+    start_sequence: int,
+    budget: int,
+) -> int:
+    reusable = _reusable_mcq_payloads(
+        db,
+        page_hash=page_hash,
+        page_number=page_number,
+        limit=len(targets),
+    )
+    if not reusable:
+        return 0
+
+    saved = 0
+    sequence = start_sequence
+    for target, template in zip(targets, reusable):
+        sequence += 1
+        if sequence > budget:
+            break
+        if _assertion_sequence_exists(db, document_id, page_number, sequence):
+            continue
+        payload = {
+            k: v
+            for k, v in template.items()
+            if k not in {"artifact_id", "sequence", "quality"}
+        }
+        payload["page_content_hash"] = page_hash
+        payload["reused_from_shared"] = True
+        _persist_assertion(db, document_id, payload, page_number=page_number, sequence=sequence)
+        if target and target.get("key"):
+            mark_aspect_asked(db, document_id, page_number, str(target["key"]))
+        saved += 1
+    return saved
 
 
 def run_generation(db: Session, document_id: uuid.UUID, options: dict[str, Any]) -> dict[str, Any]:
@@ -257,6 +335,29 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
             return {"questions_saved": 0, "page_number": page_number}
 
     prior_mcqs = _prior_mcqs_on_page(db, document_id, page_number)
+    page_hash = _page_content_hash(page_text)
+    cloned = _clone_reusable_mcqs(
+        db,
+        document_id,
+        page_number=page_number,
+        page_hash=page_hash,
+        targets=targets,
+        start_sequence=start_sequence,
+        budget=budget,
+    )
+    if cloned >= len(targets):
+        on_batch_completed(db, document_id, page=page_number, saved=cloned)
+        if activity_id:
+            update_activity(
+                db,
+                uuid.UUID(str(activity_id)),
+                status="succeeded",
+                stats={"questions_saved": cloned, "page_number": page_number, "reused": True},
+                finished=True,
+            )
+        db.commit()
+        return {"questions_saved": cloned, "page_number": page_number, "reused": True}
+
     stable_context = get_cacheable_page_context(document_id, page_number, page_text)
     aspect_hints = _aspect_retrieval_hints(db, document_id, page_number, targets, page_text)
     kept = generate_quality_mcq_batch(
@@ -277,6 +378,8 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
             break
         if _assertion_sequence_exists(db, document_id, page_number, sequence):
             continue
+        payload = dict(payload)
+        payload["page_content_hash"] = page_hash
         _persist_assertion(db, document_id, payload, page_number=page_number, sequence=sequence)
         if target and target.get("key"):
             mark_aspect_asked(db, document_id, page_number, str(target["key"]))

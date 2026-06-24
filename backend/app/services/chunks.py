@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 
@@ -12,6 +13,22 @@ from app.config import get_settings
 from app.models import Document, DocumentChunk
 
 settings = get_settings()
+
+
+def _chunk_content_hash(text_value: str) -> str:
+    return hashlib.sha256((text_value or "").encode("utf-8")).hexdigest()
+
+
+_EXISTING_PAGE_CHUNKS_SQL = text(
+    """
+    SELECT text, meta->>'content_hash' AS content_hash
+    FROM document_chunks
+    WHERE document_id = :document_id
+      AND page_start = :page
+      AND page_end = :page
+    ORDER BY id
+    """
+)
 
 
 _INSERT_CHUNK_SQL = text(
@@ -79,6 +96,22 @@ def upsert_page_chunks(
     chunks: list[dict],
     embeddings: list[list[float]],
 ) -> int:
+    if chunks and embeddings:
+        existing = db.execute(
+            _EXISTING_PAGE_CHUNKS_SQL,
+            {"document_id": str(document_id), "page": int(page)},
+        ).mappings().all()
+        if len(existing) == len(chunks):
+            unchanged = True
+            for row, chunk in zip(existing, chunks, strict=True):
+                new_hash = _chunk_content_hash(chunk.get("text") or "")
+                old_hash = row.get("content_hash") or _chunk_content_hash(row.get("text") or "")
+                if new_hash != old_hash:
+                    unchanged = False
+                    break
+            if unchanged:
+                return len(chunks)
+
     db.execute(
         _DELETE_PAGE_CHUNKS_SQL,
         {"document_id": str(document_id), "page": int(page)},
@@ -91,7 +124,12 @@ def upsert_page_chunks(
             "page_end": chunk["page_end"],
             "text": chunk["text"],
             "embedding": "[" + ",".join(str(x) for x in embedding) + "]",
-            "meta": json.dumps(chunk.get("meta") or {}),
+            "meta": json.dumps(
+                {
+                    **(chunk.get("meta") or {}),
+                    "content_hash": _chunk_content_hash(chunk.get("text") or ""),
+                }
+            ),
         }
         for chunk, embedding in zip(chunks, embeddings, strict=True)
     ]

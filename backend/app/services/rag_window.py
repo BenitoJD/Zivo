@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.models import Document
-from app.services.chunks import delete_chunks_outside_pages, indexed_pages_for_document
+from app.services.chunks import indexed_pages_for_document
 from app.services.question_pool import get_progress, selected_page_list
 
 MAX_RAG_PAGES = 6
@@ -75,9 +75,13 @@ def sync_rag_window(
     document_id: uuid.UUID,
     target_pages: list[int],
 ) -> list[int]:
-    """Delete chunks outside the window; return study pages that still need ingest."""
+    """Return study pages in the window that still need ingest.
+
+    Embeddings are retained for all pages once indexed — scrolling back does
+    not force a full re-parse/re-embed. Chat retrieval scopes to the active
+    window via ``doc.meta['rag_window']`` instead of physical deletion.
+    """
     allowed = {int(p) for p in target_pages}
-    delete_chunks_outside_pages(db, document_id, allowed)
     indexed = indexed_pages_for_document(db, document_id)
     return sorted(p for p in allowed if p not in indexed)
 

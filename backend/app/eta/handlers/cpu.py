@@ -9,7 +9,7 @@ from app.services.chunking import chunk_pages
 from app.services.chunks import finalize_image_document, persist_document_index, upsert_page_chunks
 from app.services.embed import embed_texts
 from app.services.jobs import batch_enqueue_jobs, enqueue_job
-from app.services.parse import parse_document, parse_document_page
+from app.services.parse import document_bytes_hash, parse_document, parse_document_page
 from app.services.rag_window import (
     chat_rag_window,
     refresh_rag_window_status,
@@ -184,7 +184,26 @@ def ingest_page_job(payload: dict) -> dict:
         if not doc:
             return {"skipped": True}
         raw = fetch_object(doc.storage_key)
-        page = parse_document_page(doc.content_type, raw, page_number)
+        cache_key = ingest_tmp_key(document_id, "parsed_pages")
+        content_hash = document_bytes_hash(raw)
+        cached_pages: list[dict] | None = None
+        try:
+            cached = get_json(cache_key)
+            if cached.get("content_hash") == content_hash and isinstance(cached.get("pages"), list):
+                cached_pages = cached["pages"]
+        except Exception:
+            cached_pages = None
+        if cached_pages is None and not (
+            doc.content_type.startswith("application/pdf") or raw[:4] == b"%PDF"
+        ):
+            cached_pages = parse_document(doc.content_type, raw)
+            put_json(cache_key, {"content_hash": content_hash, "pages": cached_pages})
+        page = parse_document_page(
+            doc.content_type,
+            raw,
+            page_number,
+            cached_pages=cached_pages,
+        )
         chunks = chunk_pages([page])
         texts = [f"passage: {c['text']}" for c in chunks if c.get("text")]
         vectors = embed_texts(texts) if texts else []

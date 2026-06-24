@@ -893,9 +893,7 @@ def generate_quality_mcq_batch(
             "max_similarity_to_prior": max_sim,
         }
         if critic_meta:
-            draft["quality"]["cognitive_level"] = critic_meta.get("cognitive_level")
-            draft["quality"]["matches_aspect"] = critic_meta.get("matches_aspect")
-            draft["quality"]["provokes_understanding"] = critic_meta.get("provokes_understanding")
+            draft["quality"]["critic_sampled"] = True
         if target and target.get("cognitive_angle"):
             draft["cognitive_angle"] = target["cognitive_angle"]
         accepted.append((target, draft))

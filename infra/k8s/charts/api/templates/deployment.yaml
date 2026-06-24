@@ -17,6 +17,7 @@ spec:
     metadata:
       labels:
         app: {{ .Chart.Name }}
+        app.kubernetes.io/component: api
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:

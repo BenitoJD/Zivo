@@ -1,10 +1,17 @@
 """Document parsing — PDF, DOCX, plain text, imported articles."""
 
+import hashlib
 import io
 import json
 
 import fitz
 from docx import Document as DocxDocument
+
+_SPARSE_PAGE_CHARS = 40
+
+
+def document_bytes_hash(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 def parse_document(content_type: str, data: bytes) -> list[dict]:
@@ -25,8 +32,20 @@ def _parse_pdf(data: bytes) -> list[dict]:
     with fitz.open(stream=data, filetype="pdf") as doc:
         for i, page in enumerate(doc, start=1):
             text = page.get_text("text").strip()
-            pages.append({"page": i, "text": text})
-    return pages or [{"page": 1, "text": ""}]
+            if len(text) < _SPARSE_PAGE_CHARS:
+                blocks = page.get_text("blocks")
+                block_text = "\n".join(
+                    str(block[4]).strip()
+                    for block in blocks
+                    if isinstance(block, (list, tuple)) and len(block) > 4 and str(block[4]).strip()
+                ).strip()
+                if len(block_text) > len(text):
+                    text = block_text
+            entry: dict = {"page": i, "text": text}
+            if len(text) < _SPARSE_PAGE_CHARS:
+                entry["sparse_text"] = True
+            pages.append(entry)
+    return pages or [{"page": 1, "text": "", "sparse_text": True}]
 
 
 def parse_pdf_page(data: bytes, page_number: int) -> dict:
@@ -39,8 +58,20 @@ def parse_pdf_page(data: bytes, page_number: int) -> dict:
         return {"page": page_number, "text": text}
 
 
-def parse_document_page(content_type: str, data: bytes, page_number: int) -> dict:
+def parse_document_page(
+    content_type: str,
+    data: bytes,
+    page_number: int,
+    *,
+    cached_pages: list[dict] | None = None,
+) -> dict:
     """Return {page, text} for one page (PDF) or the whole doc for single-page formats."""
+    page_number = int(page_number)
+    if cached_pages:
+        for item in cached_pages:
+            if int(item.get("page", 0)) == page_number:
+                return {"page": page_number, "text": str(item.get("text") or "").strip()}
+        return {"page": page_number, "text": ""}
     ct = (content_type or "").lower()
     if "pdf" in ct or data[:4] == b"%PDF":
         return parse_pdf_page(data, page_number)
@@ -48,7 +79,7 @@ def parse_document_page(content_type: str, data: bytes, page_number: int) -> dic
     if len(pages) == 1:
         return pages[0]
     for item in pages:
-        if int(item.get("page", 0)) == int(page_number):
+        if int(item.get("page", 0)) == page_number:
             return item
     return {"page": page_number, "text": ""}
 
