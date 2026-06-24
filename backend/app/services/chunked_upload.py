@@ -187,7 +187,7 @@ def upload_part(
         text(
             """
             UPDATE qb.upload_session
-            SET parts = COALESCE(parts, '{}'::jsonb) || jsonb_build_object(:part, to_jsonb(:etag::text))
+            SET parts = COALESCE(parts, '{}'::jsonb) || jsonb_build_object(:part, to_jsonb(CAST(:etag AS text)))
             WHERE id = :id
             """
         ),
