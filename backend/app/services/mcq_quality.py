@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import uuid
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -150,8 +151,10 @@ def has_fatal_heuristic_flaws(flaws: list[dict[str, str]]) -> bool:
     return any(f.get("code") in FATAL_FLAW_CODES for f in flaws)
 
 
-def _complete_chat_sync(db: Session, messages: list[dict], *, log_tag: str) -> str:
-    return asyncio.run(complete_chat(messages, db, log_tag=log_tag))
+def _complete_chat_sync(
+    db: Session, messages: list[dict], *, log_tag: str, model_id: uuid.UUID | None = None
+) -> str:
+    return asyncio.run(complete_chat(messages, db, log_tag=log_tag, model_id=model_id))
 
 
 def _parse_mcq_json(raw: str) -> dict[str, Any] | None:
@@ -253,6 +256,7 @@ def _generate_draft_mcq(
     sequence: int,
     target_aspect: dict[str, Any] | None,
     prior_mcqs: list[dict[str, Any]] | None,
+    model_id: uuid.UUID | None = None,
 ) -> dict[str, Any] | None:
     excerpt = page_text[:12_000]
     aspect_line = ""
@@ -280,6 +284,7 @@ def _generate_draft_mcq(
         db,
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         log_tag="generate_mcq",
+        model_id=model_id,
     )
     parsed = _parse_mcq_json(raw)
     if not parsed:
@@ -299,6 +304,7 @@ def _rewrite_mcq(
     target_aspect: dict[str, Any] | None,
     critique_bundle: dict[str, Any],
     prior_mcqs: list[dict[str, Any]] | None,
+    model_id: uuid.UUID | None = None,
 ) -> dict[str, Any] | None:
     excerpt = page_text[:12_000]
     aspect_label = (target_aspect or {}).get("label") or draft.get("primary_concept") or "aspect"
@@ -320,6 +326,7 @@ def _rewrite_mcq(
         db,
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         log_tag="rewrite_mcq",
+        model_id=model_id,
     )
     parsed = _parse_mcq_json(raw)
     if not parsed:
@@ -338,6 +345,7 @@ def critique_mcq(
     page_number: int,
     target_aspect: dict[str, Any] | None,
     prior_mcqs: list[dict[str, Any]] | None = None,
+    model_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     excerpt = page_text[:8_000]
     aspect = target_aspect or {}
@@ -368,6 +376,7 @@ def critique_mcq(
         db,
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         log_tag="critic_mcq",
+        model_id=model_id,
     )
     parsed = _parse_critic_json(raw)
     if not parsed:
@@ -391,6 +400,7 @@ def generate_quality_mcq(
     prior_mcqs: list[dict[str, Any]] | None = None,
     asked_labels: list[str] | None = None,
     max_attempts: int = MAX_GENERATION_ATTEMPTS,
+    model_id: uuid.UUID | None = None,
 ) -> dict[str, Any] | None:
     """Generate → heuristic check → LLM critic → embedding gate → rewrite until pass or exhausted."""
     if not page_text or not page_text.strip():
@@ -398,6 +408,15 @@ def generate_quality_mcq(
 
     if prior_mcqs is None and asked_labels:
         prior_mcqs = [{"aspect_label": label, "question": "", "correct_answer": ""} for label in asked_labels]
+
+    # Pin every generation call to one model instead of round-robining the pool.
+    # A parallel batch split across models of different speed waits on the slowest;
+    # pinning to the default collapses batch wall-clock. Interactive chat keeps
+    # using the pool for failover. Falls back to pool behavior if no default set.
+    if model_id is None:
+        from app.services.llm_registry import default_chat_model_id
+
+        model_id = default_chat_model_id(db)
 
     draft: dict[str, Any] | None = None
     last_critique_bundle: dict[str, Any] = {"flaws": [], "rewrite_hints": ""}
@@ -411,6 +430,7 @@ def generate_quality_mcq(
                 sequence=sequence,
                 target_aspect=target_aspect,
                 prior_mcqs=prior_mcqs,
+                model_id=model_id,
             )
         else:
             if draft is None:
@@ -421,6 +441,7 @@ def generate_quality_mcq(
                     sequence=sequence,
                     target_aspect=target_aspect,
                     prior_mcqs=prior_mcqs,
+                    model_id=model_id,
                 )
             elif last_critique_bundle.get("flaws") or last_critique_bundle.get("rewrite_hints"):
                 draft = _rewrite_mcq(
@@ -431,6 +452,7 @@ def generate_quality_mcq(
                     target_aspect=target_aspect,
                     critique_bundle=last_critique_bundle,
                     prior_mcqs=prior_mcqs,
+                    model_id=model_id,
                 )
             else:
                 draft = _generate_draft_mcq(
@@ -440,6 +462,7 @@ def generate_quality_mcq(
                     sequence=sequence,
                     target_aspect=target_aspect,
                     prior_mcqs=prior_mcqs,
+                    model_id=model_id,
                 )
 
         if draft is None:
@@ -488,6 +511,7 @@ def generate_quality_mcq(
             page_number=page_number,
             target_aspect=target_aspect,
             prior_mcqs=prior_mcqs,
+            model_id=model_id,
         )
         extra_flaws = [f for f in (critique.get("flaws") or []) if f.get("code") not in FATAL_FLAW_CODES]
         combined_count = len(heuristic_flaws) + len(extra_flaws) + len(critique.get("fatal_flaws") or [])

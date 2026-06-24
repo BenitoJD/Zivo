@@ -68,8 +68,10 @@ def run_page_triage(
     return result
 
 
-def _complete_chat_sync(db: Session, messages: list[dict]) -> str:
-    return asyncio.run(complete_chat(messages, db, log_tag="page_triage"))
+def _complete_chat_sync(
+    db: Session, messages: list[dict], *, model_id: uuid.UUID | None = None
+) -> str:
+    return asyncio.run(complete_chat(messages, db, log_tag="page_triage", model_id=model_id))
 
 
 def _parse_triage_json(raw: str) -> dict[str, Any] | None:
@@ -169,6 +171,11 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
     excerpt = page_text[:14_000] if page_text else ""
     if excerpt:
         try:
+            # Pin triage to the default model rather than round-robining the pool,
+            # so triage wall-clock isn't gated by the slowest pool model.
+            from app.services.llm_registry import default_chat_model_id
+
+            model_id = default_chat_model_id(db)
             system = get_prompt(db, "page_triage_system")
             user = get_prompt(
                 db,
@@ -178,6 +185,7 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
             raw = _complete_chat_sync(
                 db,
                 [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                model_id=model_id,
             )
             parsed = _parse_triage_json(raw)
             if parsed:

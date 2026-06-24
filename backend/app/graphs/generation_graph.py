@@ -15,7 +15,7 @@ from app.db import SessionLocal
 from app.graphs.page_triage_graph import run_page_triage
 from app.models import Document
 from app.repositories.intel import update_activity
-from app.services.mcq_dedup import is_mcq_too_similar, prior_mcq_from_payload
+from app.services.mcq_dedup import prior_mcq_from_payload
 from app.services.mcq_quality import generate_quality_mcq
 from app.services.question_pool import (
     get_page_coverage,
@@ -118,6 +118,45 @@ def _next_aspects(doc: Document, page_number: int, n: int) -> list[dict[str, Any
     return out
 
 
+def _speculative_aspects(page_text: str, page_number: int, n: int) -> list[dict[str, Any]]:
+    """Lightweight aspect targets when triage hasn't landed yet.
+
+    Mirrors the heuristic in page_triage_graph._fallback_triage (paragraph-based)
+    so the first batch can start generating immediately instead of blocking on
+    the triage LLM call. Real triage overwrites page_coverage later and refines
+    the plan for subsequent batches — the speculative aspects only seed the
+    first questions. Each target is marked ``speculative=True`` so it's clear
+    in coverage which aspects came from the fast path.
+    """
+    if not page_text:
+        return []
+    paragraphs = [p.strip() for p in page_text.split("\n\n") if p.strip()]
+    n = max(1, n)
+    targets: list[dict[str, Any]] = []
+    for i, para in enumerate(paragraphs[:n]):
+        label = para[:120].replace("\n", " ")
+        targets.append(
+            {
+                "key": f"page-{page_number}-spec-{i + 1}",
+                "label": label,
+                "asked": False,
+                "answered": False,
+                "speculative": True,
+            }
+        )
+    if not targets:
+        targets.append(
+            {
+                "key": f"page-{page_number}-spec-main",
+                "label": "Main ideas on this page",
+                "asked": False,
+                "answered": False,
+                "speculative": True,
+            }
+        )
+    return targets
+
+
 def _generate_batch_parallel(
     *,
     page_text: str,
@@ -164,16 +203,35 @@ def _reconcile_batch(
 
     Parallel questions can't see each other's output, so each was deduped only
     against prior questions on the page. Reconcile the new batch against itself.
+
+    Embeds once for the whole batch (vs one embed call per item): we embed every
+    candidate signature up front, then compare in-memory, collapsing N embed
+    round-trips to one.
     """
+    from app.services.embed import embed_texts
+    from app.services.mcq_dedup import cosine_similarity, mcq_signature
+
+    if not results:
+        return []
+    if len(results) == 1:
+        return list(results)
+
+    # Embed all candidate signatures in a single batch call.
+    sigs = [mcq_signature(payload) for _, payload in results]
+    vectors = embed_texts(sigs)
+
     kept: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    batch_prior: list[dict[str, Any]] = []
-    for target, payload in results:
-        if batch_prior:
-            too_similar, _ = is_mcq_too_similar(payload, batch_prior)
-            if too_similar:
-                continue
+    kept_vectors: list[list[float]] = []
+    for (target, payload), vec in zip(results, vectors, strict=True):
+        duplicate = False
+        for kept_vec in kept_vectors:
+            if cosine_similarity(vec, kept_vec) >= 0.92:
+                duplicate = True
+                break
+        if duplicate:
+            continue
         kept.append((target, payload))
-        batch_prior.append(prior_mcq_from_payload(payload))
+        kept_vectors.append(vec)
     return kept
 
 
@@ -199,18 +257,34 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
     remaining = budget - start_sequence
     targets = _next_aspects(doc, page_number, min(batch_size, max(0, remaining)))
     if not targets:
-        set_coverage_complete(db, document_id, page_number)
-        on_batch_completed(db, document_id, page=page_number, saved=0)
-        if activity_id:
-            update_activity(
-                db,
-                uuid.UUID(str(activity_id)),
-                status="succeeded",
-                stats={"questions_saved": 0, "page_number": page_number},
-                finished=True,
-            )
-        db.commit()
-        return {"questions_saved": 0, "page_number": page_number}
+        # No unasked aspects. If triage has already run (coverage exists), the
+        # page is genuinely complete. If triage hasn't landed yet, synthesize
+        # speculative aspect targets from the page text so the first batch can
+        # start immediately instead of blocking on the triage LLM call. Real
+        # triage overwrites coverage afterward and refines later batches.
+        coverage = get_page_coverage(doc, page_number)
+        triage_ran = bool(coverage.get("aspects")) or coverage.get("coverage_complete")
+        if triage_ran or not page_text:
+            set_coverage_complete(db, document_id, page_number)
+            on_batch_completed(db, document_id, page=page_number, saved=0)
+            if activity_id:
+                update_activity(
+                    db,
+                    uuid.UUID(str(activity_id)),
+                    status="succeeded",
+                    stats={"questions_saved": 0, "page_number": page_number},
+                    finished=True,
+                )
+            db.commit()
+            return {"questions_saved": 0, "page_number": page_number}
+        targets = _speculative_aspects(
+            page_text, page_number, min(batch_size, max(0, remaining))
+        )
+        if not targets:
+            set_coverage_complete(db, document_id, page_number)
+            on_batch_completed(db, document_id, page=page_number, saved=0)
+            db.commit()
+            return {"questions_saved": 0, "page_number": page_number}
 
     prior_mcqs = _prior_mcqs_on_page(db, document_id, page_number)
     generated = _generate_batch_parallel(

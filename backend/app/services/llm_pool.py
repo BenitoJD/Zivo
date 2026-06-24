@@ -146,13 +146,49 @@ def is_failover_eligible(exc: BaseException) -> bool:
 
 
 def litellm_provider_kwargs(resolved: ResolvedLlmModel) -> dict[str, str]:
-    """Per-request provider credentials (avoids env-var races between providers)."""
+    """Per-request provider credentials + model-level call params.
+
+    Credentials (avoids env-var races between providers). Model-level params
+    are read from the model row's ``meta`` JSONB so per-model behavior — e.g.
+    disabling a hosted model's reasoning/thinking mode or capping output tokens
+    — is data-driven rather than hardcoded. Only keys litellm understands are
+    forwarded; unknown keys are ignored.
+
+    Supported ``meta`` keys:
+    - ``thinking_disabled`` (bool): emit ``thinking={"type": "disabled"}`` and an
+      OpenAI-compatible ``extra_body`` fallback (Z.AI GLM 4.x emits a 1–3k-token
+      reasoning trace by default that we discard — disabling it is a ~5× latency win).
+    - ``max_tokens`` (int): hard cap on completion tokens.
+    - ``temperature`` (float): sampling temperature.
+    """
     provider = resolved.provider
     params: dict[str, str] = {}
     if provider.api_key:
         params["api_key"] = provider.api_key
     if provider.api_base_url:
         params["api_base"] = str(provider.api_base_url).rstrip("/")
+
+    meta = resolved.record.meta or {}
+    if not isinstance(meta, dict):
+        meta = {}
+
+    if meta.get("thinking_disabled"):
+        # Z.AI native form (honored by the GLM 4.x OpenAI-compatible endpoint).
+        params["thinking"] = {"type": "disabled"}
+        # OpenAI-compatible / vLLM fallback for the same switch.
+        params.setdefault("extra_body", {})
+        if isinstance(params.get("extra_body"), dict):
+            params["extra_body"].setdefault("chat_template_kwargs", {})
+            params["extra_body"]["chat_template_kwargs"].setdefault("enable_thinking", False)
+
+    max_tokens = meta.get("max_tokens")
+    if isinstance(max_tokens, int) and max_tokens > 0:
+        params["max_tokens"] = max_tokens
+
+    temperature = meta.get("temperature")
+    if isinstance(temperature, (int, float)):
+        params["temperature"] = temperature
+
     return params
 
 

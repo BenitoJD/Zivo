@@ -109,6 +109,71 @@ def embed_chunks_job(payload: dict) -> dict:
     return {"document_id": str(document_id), "chunks": count}
 
 
+@eta(name="ingest.document", workload=JobWorkload.cpu)
+def ingest_document_job(payload: dict) -> dict:
+    """Bundled ingest: parse → chunk → embed → persist in ONE job.
+
+    The happy path used to fan out across three separate CPU jobs
+    (parse_document → chunk_pages → embed_chunks), each costing a worker poll
+    cycle before the next could start. On a single-worker VPS that's two extra
+    queue hops (up to ~2 × POLL_INTERVAL each) before generation can begin.
+    Bundling collapses them to one hop while keeping the granular handlers
+    registered for the retry/legacy paths and existing tests.
+    """
+    document_id = UUID(payload["document_id"])
+    with SessionLocal() as db:
+        doc = db.get(Document, document_id)
+        if not doc:
+            return {"skipped": True}
+        raw = fetch_object(doc.storage_key)
+        if doc.content_type.startswith("image/"):
+            finalize_image_document(db, document_id)
+            return {"document_id": str(document_id), "image": True}
+
+        # --- parse ---
+        pages = parse_document(doc.content_type, raw)
+        total_pages = len(pages)
+        selected = (doc.meta or {}).get("selected_range")
+        if selected:
+            page_list = selected.get("pages")
+            if isinstance(page_list, list) and page_list:
+                allowed = {int(p) for p in page_list}
+                pages = [p for p in pages if int(p.get("page", 0)) in allowed]
+            else:
+                page_from = int(selected.get("from", 1))
+                page_to = int(selected.get("to", page_from))
+                pages = [p for p in pages if page_from <= int(p.get("page", 0)) <= page_to]
+        meta = dict(doc.meta or {})
+        meta["page_count"] = int(meta.get("page_count") or total_pages or 1)
+        doc.meta = meta
+        doc.index_progress = 40
+        db.commit()
+
+    # --- chunk ---
+    chunks = chunk_pages(pages)
+    with SessionLocal() as db:
+        doc = db.get(Document, document_id)
+        if doc:
+            doc.index_progress = 60
+            db.commit()
+
+    # --- embed + persist ---
+    texts = [f"passage: {c['text']}" for c in chunks]
+    vectors = embed_texts(texts) if texts else []
+    with SessionLocal() as db:
+        doc = db.get(Document, document_id)
+        if doc:
+            doc.index_progress = 90
+            db.commit()
+        count = persist_document_index(db, document_id, chunks, vectors)
+
+        from app.services.question_generation import enqueue_generate_if_needed
+
+        enqueue_generate_if_needed(db, document_id)
+
+    return {"document_id": str(document_id), "chunks": count}
+
+
 @eta(name="ingest.page", workload=JobWorkload.cpu)
 def ingest_page_job(payload: dict) -> dict:
     document_id = UUID(payload["document_id"])

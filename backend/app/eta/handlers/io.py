@@ -23,7 +23,7 @@ def fetch_file(payload: dict) -> dict:
 
         enqueue_job(
             db,
-            name="ingest.parse_document",
+            name="ingest.document",
             workload=JobWorkload.cpu,
             payload={"document_id": str(document_id)},
         )

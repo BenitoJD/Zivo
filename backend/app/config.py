@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     zai_api_base: str = "https://api.z.ai/api/coding/paas/v4"
     zai_api_key: str = ""
+    # Step Fun (stepfun.com) — OpenAI-compatible. step-3.5-flash is a fast,
+    # non-reasoning model well-suited to high-volume MCQ generation.
+    stepfun_api_base: str = "https://api.stepfun.ai/step_plan/v1"
+    stepfun_api_key: str = ""
     openrouter_api_base: str = "https://openrouter.ai/api/v1"
     openrouter_api_key: str = ""
     gemini_api_key: str = ""

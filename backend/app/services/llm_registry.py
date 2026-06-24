@@ -106,6 +106,23 @@ def resolve_embedding_model(db: Session) -> ResolvedLlmModel:
     return ResolvedLlmModel(record=model, provider=model.provider)
 
 
+def default_chat_model_id(db: Session) -> uuid.UUID | None:
+    """The pinned default chat model id, if any.
+
+    Used by background generation to pin every call to one model instead of
+    round-robining the pool. Round-robin spreads a parallel batch across models
+    of different speed, so the batch always waits on the slowest. Pinning to the
+    default (the fastest/quality default) collapses batch wall-clock and removes
+    cross-model stragglers. Interactive chat keeps using the pool for failover.
+    """
+    model = (
+        _enabled_chat_query(db)
+        .order_by(LlmModel.is_default.desc(), LlmModel.sort_order, LlmModel.display_name)
+        .first()
+    )
+    return model.id if model else None
+
+
 def configure_litellm(provider: LlmProvider) -> None:
     """Push provider credentials into env vars LiteLLM reads at call time."""
     mappings = _PREFIX_ENV_FIELDS.get(provider.litellm_prefix, ())
@@ -178,6 +195,15 @@ def list_public_models(db: Session) -> tuple[list[LlmModel], uuid.UUID | None, u
     default_chat_id = next((m.id for m in models if m.kind == LlmModelKind.chat and m.is_default), None)
     default_embed_id = next((m.id for m in models if m.kind == LlmModelKind.embedding and m.is_default), None)
     return models, default_chat_id, default_embed_id
+
+
+# GLM 4.x models default to a reasoning/"thinking" mode that emits a 1–3k-token
+# trace we discard (only the small MCQ JSON block is parsed). Disabling it is a
+# ~5× latency / ~14× token reduction for generation. See llm_pool.litellm_provider_kwargs.
+GLM_THINKING_DISABLED_META = {
+    "thinking_disabled": True,
+    "max_tokens": 600,
+}
 
 
 def _provider_slug_for_litellm_model(litellm_model: str) -> str:
@@ -312,8 +338,59 @@ def ensure_registry_providers(db: Session, settings: Settings | None = None) -> 
         max_input_tokens=200_000,
         max_output_tokens=8_192,
         update_fields=True,
+        meta=GLM_THINKING_DISABLED_META,
+    )
+    # Force the thinking-disabled meta onto pre-existing GLM rows whose meta was
+    # previously empty, so live DBs pick up the latency fix on next boot.
+    glm = (
+        db.query(LlmModel)
+        .filter(LlmModel.provider_id == zai.id, LlmModel.slug == "glm-4.7")
+        .first()
+    )
+    if glm and not (glm.meta or {}).get("thinking_disabled"):
+        glm.meta = GLM_THINKING_DISABLED_META
+        dirty = True
+    if before == 0:
+        dirty = True
+
+    stepfun = _upsert_provider(
+        db,
+        slug="stepfun",
+        display_name="Step Fun",
+        litellm_prefix="openai",
+        api_base_url=settings.stepfun_api_base.rstrip("/") or None,
+        api_key=settings.stepfun_api_key or None,
+    )
+    before = (
+        db.query(LlmModel)
+        .filter(LlmModel.provider_id == stepfun.id, LlmModel.slug == "step-3.5-flash")
+        .count()
+    )
+    _upsert_model(
+        db,
+        provider=stepfun,
+        slug="step-3.5-flash",
+        litellm_model="openai/step-3.5-flash",
+        display_name="Step 3.5 Flash",
+        kind=LlmModelKind.chat,
+        sort_order=5,
+        max_input_tokens=128_000,
+        max_output_tokens=8_192,
+        update_fields=True,
     )
     if before == 0:
+        dirty = True
+    # When a Step Fun key is configured, pin step-3.5-flash as the default chat
+    # model (and thus the pinned generation model) on existing DBs too. This
+    # runs on every boot, so it tracks key presence without a manual admin step.
+    stepfun_model = (
+        db.query(LlmModel)
+        .filter(LlmModel.provider_id == stepfun.id, LlmModel.slug == "step-3.5-flash")
+        .first()
+    )
+    if settings.stepfun_api_key and stepfun_model and not stepfun_model.is_default:
+        _clear_defaults_for_kind(db, LlmModelKind.chat)
+        stepfun_model.is_default = True
         dirty = True
 
     openrouter = _upsert_provider(
@@ -401,6 +478,16 @@ def refresh_llm_registry_from_env(
                 dirty = True
             if settings.zai_api_base and (force_keys or not provider.api_base_url):
                 provider.api_base_url = settings.zai_api_base.rstrip("/")
+                dirty = True
+
+    if settings.stepfun_api_key or settings.stepfun_api_base:
+        provider = db.query(LlmProvider).filter(LlmProvider.slug == "stepfun").first()
+        if provider:
+            if settings.stepfun_api_key and (force_keys or not provider.api_key):
+                provider.api_key = settings.stepfun_api_key
+                dirty = True
+            if settings.stepfun_api_base and (force_keys or not provider.api_base_url):
+                provider.api_base_url = settings.stepfun_api_base.rstrip("/")
                 dirty = True
 
     if settings.openrouter_api_key or settings.openrouter_api_base:
@@ -579,6 +666,31 @@ def bootstrap_llm_registry_from_env(db: Session, settings: Settings | None = Non
             is_default=settings.litellm_model == "openai/glm-4.7",
             sort_order=15,
             max_input_tokens=200_000,
+            max_output_tokens=8_192,
+            meta=GLM_THINKING_DISABLED_META,
+        )
+
+        stepfun = _upsert_provider(
+            db,
+            slug="stepfun",
+            display_name="Step Fun",
+            litellm_prefix="openai",
+            api_base_url=settings.stepfun_api_base.rstrip("/") or None,
+            api_key=settings.stepfun_api_key or None,
+        )
+        # step-3.5-flash becomes the pinned default generation model when a key
+        # is configured — fast, non-reasoning, ideal for high-volume MCQ cook.
+        stepfun_is_default = bool(settings.stepfun_api_key)
+        _upsert_model(
+            db,
+            provider=stepfun,
+            slug="step-3.5-flash",
+            litellm_model="openai/step-3.5-flash",
+            display_name="Step 3.5 Flash",
+            kind=LlmModelKind.chat,
+            is_default=stepfun_is_default,
+            sort_order=5,
+            max_input_tokens=128_000,
             max_output_tokens=8_192,
         )
 
