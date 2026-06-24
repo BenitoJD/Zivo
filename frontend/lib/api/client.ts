@@ -115,6 +115,18 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: buildHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  captureResponseMeta(res);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json() as Promise<T>;
+}
+
 export async function apiPostForm<T>(path: string, form: FormData): Promise<T> {
   const res = await fetchWithTimeout(
     `${API_BASE}${path}`,

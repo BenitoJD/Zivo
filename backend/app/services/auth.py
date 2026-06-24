@@ -79,6 +79,12 @@ def get_current_user(
     return user
 
 
+def require_admin(user: User = Depends(get_current_user)) -> User:
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin required")
+    return user
+
+
 def get_optional_user(
     db: Session = Depends(get_db),
     zivo_session: str | None = Cookie(default=None),

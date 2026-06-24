@@ -18,6 +18,18 @@ logger = logging.getLogger(__name__)
 
 _pool_lock = threading.Lock()
 _pool_cursor = 0
+_pool_enabled_override: bool | None = None
+
+
+def is_llm_pool_enabled() -> bool:
+    if _pool_enabled_override is not None:
+        return _pool_enabled_override
+    return get_settings().llm_pool_enabled
+
+
+def set_llm_pool_enabled(enabled: bool) -> None:
+    global _pool_enabled_override
+    _pool_enabled_override = enabled
 
 
 def _provider_ready(provider: LlmProvider) -> bool:
@@ -66,7 +78,7 @@ def iter_chat_model_attempts(
         yield resolve_chat_model(db, model_id=model_id, require_vision=require_vision)
         return
 
-    if not get_settings().llm_pool_enabled:
+    if not is_llm_pool_enabled():
         from app.services.llm_registry import resolve_chat_model
 
         yield resolve_chat_model(db, require_vision=require_vision)

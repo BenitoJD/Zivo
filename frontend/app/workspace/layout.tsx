@@ -31,7 +31,7 @@ import { Dropzone, MIME_TYPES } from "@mantine/dropzone";
 import { useForm } from "@mantine/form";
 import { useDisclosure, useLocalStorage, useMediaQuery, useMounted } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
-import { IconFileText, IconLayoutSidebarLeftCollapse, IconLink, IconLogin, IconMoon, IconSun, IconTrash, IconUpload, IconX } from "@tabler/icons-react";
+import { IconCpu, IconFileText, IconLayoutSidebarLeftCollapse, IconLink, IconLogin, IconMoon, IconSun, IconTrash, IconUpload, IconX } from "@tabler/icons-react";
 import { apiDelete, apiGet, apiPost, apiPostForm, ensureGuestSession, isArtifactId, setCsrfToken } from "@/lib/api/client";
 import { BRAND_LOGO_SRC, BRAND_NAME, BRAND_LOGO_WIDTH, BRAND_LOGO_HEIGHT } from "@/lib/brand";
 import { STORAGE_LIMIT_BYTES } from "@/lib/constants";
@@ -191,7 +191,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const sidebarWide = isMobile ? mobileOpened : sidebarExpanded;
   const sidebarWidth = isMobile
-    ? SIDEBAR_EXPANDED_WIDTH
+    ? "100%"
     : sidebarWide
       ? SIDEBAR_EXPANDED_WIDTH
       : SIDEBAR_MINI_WIDTH;
@@ -204,6 +204,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   const [deleteTarget, setDeleteTarget] = useState<SourceDocument | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [username, setUsername] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [documents, setDocuments] = useState<SourceDocument[]>([]);
 
   const [importUrl, setImportUrl] = useState("");
@@ -234,12 +235,16 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
 
   useEffect(() => {
     void ensureGuestSession();
-    apiGet<{ username: string; csrf_token: string }>("/api/auth/session")
+    apiGet<{ username: string; csrf_token: string; is_admin?: boolean }>("/api/auth/session")
       .then((s) => {
         setUsername(s.username);
+        setIsAdmin(Boolean(s.is_admin));
         setCsrfToken(s.csrf_token);
       })
-      .catch(() => setUsername(null));
+      .catch(() => {
+        setUsername(null);
+        setIsAdmin(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -364,9 +369,10 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
               confirm_password: values.password,
               accept_terms: true,
             };
-      const res = await apiPost<{ username: string; csrf_token: string }>(path, payload);
+      const res = await apiPost<{ username: string; csrf_token: string; is_admin?: boolean }>(path, payload);
       setCsrfToken(res.csrf_token);
       setUsername(res.username);
+      setIsAdmin(Boolean(res.is_admin));
       authForm.reset();
       setAuthOpen(false);
     } catch (err) {
@@ -456,65 +462,75 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
         }}
       >
         <AppShell.Header hiddenFrom="sm" px="sm">
-          <Group h="100%" justify="space-between" wrap="nowrap">
-            <Burger
-              opened={mobileOpened}
-              onClick={toggleMobile}
-              size="sm"
-              aria-label={mobileOpened ? "Close navigation" : "Open navigation"}
-            />
-            <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+          <Group h="100%" justify="space-between" wrap="nowrap" align="center">
+            <Box w={34} style={{ flexShrink: 0 }}>
+              <Burger
+                opened={mobileOpened}
+                onClick={toggleMobile}
+                size="sm"
+                aria-label={mobileOpened ? "Close navigation" : "Open navigation"}
+              />
+            </Box>
+            <Group gap="xs" wrap="nowrap" justify="center" style={{ flex: 1, minWidth: 0 }}>
               <BrandLogo height={28} />
               <Title order={5} lineClamp={1} style={{ letterSpacing: "-0.03em" }}>
                 {BRAND_NAME}
               </Title>
             </Group>
-            <ActionIcon
-              variant="subtle"
-              color="gray"
-              aria-label="Add source"
-              onClick={() => setAddOpen(true)}
-            >
-              <IconUpload size={18} stroke={1.5} />
-            </ActionIcon>
+            {mobileOpened ? (
+              <Box w={34} aria-hidden style={{ flexShrink: 0 }} />
+            ) : (
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                aria-label="Add source"
+                onClick={() => setAddOpen(true)}
+                w={34}
+                style={{ flexShrink: 0 }}
+              >
+                <IconUpload size={18} stroke={1.5} />
+              </ActionIcon>
+            )}
           </Group>
         </AppShell.Header>
         <AppShell.Navbar p={0}>
-          <AppShell.Section p={0} style={{ flexShrink: 0, overflow: "hidden" }}>
-            <Box pos="relative" h={48} w="100%">
-              <SidebarAnimatedLayer
-                visible={!sidebarWide}
-                reduceMotion={Boolean(reduceMotion)}
-              >
-                <Center h={48}>
-                  <Tooltip label="Expand sidebar" position="right" withArrow>
-                    <UnstyledButton onClick={toggleSidebar} aria-label="Expand sidebar" p={4}>
-                      <BrandLogo height={32} />
-                    </UnstyledButton>
-                  </Tooltip>
-                </Center>
-              </SidebarAnimatedLayer>
-              <SidebarAnimatedLayer visible={sidebarWide} enterDelay={60} reduceMotion={Boolean(reduceMotion)}>
-                <Group px="md" h={48} justify="space-between" wrap="nowrap" gap="sm">
-                  <Group gap="sm" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
-                    <BrandLogo height={34} />
-                    <Title order={4} lineClamp={1} style={{ letterSpacing: "-0.03em" }}>
-                      {BRAND_NAME}
-                    </Title>
+          {!isMobile && (
+            <AppShell.Section p={0} style={{ flexShrink: 0, overflow: "hidden" }}>
+              <Box pos="relative" h={48} w="100%">
+                <SidebarAnimatedLayer
+                  visible={!sidebarWide}
+                  reduceMotion={Boolean(reduceMotion)}
+                >
+                  <Center h={48}>
+                    <Tooltip label="Expand sidebar" position="right" withArrow>
+                      <UnstyledButton onClick={toggleSidebar} aria-label="Expand sidebar" p={4}>
+                        <BrandLogo height={32} />
+                      </UnstyledButton>
+                    </Tooltip>
+                  </Center>
+                </SidebarAnimatedLayer>
+                <SidebarAnimatedLayer visible={sidebarWide} enterDelay={60} reduceMotion={Boolean(reduceMotion)}>
+                  <Group px="md" h={48} justify="space-between" wrap="nowrap" gap="sm">
+                    <Group gap="sm" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
+                      <BrandLogo height={34} />
+                      <Title order={4} lineClamp={1} style={{ letterSpacing: "-0.03em" }}>
+                        {BRAND_NAME}
+                      </Title>
+                    </Group>
+                    <ActionIcon
+                      variant="subtle"
+                      color="gray"
+                      onClick={toggleSidebar}
+                      aria-label="Collapse sidebar"
+                      style={{ flexShrink: 0 }}
+                    >
+                      <IconLayoutSidebarLeftCollapse size={18} stroke={1.5} />
+                    </ActionIcon>
                   </Group>
-                  <ActionIcon
-                    variant="subtle"
-                    color="gray"
-                    onClick={toggleSidebar}
-                    aria-label="Collapse sidebar"
-                    style={{ flexShrink: 0 }}
-                  >
-                    <IconLayoutSidebarLeftCollapse size={18} stroke={1.5} />
-                  </ActionIcon>
-                </Group>
-              </SidebarAnimatedLayer>
-            </Box>
-          </AppShell.Section>
+                </SidebarAnimatedLayer>
+              </Box>
+            </AppShell.Section>
+          )}
           <AppShell.Section grow p={0} style={{ minHeight: 0, overflow: "hidden", position: "relative" }}>
             <SidebarAnimatedLayer
               visible={!sidebarWide}
@@ -548,8 +564,15 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
               </Box>
             </SidebarAnimatedLayer>
             <SidebarAnimatedLayer visible={sidebarWide} enterDelay={80} reduceMotion={Boolean(reduceMotion)}>
-              <ScrollArea h="100%" type="auto" offsetScrollbars px="xs" pt="xs">
-                <Text size="xs" tt="uppercase" fw={600} c="dimmed" px="sm" mb={4}>
+              <ScrollArea
+                h="100%"
+                type={isMobile ? "never" : "auto"}
+                scrollbars="y"
+                offsetScrollbars={isMobile ? false : true}
+                px="xs"
+                pt={isMobile ? "md" : "xs"}
+              >
+                <Text size="xs" tt="uppercase" fw={600} c="dimmed" px="sm" mb={4} lts={0.6}>
                   Sources
                 </Text>
                 {documents.length === 0 ? (
@@ -602,9 +625,9 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
           </AppShell.Section>
           <AppShell.Section p={0} style={{ flexShrink: 0, overflow: "hidden", borderTop: sidebarWide ? "1px solid var(--mantine-color-default-border)" : undefined }}>
             {sidebarWide ? (
-              <Box p="md" w="100%">
+              <Box p={isMobile ? "sm" : "md"} w="100%" pb={isMobile ? "calc(var(--mantine-spacing-sm) + env(safe-area-inset-bottom))" : undefined}>
                 {username && (
-                  <Stack gap="xs" mb="md">
+                  <Stack gap="xs" mb={isMobile ? "sm" : "md"}>
                     <Group justify="space-between">
                       <Text size="xs" c="dimmed">
                         Storage
@@ -614,67 +637,95 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
                     <Progress value={storagePct} size="sm" />
                   </Stack>
                 )}
-                <Group justify="space-between" mb="sm" wrap="nowrap" align="center">
-                  <Text size="sm" c="dimmed">
-                    Appearance
-                  </Text>
-                  {mounted ? (
-                    <SegmentedControl
-                      size="xs"
-                      value={isDark ? "dark" : "light"}
-                      onChange={(value) => {
-                        if ((value === "dark") !== isDark) toggleColorScheme();
-                      }}
-                      data={[
-                        {
-                          value: "light",
-                          label: (
-                            <Center style={{ display: "flex", lineHeight: 1 }}>
-                              <IconSun size={14} stroke={2} />
-                            </Center>
-                          ),
-                        },
-                        {
-                          value: "dark",
-                          label: (
-                            <Center style={{ display: "flex", lineHeight: 1 }}>
-                              <IconMoon size={14} stroke={2} />
-                            </Center>
-                          ),
-                        },
-                      ]}
-                      aria-label={isDark ? "Dark mode on" : "Light mode on"}
-                    />
-                  ) : (
-                    <SegmentedControl
-                      size="xs"
-                      value="dark"
-                      readOnly
-                      data={[
-                        { value: "light", label: <IconSun size={14} stroke={2} /> },
-                        { value: "dark", label: <IconMoon size={14} stroke={2} /> },
-                      ]}
-                    />
-                  )}
-                </Group>
+                {isAdmin && (
+                  <NavLink
+                    label="LLM models"
+                    description="Enable or disable chat models"
+                    leftSection={<IconCpu size={18} stroke={1.5} />}
+                    active={pathname === "/workspace/models"}
+                    onClick={() => {
+                      router.push("/workspace/models");
+                      if (isMobile) closeMobile();
+                    }}
+                    mb="sm"
+                    styles={{
+                      root: {
+                        borderRadius: "var(--mantine-radius-md)",
+                      },
+                    }}
+                  />
+                )}
                 <Button
                   fullWidth
                   variant="white"
                   c="dark.9"
+                  size={isMobile ? "md" : "sm"}
                   leftSection={<IconUpload size={16} />}
-                  onClick={() => setAddOpen(true)}
-                  mb="sm"
+                  onClick={() => {
+                    setAddOpen(true);
+                    if (isMobile) closeMobile();
+                  }}
+                  mb={isMobile ? "xs" : "sm"}
                 >
                   Add source
                 </Button>
-                <Button
-                  variant="subtle"
-                  fullWidth
-                  leftSection={<IconLogin size={16} />}
-                  onClick={() => setAuthOpen(true)}
-                >
-                  {username ? `@${username}` : "Sign in"}
-                </Button>
+                <Group justify="space-between" wrap="nowrap" align="center" gap="sm">
+                  <Group gap="xs" wrap="nowrap" align="center">
+                    <Text size="xs" c="dimmed">
+                      Appearance
+                    </Text>
+                    {mounted ? (
+                      <SegmentedControl
+                        size="xs"
+                        value={isDark ? "dark" : "light"}
+                        onChange={(value) => {
+                          if ((value === "dark") !== isDark) toggleColorScheme();
+                        }}
+                        data={[
+                          {
+                            value: "light",
+                            label: (
+                              <Center style={{ display: "flex", lineHeight: 1 }}>
+                                <IconSun size={14} stroke={2} />
+                              </Center>
+                            ),
+                          },
+                          {
+                            value: "dark",
+                            label: (
+                              <Center style={{ display: "flex", lineHeight: 1 }}>
+                                <IconMoon size={14} stroke={2} />
+                              </Center>
+                            ),
+                          },
+                        ]}
+                        aria-label={isDark ? "Dark mode on" : "Light mode on"}
+                      />
+                    ) : (
+                      <SegmentedControl
+                        size="xs"
+                        value="dark"
+                        readOnly
+                        data={[
+                          { value: "light", label: <IconSun size={14} stroke={2} /> },
+                          { value: "dark", label: <IconMoon size={14} stroke={2} /> },
+                        ]}
+                      />
+                    )}
+                  </Group>
+                  <Button
+                    variant="subtle"
+                    size="compact-sm"
+                    leftSection={<IconLogin size={14} />}
+                    onClick={() => {
+                      setAuthOpen(true);
+                      if (isMobile) closeMobile();
+                    }}
+                    px="xs"
+                  >
+                    {username ? `@${username}` : "Sign in"}
+                  </Button>
+                </Group>
               </Box>
             ) : (
               <Box pos="relative" mih={132} w="100%">

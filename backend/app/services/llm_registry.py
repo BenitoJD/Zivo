@@ -121,6 +121,51 @@ def configure_litellm(provider: LlmProvider) -> None:
             os.environ[env_key] = str(value)
 
 
+def list_admin_chat_models(db: Session) -> list[LlmModel]:
+    return (
+        db.query(LlmModel)
+        .join(LlmProvider)
+        .options(joinedload(LlmModel.provider))
+        .filter(LlmModel.kind == LlmModelKind.chat)
+        .order_by(LlmProvider.display_name, LlmModel.sort_order, LlmModel.display_name)
+        .all()
+    )
+
+
+def provider_has_api_key(provider: LlmProvider) -> bool:
+    if provider.slug == "local":
+        return True
+    return bool((provider.api_key or "").strip())
+
+
+def set_chat_model_enabled(db: Session, model_id: uuid.UUID, *, enabled: bool) -> LlmModel:
+    model = (
+        db.query(LlmModel)
+        .options(joinedload(LlmModel.provider))
+        .filter(LlmModel.id == model_id, LlmModel.kind == LlmModelKind.chat)
+        .first()
+    )
+    if not model:
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    model.is_enabled = enabled
+    if not enabled and model.is_default:
+        model.is_default = False
+        replacement = (
+            _enabled_chat_query(db)
+            .filter(LlmModel.id != model_id)
+            .order_by(LlmModel.sort_order, LlmModel.display_name)
+            .first()
+        )
+        if replacement:
+            _clear_defaults_for_kind(db, LlmModelKind.chat)
+            replacement.is_default = True
+
+    db.commit()
+    db.refresh(model)
+    return model
+
+
 def list_public_models(db: Session) -> tuple[list[LlmModel], uuid.UUID | None, uuid.UUID | None]:
     models = (
         db.query(LlmModel)
@@ -160,7 +205,6 @@ def _upsert_provider(
             provider.api_base_url = api_base_url
         if api_key:
             provider.api_key = api_key
-        provider.is_enabled = True
         return provider
 
     provider = LlmProvider(
@@ -198,7 +242,6 @@ def _upsert_model(
         .first()
     )
     if model:
-        model.is_enabled = True
         if update_fields:
             model.litellm_model = litellm_model
             model.display_name = display_name

@@ -2,6 +2,7 @@
 
 import {
   use,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -37,6 +38,7 @@ import {
 } from "@mantine/core";
 import { useDisclosure, useInterval, useLocalStorage, useMediaQuery, useMounted } from "@mantine/hooks";
 import {
+  IconArrowRight,
   IconArrowUp,
   IconArrowsMaximize,
   IconCheck,
@@ -56,13 +58,16 @@ import { AssistantMarkdown } from "@/lib/chatMarkdown";
 import { indexingStage } from "@/lib/constants";
 import { learnWaitStatus } from "@/lib/learnStatus";
 import {
+  bucketPdfThumbWidth,
   cancelAllPdfRenders,
   clampPdfScroll,
-  loadPdfDocument,
+  getCachedPdfDocument,
+  loadPdfForArtifact,
   pdfDisplayHeight,
   pdfPageAspectRatio,
   pdfPageFitScale,
   renderPdfPageToCanvas,
+  renderPdfThumbToCanvas,
   snapPdfZoom,
   PDF_ZOOM_PRESETS,
 } from "@/lib/pdf";
@@ -89,21 +94,43 @@ const STUDY_DESKTOP_BP = "(min-width: 48em)";
 const STUDY_COMPACT_BP = "(max-width: 47.99em)";
 /** Tablet range (768–991px): desktop study shell, but Source/Tutor ride as floating slide-over panels. */
 const STUDY_OVERLAY_BP = "(max-width: 61.99em)";
-const THUMB_GAP = 20;
-const THUMB_MIN_WIDTH = 188;
-const THUMB_MIN_WIDTH_COMPACT = 132;
-const SELECTION_PAD_X = 20;
-const SELECTION_PAD_Y = 12;
+const THUMB_GAP = 28;
+const THUMB_GAP_COMPACT = 14;
+const THUMB_MIN_WIDTH = 248;
+const THUMB_MIN_WIDTH_COMPACT = 148;
+const THUMB_MAX_WIDTH = 320;
+const THUMB_MAX_COLS = 4;
+const THUMB_MAX_COLS_COMPACT = 2;
+const SELECTION_PAD_X = 28;
+const SELECTION_PAD_Y = 16;
+const SELECTION_PAD_Y_COMPACT = 10;
+const SELECTION_PAD_X_COMPACT = 16;
+const SELECTION_DOCK_WIDTH = "80%";
+const SELECTION_DOCK_RESERVE = 156;
+const SELECTION_DOCK_RESERVE_COMPACT = 168;
+const THUMB_FRAME_ASPECT = 1.38;
+const THUMB_FRAME_ASPECT_COMPACT = 1.36;
+const THUMB_COVER_ZOOM = 1.08;
+const THUMB_COVER_ZOOM_COMPACT = 1.1;
 
 function shellBleedPx(compact: boolean): number {
-  return compact ? 10 : 16;
+  return compact ? 0 : 16;
 }
 
-function computeGridLayout(gridWidth: number, minThumbWidth: number, gap: number) {
+function computeGridLayout(
+  gridWidth: number,
+  minThumbWidth: number,
+  gap: number,
+  maxCols: number,
+  maxThumbWidth = THUMB_MAX_WIDTH,
+) {
   if (gridWidth < 1) return { cols: 2, thumbWidth: minThumbWidth };
-  const cols = Math.max(1, Math.floor((gridWidth + gap) / (minThumbWidth + gap)));
+  const cols = Math.min(
+    maxCols,
+    Math.max(1, Math.floor((gridWidth + gap) / (minThumbWidth + gap))),
+  );
   const totalGap = gap * Math.max(0, cols - 1);
-  const thumbWidth = Math.floor((gridWidth - totalGap) / cols);
+  const thumbWidth = Math.min(maxThumbWidth, Math.floor((gridWidth - totalGap) / cols));
   return { cols, thumbWidth };
 }
 
@@ -172,9 +199,7 @@ export default function WorkspaceArtifactPage({
   );
   const sliderFrom = sortedSelection[0] ?? 1;
   const sliderTo =
-    sortedSelection.length > 0
-      ? sortedSelection[sortedSelection.length - 1]
-      : Math.min(5, pageCount);
+    sortedSelection.length > 0 ? sortedSelection[sortedSelection.length - 1] : 1;
   const sliderMarks = useMemo(() => buildPageSliderMarks(pageCount), [pageCount]);
 
   const stem =
@@ -202,9 +227,8 @@ export default function WorkspaceArtifactPage({
         if (!cancelled) {
           setArtifact(art);
           setPages(pg);
-          const count = pg.page_count || art.meta?.page_count || 1;
-          setSelectedPages(defaultInitialPages(count));
-          setLastClickedPage(1);
+          setSelectedPages([]);
+          setLastClickedPage(null);
         }
       })
       .catch((e) => {
@@ -261,21 +285,26 @@ export default function WorkspaceArtifactPage({
   const isPdf = artifact?.content_type === "application/pdf";
 
   useEffect(() => {
-    setPdfDoc(null);
-    setPdfError(null);
-    setPdfLoading(false);
-  }, [artifactId]);
-
-  useEffect(() => {
     if (invalidArtifactId || !artifact || !isPdf) return;
-    let cancelled = false;
-    setPdfLoading(true);
+
     setPdfError(null);
+    const cached = getCachedPdfDocument(artifactId);
+    if (cached) {
+      setPdfDoc(cached);
+      setPdfLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setPdfDoc(null);
+    setPdfLoading(true);
+
     void (async () => {
       try {
-        const buf = await apiFetchBytes(`/api/documents/${artifactId}/file`);
-        if (cancelled) return;
-        const pdf = await loadPdfDocument(buf);
+        const pdf = await loadPdfForArtifact(artifactId, {
+          url: `/api/documents/${artifactId}/file`,
+          fetchBytes: () => apiFetchBytes(`/api/documents/${artifactId}/file`),
+        });
         if (!cancelled) setPdfDoc(pdf);
       } catch (e) {
         if (!cancelled) setPdfError(e instanceof Error ? e.message : "Could not load PDF");
@@ -283,6 +312,7 @@ export default function WorkspaceArtifactPage({
         if (!cancelled) setPdfLoading(false);
       }
     })();
+
     return () => {
       cancelled = true;
     };
@@ -291,10 +321,7 @@ export default function WorkspaceArtifactPage({
   useEffect(() => {
     if (!pdfDoc?.numPages || pdfDoc.numPages <= 1) return;
     const n = pdfDoc.numPages;
-    setSelectedPages((prev) => {
-      const filtered = prev.filter((p) => p <= n);
-      return filtered.length > 0 ? filtered : defaultInitialPages(n);
-    });
+    setSelectedPages((prev) => prev.filter((p) => p <= n));
   }, [pdfDoc]);
 
   const studyPages = useMemo(() => {
@@ -630,7 +657,6 @@ export default function WorkspaceArtifactPage({
 
     return (
       <PageSelectionScreen
-        title="Choose pages to study"
         subtitle={`${shortName} · ${pageCount} pages`}
         pageCount={pageCount}
         sliderFrom={sliderFrom}
@@ -1171,6 +1197,7 @@ function StudyRangeReselectOverlay({
         </Group>
         <Box flex={1} mih={0} style={{ display: "flex", flexDirection: "column" }}>
           <PageSelectionBody
+            padX={isCompact ? SELECTION_PAD_X_COMPACT : SELECTION_PAD_X}
             pageCount={pageCount}
             sliderFrom={sliderFrom}
             sliderTo={sliderTo}
@@ -2681,10 +2708,6 @@ function clampPanel(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function defaultInitialPages(count: number): number[] {
-  return pagesInRange(1, Math.min(5, count));
-}
-
 function pagesInRange(from: number, to: number): number[] {
   const lo = Math.min(from, to);
   const hi = Math.max(from, to);
@@ -2705,7 +2728,6 @@ function formatSelectionSummary(selectedPages: number[], pageCount: number): str
 }
 
 function PageSelectionScreen({
-  title,
   subtitle,
   pageCount,
   sliderFrom,
@@ -2728,7 +2750,6 @@ function PageSelectionScreen({
   onClearAll,
   onConfirm,
 }: {
-  title: string;
   subtitle: string;
   pageCount: number;
   sliderFrom: number;
@@ -2759,40 +2780,22 @@ function PageSelectionScreen({
       mih={0}
       h="100%"
       bg="var(--mantine-color-body)"
+      my={isCompact ? "calc(-1 * var(--mantine-spacing-xs))" : undefined}
       style={{
         display: "flex",
         flexDirection: "column",
-        margin: -bleed,
-        width: `calc(100% + ${bleed * 2}px)`,
-        height: `calc(100% + ${bleed * 2}px)`,
+        minHeight: 0,
+        overflow: "hidden",
+        ...(bleed > 0
+          ? {
+              margin: -bleed,
+              width: `calc(100% + ${bleed * 2}px)`,
+              height: `calc(100% + ${bleed * 2}px)`,
+            }
+          : {}),
         boxSizing: "border-box",
       }}
     >
-      <Group
-        justify="space-between"
-        align="flex-end"
-        wrap="nowrap"
-        gap="lg"
-        px={SELECTION_PAD_X}
-        py={SELECTION_PAD_Y}
-        style={{ flexShrink: 0, borderBottom: "1px solid var(--mantine-color-default-border)" }}
-      >
-        <Stack gap={2} style={{ minWidth: 0 }}>
-          <Title order={isCompact ? 4 : 3} style={{ letterSpacing: "-0.04em" }} lineClamp={1}>
-            {title}
-          </Title>
-          <Text size="sm" c="dimmed" lineClamp={1}>
-            {subtitle}
-          </Text>
-        </Stack>
-        <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
-          {pdfLoading && <Loader size="xs" />}
-          <Text size="sm" fw={600}>
-            {formatSelectionSummary(selectedPages, pageCount)}
-          </Text>
-        </Group>
-      </Group>
-
       {pdfError && (
         <Text c="red" size="sm" px="md" pt="xs">
           {pdfError}
@@ -2804,14 +2807,11 @@ function PageSelectionScreen({
         </Text>
       )}
 
-      <Box
-        flex={1}
-        mih={0}
-        px={SELECTION_PAD_X}
-        py={SELECTION_PAD_Y}
-        style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}
-      >
+      <Box flex={1} mih={0} style={{ minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
         <PageSelectionBody
+          padX={isCompact ? SELECTION_PAD_X_COMPACT : SELECTION_PAD_X}
+          subtitle={subtitle}
+          pdfLoading={pdfLoading}
           pageCount={pageCount}
           sliderFrom={sliderFrom}
           sliderTo={sliderTo}
@@ -2836,6 +2836,9 @@ function PageSelectionScreen({
 }
 
 function PageSelectionBody({
+  padX,
+  subtitle,
+  pdfLoading,
   pageCount,
   sliderFrom,
   sliderTo,
@@ -2854,6 +2857,9 @@ function PageSelectionBody({
   onClearAll,
   onConfirm,
 }: {
+  padX: number;
+  subtitle?: string;
+  pdfLoading?: boolean;
   pageCount: number;
   sliderFrom: number;
   sliderTo: number;
@@ -2872,193 +2878,505 @@ function PageSelectionBody({
   onClearAll: () => void;
   onConfirm: () => void;
 }) {
+  const isCompact = useMediaQuery(STUDY_COMPACT_BP);
   const sliderColor = isDark ? "blue.4" : "blue.6";
-  const thumbBg = isDark ? "var(--mantine-color-dark-6)" : "var(--mantine-color-white)";
-  const thumbBorder = isDark ? "var(--mantine-color-blue-4)" : "var(--mantine-color-blue-7)";
-  const trackBg = isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-3)";
+  const trackBg = isDark ? "var(--mantine-color-dark-3)" : "var(--mantine-color-gray-3)";
 
   return (
-    <Stack gap="md" flex={1} mih={0} h="100%" style={{ minHeight: 0, overflow: "hidden" }}>
-      <Box style={{ flexShrink: 0, paddingInline: 14 }}>
-        <PageRangeQuickSelect
-          sliderFrom={sliderFrom}
-          sliderTo={sliderTo}
+    <Box
+      pos="relative"
+      flex={1}
+      mih={0}
+      h="100%"
+      style={{ minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}
+    >
+      <Box
+        flex={1}
+        mih={0}
+        px={padX}
+        style={{ minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}
+      >
+        <PageThumbnailGrid
           pageCount={pageCount}
-          sliderMarks={sliderMarks}
+          selectedPages={selectedPages}
           isDark={isDark}
-          sliderColor={sliderColor}
-          thumbBg={thumbBg}
-          thumbBorder={thumbBorder}
-          trackBg={trackBg}
-          onRangeChange={onRangeChange}
+          isPdf={isPdf}
+          pdfDoc={pdfDoc}
+          thumbCanvasRefs={thumbCanvasRefs}
+          dockReserve={isCompact ? SELECTION_DOCK_RESERVE_COMPACT : SELECTION_DOCK_RESERVE}
+          onPageToggle={onPageToggle}
         />
       </Box>
-      <PageThumbnailGrid
+      <PageSelectionDock
+        subtitle={subtitle}
+        pdfLoading={pdfLoading}
+        sliderFrom={sliderFrom}
+        sliderTo={sliderTo}
         pageCount={pageCount}
+        sliderMarks={sliderMarks}
         selectedPages={selectedPages}
         isDark={isDark}
-        isPdf={isPdf}
-        pdfDoc={pdfDoc}
-        thumbCanvasRefs={thumbCanvasRefs}
-        onPageToggle={onPageToggle}
+        sliderColor={sliderColor}
+        trackBg={trackBg}
+        confirming={confirming}
+        setupError={setupError}
+        confirmLabel={confirmLabel}
+        onRangeChange={onRangeChange}
+        onSelectAll={onSelectAll}
+        onClearAll={onClearAll}
+        onConfirm={onConfirm}
       />
-      <Box
-        py={8}
-        style={{
-          flexShrink: 0,
-          borderTop: "1px solid var(--mantine-color-default-border)",
-        }}
-      >
-        <PageSelectionControls
-          selectedPages={selectedPages}
-          pageCount={pageCount}
-          confirming={confirming}
-          setupError={setupError}
-          confirmLabel={confirmLabel}
-          onSelectAll={onSelectAll}
-          onClearAll={onClearAll}
-          onConfirm={onConfirm}
-        />
-      </Box>
-    </Stack>
+    </Box>
   );
 }
 
-function PageRangeQuickSelect({
+function PageSelectionDock({
+  subtitle,
+  pdfLoading,
   sliderFrom,
   sliderTo,
   pageCount,
   sliderMarks,
+  selectedPages,
   isDark,
   sliderColor,
-  thumbBg,
-  thumbBorder,
   trackBg,
-  onRangeChange,
-}: {
-  sliderFrom: number;
-  sliderTo: number;
-  pageCount: number;
-  sliderMarks: { value: number; label?: ReactNode }[];
-  isDark: boolean;
-  sliderColor: string;
-  thumbBg: string;
-  thumbBorder: string;
-  trackBg: string;
-  onRangeChange: (from: number, to: number) => void;
-}) {
-  return (
-    <Stack gap="md">
-      <RangeSlider
-        color={sliderColor}
-        min={1}
-        max={pageCount}
-        minRange={1}
-        step={1}
-        value={[sliderFrom, sliderTo]}
-        onChange={([from, to]) => onRangeChange(from, to)}
-        marks={sliderMarks}
-        label={(v) => `Page ${v}`}
-        thumbSize={24}
-        thumbChildren={<IconGripVertical size={14} stroke={1.5} />}
-        thumbFromLabel="Start page"
-        thumbToLabel="End page"
-        thumbValueText={(v) => `Page ${v}`}
-        restrictToMarks={pageCount <= 12}
-        mb={4}
-        styles={{
-          root: { paddingTop: 8, paddingBottom: 32, overflow: "visible" },
-          track: { backgroundColor: trackBg },
-          bar: {
-            backgroundColor: isDark ? "var(--mantine-color-blue-4)" : "var(--mantine-color-blue-6)",
-          },
-          thumb: {
-            backgroundColor: thumbBg,
-            borderColor: thumbBorder,
-            borderWidth: 2,
-            color: thumbBorder,
-          },
-          mark: {
-            borderColor: isDark ? "var(--mantine-color-dark-3)" : "var(--mantine-color-gray-5)",
-          },
-          markLabel: {
-            color: "var(--mantine-color-dimmed)",
-            marginTop: 10,
-          },
-        }}
-      />
-      <Group grow gap="md">
-        <NumberInput
-          label="From"
-          size="sm"
-          min={1}
-          max={pageCount}
-          value={sliderFrom}
-          onChange={(v) => onRangeChange(typeof v === "number" ? v : 1, sliderTo)}
-        />
-        <NumberInput
-          label="To"
-          size="sm"
-          min={sliderFrom}
-          max={pageCount}
-          value={sliderTo}
-          onChange={(v) => onRangeChange(sliderFrom, typeof v === "number" ? v : sliderFrom)}
-        />
-      </Group>
-    </Stack>
-  );
-}
-
-function PageSelectionControls({
-  selectedPages,
   confirming,
   setupError,
   confirmLabel,
+  onRangeChange,
   onSelectAll,
   onClearAll,
   onConfirm,
 }: {
-  selectedPages: number[];
+  subtitle?: string;
+  pdfLoading?: boolean;
+  sliderFrom: number;
+  sliderTo: number;
   pageCount: number;
+  sliderMarks: { value: number; label?: ReactNode }[];
+  selectedPages: number[];
+  isDark: boolean;
+  sliderColor: string;
+  trackBg: string;
   confirming: boolean;
   setupError: string | null;
   confirmLabel: string;
+  onRangeChange: (from: number, to: number) => void;
   onSelectAll: () => void;
   onClearAll: () => void;
   onConfirm: () => void;
 }) {
+  const isCompact = useMediaQuery(STUDY_COMPACT_BP);
+  const hasSelection = selectedPages.length > 0;
+  const panelBorder = isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-3)";
+  const hairline = isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-3)";
+  const secondaryBorder = isDark ? "var(--mantine-color-dark-3)" : "var(--mantine-color-gray-4)";
+  const inputBorder = isDark ? "var(--mantine-color-dark-3)" : "var(--mantine-color-gray-4)";
+  const inputBg = isDark ? "var(--mantine-color-dark-8)" : "var(--mantine-color-white)";
+  const markColor = isDark ? "var(--mantine-color-gray-5)" : "var(--mantine-color-gray-5)";
+  const markLabelColor = isDark ? "var(--mantine-color-gray-5)" : "var(--mantine-color-gray-6)";
+  const summary = formatSelectionSummary(selectedPages, pageCount);
+  const dockMarks = useMemo(
+    () =>
+      isCompact
+        ? [
+            { value: 1, label: "1" },
+            ...(pageCount > 1 ? [{ value: pageCount, label: String(pageCount) }] : []),
+          ]
+        : sliderMarks,
+    [isCompact, sliderMarks, pageCount],
+  );
+
+  const numberInputStyles = {
+    input: {
+      border: `1px solid ${inputBorder}`,
+      backgroundColor: inputBg,
+      color: isDark ? "var(--mantine-color-gray-1)" : undefined,
+      minHeight: 28,
+      height: 28,
+      fontSize: 13,
+      fontWeight: 500,
+      paddingInline: 8,
+      textAlign: "center" as const,
+    },
+  } as const;
+
+  const secondaryButtonStyles = {
+    root: {
+      border: `1px solid ${secondaryBorder}`,
+      backgroundColor: isDark ? "var(--mantine-color-dark-8)" : "var(--mantine-color-white)",
+      color: isDark ? "var(--mantine-color-gray-2)" : undefined,
+      fontWeight: 600,
+    },
+  } as const;
+
+  const sliderStyles = {
+    root: { paddingTop: 0, paddingBottom: isCompact ? 2 : 16, overflow: "visible" },
+    track: { backgroundColor: trackBg, height: isCompact ? 3 : 4, borderRadius: 4 },
+    bar: {
+      backgroundColor: isDark ? "var(--mantine-color-blue-5)" : "var(--mantine-color-blue-6)",
+      borderRadius: 4,
+    },
+    thumb: {
+      backgroundColor: isDark ? "var(--mantine-color-gray-0)" : "var(--mantine-color-white)",
+      borderColor: isDark ? "var(--mantine-color-blue-4)" : "var(--mantine-color-blue-6)",
+      borderWidth: 2,
+      boxShadow: isDark
+        ? "0 1px 4px rgba(0, 0, 0, 0.45), 0 0 0 0.5px rgba(255, 255, 255, 0.08)"
+        : "0 1px 4px rgba(0, 0, 0, 0.18), 0 0 0 0.5px rgba(0, 0, 0, 0.04)",
+    },
+    mark: {
+      width: 3,
+      height: 3,
+      borderWidth: 0,
+      backgroundColor: markColor,
+      opacity: 0.7,
+    },
+    markLabel: {
+      color: markLabelColor,
+      marginTop: 4,
+      fontSize: isCompact ? 9 : 10,
+      fontWeight: 500,
+      letterSpacing: "-0.01em",
+    },
+  } as const;
+
+  const rangeSlider = (
+    <RangeSlider
+      color={sliderColor}
+      min={1}
+      max={pageCount}
+      minRange={1}
+      step={1}
+      value={[sliderFrom, sliderTo]}
+      onChange={([from, to]) => onRangeChange(from, to)}
+      marks={dockMarks}
+      label={(v) => `Page ${v}`}
+      thumbSize={isCompact ? 16 : 20}
+      thumbFromLabel="Start page"
+      thumbToLabel="End page"
+      thumbValueText={(v) => `Page ${v}`}
+      restrictToMarks={!isCompact && pageCount <= 12}
+      styles={sliderStyles}
+    />
+  );
+
+  const confirmButton = (
+    <Button
+      size={isCompact ? "sm" : "md"}
+      radius="xl"
+      variant="filled"
+      color="blue"
+      px={isCompact ? "lg" : "xl"}
+      fw={600}
+      fullWidth={isCompact}
+      h={isCompact ? 40 : undefined}
+      rightSection={<IconArrowRight size={isCompact ? 15 : 18} stroke={2.25} />}
+      onClick={onConfirm}
+      loading={confirming}
+      disabled={!hasSelection}
+      styles={{
+        root: {
+          boxShadow: hasSelection
+            ? isDark
+              ? "0 6px 20px rgba(51, 154, 240, 0.32)"
+              : "0 6px 16px rgba(34, 139, 230, 0.24)"
+            : undefined,
+        },
+      }}
+    >
+      {confirmLabel}
+    </Button>
+  );
+
+  if (isCompact) {
+    return (
+      <Box
+        pos="absolute"
+        left={0}
+        right={0}
+        bottom={0}
+        bg={isDark ? "dark.7" : "gray.0"}
+        style={{
+          zIndex: 2,
+          pointerEvents: "none",
+          borderTop: `1px solid ${hairline}`,
+          paddingBottom: "calc(12px + env(safe-area-inset-bottom))",
+          boxShadow: isDark
+            ? "0 -10px 32px rgba(0, 0, 0, 0.4)"
+            : "0 -6px 20px rgba(0, 0, 0, 0.08)",
+        }}
+      >
+        <Stack gap={8} px="md" pt={10} pb={4} style={{ pointerEvents: "auto" }}>
+          {rangeSlider}
+          <Group justify="space-between" align="center" wrap="nowrap" gap="sm">
+            <Box miw={0} style={{ flex: 1 }}>
+              {subtitle && (
+                <Group gap={6} wrap="nowrap" mb={2}>
+                  <Text
+                    size="xs"
+                    c="dimmed"
+                    lineClamp={1}
+                    tt="uppercase"
+                    fw={600}
+                    style={{ letterSpacing: "0.05em", fontSize: 10 }}
+                  >
+                    {subtitle}
+                  </Text>
+                  {pdfLoading && <Loader size="xs" />}
+                </Group>
+              )}
+              <Text
+                fw={600}
+                size="sm"
+                lineClamp={1}
+                c={hasSelection ? (isDark ? "gray.1" : "dark.8") : "dimmed"}
+              >
+                {summary}
+              </Text>
+            </Box>
+            <Group gap={4} wrap="nowrap" style={{ flexShrink: 0 }}>
+              <Button variant="subtle" size="compact-sm" radius="xl" onClick={onSelectAll} px="xs">
+                All
+              </Button>
+              <Button
+                variant="subtle"
+                size="compact-sm"
+                radius="xl"
+                onClick={onClearAll}
+                disabled={!hasSelection}
+                px="xs"
+              >
+                Clear
+              </Button>
+            </Group>
+          </Group>
+          {confirmButton}
+          {setupError && (
+            <Text size="xs" c="red" ta="center">
+              {setupError}
+            </Text>
+          )}
+        </Stack>
+      </Box>
+    );
+  }
+
   return (
-    <Stack gap={4} w="100%" maw="100%">
-      <Group justify="space-between" align="center" wrap="nowrap" gap="sm" w="100%" maw="100%">
-        <Text size="xs" c="dimmed" lineClamp={1} visibleFrom="sm" style={{ flex: 1, minWidth: 0 }}>
-          Slider for range · tap to toggle · Shift+tap to extend
-        </Text>
-        <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
-          <Button variant="subtle" size="compact-xs" onClick={onSelectAll}>
-            All
-          </Button>
-          <Button variant="subtle" size="compact-xs" onClick={onClearAll}>
-            Clear
-          </Button>
-          <Button
-            size="compact-sm"
-            variant="filled"
-            color="blue"
-            radius="md"
-            onClick={onConfirm}
-            loading={confirming}
-            disabled={selectedPages.length === 0}
-          >
-            {confirmLabel}
-          </Button>
-        </Group>
-      </Group>
-      {setupError && (
-        <Text size="xs" c="red">
-          {setupError}
-        </Text>
-      )}
-    </Stack>
+    <Box
+      pos="absolute"
+      left={0}
+      right={0}
+      bottom={0}
+      w={SELECTION_DOCK_WIDTH}
+      mx="auto"
+      pb="md"
+      pt="xs"
+      style={{ zIndex: 2, pointerEvents: "none" }}
+    >
+      <Paper
+        withBorder
+        radius="lg"
+        w="100%"
+        bg={isDark ? "dark.7" : "gray.0"}
+        style={{
+          pointerEvents: "auto",
+          borderColor: panelBorder,
+          boxShadow: isDark
+            ? "0 -12px 40px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.04) inset"
+            : "0 -8px 32px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(255, 255, 255, 0.6) inset",
+        }}
+      >
+      <Stack gap={0}>
+        <Box px={isCompact ? "sm" : "md"} pt="sm" pb={isCompact ? "xs" : 4}>
+          {isCompact ? (
+            <Stack gap="sm">
+              <Group justify="center" gap={8} wrap="nowrap">
+                <Text size="xs" c="dimmed" fw={500}>
+                  From
+                </Text>
+                <NumberInput
+                  hideControls
+                  size="xs"
+                  w={56}
+                  radius="md"
+                  min={1}
+                  max={pageCount}
+                  value={sliderFrom}
+                  onChange={(v) => onRangeChange(typeof v === "number" ? v : 1, sliderTo)}
+                  styles={numberInputStyles}
+                />
+                <Text size="xs" c="dimmed" fw={500}>
+                  To
+                </Text>
+                <NumberInput
+                  hideControls
+                  size="xs"
+                  w={56}
+                  radius="md"
+                  min={sliderFrom}
+                  max={pageCount}
+                  value={sliderTo}
+                  onChange={(v) => onRangeChange(sliderFrom, typeof v === "number" ? v : sliderFrom)}
+                  styles={numberInputStyles}
+                />
+              </Group>
+              {rangeSlider}
+            </Stack>
+          ) : (
+            <Group align="center" gap="md" wrap="nowrap" w="100%">
+              <Group gap={6} align="center" wrap="nowrap" style={{ flexShrink: 0 }}>
+                <Text size="xs" c="dimmed" fw={500}>
+                  From
+                </Text>
+                <NumberInput
+                  hideControls
+                  size="xs"
+                  w={52}
+                  radius="md"
+                  min={1}
+                  max={pageCount}
+                  value={sliderFrom}
+                  onChange={(v) => onRangeChange(typeof v === "number" ? v : 1, sliderTo)}
+                  styles={numberInputStyles}
+                />
+                <Text size="xs" c="dimmed" fw={500}>
+                  To
+                </Text>
+                <NumberInput
+                  hideControls
+                  size="xs"
+                  w={52}
+                  radius="md"
+                  min={sliderFrom}
+                  max={pageCount}
+                  value={sliderTo}
+                  onChange={(v) => onRangeChange(sliderFrom, typeof v === "number" ? v : sliderFrom)}
+                  styles={numberInputStyles}
+                />
+              </Group>
+              <Box flex={1} miw={120} style={{ minWidth: 0 }}>
+                {rangeSlider}
+              </Box>
+            </Group>
+          )}
+        </Box>
+
+        <Box h={1} bg={hairline} />
+
+        <Box px={isCompact ? "sm" : "md"} py={isCompact ? "xs" : "sm"}>
+          <Stack gap={isCompact ? "sm" : "xs"}>
+            {isCompact ? (
+              <Stack gap={6} align="center">
+                {subtitle && (
+                  <Group gap="xs" wrap="nowrap" justify="center">
+                    <Text
+                      size="xs"
+                      c="dimmed"
+                      ta="center"
+                      lineClamp={2}
+                      tt="uppercase"
+                      fw={600}
+                      style={{ letterSpacing: "0.04em" }}
+                    >
+                      {subtitle}
+                    </Text>
+                    {pdfLoading && <Loader size="xs" />}
+                  </Group>
+                )}
+                <Text
+                  fw={600}
+                  size="sm"
+                  ta="center"
+                  lineClamp={2}
+                  c={hasSelection ? (isDark ? "gray.1" : "dark.8") : "dimmed"}
+                >
+                  {summary}
+                </Text>
+                <Text size="xs" c="dimmed" ta="center">
+                  Tap a page · Shift+tap to extend
+                </Text>
+                <Group grow gap="xs" w="100%">
+                  <Button variant="default" size="sm" radius="xl" onClick={onSelectAll} styles={secondaryButtonStyles}>
+                    All
+                  </Button>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    radius="xl"
+                    onClick={onClearAll}
+                    disabled={!hasSelection}
+                    styles={secondaryButtonStyles}
+                  >
+                    Clear
+                  </Button>
+                </Group>
+                {confirmButton}
+              </Stack>
+            ) : (
+              <Group align="center" wrap="nowrap" gap="lg" w="100%">
+                <Box style={{ flex: 1, minWidth: 0 }}>
+                  {subtitle && (
+                    <Group gap="xs" wrap="nowrap" align="center">
+                      <Text
+                        size="xs"
+                        c="dimmed"
+                        lineClamp={1}
+                        tt="uppercase"
+                        fw={600}
+                        style={{ letterSpacing: "0.04em" }}
+                      >
+                        {subtitle}
+                      </Text>
+                      {pdfLoading && <Loader size="xs" />}
+                    </Group>
+                  )}
+                </Box>
+
+                <Stack gap={2} align="center" style={{ flex: 1.2, minWidth: 0 }}>
+                  <Text
+                    fw={600}
+                    size="sm"
+                    ta="center"
+                    lineClamp={1}
+                    c={hasSelection ? (isDark ? "gray.1" : "dark.8") : "dimmed"}
+                  >
+                    {summary}
+                  </Text>
+                  <Text size="xs" c="dimmed" ta="center" lineClamp={1}>
+                    Tap a page · Shift+tap to extend
+                  </Text>
+                </Stack>
+
+                <Group gap="xs" wrap="nowrap" justify="flex-end" style={{ flex: 1, minWidth: 0 }}>
+                  <Button variant="default" size="sm" radius="xl" onClick={onSelectAll} styles={secondaryButtonStyles}>
+                    All
+                  </Button>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    radius="xl"
+                    onClick={onClearAll}
+                    disabled={!hasSelection}
+                    styles={secondaryButtonStyles}
+                  >
+                    Clear
+                  </Button>
+                  {confirmButton}
+                </Group>
+              </Group>
+            )}
+            {setupError && (
+              <Text size="xs" c="red" ta={isCompact ? "center" : undefined}>
+                {setupError}
+              </Text>
+            )}
+          </Stack>
+        </Box>
+      </Stack>
+    </Paper>
+    </Box>
   );
 }
 
@@ -3069,6 +3387,7 @@ function PageThumbnailGrid({
   isPdf,
   pdfDoc,
   thumbCanvasRefs,
+  dockReserve = 0,
   onPageToggle,
 }: {
   pageCount: number;
@@ -3077,19 +3396,39 @@ function PageThumbnailGrid({
   isPdf: boolean;
   pdfDoc: PDFDocumentProxy | null;
   thumbCanvasRefs: React.MutableRefObject<Record<number, HTMLCanvasElement | null>>;
+  dockReserve?: number;
   onPageToggle: (page: number, shiftKey: boolean) => void;
 }) {
   const selectedSet = useMemo(() => new Set(selectedPages), [selectedPages]);
-  const gridRef = useRef<HTMLDivElement>(null);
+  const outerRef = useRef<HTMLDivElement | null>(null);
   const [gridWidth, setGridWidth] = useState(0);
+  const isCompact = useMediaQuery(STUDY_COMPACT_BP);
 
-  // On narrow (phone) grids, use a smaller thumb floor so we get 2 columns
-  // instead of a single oversized column that forces excessive scrolling.
-  const thumbMinWidth = gridWidth > 0 && gridWidth < 420 ? THUMB_MIN_WIDTH_COMPACT : THUMB_MIN_WIDTH;
-  const { cols, thumbWidth } = computeGridLayout(gridWidth, thumbMinWidth, THUMB_GAP);
+  const compactGrid = isCompact || (gridWidth > 0 && gridWidth < 520);
+  const gap = compactGrid ? THUMB_GAP_COMPACT : THUMB_GAP;
+  const thumbMinWidth = compactGrid ? THUMB_MIN_WIDTH_COMPACT : THUMB_MIN_WIDTH;
+  const maxCols = compactGrid ? THUMB_MAX_COLS_COMPACT : THUMB_MAX_COLS;
+  const { cols, thumbWidth } = computeGridLayout(gridWidth, thumbMinWidth, gap, maxCols);
+  const renderThumbWidth =
+    compactGrid && gridWidth > 0
+      ? Math.floor((gridWidth - gap * Math.max(0, cols - 1)) / cols)
+      : thumbWidth;
+  const stableThumbWidth = bucketPdfThumbWidth(renderThumbWidth);
+  const cellThumbWidth =
+    compactGrid && renderThumbWidth > 0 ? renderThumbWidth : stableThumbWidth;
+  const [scrollRoot, setScrollRoot] = useState<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const el = gridRef.current;
+    const id = "zivo-page-scroll-style";
+    if (document.getElementById(id)) return;
+    const el = document.createElement("style");
+    el.id = id;
+    el.textContent = "[data-zivo-page-scroll]::-webkit-scrollbar{display:none;width:0;height:0}";
+    document.head.appendChild(el);
+  }, []);
+
+  useEffect(() => {
+    const el = outerRef.current;
     if (!el) return;
     const update = () => setGridWidth(el.clientWidth);
     update();
@@ -3098,61 +3437,73 @@ function PageThumbnailGrid({
     return () => ro.disconnect();
   }, []);
 
-  useEffect(() => {
-    if (!pdfDoc || !isPdf || thumbWidth < 1) return;
-    let cancelled = false;
-    const renderScale = Math.min(0.5, Math.max(0.22, thumbWidth / 320));
-
-    void (async () => {
-      for (let p = 1; p <= pageCount; p += 1) {
-        if (cancelled) return;
-        const canvas = thumbCanvasRefs.current[p];
-        if (!canvas) continue;
-        try {
-          await renderPdfPageToCanvas(pdfDoc, p, canvas, renderScale, thumbWidth);
-        } catch {
-          if (cancelled) return;
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      cancelAllPdfRenders(Object.values(thumbCanvasRefs.current));
-    };
-  }, [pdfDoc, isPdf, pageCount, thumbCanvasRefs, thumbWidth]);
-
   const pageNumbers = useMemo(
     () => Array.from({ length: pageCount }, (_, index) => index + 1),
     [pageCount],
   );
 
+  const gridContent = (
+    <Box
+      w="100%"
+      pb={(compactGrid ? SELECTION_PAD_Y_COMPACT : SELECTION_PAD_Y) + dockReserve}
+      style={{
+        display: "grid",
+        gridTemplateColumns: compactGrid
+          ? `repeat(${cols}, minmax(0, 1fr))`
+          : `repeat(${cols}, ${thumbWidth}px)`,
+        justifyContent: compactGrid ? "stretch" : "center",
+        gap,
+        boxSizing: "border-box",
+      }}
+    >
+      {pageNumbers.map((page) => (
+        <PageThumbnailCell
+          key={page}
+          page={page}
+          selected={selectedSet.has(page)}
+          isDark={isDark}
+          isPdf={isPdf}
+          pdfDoc={pdfDoc}
+          thumbWidth={cellThumbWidth}
+          compact={compactGrid}
+          scrollRoot={scrollRoot}
+          thumbCanvasRefs={thumbCanvasRefs}
+          onToggle={onPageToggle}
+        />
+      ))}
+    </Box>
+  );
+
+  const bindScrollContainer = useCallback((node: HTMLDivElement | null) => {
+    setScrollRoot(node);
+  }, []);
+
   return (
-    <Box ref={gridRef} flex={1} mih={0} h="100%" w="100%" style={{ overflow: "hidden" }}>
-      <ScrollArea h="100%" flex={1} mih={0} w="100%" offsetScrollbars type="auto" scrollbarSize={8} pt={4}>
-        <Box
-          w="100%"
-          pb={SELECTION_PAD_Y}
-          style={{
-            display: "grid",
-            gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
-            gap: THUMB_GAP,
-          }}
-        >
-          {pageNumbers.map((page) => (
-            <PageThumbnailCell
-              key={page}
-              page={page}
-              selected={selectedSet.has(page)}
-              isDark={isDark}
-              isPdf={isPdf}
-              thumbWidth={thumbWidth}
-              thumbCanvasRefs={thumbCanvasRefs}
-              onToggle={onPageToggle}
-            />
-          ))}
-        </Box>
-      </ScrollArea>
+    <Box
+      ref={outerRef}
+      flex={1}
+      mih={0}
+      w="100%"
+      style={{ minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}
+    >
+      <Box
+        ref={bindScrollContainer}
+        data-zivo-page-scroll
+        flex={1}
+        mih={0}
+        pt={compactGrid ? 6 : 8}
+        style={{
+          minHeight: 0,
+          overflowY: "auto",
+          overflowX: "hidden",
+          WebkitOverflowScrolling: "touch",
+          overscrollBehavior: "contain",
+          scrollbarWidth: "none",
+          msOverflowStyle: "none",
+        }}
+      >
+        {gridContent}
+      </Box>
     </Box>
   );
 }
@@ -3162,7 +3513,10 @@ function PageThumbnailCell({
   selected,
   isDark,
   isPdf,
+  pdfDoc,
   thumbWidth,
+  compact,
+  scrollRoot,
   thumbCanvasRefs,
   onToggle,
 }: {
@@ -3170,58 +3524,173 @@ function PageThumbnailCell({
   selected: boolean;
   isDark: boolean;
   isPdf: boolean;
+  pdfDoc: PDFDocumentProxy | null;
   thumbWidth: number;
+  compact?: boolean;
+  scrollRoot: HTMLDivElement | null;
   thumbCanvasRefs: React.MutableRefObject<Record<number, HTMLCanvasElement | null>>;
   onToggle: (page: number, shiftKey: boolean) => void;
 }) {
-  const placeholderHeight = Math.round(thumbWidth * 1.35);
+  const [hovered, setHovered] = useState(false);
+  const [nearViewport, setNearViewport] = useState(false);
+  const [renderedForWidth, setRenderedForWidth] = useState(0);
+  const cellRef = useRef<HTMLButtonElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const [frameWidth, setFrameWidth] = useState(compact ? 0 : thumbWidth);
   const ringColor = isDark ? "var(--mantine-color-blue-4)" : "var(--mantine-color-blue-6)";
   const idleRing = isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-4)";
+  const ringWidth = selected ? 3 : 1;
+  const innerRadius = compact ? 12 : 14;
+  const outerRadius = innerRadius + ringWidth;
+  const renderWidth = compact ? (frameWidth > 0 ? frameWidth : thumbWidth) : thumbWidth;
+  const frameHeight = Math.round(
+    renderWidth * (compact ? THUMB_FRAME_ASPECT_COMPACT : THUMB_FRAME_ASPECT),
+  );
+  const rendered = renderedForWidth === renderWidth && renderWidth > 0;
+
+  useEffect(() => {
+    if (!compact) {
+      setFrameWidth(thumbWidth);
+      return;
+    }
+    const el = frameRef.current;
+    if (!el) return;
+    const update = () => setFrameWidth(Math.round(el.clientWidth));
+    update();
+    const ro = new ResizeObserver(() => update());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [compact, thumbWidth]);
+
+  useEffect(() => {
+    thumbCanvasRefs.current[page] = canvasRef.current;
+    return () => {
+      if (thumbCanvasRefs.current[page] === canvasRef.current) {
+        delete thumbCanvasRefs.current[page];
+      }
+    };
+  }, [page, thumbCanvasRefs]);
+
+  useEffect(() => {
+    const target = cellRef.current;
+    if (!target || !scrollRoot) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setNearViewport(entry.isIntersecting);
+      },
+      {
+        root: scrollRoot,
+        rootMargin: compact ? "360px 0px" : "280px 0px",
+        threshold: 0.01,
+      },
+    );
+
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [scrollRoot, compact, page]);
+
+  useEffect(() => {
+    if (!nearViewport || !pdfDoc || !isPdf || renderWidth < 1) return;
+
+    let cancelled = false;
+    const coverZoom = compact ? THUMB_COVER_ZOOM_COMPACT : THUMB_COVER_ZOOM;
+
+    void (async () => {
+      const canvas = canvasRef.current;
+      if (!canvas || cancelled) return;
+      try {
+        await renderPdfThumbToCanvas(pdfDoc, page, canvas, renderWidth, frameHeight, coverZoom);
+        if (!cancelled) setRenderedForWidth(renderWidth);
+      } catch {
+        if (!cancelled) return;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [nearViewport, pdfDoc, isPdf, page, renderWidth, frameHeight, compact, thumbCanvasRefs]);
 
   return (
     <UnstyledButton
+      ref={cellRef}
       onClick={(event) => onToggle(page, event.shiftKey)}
       aria-label={`Page ${page}${selected ? ", selected" : ""}`}
       aria-pressed={selected}
       w="100%"
+      pb={compact ? 4 : 8}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        transition: "transform 140ms ease",
+        transform: hovered && !selected ? "translateY(-2px)" : undefined,
+      }}
     >
       <Box pos="relative" w="100%">
         <Box
-          bg={isDark ? "dark.7" : "gray.1"}
-          p={2}
+          p={ringWidth}
+          bg={selected ? ringColor : idleRing}
           style={{
-            borderRadius: 10,
+            borderRadius: outerRadius,
+            overflow: "hidden",
             lineHeight: 0,
-            boxShadow: selected
-              ? `0 0 0 2px ${ringColor}, 0 8px 20px rgba(0, 0, 0, 0.22)`
-              : `0 0 0 1px ${idleRing}`,
-            opacity: selected ? 1 : 0.88,
-            transition: "box-shadow 160ms ease, opacity 160ms ease",
+            transition: "background-color 160ms ease",
           }}
         >
-          {isPdf ? (
-            <canvas
-              ref={(el) => {
-                thumbCanvasRefs.current[page] = el;
-              }}
-              style={{
-                width: "100%",
-                height: "auto",
-                display: "block",
-                borderRadius: 8,
-                verticalAlign: "top",
-              }}
-            />
-          ) : (
-            <Center h={placeholderHeight} w="100%">
-              <IconFileText size={32} stroke={1.25} color="var(--mantine-color-dimmed)" />
-            </Center>
-          )}
+          <Box
+            bg={isDark ? "dark.7" : "gray.0"}
+            w="100%"
+            style={{
+              borderRadius: innerRadius,
+              overflow: "hidden",
+              lineHeight: 0,
+              opacity: selected ? 1 : 0.94,
+              transition: "opacity 160ms ease",
+            }}
+          >
+            {isPdf ? (
+              <Box
+                ref={frameRef}
+                pos="relative"
+                w="100%"
+                h={frameHeight}
+                style={{
+                  borderRadius: innerRadius,
+                  overflow: "hidden",
+                }}
+              >
+                {!rendered && (
+                  <Center
+                    pos="absolute"
+                    inset={0}
+                    bg={isDark ? "dark.6" : "gray.1"}
+                  >
+                    <Loader size="xs" color="gray" />
+                  </Center>
+                )}
+                <canvas
+                  ref={canvasRef}
+                  style={{
+                    display: "block",
+                    verticalAlign: "top",
+                    opacity: rendered ? 1 : 0,
+                    transition: "opacity 180ms ease",
+                  }}
+                />
+              </Box>
+            ) : (
+              <Center h={frameHeight} w="100%">
+                <IconFileText size={40} stroke={1.25} color="var(--mantine-color-dimmed)" />
+              </Center>
+            )}
+          </Box>
         </Box>
         <Text
-          size="sm"
+          size={compact ? "sm" : "md"}
           ta="center"
-          mt={10}
+          mt={compact ? 8 : 12}
           fw={selected ? 700 : 500}
           c={selected ? "blue" : "dimmed"}
           lh={1}
@@ -3231,15 +3700,15 @@ function PageThumbnailCell({
         {selected && (
           <ThemeIcon
             pos="absolute"
-            top={8}
-            right={8}
-            size={24}
+            top={ringWidth + 6}
+            right={ringWidth + 6}
+            size={32}
             radius="xl"
             color="blue"
             variant="filled"
-            style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.3)" }}
+            style={{ boxShadow: "0 3px 12px rgba(0,0,0,0.35)" }}
           >
-            <IconCheck size={14} stroke={3} />
+            <IconCheck size={18} stroke={3} />
           </ThemeIcon>
         )}
       </Box>

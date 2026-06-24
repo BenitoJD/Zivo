@@ -38,6 +38,7 @@ class LoginRequest(BaseModel):
 class AuthResponse(BaseModel):
     username: str
     csrf_token: str
+    is_admin: bool = False
 
 
 @router.post("/signup", response_model=AuthResponse)
@@ -69,7 +70,7 @@ def signup(
 
     token, csrf = create_session_token(user.id)
     set_session_cookie(response, token, remember=False)
-    return AuthResponse(username=user.username, csrf_token=csrf)
+    return AuthResponse(username=user.username, csrf_token=csrf, is_admin=user.is_admin)
 
 
 @router.post("/login", response_model=AuthResponse)
@@ -88,7 +89,7 @@ def login(
 
     token, csrf = create_session_token(user.id, remember=body.remember_me)
     set_session_cookie(response, token, remember=body.remember_me)
-    return AuthResponse(username=user.username, csrf_token=csrf)
+    return AuthResponse(username=user.username, csrf_token=csrf, is_admin=user.is_admin)
 
 
 @router.get("/session", response_model=AuthResponse)
@@ -98,7 +99,7 @@ def get_session(
 ) -> AuthResponse:
     if not zivo_session:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return AuthResponse(username=user.username, csrf_token=csrf_from_session_token(zivo_session))
+    return AuthResponse(username=user.username, csrf_token=csrf_from_session_token(zivo_session), is_admin=user.is_admin)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

@@ -6,7 +6,7 @@ import Providers from "@/app/providers";
 import { MANTINE_COLOR_SCHEME_SCRIPT, mantineHtmlProps } from "@/lib/mantine-color-scheme";
 
 export const metadata: Metadata = {
-  title: "Question Better.",
+  title: "ZIVO",
   description: "Measure and improve understanding through questions.",
 };
 
