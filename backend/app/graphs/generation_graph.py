@@ -16,7 +16,7 @@ from app.graphs.page_triage_graph import run_page_triage
 from app.models import Document
 from app.repositories.intel import update_activity
 from app.services.mcq_dedup import prior_mcq_from_payload
-from app.services.mcq_quality import generate_quality_mcq
+from app.services.mcq_quality import generate_quality_mcq, generate_quality_mcq_batch
 from app.services.question_pool import (
     get_page_coverage,
     get_question_budget,
@@ -287,14 +287,19 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
             return {"questions_saved": 0, "page_number": page_number}
 
     prior_mcqs = _prior_mcqs_on_page(db, document_id, page_number)
-    generated = _generate_batch_parallel(
+    # One LLM call produces up to N MCQs (N = len(targets), capped at 5). The
+    # batch generator runs the per-MCQ quality gate (heuristics + embedding
+    # similarity) internally, so this replaces both the N-way parallel
+    # _generate_batch_parallel AND the post-hoc _reconcile_batch dedup. A single
+    # call collapses N TTFTs to one and lets the model self-coordinate distractor
+    # diversity across the batch.
+    kept = generate_quality_mcq_batch(
+        db,
         page_text=page_text,
         page_number=page_number,
         targets=targets,
         prior_mcqs=prior_mcqs,
-        start_sequence=start_sequence,
     )
-    kept = _reconcile_batch(generated)
 
     saved = 0
     sequence = start_sequence
@@ -306,7 +311,8 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
         if _assertion_sequence_exists(db, document_id, page_number, sequence):
             continue
         _persist_assertion(db, document_id, payload, page_number=page_number, sequence=sequence)
-        mark_aspect_asked(db, document_id, page_number, str(target["key"]))
+        if target and target.get("key"):
+            mark_aspect_asked(db, document_id, page_number, str(target["key"]))
         saved += 1
 
     if saved == 0 and start_sequence + batch_size >= budget:

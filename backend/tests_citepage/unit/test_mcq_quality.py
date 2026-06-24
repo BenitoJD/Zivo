@@ -9,6 +9,7 @@ import pytest
 
 from app.services.mcq_quality import (
     _critique_passes,
+    _parse_mcq_blocks,
     generate_quality_mcq,
     has_fatal_heuristic_flaws,
     run_heuristic_checks,
@@ -267,3 +268,61 @@ def test_generate_quality_mcq_embedding_gate_retries() -> None:
     assert result is not None
     assert result["question"].startswith("Where in the cell")
     assert result["quality"]["attempts"] == 2
+
+
+# ---------------------------------------------------------------------------
+# _parse_mcq_blocks — multi-block extraction for one-call batch generation
+# ---------------------------------------------------------------------------
+
+
+def test_parse_mcq_blocks_multiple_fenced() -> None:
+    a = {"question": "What is A?", "options": ["1", "2"], "correct_index": 0}
+    b = {"question": "What is B?", "options": ["3", "4"], "correct_index": 1}
+    raw = f"Here are two questions:\n```zv-mcq\n{json.dumps(a)}\n```\n\n```zv-mcq\n{json.dumps(b)}\n```"
+    parsed = _parse_mcq_blocks(raw)
+    assert len(parsed) == 2
+    assert parsed[0]["question"] == "What is A?"
+    assert parsed[1]["correct_index"] == 1
+
+
+def test_parse_mcq_blocks_single_fenced() -> None:
+    a = {"question": "Solo?", "options": ["x", "y"], "correct_index": 0}
+    raw = f"```zv-mcq\n{json.dumps(a)}\n```"
+    parsed = _parse_mcq_blocks(raw)
+    assert len(parsed) == 1
+    assert parsed[0]["question"] == "Solo?"
+
+
+def test_parse_mcq_blocks_json_array_fallback() -> None:
+    a = {"question": "Q1?", "options": ["a", "b"], "correct_index": 0}
+    b = {"question": "Q2?", "options": ["c", "d"], "correct_index": 0}
+    raw = json.dumps([a, b])
+    parsed = _parse_mcq_blocks(raw)
+    assert len(parsed) == 2
+    assert parsed[1]["question"] == "Q2?"
+
+
+def test_parse_mcq_blocks_skips_malformed_block() -> None:
+    good = {"question": "Valid?", "options": ["x", "y"], "correct_index": 0}
+    raw = (
+        "```zv-mcq\n{not valid json}\n```\n\n"
+        f"```zv-mcq\n{json.dumps(good)}\n```"
+    )
+    parsed = _parse_mcq_blocks(raw)
+    assert len(parsed) == 1
+    assert parsed[0]["question"] == "Valid?"
+
+
+def test_parse_mcq_blocks_empty_input() -> None:
+    assert _parse_mcq_blocks("") == []
+    assert _parse_mcq_blocks("   ") == []
+
+
+def test_parse_mcq_blocks_bare_objects_without_fences() -> None:
+    a = {"question": "Bare1?", "options": ["a", "b"], "correct_index": 0}
+    b = {"question": "Bare2?", "options": ["c", "d"], "correct_index": 1}
+    raw = f"Here:\n{json.dumps(a)}\nand\n{json.dumps(b)}"
+    parsed = _parse_mcq_blocks(raw)
+    assert len(parsed) == 2
+    assert parsed[0]["question"] == "Bare1?"
+    assert parsed[1]["correct_index"] == 1

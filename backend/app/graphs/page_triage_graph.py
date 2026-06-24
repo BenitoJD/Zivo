@@ -177,14 +177,22 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
 
             model_id = default_chat_model_id(db)
             system = get_prompt(db, "page_triage_system")
-            user = get_prompt(
+            instructions = get_prompt(
                 db,
                 "page_triage_format",
-                page_text=excerpt,
+                page_text="(the page text provided above)",
             )
+            # Stable-prefix ordering for provider prompt caching: system prompt
+            # + page text lead (byte-identical across pages only by page, but
+            # stable across retries/lookahead on the SAME page), with the
+            # variable JSON instructions in the trailing message.
             raw = _complete_chat_sync(
                 db,
-                [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": f"Page text:\n{excerpt}"},
+                    {"role": "user", "content": instructions},
+                ],
                 model_id=model_id,
             )
             parsed = _parse_triage_json(raw)

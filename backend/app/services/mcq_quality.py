@@ -197,6 +197,92 @@ def _parse_critic_json(raw: str) -> dict[str, Any] | None:
         return None
 
 
+# Fenced-block splitter: captures the JSON inside each ```zv-mcq ... ``` block.
+# Non-greedy on the inner JSON (each MCQ block is flat, so this is safe) and
+# finds ALL blocks rather than just the first. Used by one-call batch generation.
+_FENCED_MCQ_RE = re.compile(r"```(?:zv-mcq|json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+
+def _parse_mcq_blocks(raw: str) -> list[dict[str, Any]]:
+    """Extract every MCQ JSON object from a multi-block LLM response.
+
+    Handles fenced ```zv-mcq blocks (the normal case) and falls back to scanning
+    for top-level JSON objects if the model omitted fences. Each candidate is
+    json.loads'd; unparseable candidates are skipped individually so one bad
+    block never fails the whole batch.
+    """
+    if not raw or not raw.strip():
+        return []
+    text_block = raw.strip()
+    out: list[dict[str, Any]] = []
+
+    # Primary path: fenced blocks.
+    for match in _FENCED_MCQ_RE.finditer(text_block):
+        try:
+            obj = json.loads(match.group(1))
+            if isinstance(obj, dict):
+                out.append(obj)
+        except json.JSONDecodeError:
+            continue
+
+    if out:
+        return out
+
+    # Fallback: the model returned a bare JSON array of MCQ objects, or a run of
+    # brace-delimited objects without fences. Try a JSON array first, then a
+    # whole-text parse, then a brace scan.
+    if text_block.startswith("["):
+        try:
+            arr = json.loads(text_block)
+            if isinstance(arr, list):
+                return [o for o in arr if isinstance(o, dict)]
+        except json.JSONDecodeError:
+            pass
+
+    if text_block.startswith("{"):
+        try:
+            obj = json.loads(text_block)
+            if isinstance(obj, dict):
+                return [obj]
+        except json.JSONDecodeError:
+            pass
+
+    # Last resort: pull each top-level {...} span. Greedy-with-balancing isn't
+    # trivial with regex, so we find each '{'...'{' pair at the shallowest level
+    # via a simple depth scan — robust enough for flat MCQ objects.
+    depth = 0
+    start = -1
+    in_string = False
+    escape = False
+    for i, ch in enumerate(text_block):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                try:
+                    obj = json.loads(text_block[start : i + 1])
+                    if isinstance(obj, dict):
+                        out.append(obj)
+                except json.JSONDecodeError:
+                    pass
+                start = -1
+    return out
+
+
 def _normalize_mcq_payload(data: dict[str, Any], target_aspect: dict[str, Any] | None) -> dict[str, Any]:
     question = sanitize_mcq_stem(str(data.get("question") or data.get("stem") or ""))
     options = coerce_mcq_options(data.get("options") or data.get("choices"))
@@ -272,17 +358,26 @@ def _generate_draft_mcq(
     prior_block = format_prior_mcqs_block(prior_mcqs)
 
     system = get_prompt(db, "mcq_page_generate_system")
-    user = (
+    # Stable-prefix message ordering for provider prompt caching: the system
+    # prompt and page text are byte-identical across every question on a page
+    # (and across refill batches), so they form a cacheable prefix. Only the
+    # per-question variable part (aspect, prior questions, index) sits in the
+    # trailing message. Z.AI / OpenAI-compatible providers cache the leading
+    # prefix automatically and skip re-processing the ~12k-char page text.
+    instructions = (
         f"Generate exactly one multiple-choice question from this page excerpt.\n"
         f"Question index on this page: {sequence}\n"
         f"{aspect_line}{cognitive_line}\n"
         f"{prior_block}"
-        f"Page text:\n{excerpt}\n\n"
         "Return only one ```zv-mcq``` JSON block. Include primary_concept_key matching the target aspect."
     )
     raw = _complete_chat_sync(
         db,
-        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": f"Page text:\n{excerpt}"},
+            {"role": "user", "content": instructions},
+        ],
         log_tag="generate_mcq",
         model_id=model_id,
     )
@@ -313,18 +408,22 @@ def _rewrite_mcq(
     prior_block = format_prior_mcqs_block(prior_mcqs)
 
     system = get_prompt(db, "mcq_rewrite_system")
-    user = (
+    # Stable-prefix ordering for caching (page text + system prompt first).
+    instructions = (
         f"Rewrite this MCQ for aspect: {aspect_label}.\n\n"
         f"Flaws to fix:\n{flaws_json}\n\n"
         f"Hints:\n{hints}\n\n"
         f"{prior_block}"
-        f"Page text:\n{excerpt}\n\n"
         f"Current MCQ:\n{json.dumps(draft, ensure_ascii=False)}\n\n"
         "Return only one ```zv-mcq``` JSON block."
     )
     raw = _complete_chat_sync(
         db,
-        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": f"Page text:\n{excerpt}"},
+            {"role": "user", "content": instructions},
+        ],
         log_tag="rewrite_mcq",
         model_id=model_id,
     )
@@ -549,3 +648,140 @@ def generate_quality_mcq(
         last_critique_bundle = _merge_critique_for_rewrite(heuristic_flaws, critique)
 
     return None
+
+
+# Cap on how many MCQs to ask for in a single LLM call. Past ~20-30 structured
+# objects, LLMs reliably degrade (repetition, dropped JSON alignment, filler
+# distractors). 5 is safely within the reliable range. For budgets > 5, call
+# this multiple times — prompt caching makes the repeat calls cheap.
+BATCH_MCQ_CAP = 5
+
+
+def _generate_batch_drafts(
+    db: Session,
+    *,
+    page_text: str,
+    page_number: int,
+    targets: list[dict[str, Any]],
+    prior_mcqs: list[dict[str, Any]] | None,
+    model_id: uuid.UUID | None = None,
+) -> list[dict[str, Any]]:
+    """One LLM call producing up to N MCQs (one per target aspect).
+
+    Returns normalized payload dicts for every block the model emitted. The
+    quality gates (heuristics, embedding similarity) run on each in the caller.
+    """
+    excerpt = page_text[:12_000]
+    targets_block = "\n".join(
+        f"{i + 1}. {t.get('label')} (key: {t.get('key')})"
+        + (f" — angle: {t.get('cognitive_angle')}" if t.get("cognitive_angle") else "")
+        for i, t in enumerate(targets)
+    )
+    prior_block = format_prior_mcqs_block(prior_mcqs)
+
+    system = get_prompt(db, "mcq_page_generate_system")
+    instructions = (
+        f"Generate exactly {len(targets)} multiple-choice questions — ONE per target aspect below. "
+        f"Each must test a distinct idea from the page.\n\n"
+        f"Target aspects:\n{targets_block}\n\n"
+        f"{prior_block}"
+        f"Return ONLY {len(targets)} ```zv-mcq``` JSON blocks, one per aspect, in order. "
+        "Each block's primary_concept_key must match its target aspect key."
+    )
+    raw = _complete_chat_sync(
+        db,
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": f"Page text:\n{excerpt}"},
+            {"role": "user", "content": instructions},
+        ],
+        log_tag="generate_mcq_batch",
+        model_id=model_id,
+    )
+    blocks = _parse_mcq_blocks(raw)
+    # Pair each parsed block with its target aspect (in order). If the model
+    # returned fewer blocks than targets, we keep what we got. Normalization is
+    # per-block so one malformed block can't fail the rest.
+    normalized: list[dict[str, Any]] = []
+    for idx, data in enumerate(blocks):
+        target = targets[idx] if idx < len(targets) else None
+        try:
+            normalized.append(_normalize_mcq_payload(data, target))
+        except ValueError:
+            continue
+    return normalized
+
+
+def generate_quality_mcq_batch(
+    db: Session,
+    *,
+    page_text: str,
+    page_number: int,
+    targets: list[dict[str, Any]],
+    prior_mcqs: list[dict[str, Any]] | None = None,
+    model_id: uuid.UUID | None = None,
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Generate N MCQs in ONE LLM call, then run the quality gate on each.
+
+    Returns (target_aspect, payload) pairs for the MCQs that pass the fast-path
+    quality gate (heuristic checks + embedding-similarity vs priors). MCQs that
+    fail a gate are dropped individually — a bad one never poisons the batch.
+
+    Unlike generate_quality_mcq's per-question critic/rewrite loop, batch mode
+    uses the fast path only: heuristics + embedding similarity. The critic is
+    deferred (same principle as the single-MCQ fast path) because the heuristics
+    catch the structural flaws and embedding similarity catches near-dupes. This
+    keeps the batch to a single LLM call for latency; any question that needs a
+    critic or rewrite will be caught later by the quality gate on refill.
+    """
+    if not page_text or not page_text.strip() or not targets:
+        return []
+
+    targets = targets[:BATCH_MCQ_CAP]
+    if model_id is None:
+        from app.services.llm_registry import default_chat_model_id
+
+        model_id = default_chat_model_id(db)
+
+    drafts = _generate_batch_drafts(
+        db,
+        page_text=page_text,
+        page_number=page_number,
+        targets=targets,
+        prior_mcqs=prior_mcqs,
+        model_id=model_id,
+    )
+    if not drafts:
+        return []
+
+    # Run the fast-path quality gate per draft. Intra-batch near-dupes are
+    # caught by tracking accepted drafts as the "prior" for the next check.
+    accepted: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    accepted_payloads: list[dict[str, Any]] = []
+    for idx, draft in enumerate(drafts):
+        target = targets[idx] if idx < len(targets) else None
+        check_against = list(prior_mcqs or []) + accepted_payloads
+
+        heuristic_flaws = run_heuristic_checks(draft, prior_mcqs=prior_mcqs)
+        if has_fatal_heuristic_flaws(heuristic_flaws):
+            continue
+
+        too_similar, max_sim = is_mcq_too_similar(draft, check_against)
+        if too_similar:
+            continue
+
+        draft["quality"] = {
+            "pass": True,
+            "flaw_count": len(heuristic_flaws),
+            "attempts": 1,
+            "fast_path": True,
+            "batch": True,
+            "heuristic_flaws": heuristic_flaws,
+            "max_similarity_to_prior": max_sim,
+        }
+        if target and target.get("cognitive_angle"):
+            draft["cognitive_angle"] = target["cognitive_angle"]
+        accepted.append((target, draft))
+        accepted_payloads.append(draft)
+
+    return accepted
