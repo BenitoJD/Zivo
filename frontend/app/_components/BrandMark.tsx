@@ -42,17 +42,19 @@ export function BrandMark({
         }}
       />
       {showWord && (
-        <Title
-          order={4}
-          className="serif-text"
+        <span
           style={{
-            fontWeight: 500,
-            letterSpacing: "-0.02em",
+            fontFamily: "var(--font-sans), sans-serif",
+            fontWeight: 700,
+            fontSize: height * 0.75,
+            letterSpacing: "-0.03em",
             color: "inherit",
+            lineHeight: 1,
+            marginTop: height * 0.05,
           }}
         >
           {BRAND_NAME}
-        </Title>
+        </span>
       )}
     </Box>
   );
