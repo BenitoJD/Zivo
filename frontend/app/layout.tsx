@@ -23,8 +23,8 @@ const newsreader = Newsreader({
 });
 
 export const metadata: Metadata = {
-  title: "ZIVO",
-  description: "Measure and improve understanding through questions.",
+  title: "Zivo — Question Better.",
+  description: "Upload anything. Get exam-style questions, scoped exactly to what you read, with a tutor that knows your source.",
 };
 
 export const viewport: Viewport = {

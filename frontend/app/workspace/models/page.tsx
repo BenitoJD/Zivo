@@ -60,7 +60,7 @@ export default function WorkspaceModelsPage() {
     notifications.show({
       title: "Models",
       message: modelsQuery.error instanceof Error ? modelsQuery.error.message : "Unknown error",
-      color: "red",
+      color: "terracotta",
     });
   }, [modelsQuery.isError, modelsQuery.error, forbidden]);
 
@@ -77,7 +77,7 @@ export default function WorkspaceModelsPage() {
       notifications.show({
         title: model.display_name,
         message: e instanceof Error ? e.message : "Update failed",
-        color: "red",
+        color: "terracotta",
       });
     } finally {
       setBusyId(null);
@@ -95,7 +95,7 @@ export default function WorkspaceModelsPage() {
       notifications.show({
         title: "Model pool",
         message: e instanceof Error ? e.message : "Update failed",
-        color: "red",
+        color: "terracotta",
       });
     } finally {
       setPoolBusy(false);
@@ -113,9 +113,11 @@ export default function WorkspaceModelsPage() {
   if (forbidden) {
     return (
       <Center mih="50vh" px="lg">
-        <Stack align="center" gap="sm" maw={420}>
-          <Text fw={600}>Admin only</Text>
-          <Text size="sm" c="dimmed" ta="center">
+        <Stack align="center" gap="sm" maw={420} ta="center">
+          <Text fw={600} size="lg" style={{ fontFamily: "var(--font-serif), Georgia, serif" }}>
+            Admin only
+          </Text>
+          <Text size="sm" c="dimmed" ta="center" lh={1.6}>
             Sign in as an admin user to enable or disable chat models.
           </Text>
         </Stack>
@@ -124,16 +126,19 @@ export default function WorkspaceModelsPage() {
   }
 
   return (
-    <Box p="lg" maw={720} mx="auto" w="100%">
+    <Box p={{ base: "md", md: "lg" }} maw={720} mx="auto" w="100%">
       <Stack gap="lg">
         <Stack gap={4}>
-          <Group gap="sm">
+          <Group gap="sm" align="center">
             <IconCpu size={22} stroke={1.5} />
-            <Title order={3} style={{ letterSpacing: "-0.03em" }}>
+            <Title
+              order={3}
+              style={{ letterSpacing: "-0.01em", fontFamily: "var(--font-serif), Georgia, serif", fontWeight: 500 }}
+            >
               LLM models
             </Title>
           </Group>
-          <Text size="sm" c="dimmed">
+          <Text size="sm" c="dimmed" lh={1.55}>
             Turn models on or off for chat and question generation. Disabled models are skipped by the router.
           </Text>
         </Stack>
@@ -169,7 +174,7 @@ export default function WorkspaceModelsPage() {
                         {model.display_name}
                       </Text>
                       {model.is_default && (
-                        <Badge size="sm" variant="light" color="blue">
+                        <Badge size="sm" variant="light" color="lavender">
                           Default
                         </Badge>
                       )}

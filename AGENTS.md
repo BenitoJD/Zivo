@@ -131,51 +131,50 @@ Deploy: GitHub → Actions → **Deploy Zivo** → Run workflow.
 
 | Rule | Detail |
 |------|--------|
-| **Where UI lives** | `frontend/app/` — pages and layouts (`layout.tsx`, `page.tsx`, `providers.tsx`) |
-| **Forbidden** | `frontend/components/`, custom CSS files, inline `style={}`, native HTML UI (`<form>`, `<button>`, etc.), Tailwind, shadcn |
-| **Allowed imports** | `@mantine/*`, `@tabler/icons-react` (Mantine’s icon set), `next/*`, `react` |
-| **Non-UI code** | `frontend/lib/` — API client, types, constants only |
+| **Where UI lives** | `frontend/app/` — pages, layouts (`layout.tsx`, `page.tsx`, `providers.tsx`), and collocated private components in `app/**/_components/` (underscore folders are excluded from routing) |
+| **Forbidden** | top-level `frontend/components/`, custom CSS files, Tailwind, shadcn. Inline `style={}` is permitted only for dynamic/animated values — prefer Mantine style props otherwise |
+| **Allowed imports** | `@mantine/*`, `@tabler/icons-react` (Mantine's icon set), `next/*`, `react` |
+| **Non-UI code** | `frontend/lib/` — API client, types, constants, and shared client logic (e.g. `lib/auth.ts`) |
 | **Theming** | `createTheme` in `app/providers.tsx` — Mantine theme API, not custom stylesheets |
 
-### Wispr Flow Style System
+### Calm Paper Style System
 
-Zivo utilizes an **editorial, human-centric, tactile UI/UX system** inspired by `wisprflow.ai`. When editing or creating new interface files, you **MUST** strictly adhere to the following layout, spacing, and styling tokens:
+Zivo's UI is a **light-first, book-like study aesthetic** ("Calm Paper"): warm paper surfaces, ink text, restrained color, generous air, tactile cards — calm, not loud. When editing or creating interface files, you **MUST** strictly adhere to these tokens (all defined in `app/providers.tsx`):
 
 #### 1. Typography
-- **Headings**: Use `var(--font-serif)` (Newsreader) with a lighter font weight (`500` or `400`). Use serif typography for high-impact titles, section labels, and empty-state headings. Incorporate italics (`fs="italic"`) sparingly for highlights.
-- **Body & UI**: Use `var(--font-sans)` (Plus Jakarta Sans) for standard body copy, interactive controls, inputs, buttons, and navigation elements. Keep text size compact, high density, and clean.
+- **Serif / reading content** (`var(--font-serif)`, Newsreader): question stems, page/section titles, empty-state headings, empty/complete states, marketing headlines. Weight `500`; `italic` sparingly for highlights.
+- **Sans / UI** (`var(--font-sans)`, Plus Jakarta Sans): body copy, inputs, buttons, navigation, metadata. Compact and clean.
+- **Line-height**: generous for reading (theme `lineHeights` scale; body `1.6`+).
 
 #### 2. Color Palette
-The colors are automatically resolved via `cssVariablesResolver` based on the active color scheme:
-- **Primary Color**: `lavender` (brand purple/lilac). Use `var(--mantine-color-lavender-filled)` or `var(--mantine-color-lavender-light)` for primary buttons, active states, and highlights.
-- **Light Scheme**:
-  - Background (`--mantine-color-body`): `#FAF7EE` (Warm editorial cream)
-  - Text (`--mantine-color-text`): `#1C1C1A` (Near black/charcoal text)
-  - Borders (`--mantine-color-default-border`): `#E5E1D3` (Soft warm beige)
-  - Hover states (`--mantine-color-default-hover`): `#F0EDE2`
-- **Dark Scheme**:
-  - Background (`--mantine-color-body`): `#121211` (Soft warm off-black)
-  - Text (`--mantine-color-text`): `#FAF7EE` (Cream text)
-  - Borders (`--mantine-color-default-border`): `#2E2D2B` (Soft charcoal border)
-  - Hover states (`--mantine-color-default-hover`): `#1C1C1A`
-- **Theme Overrides**: Avoid hardcoded hex colors. Rely on Mantine's theme variables or color scale tokens (e.g. `dark.0` through `dark.9` which maps to the warm cream/charcoal scale).
+Colors resolve via `cssVariablesResolver` + the theme color scales. **Default scheme is light.**
+- **Brand accent — `lavender`**: used *sparingly* — links, active states, selection rings, primary action buttons. Prefer `lavender.6`/`lavender.7` (text) and `lavender.0`/`lavender-1` (tint backgrounds).
+- **Neutral — `dark`/`gray` (aliased, warm paper→ink scale)**: surfaces and text.
+- **Feedback (calm, not loud)**: `sage` = correct/success; `terracotta` = wrong/error. `green`/`red`/`blue` are **aliased** to these so legacy `color="green"/"red"/"blue"` resolves to the calm palette — but write new code as `sage`/`terracotta`/`lavender` explicitly.
+- **Light Scheme**: body `#F4F1E9` (warm oat paper) · text `#232220` (ink) · border `#E7E2D6` (warm hairline) · hover `#EFEBE1` · card surface `gray.0` (`#FBFAF6`).
+- **Dark Scheme**: body `#1A1917` (warm ink) · text `#F4F1E9` (paper) · border `#2E2C28` · hover `#262522`.
+- **No hardcoded hex in pages/components.** Use Mantine tokens (`var(--mantine-color-sage-0)`, `c="lavender.7"`, `bg="gray.0"`, etc.).
 
-#### 3. Border Radii
-Components must feel soft and tactile:
-- **Pills**: Use `radius="xl"` (or `9999px`) for `Button`, `TextInput`, `PasswordInput`, and `SegmentedControl`.
-- **Cards & Modals**: Use `radius="xl"` for containers, cards, and modal panels (`Paper` defaults to `xl` / `28px`).
-- **Lists & Mini components**: Use `radius="md"` (`14px`) or `radius="lg"` (`20px`).
+#### 3. Shadows
+Soft "paper lift" — calm, not Material-heavy. Use `shadow="paper"` (default on `Paper`) or `shadow="paper-lg"` for elevated hero cards/modals.
 
-#### 4. Frosted Modals
-All modals must have frosted glass backdrop filters. Ensure `overlayProps` uses:
-- `backgroundOpacity: 0.6`
-- `blur: 8`
+#### 4. Border Radii
+Soft and tactile: `Button`/`SegmentedControl` = `xl` (pill); `Paper`/`Modal` = `xl` (`28px`); `TextInput`/`PasswordInput`/`Textarea` = `md` (crisp). Radius scale in theme: `xs 6 / sm 10 / md 14 / lg 20 / xl 28`.
 
-Workspace routes:
+#### 5. Frosted Modals
+All modals use a frosted backdrop. `overlayProps` = `{ backgroundOpacity: 0.45, blur: 8 }` (set as the `Modal` default).
 
-- `/workspace` — empty library (`app/workspace/page.tsx`)
-- `/workspace/[artifactId]` — setup, MCQ, source stub, tutor chat (`app/workspace/[artifactId]/page.tsx`)
-- Shared shell (sidebar, add-source modal, auth modal) — `app/workspace/layout.tsx`
+#### 6. Motion
+Transitions use `cubic-bezier(0.32, 0.72, 0, 1)` over ~280ms; always respect `prefers-reduced-motion`.
+
+### Routes
+
+- `/` — public landing page (`app/page.tsx`)
+- `/login`, `/signup` — dedicated auth pages (`app/login/page.tsx`, `app/signup/page.tsx`); shared form in `app/_components/AuthForm.tsx`, logic in `lib/auth.ts`
+- `/workspace` — library / empty-state (`app/workspace/page.tsx`)
+- `/workspace/[artifactId]` — page selection → MCQ → source + tutor (`app/workspace/[artifactId]/page.tsx`)
+- `/workspace/models` — admin model management (`app/workspace/models/page.tsx`)
+- Shared shell (sidebar, add-source modal, delete modal) — `app/workspace/layout.tsx` + `app/workspace/_components/` (`Sidebar`, `AddSourceModal`, `DeleteSourceModal`). Auth is handled by `/login`, not a modal.
 
 ```bash
 cd frontend && npm run build && npm run lint
