@@ -1,0 +1,248 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
+import { Box, Button, Container, Drawer, Group, Stack, Text } from "@mantine/core";
+import { useDisclosure } from "@mantine/hooks";
+import { useReducedMotion } from "framer-motion";
+import { IconArrowRight, IconMenu2, IconX } from "@tabler/icons-react";
+import { BrandMark } from "@/app/_components/BrandMark";
+
+type NavItem = { label: string; href: string };
+
+/** Anchor links to landing sections. Order = left-to-right in the bar. */
+const NAV_LINKS: NavItem[] = [
+  { label: "How it works", href: "/#how" },
+  { label: "Why questions", href: "/#ethos" },
+  { label: "FAQ", href: "/#faq" },
+];
+
+/**
+ * World-class landing header.
+ *
+ * - Tall + transparent at the top of the page.
+ * - On scroll, condenses into a floating, frosted "paper" pill that sits over
+ *   the content (backdrop blur + color-mix paper tint + hairline border).
+ * - Left: brand lockup. Center: in-page anchor links. Right: Sign in + primary
+ *   CTA. On mobile, the links collapse into a calm Drawer.
+ * - Anchor links highlight as their section scrolls into view (scroll-spy via
+ *   IntersectionObserver). Smooth-scroll is handled via the section CSS.
+ * - Respects prefers-reduced-motion everywhere.
+ */
+export function LandingNav() {
+  const [scrolled, setScrolled] = useState(false);
+  const [activeId, setActiveId] = useState<string>("");
+  const reduce = useReducedMotion();
+  const raf = useRef<number | null>(null);
+  const [drawerOpen, { toggle: toggleDrawer, close: closeDrawer }] = useDisclosure(false);
+
+  // condense on scroll
+  useEffect(() => {
+    const onScroll = () => {
+      if (raf.current != null) return;
+      raf.current = requestAnimationFrame(() => {
+        raf.current = null;
+        setScrolled((window.scrollY ?? 0) > 12);
+      });
+    };
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      if (raf.current != null) cancelAnimationFrame(raf.current);
+    };
+  }, []);
+
+  // scroll-spy: highlight the link whose section is in view
+  useEffect(() => {
+    const ids = NAV_LINKS.map((l) => l.href.split("#")[1]);
+    const sections = ids
+      .map((id) => document.getElementById(id))
+      .filter((el): el is HTMLElement => el !== null);
+    if (sections.length === 0) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (visible) setActiveId(visible.target.id);
+      },
+      { rootMargin: "-45% 0px -50% 0px", threshold: [0, 0.25, 0.6] },
+    );
+    sections.forEach((s) => observer.observe(s));
+    return () => observer.disconnect();
+  }, []);
+
+  const transition = reduce
+    ? "none"
+    : "background-color 280ms cubic-bezier(0.32, 0.72, 0, 1), box-shadow 280ms cubic-bezier(0.32, 0.72, 0, 1), border-color 280ms cubic-bezier(0.32, 0.72, 0, 1), padding 280ms cubic-bezier(0.32, 0.72, 0, 1)";
+
+  const condensed = scrolled;
+  const brandH = condensed ? 26 : 30;
+
+  return (
+    <>
+      <Box
+        component="header"
+        pos="sticky"
+        top={0}
+        style={{ zIndex: 100, transition }}
+      >
+        <Container
+          size="lg"
+          px={{ base: "md", md: "lg" }}
+          pt={{ base: "sm", md: condensed ? "xs" : "lg" }}
+          pb={{ base: "sm", md: condensed ? "xs" : "lg" }}
+        >
+          <Box
+            style={{
+              borderRadius: "var(--mantine-radius-xl)",
+              padding: condensed ? "8px 8px 8px 20px" : "8px 12px",
+              transition,
+              background: condensed
+                ? "color-mix(in srgb, var(--mantine-color-body) 78%, transparent)"
+                : "transparent",
+              backdropFilter: condensed ? "blur(14px) saturate(1.25)" : "none",
+              WebkitBackdropFilter: condensed ? "blur(14px) saturate(1.25)" : "none",
+              border: condensed
+                ? "1px solid var(--mantine-color-default-border)"
+                : "1px solid transparent",
+              boxShadow: condensed ? "var(--mantine-shadow-paper)" : "none",
+            }}
+          >
+            <Group justify="space-between" wrap="nowrap" h={brandH}>
+              {/* Left: brand */}
+              <Box component={Link} href="/" style={{ textDecoration: "none", height: brandH }}>
+                <BrandMark height={brandH} />
+              </Box>
+
+              {/* Center: anchor links (desktop) */}
+              <Group gap={4} wrap="nowrap" visibleFrom="md">
+                {NAV_LINKS.map((item) => {
+                  const id = item.href.split("#")[1];
+                  const active = activeId === id;
+                  return (
+                    <Text
+                      key={item.href}
+                      component={Link}
+                      href={item.href}
+                      size="sm"
+                      fw={active ? 600 : 500}
+                      c={active ? "lavender.7" : "gray.7"}
+                      style={{
+                        textDecoration: "none",
+                        padding: "6px 12px",
+                        borderRadius: "var(--mantine-radius-md)",
+                        background: active ? "var(--mantine-color-lavender-0)" : "transparent",
+                        transition: reduce
+                          ? "none"
+                          : "color 200ms cubic-bezier(0.32, 0.72, 0, 1), background 200ms cubic-bezier(0.32, 0.72, 0, 1)",
+                      }}
+                    >
+                      {item.label}
+                    </Text>
+                  );
+                })}
+              </Group>
+
+              {/* Right: actions (desktop) */}
+              <Group gap="sm" wrap="nowrap" visibleFrom="md">
+                <Button component={Link} href="/login" variant="subtle" color="gray" size={condensed ? "sm" : "md"}>
+                  Sign in
+                </Button>
+                <Button
+                  component={Link}
+                  href="/workspace"
+                  size={condensed ? "sm" : "md"}
+                  rightSection={<IconArrowRight size={16} stroke={1.9} />}
+                >
+                  Start studying
+                </Button>
+              </Group>
+
+              {/* Mobile: menu trigger */}
+              <Group gap="xs" wrap="nowrap" hiddenFrom="md">
+                <Button component={Link} href="/workspace" size="sm">
+                  Start
+                </Button>
+                <Button
+                  variant="subtle"
+                  color="gray"
+                  onClick={toggleDrawer}
+                  leftSection={<IconMenu2 size={16} stroke={1.8} />}
+                  px="xs"
+                  aria-label="Open menu"
+                />
+              </Group>
+            </Group>
+          </Box>
+        </Container>
+      </Box>
+
+      {/* Mobile drawer */}
+      <Drawer
+        opened={drawerOpen}
+        onClose={closeDrawer}
+        position="right"
+        size="md"
+        padding="xl"
+        title={
+          <Group gap={10}>
+            <BrandMark height={26} />
+          </Group>
+        }
+        styles={{
+          content: {
+            background: "var(--mantine-color-body)",
+          },
+          header: {
+            borderBottom: "1px solid var(--mantine-color-default-border)",
+          },
+        }}
+        overlayProps={{ backgroundOpacity: 0.45, blur: 8 }}
+      >
+        <Stack gap={4}>
+          {NAV_LINKS.map((item) => (
+            <Text
+              key={item.href}
+              component={Link}
+              href={item.href}
+              size="lg"
+              onClick={closeDrawer}
+              style={{
+                fontFamily: "var(--font-serif), Georgia, serif",
+                fontWeight: 500,
+                padding: "12px 4px",
+                textDecoration: "none",
+                color: "var(--mantine-color-gray-8)",
+                borderBottom: "1px solid var(--mantine-color-default-border)",
+              }}
+            >
+              {item.label}
+            </Text>
+          ))}
+        </Stack>
+        <Stack gap="sm" mt="xl">
+          <Button
+            component={Link}
+            href="/workspace"
+            onClick={closeDrawer}
+            size="md"
+            rightSection={<IconArrowRight size={18} stroke={1.9} />}
+          >
+            Start studying
+          </Button>
+          <Button component={Link} href="/login" onClick={closeDrawer} variant="subtle" color="gray" size="md">
+            Sign in
+          </Button>
+        </Stack>
+      </Drawer>
+    </>
+  );
+}
+
+/** Re-exported for the mobile drawer close affordance. */
+export function DrawerCloseIcon() {
+  return <IconX size={18} stroke={1.8} />;
+}
