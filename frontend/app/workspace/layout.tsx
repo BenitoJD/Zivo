@@ -311,7 +311,9 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
         e instanceof Error && e.name === "TimeoutError"
           ? "Upload timed out. Try a smaller file or check your connection."
           : e instanceof Error
-            ? e.message
+            ? e.message === "Sign in to add more documents"
+              ? "Guest limit reached — delete a source or sign in to add more."
+              : e.message
             : "Unknown error";
       notifications.show({
         title: "Upload failed",
@@ -352,7 +354,12 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
     } catch (e) {
       notifications.show({
         title: "Import failed",
-        message: e instanceof Error ? e.message : "Unknown error",
+        message:
+          e instanceof Error && e.message === "Sign in to add more documents"
+            ? "Guest limit reached — delete a source or sign in to add more."
+            : e instanceof Error
+              ? e.message
+              : "Unknown error",
         color: "red",
       });
     } finally {

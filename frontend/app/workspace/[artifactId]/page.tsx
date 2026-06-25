@@ -371,10 +371,11 @@ export default function WorkspaceArtifactPage({
     };
   }, []);
 
+  const queueStreamRef = useRef<EventSource | null>(null);
+
   useEffect(() => {
     if (invalidArtifactId || !studyRangeKey || artifact?.status === "indexing") return;
     let cancelled = false;
-    let es: EventSource | null = null;
 
     void (async () => {
       await ensureGuestSession();
@@ -389,8 +390,10 @@ export default function WorkspaceArtifactPage({
       }
       if (cancelled) return;
 
+      queueStreamRef.current?.close();
       const url = apiUrl(`/api/artifacts/${artifactId}/learn-queue/stream`);
-      es = new EventSource(url, { withCredentials: true });
+      const es = new EventSource(url, { withCredentials: true });
+      queueStreamRef.current = es;
       es.addEventListener("queue", (ev) => {
         if (cancelled) return;
         try {
@@ -409,27 +412,35 @@ export default function WorkspaceArtifactPage({
         } catch {
           /* ignore */
         }
-        es?.close();
+        es.close();
+        if (queueStreamRef.current === es) queueStreamRef.current = null;
       });
-      es.addEventListener("error", () => {
-        if (cancelled || !es || es.readyState !== EventSource.CLOSED) return;
-        void (async () => {
-          try {
-            const data = await apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`);
-            if (cancelled) return;
-            setQueue(data);
-          } catch {
-            setQuestion("Sign in or reload to load questions.");
-          } finally {
-            if (!cancelled) setMcqLoading(false);
-          }
-        })();
-      });
+      es.addEventListener(
+        "error",
+        () => {
+          if (cancelled) return;
+          es.close();
+          if (queueStreamRef.current === es) queueStreamRef.current = null;
+          void (async () => {
+            try {
+              const data = await apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`);
+              if (cancelled) return;
+              setQueue(data);
+            } catch {
+              setQuestion("Sign in or reload to load questions.");
+            } finally {
+              if (!cancelled) setMcqLoading(false);
+            }
+          })();
+        },
+        { once: true },
+      );
     })();
 
     return () => {
       cancelled = true;
-      es?.close();
+      queueStreamRef.current?.close();
+      queueStreamRef.current = null;
     };
   }, [artifactId, invalidArtifactId, studyRangeKey, artifact?.status]);
 
