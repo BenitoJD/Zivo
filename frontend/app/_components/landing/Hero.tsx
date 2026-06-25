@@ -85,7 +85,7 @@ function WavyTextAnimation() {
           </textPath>
         </text>
 
-        {/* Floating badge above the pill — matches Wispr Flow's "Grammar corrected" badge */}
+        {/* Floating badge above the pill — cream background, dark green check, dark text */}
         <g transform="translate(518, 145)">
           <rect
             x="-72"
@@ -93,20 +93,21 @@ function WavyTextAnimation() {
             width="144"
             height="32"
             rx="16"
-            fill="var(--mantine-color-sage-1)"
-            stroke="var(--mantine-color-sage-4)"
-            strokeWidth="1"
+            fill="var(--mantine-color-gray-0)"
+            stroke="var(--mantine-color-dark-1)"
+            strokeWidth="0.75"
+            style={{ filter: "drop-shadow(0 2px 8px rgba(0,0,0,0.06))" }}
           >
             <animate attributeName="y" values="-16;-18;-16" dur="3s" repeatCount="indefinite" />
           </rect>
-          {/* Checkmark circle */}
-          <circle cx="-52" cy="0" r="8" fill="var(--mantine-color-sage-6)">
+          {/* Checkmark circle — dark green */}
+          <circle cx="-52" cy="0" r="8" fill="#2D6A4F">
             <animate attributeName="cy" values="0;-2;0" dur="3s" repeatCount="indefinite" />
           </circle>
           <path d="M -55.5 0 L -53 2.5 L -48.5 -2" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none">
             <animate attributeName="d" values="M -55.5 0 L -53 2.5 L -48.5 -2;M -55.5 -2 L -53 0.5 L -48.5 -4;M -55.5 0 L -53 2.5 L -48.5 -2" dur="3s" repeatCount="indefinite" />
           </path>
-          {/* Badge text */}
+          {/* Badge text — dark ink */}
           <text
             x="-38"
             y="1"
@@ -115,7 +116,7 @@ function WavyTextAnimation() {
               fontSize: 11,
               fontFamily: "var(--font-sans), sans-serif",
               fontWeight: 600,
-              fill: "var(--mantine-color-sage-9)",
+              fill: "var(--mantine-color-text)",
             }}
           >
             Questions generated
