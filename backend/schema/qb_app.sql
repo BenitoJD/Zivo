@@ -15,48 +15,6 @@ CREATE TABLE IF NOT EXISTS qb.account (
 
 CREATE INDEX IF NOT EXISTS account_username_idx ON qb.account (username);
 
--- Learn progress (promoted from documents.meta.question_progress)
-CREATE TABLE IF NOT EXISTS qb.document_learn_state (
-  document_id UUID PRIMARY KEY REFERENCES qb.documents (id) ON DELETE CASCADE,
-  progress    JSONB NOT NULL DEFAULT '{}',
-  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Hot MCQ fields indexed outside intel.assertion.payload
-CREATE TABLE IF NOT EXISTS qb.mcq_assertion_facets (
-  assertion_id  UUID PRIMARY KEY,
-  artifact_id   UUID NOT NULL,
-  page_number   INTEGER NOT NULL,
-  sequence      INTEGER NOT NULL,
-  question      TEXT,
-  correct_index INTEGER,
-  CONSTRAINT mcq_assertion_facets_assertion_fk
-    FOREIGN KEY (assertion_id) REFERENCES intel.assertion (id) ON DELETE CASCADE
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS ix_mcq_facets_artifact_page_seq
-  ON qb.mcq_assertion_facets (artifact_id, page_number, sequence);
-
-CREATE INDEX IF NOT EXISTS ix_mcq_facets_artifact_page
-  ON qb.mcq_assertion_facets (artifact_id, page_number);
-
-CREATE TABLE IF NOT EXISTS qb.upload_session (
-  id UUID PRIMARY KEY,
-  account_id UUID REFERENCES qb.account (id) ON DELETE CASCADE,
-  guest_id TEXT,
-  filename TEXT NOT NULL,
-  content_type TEXT NOT NULL,
-  total_size BIGINT NOT NULL,
-  chunk_size INTEGER NOT NULL,
-  storage_key TEXT NOT NULL,
-  multipart_upload_id TEXT NOT NULL,
-  parts JSONB NOT NULL DEFAULT '{}',
-  expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS ix_upload_session_expires ON qb.upload_session (expires_at);
-
 -- Links qb.account -> intel.entity (person) for measurement / projection
 CREATE TABLE IF NOT EXISTS qb.account_entity (
   account_id UUID PRIMARY KEY REFERENCES qb.account (id) ON DELETE CASCADE,
