@@ -374,6 +374,7 @@ export default function WorkspaceArtifactPage({
   useEffect(() => {
     if (invalidArtifactId || !studyRangeKey || artifact?.status === "indexing") return;
     let cancelled = false;
+    let es: EventSource | null = null;
 
     void (async () => {
       await ensureGuestSession();
@@ -384,52 +385,76 @@ export default function WorkspaceArtifactPage({
         setQueue(data);
         setMcqLoading(false);
       } catch {
-        /* stream + retry below */
+        /* stream below */
       }
-    })();
+      if (cancelled) return;
 
-    const url = apiUrl(`/api/artifacts/${artifactId}/learn-queue/stream`);
-    const es = new EventSource(url, { withCredentials: true });
-    es.addEventListener("queue", (ev) => {
-      if (cancelled) return;
-      try {
-        const data = JSON.parse((ev as MessageEvent).data) as McqState;
-        setQueue(data);
-        setMcqLoading(false);
-      } catch {
-        /* ignore malformed */
-      }
-    });
-    es.addEventListener("done", (ev) => {
-      if (cancelled) return;
-      try {
-        const data = JSON.parse((ev as MessageEvent).data) as McqState;
-        setQueue(data);
-      } catch {
-        /* ignore */
-      }
-      es.close();
-    });
-    es.addEventListener("error", () => {
-      if (cancelled) return;
-      es.close();
-      void (async () => {
+      const url = apiUrl(`/api/artifacts/${artifactId}/learn-queue/stream`);
+      es = new EventSource(url, { withCredentials: true });
+      es.addEventListener("queue", (ev) => {
+        if (cancelled) return;
         try {
-          const data = await apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`);
-          if (cancelled) return;
+          const data = JSON.parse((ev as MessageEvent).data) as McqState;
+          setQueue(data);
+          setMcqLoading(false);
+        } catch {
+          /* ignore malformed */
+        }
+      });
+      es.addEventListener("done", (ev) => {
+        if (cancelled) return;
+        try {
+          const data = JSON.parse((ev as MessageEvent).data) as McqState;
           setQueue(data);
         } catch {
-          setQuestion("Sign in or reload to load questions.");
-        } finally {
-          if (!cancelled) setMcqLoading(false);
+          /* ignore */
         }
-      })();
-    });
+        es?.close();
+      });
+      es.addEventListener("error", () => {
+        if (cancelled || !es || es.readyState !== EventSource.CLOSED) return;
+        void (async () => {
+          try {
+            const data = await apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`);
+            if (cancelled) return;
+            setQueue(data);
+          } catch {
+            setQuestion("Sign in or reload to load questions.");
+          } finally {
+            if (!cancelled) setMcqLoading(false);
+          }
+        })();
+      });
+    })();
+
     return () => {
       cancelled = true;
-      es.close();
+      es?.close();
     };
   }, [artifactId, invalidArtifactId, studyRangeKey, artifact?.status]);
+
+  useEffect(() => {
+    if (invalidArtifactId || !studyRangeKey || artifact?.status !== "ready") return;
+    const needsPoll =
+      !queue?.current_assertion_id ||
+      (Boolean(queue.generation_pending) && (queue.pool_available ?? 0) === 0);
+    if (!needsPoll) return;
+
+    const id = window.setInterval(() => {
+      void apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`)
+        .then((data) => setQueue(data))
+        .catch(() => {});
+    }, 3000);
+    return () => window.clearInterval(id);
+  }, [
+    artifactId,
+    invalidArtifactId,
+    studyRangeKey,
+    artifact?.status,
+    queue?.current_assertion_id,
+    queue?.generation_pending,
+    queue?.pool_available,
+  ]);
 
   useEffect(() => {
     if (invalidArtifactId || !queue?.current_assertion_id) return;
