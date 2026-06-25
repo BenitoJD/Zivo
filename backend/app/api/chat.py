@@ -63,6 +63,7 @@ class ChatScope(BaseModel):
     page_end: int | None = Field(default=None, ge=1)
     selection_text: str | None = Field(default=None, max_length=8000)
     current_page: int | None = Field(default=None, ge=1)
+    current_assertion_id: uuid.UUID | None = None
     confirmed_choice_index: int | None = Field(default=None, ge=0, le=25)
     answer_correct: bool | None = None
     mentions: list[str] = Field(default_factory=list, max_length=20)
@@ -218,9 +219,6 @@ def clear_thread(
     return {"version": new_version}
 
 
-    return {"version": new_version}
-
-
 def _prepare_chat_stream(
     body: ChatRequest,
     request: Request,
@@ -310,23 +308,27 @@ async def chat_stream(
         try:
             yield {"event": "status", "data": json.dumps({"phase": "thinking"})}
             try:
-                scope = normalize_chat_scope(request_scope, doc_snapshot)
+                doc = stream_db.get(Document, doc_snapshot.id)
+                if not doc or not can_access_document(doc, user, guest_id):
+                    yield _stream_error_event("Document not found.")
+                    return
+                scope = normalize_chat_scope(request_scope, doc)
                 scope.update(
                     learn_scope_fields(
                         stream_db,
-                        doc_snapshot.id,
-                        doc_snapshot,
+                        doc.id,
+                        doc,
                         request_scope=request_scope,
                     )
                 )
                 doc_ids = _resolve_document_ids(
                     stream_db,
-                    doc_snapshot.id,
+                    doc.id,
                     scope.get("mentions") or [],
                     user,
                     guest_id,
                 )
-                if is_image_document(doc_snapshot):
+                if is_image_document(doc):
                     retrieved = {
                         "citations": [],
                         "messages": prior_messages,
@@ -360,7 +362,7 @@ async def chat_stream(
 
                 user_content = build_user_message(
                     request_message,
-                    doc_snapshot,
+                    doc,
                     include_image=include_image,
                     current_page=scope.get("current_page"),
                     page_start=scope.get("page_start"),
@@ -370,8 +372,8 @@ async def chat_stream(
                 trailer_parts: list[str] = []
                 learn_context = build_learn_chat_context(
                     stream_db,
-                    doc_snapshot.id,
-                    doc_snapshot,
+                    doc.id,
+                    doc,
                     scope=scope,
                 )
                 if learn_context:
@@ -386,7 +388,7 @@ async def chat_stream(
                     and bool(citations)
                     and len(doc_ids) == 1
                 )
-                artifact_id, artifact_captured_at = _artifact_ref(doc_snapshot)
+                artifact_id, artifact_captured_at = _artifact_ref(doc)
                 cached: dict | None = None
                 query_embedding: list[float] | None = None
                 if cache_eligible:
