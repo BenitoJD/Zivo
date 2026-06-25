@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import threading
 import uuid
+from collections import OrderedDict
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -10,6 +12,15 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 
 settings = get_settings()
+
+# In-process memo for page-range chunk fetches. Chunks are immutable once a
+# document is indexed, so refill batches on the same page re-query identical
+# rows every time. Bound at 512 pages (~most of a large textbook) and keyed by
+# (document_id, page_start, page_end); invalidated by process restart, which is
+# fine because re-indexing writes new chunk rows only on explicit re-ingest.
+_PAGE_CHUNK_CACHE_MAX = 512
+_page_chunk_cache: OrderedDict[tuple[str, int, int], list[dict]] = OrderedDict()
+_page_chunk_cache_lock = threading.Lock()
 
 
 def _row_to_chunk(row: dict, *, score: float = 1.0) -> dict:
@@ -35,6 +46,19 @@ def fetch_chunks_for_page_range(
     if not document_ids:
         return []
 
+    # Single-document page fetches are the refill-batch hot path and are
+    # immutable post-index — memoize them. Multi-document fan-outs (search)
+    # bypass the cache since they're rare and blow the key cardinality.
+    cache_key: tuple[str, int, int] | None = None
+    if len(document_ids) == 1 and limit >= 48:
+        cache_key = (str(document_ids[0]), page_start, page_end)
+        with _page_chunk_cache_lock:
+            cached = _page_chunk_cache.get(cache_key)
+            if cached is not None:
+                _page_chunk_cache.move_to_end(cache_key)
+                # Copy so callers can't mutate the cached entry.
+                return [dict(c) for c in cached]
+
     sql = text(
         """
         SELECT dc.id, dc.document_id, dc.page_start, dc.page_end, dc.text
@@ -55,7 +79,14 @@ def fetch_chunks_for_page_range(
             "limit": limit,
         },
     ).mappings().all()
-    return [_row_to_chunk(dict(r)) for r in rows]
+    out = [_row_to_chunk(dict(r)) for r in rows]
+    if cache_key is not None:
+        with _page_chunk_cache_lock:
+            _page_chunk_cache[cache_key] = [dict(c) for c in out]
+            _page_chunk_cache.move_to_end(cache_key)
+            while len(_page_chunk_cache) > _PAGE_CHUNK_CACHE_MAX:
+                _page_chunk_cache.popitem(last=False)
+    return out
 
 
 def merge_chunks(*lists: list[dict]) -> list[dict]:

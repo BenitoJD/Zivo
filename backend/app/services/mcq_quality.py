@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import random
 import re
 import uuid
-from collections import OrderedDict
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -689,74 +687,6 @@ BATCH_MCQ_CAP = 5
 CRITIC_SAMPLE_RATE = float(os.getenv("ZIVO_CRITIC_SAMPLE_RATE", "0.25"))
 
 
-class _BatchDraftCache:
-    """In-process LRU cache of batch draft responses (no DB migration needed).
-
-    Caches the *drafts* (pre-quality-gate) keyed by a deterministic hash of the
-    page context + sorted aspect keys. The quality gate still runs on every
-    retrieval (we never bypass heuristics/embedding checks) — only the LLM
-    generation call is skipped on a hit. Highest value for rapid re-queries of
-    the same page (demo doc, a page re-generated within the TTL) and avoids
-    paying for a DB-backed cache table + migration for a lower-volume win.
-    """
-
-    def __init__(self, max_entries: int = 64) -> None:
-        self._store: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
-        self._max = max_entries
-
-    def _key(
-        self,
-        page_number: int,
-        targets: list[dict[str, Any]],
-        prior_mcqs: list[dict[str, Any]] | None,
-    ) -> str:
-        aspect_keys = sorted(str(t.get("key") or "") for t in targets)
-        h = hashlib.sha256()
-        h.update(str(page_number).encode("ascii"))
-        h.update(b"\x1f")
-        h.update("\x1e".join(aspect_keys).encode("utf-8", "ignore"))
-        if prior_mcqs:
-            prior_digest = hashlib.sha256(
-                json.dumps(prior_mcqs, sort_keys=True, default=str).encode("utf-8")
-            ).hexdigest()
-            h.update(b"\x1f")
-            h.update(prior_digest.encode("ascii"))
-        return h.hexdigest()
-
-    def get(
-        self,
-        page_number: int,
-        targets: list[dict[str, Any]],
-        prior_mcqs: list[dict[str, Any]] | None,
-    ) -> list[dict[str, Any]] | None:
-        key = self._key(page_number, targets, prior_mcqs)
-        hits = self._store.get(key)
-        if hits is None:
-            return None
-        # Refresh recency.
-        self._store.move_to_end(key)
-        # Return deep copies so callers can't mutate the cache.
-        return [dict(d) for d in hits]
-
-    def put(
-        self,
-        page_number: int,
-        targets: list[dict[str, Any]],
-        prior_mcqs: list[dict[str, Any]] | None,
-        drafts: list[dict[str, Any]],
-    ) -> None:
-        if not drafts:
-            return
-        key = self._key(page_number, targets, prior_mcqs)
-        self._store[key] = [dict(d) for d in drafts]
-        self._store.move_to_end(key)
-        while len(self._store) > self._max:
-            self._store.popitem(last=False)
-
-
-_batch_draft_cache = _BatchDraftCache()
-
-
 def _generate_batch_drafts(
     db: Session,
     *,
@@ -842,9 +772,12 @@ def generate_quality_mcq_batch(
 
     # Generation response cache: skip the LLM call if we've already generated
     # drafts for this (page context, aspect set). The quality gate below still
-    # runs on every retrieval — only the generation call is skipped. Highest
-    # value for rapid re-queries (demo doc, same page within the process TTL).
-    drafts = _batch_draft_cache.get(page_number, targets, prior_mcqs)
+    # runs on every retrieval — only the generation call is skipped. DB-backed
+    # so the 4 CPU workers share one cache and a restart doesn't re-pay the LLM.
+    from app.services.generation_cache import batch_drafts_key, get as cache_get, put as cache_put
+
+    drafts_cache_key = batch_drafts_key(page_number, targets, prior_mcqs)
+    drafts = cache_get(db, kind="batch_drafts", cache_key=drafts_cache_key)
     if drafts is None:
         drafts = _generate_batch_drafts(
             db,
@@ -856,7 +789,7 @@ def generate_quality_mcq_batch(
             aspect_hints=aspect_hints,
         )
         if drafts:
-            _batch_draft_cache.put(page_number, targets, prior_mcqs, drafts)
+            cache_put(db, kind="batch_drafts", cache_key=drafts_cache_key, value=drafts)
     if not drafts:
         return []
 

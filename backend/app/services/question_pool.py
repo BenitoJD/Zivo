@@ -27,8 +27,8 @@ INITIAL_BATCH_SIZE = 5
 FIRST_QUESTION_BATCH_SIZE = INITIAL_BATCH_SIZE
 REFILL_BATCH_SIZE = 5
 REFILL_AFTER_ANSWERED = 2
-TRANSITION_PREFETCH_RATIO = float(os.getenv("ZIVO_TRANSITION_PREFETCH_RATIO", "0.70"))
-TRANSITION_GENERATION_RATIO = float(os.getenv("ZIVO_TRANSITION_GENERATION_RATIO", "0.70"))
+TRANSITION_PREFETCH_RATIO = float(os.getenv("ZIVO_TRANSITION_PREFETCH_RATIO", "0.30"))
+TRANSITION_GENERATION_RATIO = float(os.getenv("ZIVO_TRANSITION_GENERATION_RATIO", "0.30"))
 GENERATION_AHEAD_BUFFER = int(os.getenv("ZIVO_GENERATION_AHEAD_BUFFER", "10"))
 # Eagerly triage the current page + this many pages ahead at init, so the document
 # is understood before the reader arrives. Triage only (cheap, ~1 call/page);
@@ -662,13 +662,27 @@ def on_batch_failed(db: Session, document_id: uuid.UUID, *, page: int) -> None:
 
 
 def mark_aspect_asked(db: Session, document_id: uuid.UUID, page: int, aspect_key: str) -> None:
+    mark_aspects_asked(db, document_id, page, [aspect_key])
+
+
+def mark_aspects_asked(
+    db: Session, document_id: uuid.UUID, page: int, aspect_keys: list[str]
+) -> None:
+    """Mark multiple aspects asked in one coverage read + one progress write.
+
+    Replaces N calls to mark_aspect_asked (each did its own get_page_coverage +
+    save_progress = O(N) DB round trips) with a single batched update.
+    """
+    if not aspect_keys:
+        return
     doc = db.get(Document, document_id)
     if not doc:
         return
     entry = dict(get_page_coverage(doc, page))
     aspects = list(entry.get("aspects") or [])
+    wanted = set(aspect_keys)
     for aspect in aspects:
-        if aspect.get("key") == aspect_key:
+        if aspect.get("key") in wanted:
             aspect["asked"] = True
     entry["aspects"] = aspects
     save_progress(db, doc, {"page_coverage": {_page_key(page): entry}})
