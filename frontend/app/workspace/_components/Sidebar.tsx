@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import {
   ActionIcon,
   Box,
@@ -27,12 +26,8 @@ import {
   IconTrash,
   IconUpload,
 } from "@tabler/icons-react";
-import {
-  BRAND_LOGO_SRC,
-  BRAND_LOGO_HEIGHT,
-  BRAND_LOGO_WIDTH,
-  BRAND_NAME,
-} from "@/lib/brand";
+import { BRAND_NAME } from "@/lib/brand";
+import { BrandMark } from "@/app/_components/BrandMark";
 import type { SourceDocument } from "@/lib/types";
 
 export const SIDEBAR_MINI_WIDTH = 64;
@@ -40,21 +35,6 @@ export const SIDEBAR_EXPANDED_WIDTH = 280;
 export const SHELL_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
 export const SHELL_MS = 280;
 const MINI_RAIL_ICON_SIZE = 42;
-
-function BrandLogo({ height }: { height: number }) {
-  const width = Math.round((height * BRAND_LOGO_WIDTH) / BRAND_LOGO_HEIGHT);
-  return (
-    <Image
-      src={BRAND_LOGO_SRC}
-      alt={BRAND_NAME}
-      width={width}
-      height={height}
-      priority
-      unoptimized
-      style={{ width, height, flexShrink: 0, objectFit: "contain", display: "block" }}
-    />
-  );
-}
 
 function SidebarAnimatedLayer({
   visible,
@@ -206,7 +186,7 @@ export function Sidebar({
             <Center h={52}>
               <Tooltip label="Expand sidebar" position="right" withArrow>
                 <UnstyledButton onClick={onToggleSidebar} aria-label="Expand sidebar" p={4}>
-                  <BrandLogo height={32} />
+                  <BrandMark showWord={false} height={32} />
                 </UnstyledButton>
               </Tooltip>
             </Center>
@@ -214,12 +194,16 @@ export function Sidebar({
           <SidebarAnimatedLayer visible={wide} enterDelay={60} reduceMotion={reduceMotion}>
             <Group px="md" h={52} justify="space-between" wrap="nowrap" gap="sm">
               <Group gap="sm" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
-                <BrandLogo height={30} />
+                <BrandMark showWord={false} height={30} />
                 <Text
                   fw={600}
                   size="lg"
                   lineClamp={1}
-                  style={{ letterSpacing: "-0.03em", fontFamily: "var(--font-serif), Georgia, serif" }}
+                  style={{
+                    letterSpacing: "-0.03em",
+                    fontFamily: "var(--font-serif), 'EB Garamond', Georgia, serif",
+                    color: "var(--mantine-color-text)",
+                  }}
                 >
                   {BRAND_NAME}
                 </Text>

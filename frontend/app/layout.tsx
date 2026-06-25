@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { cookies } from "next/headers";
 import Script from "next/script";
-import { Plus_Jakarta_Sans, Newsreader } from "next/font/google";
+import { Figtree, EB_Garamond } from "next/font/google";
 import "@mantine/core/styles.css";
 import "@mantine/dropzone/styles.css";
 import "@mantine/notifications/styles.css";
@@ -12,14 +12,14 @@ import {
   readColorSchemeFromCookie,
 } from "@/lib/mantine-color-scheme";
 
-const plusJakartaSans = Plus_Jakarta_Sans({
+const figtree = Figtree({
   subsets: ["latin"],
   variable: "--font-sans",
   weight: ["400", "500", "600", "700"],
   display: "swap",
 });
 
-const newsreader = Newsreader({
+const ebGaramond = EB_Garamond({
   subsets: ["latin"],
   variable: "--font-serif",
   weight: ["400", "500", "600", "700"],
@@ -45,7 +45,12 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   );
 
   return (
-    <html lang="en" data-mantine-color-scheme={colorScheme} suppressHydrationWarning>
+    <html
+      lang="en"
+      className={`${figtree.variable} ${ebGaramond.variable}`}
+      data-mantine-color-scheme={colorScheme}
+      suppressHydrationWarning
+    >
       <head>
         <script
           data-mantine-script
@@ -54,10 +59,27 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
         <Script id="unregister-stale-sw" strategy="beforeInteractive">
           {`if("serviceWorker" in navigator){navigator.serviceWorker.getRegistrations().then((rs)=>{rs.forEach((r)=>r.unregister())})}`}
         </Script>
+        <style
+          dangerouslySetInnerHTML={{
+            __html: `
+              html, body, input, button, select, textarea {
+                font-family: var(--font-sans), 'Figtree', -apple-system, BlinkMacSystemFont, sans-serif !important;
+              }
+              h1, h2, h3, h4, h5, h6, .serif-text {
+                font-family: var(--font-serif), 'EB Garamond', Georgia, serif !important;
+              }
+            `,
+          }}
+        />
       </head>
       <body
-        className={`${plusJakartaSans.variable} ${newsreader.variable}`}
-        style={{ height: "100dvh", overflow: "hidden", margin: 0 }}
+        style={{
+          height: "100dvh",
+          overflow: "hidden",
+          margin: 0,
+          WebkitFontSmoothing: "antialiased",
+          MozOsxFontSmoothing: "grayscale",
+        }}
       >
         <Providers colorScheme={colorScheme}>{children}</Providers>
       </body>

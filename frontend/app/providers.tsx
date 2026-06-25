@@ -30,9 +30,9 @@ import {
 
 /** Neutral paper/ink scale — warm oat to deep ink (not cold grey). */
 const NEUTRAL_PALETTE = [
-  "#FBFAF6", // 0 — lifted paper (cards)
-  "#F4F1E9", // 1 — page (app background)
-  "#EFEBE1", // 2 — hover
+  "#FFFFFF", // 0 — lifted paper (cards)
+  "#FAF9F6", // 1 — page (app background)
+  "#F3EFE6", // 2 — hover
   "#E7E2D6", // 3 — hairline border
   "#D9D3C4", // 4 — stronger border
   "#A8A296", // 5 — dimmed text
@@ -42,7 +42,21 @@ const NEUTRAL_PALETTE = [
   "#1A1917", // 9 — deepest ink
 ] as const;
 
-/** Brand lavender accent — used sparingly (links, active states, subtle highlights). */
+/** Brand forest/teal accent — inspired by Wispr Flow (034F46). */
+const FOREST_PALETTE = [
+  "#F2F7F6", // 0 — lightest tint
+  "#E4ECEB", // 1
+  "#C5D8D6", // 2
+  "#A5C1BD", // 3
+  "#7FA39E", // 4
+  "#56817B", // 5
+  "#2E5E58", // 6
+  "#034F46", // 7 — primary forest teal
+  "#023D36", // 8
+  "#012622", // 9 — deepest forest ink
+] as const;
+
+/** Brand lavender accent — kept as a reference fallback. */
 const LAVENDER_PALETTE = [
   "#F7F4FB", // 0
   "#EFE9F6", // 1
@@ -112,6 +126,7 @@ const theme = mergeMantineTheme(
     colors: {
       dark: [...NEUTRAL_PALETTE],
       gray: [...NEUTRAL_PALETTE],
+      forest: [...FOREST_PALETTE],
       lavender: [...LAVENDER_PALETTE],
       sage: [...SAGE_PALETTE],
       terracotta: [...TERRACOTTA_PALETTE],
@@ -181,22 +196,72 @@ const theme = mergeMantineTheme(
 const cssVariablesResolver: CSSVariablesResolver = () => ({
   variables: {},
   light: {
-    "--mantine-color-body": "#F4F1E9",            // Warm oat paper background
+    "--mantine-color-body": "#FAF9F6",            // Warm oat paper background
     "--mantine-color-text": "#232220",            // Ink text
     "--mantine-color-default-border": "#E7E2D6",  // Warm hairline border
-    "--mantine-color-default-hover": "#EFEBE1",   // Hover over paper items
+    "--mantine-color-default-hover": "#F3EFE6",   // Hover over paper items
     "--mantine-color-placeholder": "#8E8A7E",     // Placeholder
-    "--mantine-skeleton-color": "#EFEBE1",
+    "--mantine-skeleton-color": "#F3EFE6",
     "--mantine-skeleton-color-da": "#E7E2D6",
+    "--zivo-header-bg": "#FFFFFF",
+
+    // Neutral gray scale overrides for light mode
+    "--mantine-color-gray-0": "#FFFFFF",
+    "--mantine-color-gray-1": "#FAF9F6",
+    "--mantine-color-gray-2": "#F3EFE6",
+    "--mantine-color-gray-3": "#E7E2D6",
+    "--mantine-color-gray-4": "#D9D3C4",
+    "--mantine-color-gray-5": "#A8A296",
+    "--mantine-color-gray-6": "#6B675E",
+    "--mantine-color-gray-7": "#46433D",
+    "--mantine-color-gray-8": "#232220",
+    "--mantine-color-gray-9": "#1A1917",
+
+    // Neutral dark scale overrides for light mode (keep aligned with gray)
+    "--mantine-color-dark-0": "#FFFFFF",
+    "--mantine-color-dark-1": "#FAF9F6",
+    "--mantine-color-dark-2": "#F3EFE6",
+    "--mantine-color-dark-3": "#E7E2D6",
+    "--mantine-color-dark-4": "#D9D3C4",
+    "--mantine-color-dark-5": "#A8A296",
+    "--mantine-color-dark-6": "#6B675E",
+    "--mantine-color-dark-7": "#46433D",
+    "--mantine-color-dark-8": "#232220",
+    "--mantine-color-dark-9": "#1A1917",
   },
   dark: {
     "--mantine-color-body": "#1A1917",            // Soft warm ink background
-    "--mantine-color-text": "#F4F1E9",            // Warm paper text
+    "--mantine-color-text": "#FAF9F6",            // Warm paper text
     "--mantine-color-default-border": "#2E2C28",  // Soft charcoal border
     "--mantine-color-default-hover": "#262522",   // Hover over charcoal items
     "--mantine-color-placeholder": "#7A756B",     // Placeholder
     "--mantine-skeleton-color": "#262522",
     "--mantine-skeleton-color-da": "#2E2C28",
+    "--zivo-header-bg": "#22211F",
+
+    // Neutral gray scale overrides for dark mode (inverted logic)
+    "--mantine-color-gray-0": "#22211F",          // Lifted paper (dark card background)
+    "--mantine-color-gray-1": "#1A1917",          // App background
+    "--mantine-color-gray-2": "#2C2B28",          // Hover
+    "--mantine-color-gray-3": "#383632",          // Hairline border
+    "--mantine-color-gray-4": "#4E4B45",          // Stronger border
+    "--mantine-color-gray-5": "#8E8A7E",          // Dimmed text
+    "--mantine-color-gray-6": "#A8A296",          // Secondary text
+    "--mantine-color-gray-7": "#D9D3C4",          // Strong muted
+    "--mantine-color-gray-8": "#FAF9F6",          // Ink text (light)
+    "--mantine-color-gray-9": "#FFFFFF",          // Deepest text
+
+    // Neutral dark scale overrides for dark mode (keep aligned with gray)
+    "--mantine-color-dark-0": "#22211F",
+    "--mantine-color-dark-1": "#1A1917",
+    "--mantine-color-dark-2": "#2C2B28",
+    "--mantine-color-dark-3": "#383632",
+    "--mantine-color-dark-4": "#4E4B45",
+    "--mantine-color-dark-5": "#8E8A7E",
+    "--mantine-color-dark-6": "#A8A296",
+    "--mantine-color-dark-7": "#D9D3C4",
+    "--mantine-color-dark-8": "#FAF9F6",
+    "--mantine-color-dark-9": "#FFFFFF",
   },
 });
 

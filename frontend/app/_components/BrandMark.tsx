@@ -5,7 +5,7 @@ import { Box, Title } from "@mantine/core";
 import { BRAND_LOGO_SRC, BRAND_LOGO_HEIGHT, BRAND_LOGO_WIDTH, BRAND_NAME } from "@/lib/brand";
 
 /**
- * Brand lockup: logo glyph + serif wordmark ("Zivo", title-case, Newsreader 500,
+ * Brand lockup: logo glyph + serif wordmark ("Zivo", title-case, EB Garamond 500,
  * tightened tracking). Used across the front door (landing, auth), the sidebar,
  * the mobile header, and the footer. Sized by the logo height.
  */
@@ -23,6 +23,7 @@ export function BrandMark({
         display: "inline-flex",
         alignItems: "center",
         gap: 10,
+        color: "var(--mantine-color-text)",
       }}
     >
       <Image
@@ -38,17 +39,16 @@ export function BrandMark({
           flexShrink: 0,
           objectFit: "contain",
           display: "block",
-          // let the glyph breathe optically within the lockup
-          filter: "saturate(1.04)",
         }}
       />
       {showWord && (
         <Title
           order={4}
           style={{
-            fontFamily: "var(--font-serif), Georgia, serif",
+            fontFamily: "var(--font-serif), 'EB Garamond', Georgia, serif",
             fontWeight: 500,
             letterSpacing: "-0.02em",
+            color: "inherit",
           }}
         >
           {BRAND_NAME}

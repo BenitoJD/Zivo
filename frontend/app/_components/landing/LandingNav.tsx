@@ -92,33 +92,35 @@ export function LandingNav() {
         <Container
           size="lg"
           px={{ base: "md", md: "lg" }}
-          pt={{ base: "sm", md: condensed ? "xs" : "lg" }}
-          pb={{ base: "sm", md: condensed ? "xs" : "lg" }}
+          pt={{ base: "sm", md: condensed ? "xs" : "md" }}
+          pb={{ base: "sm", md: condensed ? "xs" : "md" }}
         >
           <Box
             style={{
-              borderRadius: "var(--mantine-radius-xl)",
-              padding: condensed ? "8px 8px 8px 20px" : "8px 12px",
+              borderRadius: "16px",
+              padding: condensed ? "8px 12px 8px 24px" : "12px 18px 12px 28px",
               transition,
-              background: condensed
-                ? "color-mix(in srgb, var(--mantine-color-body) 78%, transparent)"
-                : "transparent",
-              backdropFilter: condensed ? "blur(14px) saturate(1.25)" : "none",
-              WebkitBackdropFilter: condensed ? "blur(14px) saturate(1.25)" : "none",
-              border: condensed
-                ? "1px solid var(--mantine-color-default-border)"
-                : "1px solid transparent",
-              boxShadow: condensed ? "var(--mantine-shadow-paper)" : "none",
+              background: "var(--zivo-header-bg)",
+              border: "1px solid var(--mantine-color-default-border)",
+              boxShadow: "var(--mantine-shadow-paper-lg)",
             }}
           >
             <Group justify="space-between" wrap="nowrap" h={brandH}>
               {/* Left: brand */}
-              <Box component={Link} href="/" style={{ textDecoration: "none", height: brandH }}>
+              <Box
+                component={Link}
+                href="/"
+                style={{
+                  textDecoration: "none",
+                  height: brandH,
+                  color: "var(--mantine-color-text)",
+                }}
+              >
                 <BrandMark height={brandH} />
               </Box>
 
               {/* Center: anchor links (desktop) */}
-              <Group gap={4} wrap="nowrap" visibleFrom="md">
+              <Group gap={6} wrap="nowrap" visibleFrom="md">
                 {NAV_LINKS.map((item) => {
                   const id = item.href.split("#")[1];
                   const active = activeId === id;
@@ -132,8 +134,9 @@ export function LandingNav() {
                       c={active ? "lavender.7" : "gray.7"}
                       style={{
                         textDecoration: "none",
-                        padding: "6px 12px",
-                        borderRadius: "var(--mantine-radius-md)",
+                        fontFamily: "var(--font-sans), sans-serif",
+                        padding: "6px 14px",
+                        borderRadius: "10px",
                         background: active ? "var(--mantine-color-lavender-0)" : "transparent",
                         transition: reduce
                           ? "none"
@@ -147,15 +150,32 @@ export function LandingNav() {
               </Group>
 
               {/* Right: actions (desktop) */}
-              <Group gap="sm" wrap="nowrap" visibleFrom="md">
-                <Button component={Link} href="/login" variant="subtle" color="gray" size={condensed ? "sm" : "md"}>
+              <Group gap="md" wrap="nowrap" visibleFrom="md">
+                <Button
+                  component={Link}
+                  href="/login"
+                  variant="subtle"
+                  color="gray"
+                  size={condensed ? "sm" : "md"}
+                  style={{
+                    fontFamily: "var(--font-sans), sans-serif",
+                    fontWeight: 600,
+                  }}
+                >
                   Sign in
                 </Button>
+                <Box style={{ width: 1, height: 22, backgroundColor: "var(--mantine-color-default-border)" }} />
                 <Button
                   component={Link}
                   href="/workspace"
                   size={condensed ? "sm" : "md"}
                   rightSection={<IconArrowRight size={16} stroke={1.9} />}
+                  className="nav-cta-button"
+                  style={{
+                    transition: "transform 150ms ease, box-shadow 150ms ease",
+                    fontFamily: "var(--font-sans), sans-serif",
+                    fontWeight: 600,
+                  }}
                 >
                   Start studying
                 </Button>
@@ -179,6 +199,21 @@ export function LandingNav() {
           </Box>
         </Container>
       </Box>
+
+      <style>{`
+        .nav-cta-button {
+          background-color: #E9DDF5 !important;
+          color: var(--mantine-color-text) !important;
+          border: 1.5px solid var(--mantine-color-text) !important;
+          border-radius: 12px !important;
+          font-family: var(--font-sans), sans-serif !important;
+          font-weight: 600 !important;
+        }
+        .nav-cta-button:hover {
+          background-color: #DFCDED !important;
+          transform: translateY(-1px);
+        }
+      `}</style>
 
       {/* Mobile drawer */}
       <Drawer

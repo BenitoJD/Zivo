@@ -12,7 +12,6 @@ import {
   type WheelEvent,
 } from "react";
 import { useRouter } from "next/navigation";
-import Image from "next/image";
 import {
   ActionIcon,
   Alert,
@@ -64,7 +63,8 @@ import {
   useAssertionQuery,
   useChatMessagesQuery,
 } from "@/lib/api/queries";
-import { BRAND_LOGO_HEIGHT, BRAND_LOGO_SRC, BRAND_LOGO_WIDTH, ZIVO_ASSISTANT_NAME } from "@/lib/brand";
+import { ZIVO_ASSISTANT_NAME } from "@/lib/brand";
+import { BrandMark } from "@/app/_components/BrandMark";
 import { AssistantMarkdown } from "@/lib/chatMarkdown";
 import { indexingStage, isTransientChatAssistantMessage } from "@/lib/constants";
 import { learnWaitStatus } from "@/lib/learnStatus";
@@ -2570,24 +2570,7 @@ function McqHeroPanel({
 }
 
 function AssistantLogo({ size }: { size: number }) {
-  const height = size;
-  const width = Math.round((size * BRAND_LOGO_WIDTH) / BRAND_LOGO_HEIGHT);
-  return (
-    <Image
-      src={BRAND_LOGO_SRC}
-      alt={ZIVO_ASSISTANT_NAME}
-      width={width}
-      height={height}
-      unoptimized
-      style={{
-        width,
-        height,
-        flexShrink: 0,
-        objectFit: "contain",
-        display: "block",
-      }}
-    />
-  );
+  return <BrandMark showWord={false} height={size} />;
 }
 
 function TutorPanel({
