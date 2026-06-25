@@ -38,55 +38,54 @@ function WavyTextAnimation() {
         style={{ display: "block", overflow: "visible" }}
       >
         {/* Path 1: Source text — an elegant, massive counter-clockwise loop-de-loop.
-            Matches Wispr Flow exactly: enters from top-left, swoops down to form the bottom,
-            up the right side, across the top, down the left, crosses over itself,
-            and flows smoothly into the pill. */}
+            Path extended infinitely to the top-left (-2000, -850) so it never starts on-screen. */}
         <path
           id="sourceCurve"
-          d="M -200 50 C 0 50, 100 260, 250 260 C 400 260, 400 -20, 250 -20 C 100 -20, 100 260, 453 200"
+          d="M -2000 -850 L -200 50 C -100 100, 100 260, 250 260 C 400 260, 400 -20, 250 -20 C 100 -20, 100 260, 453 200"
           stroke="none"
         />
 
-        {/* Path 2: Question ribbon — sleek dark band */}
+        {/* Path 2: Question ribbon — sleek dark band
+            Path extended infinitely to the right (3000, -100) so it never ends on-screen. */}
         <path
           id="questionCurve"
-          d="M 583 200 C 750 200, 850 190, 1000 160 C 1200 110, 1400 80, 1600 70"
+          d="M 583 200 C 750 200, 850 190, 1000 160 C 1500 60, 2000 0, 3000 -100"
           stroke="var(--mantine-color-text)"
-          strokeWidth="46"
+          strokeWidth="54"
           strokeLinecap="round"
         />
 
-        {/* Source text — faint whisper, tiny and spaced out */}
+        {/* Source text — faint whisper, now bigger and more spaced out */}
         <text
           dominantBaseline="central"
           style={{
-            fontSize: 13,
+            fontSize: 15,
             fontFamily: "var(--font-sans), 'Figtree', sans-serif",
             fill: "var(--mantine-color-text)",
             opacity: 0.45,
-            letterSpacing: "0.03em",
+            letterSpacing: "0.04em",
           }}
         >
-          <textPath href="#sourceCurve" startOffset="-3000">
-            {Array(20).fill("Umm, I have this biology PDF on cellular respiration... glycolysis yields 2 ATP... wait, carbon bonds break... what is the citric acid cycle? Prep reaction produces acetyl CoA... Electron transport chain generates NADH... I need to memorize this for the exam... cellular respiration occurs in the mitochondria... oxygen is the final electron acceptor... ").join("")}
-            <animate attributeName="startOffset" from="-3000" to="0" dur="60s" repeatCount="indefinite" />
+          <textPath href="#sourceCurve" startOffset="-6000">
+            {Array(40).fill("Umm, I have this biology PDF on cellular respiration... glycolysis yields 2 ATP... wait, carbon bonds break... what is the citric acid cycle? Prep reaction produces acetyl CoA... Electron transport chain generates NADH... I need to memorize this for the exam... cellular respiration occurs in the mitochondria... oxygen is the final electron acceptor... ").join("")}
+            <animate attributeName="startOffset" from="-6000" to="0" dur="120s" repeatCount="indefinite" />
           </textPath>
         </text>
 
-        {/* Question text inside the dark ribbon — sleek sans-serif */}
+        {/* Question text inside the dark ribbon — sleek sans-serif, bigger and bolder */}
         <text
           dominantBaseline="central"
           style={{
-            fontSize: 14,
+            fontSize: 16,
             fontFamily: "var(--font-sans), sans-serif",
             fontWeight: 500,
-            letterSpacing: "0.02em",
+            letterSpacing: "0.03em",
             fill: "var(--mantine-color-body)",
           }}
         >
-          <textPath href="#questionCurve" startOffset="-3000">
-            {Array(20).fill("Q: What is the final electron acceptor in the electron transport chain? · Q: Where does cellular respiration take place? · Q: What is the net yield of ATP from glycolysis? · Q: Which coenzymes are produced during the citric acid cycle? · Q: What is the role of NADH? · ").join("")}
-            <animate attributeName="startOffset" from="-3000" to="0" dur="45s" repeatCount="indefinite" />
+          <textPath href="#questionCurve" startOffset="-6000">
+            {Array(40).fill("Q: What is the final electron acceptor in the electron transport chain? · Q: Where does cellular respiration take place? · Q: What is the net yield of ATP from glycolysis? · Q: Which coenzymes are produced during the citric acid cycle? · Q: What is the role of NADH? · ").join("")}
+            <animate attributeName="startOffset" from="-6000" to="0" dur="90s" repeatCount="indefinite" />
           </textPath>
         </text>
 
