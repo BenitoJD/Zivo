@@ -326,7 +326,37 @@ def _normalize_mcq_payload(data: dict[str, Any], target_aspect: dict[str, Any] |
         "primary_concept_key": key,
         "primary_concept": label,
         "tags": data.get("tags") or ["auto"],
+        # Wikidata concept tags — the LLM emits these from the source material;
+        # persist-time code in generation_graph.py links them to intel.entity rows.
+        "tested_concepts": _coerce_tested_concepts(data.get("tested_concepts")),
     }
+
+
+# Shape: [{"qid": "Q80001", "label": "Photosynthesis"}]
+_QID_RE = re.compile(r"^Q\d+$", re.IGNORECASE)
+
+
+def _coerce_tested_concepts(raw: Any) -> list[dict[str, str]]:
+    """Normalize the model's tested_concepts output to [{qid, label}]."""
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        qid = str(item.get("qid") or "").strip()
+        if not _QID_RE.match(qid):
+            continue
+        qid = qid.upper()
+        if qid in seen:
+            continue
+        seen.add(qid)
+        label = str(item.get("label") or "").strip()[:200]
+        if not label:
+            continue
+        out.append({"qid": qid, "label": label})
+    return out
 
 
 def _critique_passes(critique: dict[str, Any]) -> bool:

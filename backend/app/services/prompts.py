@@ -124,11 +124,12 @@ OUTPUT — be economical; emitted tokens are the slow, costly part
 - Plain-text options (no "A)" / "1." prefixes — the UI adds labels).
 - explanation: ONE short sentence stating the key idea directly. No "the text says", no page numbers.
 - Include primary_concept_key matching the target aspect key.
+- tested_concepts: 1–3 Wikidata concepts the question tests, each {{"qid": "Q<n>", "label": "..."}}. Use real Wikidata QIDs (e.g. Q80001 photosynthesis). If you cannot confidently identify the QID, omit the field rather than guess.
 - Do not repeat or paraphrase any prior question listed in the user message.
 
 Example:
 ```zv-mcq
-{"question":"Why does adding a catalyst speed up a reaction without being consumed?","options":["It lowers the activation energy so more collisions succeed","It raises the temperature of the reactants","It increases the concentration of the reactants","It shifts the equilibrium toward the products"],"correct_index":0,"explanation":"A catalyst offers a lower-energy pathway, so it is regenerated unchanged.","primary_concept_key":"catalysis"}
+{{"question":"Why does adding a catalyst speed up a reaction without being consumed?","options":["It lowers the activation energy so more collisions succeed","It raises the temperature of the reactants","It increases the concentration of the reactants","It shifts the equilibrium toward the products"],"correct_index":0,"explanation":"A catalyst offers a lower-energy pathway, so it is regenerated unchanged.","primary_concept_key":"catalysis","tested_concepts":[{{"qid":"Q125874","label":"Catalysis"}}]}}
 ```""",
     "mcq_critic_system": """You are an expert psychometrician applying the 19-item Item-Writing Flaws (IWF) rubric.
 

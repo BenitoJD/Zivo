@@ -62,7 +62,7 @@ def claim_guest_documents(db: Session, account_id: uuid.UUID, guest_id: str | No
 def document_owned_by_guest(doc: Document, guest_id: str | None) -> bool:
     if doc.account_id is not None:
         return False
-    if doc.meta and doc.meta.get("is_demo"):
+    if doc.meta and (doc.meta.get("is_demo") or doc.meta.get("is_public")):
         return False
     return bool(guest_id) and doc.meta.get("guest_id") == guest_id
 
@@ -70,6 +70,7 @@ def document_owned_by_guest(doc: Document, guest_id: str | None) -> bool:
 def can_access_document(doc: Document, user: Account | None, guest_id: str | None) -> bool:
     if doc.account_id is not None:
         return user is not None and doc.account_id == user.id
-    if doc.meta and doc.meta.get("is_demo"):
+    if doc.meta and (doc.meta.get("is_demo") or doc.meta.get("is_public")):
+        # Platform-owned documents: open to everyone.
         return True
     return document_owned_by_guest(doc, guest_id)

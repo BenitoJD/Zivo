@@ -1,0 +1,203 @@
+"use client";
+
+/**
+ * Practice library hub — search-first entry into the Wikidata concept graph.
+ *
+ * Public (no auth). A guest session is bootstrapped so on-demand generation and
+ * answer recording work for anonymous visitors. Mirrors the landing-page pattern:
+ * owns a 100dvh scroll container because <body> is locked by the workspace shell.
+ */
+
+import { useEffect, useState } from "react";
+import {
+  Anchor,
+  Box,
+  Button,
+  Center,
+  Container,
+  Group,
+  Paper,
+  Stack,
+  Text,
+  TextInput,
+  Title,
+} from "@mantine/core";
+import { IconArrowRight, IconSearch } from "@tabler/icons-react";
+import { apiGet, ensureGuestSession } from "@/lib/api/client";
+
+type ConceptSummary = { qid: string; label: string; description: string };
+type SearchResponse = { query: string; results: ConceptSummary[] };
+
+// A few evergreen concepts for first-time gravity (SEO + discoverability).
+const CURATED: ConceptSummary[] = [
+  { qid: "Q41506", label: "Music", description: "The art of organized sound." },
+  { qid: "Q80001", label: "Photosynthesis", description: "How plants convert light into chemical energy." },
+  { qid: "Q385824", label: "Quadratic equation", description: "Solving second-degree polynomial equations." },
+  { qid: "Q11197", label: "Calculus", description: "The mathematics of continuous change." },
+  { qid: "Q336", label: "Science", description: "Systematic study of the natural world." },
+  { qid: "Q83363", label: "Newton's laws of motion", description: "The foundations of classical mechanics." },
+];
+
+export default function PracticeHubPage() {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<ConceptSummary[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void ensureGuestSession();
+  }, []);
+
+  async function handleSearch(e: React.FormEvent) {
+    e.preventDefault();
+    const q = query.trim();
+    if (!q) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await apiGet<SearchResponse>(`/api/practice/search?q=${encodeURIComponent(q)}`);
+      setResults(data.results);
+    } catch {
+      setError("Search is temporarily unavailable. Please try again.");
+      setResults([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Box
+      bg="var(--mantine-color-body)"
+      style={{ height: "100dvh", overflowY: "auto", overflowX: "hidden" }}
+    >
+      <Container size="md" py={{ base: 48, md: 72 }}>
+        <Stack gap="xl">
+          {/* Header */}
+          <Stack gap={6} align="center" ta="center">
+            <Text size="xs" fw={600} tt="uppercase" lts={1.5} c="lavender.8">
+              Practice Library
+            </Text>
+            <Title
+              order={1}
+              fw={500}
+              style={{ fontFamily: "var(--font-serif), Georgia, serif", letterSpacing: "-0.02em" }}
+            >
+              Practice{" "}
+              <Box component="span" fs="italic" c="lavender.7">
+                anything
+              </Box>{" "}
+              in the world.
+            </Title>
+            <Text size="lg" c="gray.6" lh={1.6} maw={560}>
+              Search any concept — from photosynthesis to Bebop — and practice AI-generated
+              questions instantly. No sign-up needed.
+            </Text>
+          </Stack>
+
+          {/* Search */}
+          <Paper shadow="paper" radius="xl" p={6} withBorder bg="gray.0">
+            <form onSubmit={handleSearch}>
+              <Group gap={0} wrap="nowrap">
+                <TextInput
+                  variant="unstyled"
+                  placeholder="Search a topic, e.g. “quadratic equations”"
+                  value={query}
+                  onChange={(e) => setQuery(e.currentTarget.value)}
+                  size="md"
+                  leftSection={<IconSearch size={18} />}
+                  styles={{ input: { fontSize: "1.05rem" } }}
+                  style={{ flex: 1 }}
+                />
+                <Button type="submit" radius="xl" loading={loading} disabled={!query.trim()}>
+                  Search
+                </Button>
+              </Group>
+            </form>
+          </Paper>
+
+          {error && (
+            <Text size="sm" c="terracotta.7" ta="center">
+              {error}
+            </Text>
+          )}
+
+          {/* Results */}
+          {results !== null ? (
+            results.length === 0 ? (
+              <Center py={40}>
+                <Stack align="center" gap="xs">
+                  <Text size="lg" fw={500} c="gray.7">
+                    No concepts found for “{query}”.
+                  </Text>
+                  <Text size="sm" c="dimmed">
+                    Try a broader term, or pick one below to start.
+                  </Text>
+                </Stack>
+              </Center>
+            ) : (
+              <Stack gap="sm">
+                <Text size="sm" c="dimmed" fw={500}>
+                  {results.length} concept{results.length === 1 ? "" : "s"} found
+                </Text>
+                {results.map((c) => (
+                  <ConceptCard key={c.qid} concept={c} />
+                ))}
+              </Stack>
+            )
+          ) : (
+            <>
+              {/* Curated landing */}
+              <Stack gap="xs">
+                <Text size="sm" c="dimmed" fw={500}>
+                  Or explore a topic to get started
+                </Text>
+                {CURATED.map((c) => (
+                  <ConceptCard key={c.qid} concept={c} />
+                ))}
+              </Stack>
+            </>
+          )}
+        </Stack>
+      </Container>
+    </Box>
+  );
+}
+
+function ConceptCard({ concept }: { concept: ConceptSummary }) {
+  return (
+    <Anchor href={`/practice/c/${concept.qid}`} underline="never" style={{ display: "block" }}>
+      <Paper
+        radius="xl"
+        p="lg"
+        shadow="paper"
+        bg="gray.0"
+        withBorder
+        style={{ transition: "transform 160ms ease, border-color 160ms ease" }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.transform = "translateY(-1px)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.transform = "translateY(0)";
+        }}
+      >
+        <Group justify="space-between" align="flex-start" wrap="nowrap">
+          <Stack gap={4}>
+            <Title
+              order={3}
+              fw={500}
+              style={{ fontFamily: "var(--font-serif), Georgia, serif", fontSize: "1.15rem" }}
+            >
+              {concept.label}
+            </Title>
+            <Text size="sm" c="gray.6" lh={1.5}>
+              {concept.description || "Practice questions for this concept."}
+            </Text>
+          </Stack>
+          <Box c="lavender.7" style={{ flexShrink: 0, marginTop: 4 }}>
+            <IconArrowRight size={20} />
+          </Box>
+        </Group>
+      </Paper>
+    </Anchor>
+  );
+}
