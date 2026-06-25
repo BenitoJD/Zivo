@@ -23,16 +23,16 @@ function WavyTextAnimation() {
       style={{
         position: "relative",
         width: "100%",
-        height: "100%",
-        minHeight: "400px",
-        overflow: "hidden",
+        maxWidth: 960,
+        height: 340,
+        margin: "0 auto",
+        overflow: "visible",
       }}
-      h={{ base: 280, md: 400 }}
     >
       <svg
         width="100%"
         height="100%"
-        viewBox="0 0 1000 400"
+        viewBox="0 0 1000 340"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
         style={{ display: "block", overflow: "visible" }}
@@ -51,7 +51,7 @@ function WavyTextAnimation() {
           id="questionCurve"
           d="M 583 200 C 750 200, 850 190, 1000 160 C 1500 60, 2000 0, 3000 -100"
           stroke="var(--mantine-color-text)"
-          strokeWidth="68"
+          strokeWidth="54"
           strokeLinecap="round"
         />
 
@@ -59,11 +59,11 @@ function WavyTextAnimation() {
         <text
           dominantBaseline="central"
           style={{
-            fontSize: 18,
+            fontSize: 15,
             fontFamily: "var(--font-sans), 'Figtree', sans-serif",
             fill: "var(--mantine-color-text)",
             opacity: 0.45,
-            letterSpacing: "0.05em",
+            letterSpacing: "0.04em",
           }}
         >
           <textPath href="#sourceCurve" startOffset="-6000">
@@ -76,10 +76,10 @@ function WavyTextAnimation() {
         <text
           dominantBaseline="central"
           style={{
-            fontSize: 20,
+            fontSize: 16,
             fontFamily: "var(--font-sans), sans-serif",
             fontWeight: 500,
-            letterSpacing: "0.04em",
+            letterSpacing: "0.03em",
             fill: "var(--mantine-color-body)",
           }}
         >
@@ -89,91 +89,93 @@ function WavyTextAnimation() {
           </textPath>
         </text>
 
-        {/* Floating badge above the pill — scaled up slightly and moved higher */}
-        <g transform="translate(518, 110)">
+        {/* Floating badge above the pill — cream background, dark green check, dark text */}
+        <g transform="translate(518, 145)">
           <rect
-            x="-84"
-            y="-18"
-            width="168"
-            height="36"
-            rx="18"
+            x="-72"
+            y="-16"
+            width="144"
+            height="32"
+            rx="16"
             fill="var(--mantine-color-gray-0)"
             stroke="var(--mantine-color-text)"
             strokeOpacity="0.15"
-            strokeWidth="1.5"
-            style={{ filter: "drop-shadow(0 6px 16px rgba(0,0,0,0.08))" }}
+            strokeWidth="1"
+            style={{ filter: "drop-shadow(0 4px 12px rgba(0,0,0,0.08))" }}
           >
-            <animate attributeName="y" values="-18;-21;-18" dur="3s" repeatCount="indefinite" />
+            <animate attributeName="y" values="-16;-18;-16" dur="3s" repeatCount="indefinite" />
           </rect>
           {/* Checkmark circle — dark green */}
-          <circle cx="-60" cy="0" r="9" fill="#2D6A4F">
-            <animate attributeName="cy" values="0;-3;0" dur="3s" repeatCount="indefinite" />
+          <circle cx="-52" cy="0" r="8" fill="#2D6A4F">
+            <animate attributeName="cy" values="0;-2;0" dur="3s" repeatCount="indefinite" />
           </circle>
-          <path d="M -64 0 L -61 3 L -55 -2" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none">
-            <animate attributeName="d" values="M -64 0 L -61 3 L -55 -2;M -64 -3 L -61 0 L -55 -5;M -64 0 L -61 3 L -55 -2" dur="3s" repeatCount="indefinite" />
+          <path d="M -55.5 0 L -53 2.5 L -48.5 -2" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none">
+            <animate attributeName="d" values="M -55.5 0 L -53 2.5 L -48.5 -2;M -55.5 -2 L -53 0.5 L -48.5 -4;M -55.5 0 L -53 2.5 L -48.5 -2" dur="3s" repeatCount="indefinite" />
           </path>
           {/* Badge text — dark ink */}
           <text
-            x="-44"
+            x="-38"
             y="1"
             dominantBaseline="central"
             style={{
-              fontSize: 13,
+              fontSize: 11,
               fontFamily: "var(--font-sans), sans-serif",
               fontWeight: 600,
               fill: "var(--mantine-color-text)",
             }}
           >
             Questions generated
-            <animate attributeName="y" values="1;-2;1" dur="3s" repeatCount="indefinite" />
+            <animate attributeName="y" values="1;-1;1" dur="3s" repeatCount="indefinite" />
           </text>
         </g>
 
         {/* Central pill junction — large, prominent, with dense realistic waveform */}
         <g transform="translate(518, 200)">
-          {/* Pill background — scaled up by 1.5x */}
+          {/* Pill background — larger, thicker border, subtle shadow */}
           <rect
-            x="-90"
-            y="-40"
-            width="180"
-            height="80"
-            rx="40"
+            x="-65"
+            y="-28"
+            width="130"
+            height="56"
+            rx="28"
             fill="var(--mantine-color-gray-0)"
             stroke="var(--mantine-color-text)"
-            strokeWidth="2.5"
-            style={{ filter: "drop-shadow(0 4px 16px rgba(0,0,0,0.08))" }}
+            strokeWidth="2"
+            style={{ filter: "drop-shadow(0 3px 12px rgba(0,0,0,0.08))" }}
           />
-          {/* Dense waveform — scaled up proportionally */}
-          <g transform="translate(-66, 0)">
+          {/* Dense waveform — 25 bars with dots interspersed, mimicking a real audio waveform.
+              Heights vary dramatically: some are just dots (2-3px), others reach near-max (36px).
+              This creates the authentic "audio waveform" silhouette from the Wispr Flow close-up. */}
+          <g transform="translate(-48, 0)">
             {[
-              { x: 0,   h: 6,   dur: "1.4s" },
-              { x: 7,   h: 18,  dur: "1.1s" },
-              { x: 14,  h: 36,  dur: "0.9s" },
-              { x: 21,  h: 54,  dur: "0.7s" },
-              { x: 28,  h: 24,  dur: "1.0s" },
-              { x: 35,  h: 63,  dur: "0.65s" },
-              { x: 42,  h: 12,  dur: "1.2s" },
-              { x: 49,  h: 45,  dur: "0.75s" },
-              { x: 56,  h: 9,   dur: "1.35s" },
-              { x: 63,  h: 42,  dur: "0.85s" },
-              { x: 70,  h: 60,  dur: "0.6s" },
-              { x: 77,  h: 21,  dur: "1.15s" },
-              { x: 84,  h: 51,  dur: "0.7s" },
-              { x: 91,  h: 15,  dur: "1.3s" },
-              { x: 98,  h: 39,  dur: "0.8s" },
-              { x: 105, h: 57,  dur: "0.65s" },
-              { x: 112, h: 27,  dur: "1.25s" },
-              { x: 119, h: 33,  dur: "0.9s" },
-              { x: 126, h: 54,  dur: "0.7s" },
-              { x: 133, h: 18,  dur: "1.05s" },
+              { x: 0,   h: 4,  dur: "1.4s" },
+              { x: 5,   h: 12, dur: "1.1s" },
+              { x: 10,  h: 24, dur: "0.9s" },
+              { x: 15,  h: 36, dur: "0.7s" },
+              { x: 20,  h: 16, dur: "1.0s" },
+              { x: 25,  h: 42, dur: "0.65s" },
+              { x: 30,  h: 8,  dur: "1.2s" },
+              { x: 35,  h: 32, dur: "0.75s" },
+              { x: 40,  h: 6,  dur: "1.35s" },
+              { x: 45,  h: 28, dur: "0.85s" },
+              { x: 50,  h: 40, dur: "0.6s" },
+              { x: 55,  h: 14, dur: "1.15s" },
+              { x: 60,  h: 34, dur: "0.7s" },
+              { x: 65,  h: 10, dur: "1.3s" },
+              { x: 70,  h: 26, dur: "0.8s" },
+              { x: 75,  h: 38, dur: "0.65s" },
+              { x: 80,  h: 18, dur: "1.25s" },
+              { x: 85,  h: 22, dur: "0.9s" },
+              { x: 90,  h: 36, dur: "0.7s" },
+              { x: 95,  h: 12, dur: "1.05s" },
             ].map((bar, i) => (
               <rect
                 key={i}
                 x={bar.x}
                 y={-bar.h / 2}
-                width="3.5"
+                width="2.5"
                 height={bar.h}
-                rx="1.75"
+                rx="1.25"
                 fill="var(--mantine-color-text)"
                 opacity="0.9"
               >
