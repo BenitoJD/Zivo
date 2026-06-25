@@ -38,12 +38,12 @@ function WavyTextAnimation() {
         style={{ display: "block", overflow: "visible" }}
       >
         {/* Path 1: Source text — an elegant, massive counter-clockwise loop-de-loop.
-            Matches Wispr Flow exactly: enters from left, swoops under the loop,
+            Matches Wispr Flow exactly: enters from top-left, swoops down to form the bottom,
             up the right side, across the top, down the left, crosses over itself,
             and flows smoothly into the pill. */}
         <path
           id="sourceCurve"
-          d="M -200 250 C 50 250, 150 260, 250 260 C 400 260, 400 -20, 250 -20 C 100 -20, 100 260, 300 200 C 380 170, 420 200, 453 200"
+          d="M -200 50 C 0 50, 100 260, 250 260 C 400 260, 400 -20, 250 -20 C 100 -20, 100 260, 453 200"
           stroke="none"
         />
 
