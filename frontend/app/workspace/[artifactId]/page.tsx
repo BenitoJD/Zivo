@@ -23,7 +23,6 @@ import {
   NumberInput,
   Paper,
   Progress,
-  Radio,
   RangeSlider,
   ScrollArea,
   SegmentedControl,
@@ -1358,8 +1357,9 @@ function StudyMetaBar({
   showProgress?: boolean;
   compact?: boolean;
 }) {
-  const progressLabel =
-    showProgress && questionTotal > 0 ? `Question ${questionIndex} of ${questionTotal}` : null;
+  const showBar = showProgress && questionTotal > 0;
+  const pct = showBar ? Math.min(100, Math.round((questionIndex / questionTotal) * 100)) : 0;
+  const segmented = showBar && questionTotal <= 16;
 
   return (
     <Group
@@ -1368,12 +1368,60 @@ function StudyMetaBar({
       justify="space-between"
       align="center"
       wrap="nowrap"
-      gap="xs"
+      gap="md"
       style={{ flexShrink: 0 }}
     >
-      <Text size="xs" c="dimmed" fw={500} ff="monospace" style={{ minWidth: compact ? 40 : 48 }}>
-        {progressLabel ?? ""}
-      </Text>
+      <Group gap={compact ? 8 : 12} wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
+        {showBar && (
+          <Text size="xs" c="dimmed" fw={600} ff="monospace" style={{ flexShrink: 0, letterSpacing: "0.02em" }}>
+            {String(questionIndex).padStart(2, "0")}
+            <Text component="span" inherit style={{ opacity: 0.45 }}>
+              {" / "}
+              {String(questionTotal).padStart(2, "0")}
+            </Text>
+          </Text>
+        )}
+        {segmented ? (
+          <Group gap={4} wrap="nowrap" style={{ flex: 1, minWidth: 0, maxWidth: 380 }}>
+            {Array.from({ length: questionTotal }).map((_, i) => (
+              <Box
+                key={i}
+                style={{
+                  flex: 1,
+                  height: 5,
+                  borderRadius: 99,
+                  background:
+                    i < questionIndex
+                      ? "var(--mantine-color-lavender-6)"
+                      : "var(--mantine-color-gray-3)",
+                  transition: "background 260ms ease",
+                }}
+              />
+            ))}
+          </Group>
+        ) : showBar ? (
+          <Box
+            style={{
+              flex: 1,
+              maxWidth: 380,
+              height: 5,
+              borderRadius: 99,
+              background: "var(--mantine-color-gray-3)",
+              overflow: "hidden",
+            }}
+          >
+            <Box
+              style={{
+                width: `${pct}%`,
+                height: "100%",
+                borderRadius: 99,
+                background: "var(--mantine-color-lavender-6)",
+                transition: "width 320ms cubic-bezier(0.32,0.72,0,1)",
+              }}
+            />
+          </Box>
+        ) : null}
+      </Group>
       <StudyModeSwitch mode={mode} onChange={onModeChange} compact={compact} />
     </Group>
   );
@@ -2010,17 +2058,27 @@ function StudySourcePanel({
   if (pdfLoading) {
     return (
       <Center flex={1}>
-        <Loader size="sm" />
+        <Stack align="center" gap="sm">
+          <Loader size="sm" color="lavender" />
+          <Text size="sm" c="dimmed">
+            Loading document…
+          </Text>
+        </Stack>
       </Center>
     );
   }
 
   if (pdfError) {
     return (
-      <Center flex={1} px="md">
-        <Text c="terracotta.7" size="sm" ta="center">
-          {pdfError}
-        </Text>
+      <Center flex={1} px="lg">
+        <Stack align="center" gap="sm" maw={300}>
+          <ThemeIcon size={44} radius="xl" variant="light" color="terracotta">
+            <IconFileText size={22} stroke={1.6} />
+          </ThemeIcon>
+          <Text c="terracotta.8" size="sm" ta="center" lh={1.55}>
+            {pdfError}
+          </Text>
+        </Stack>
       </Center>
     );
   }
@@ -2030,7 +2088,7 @@ function StudySourcePanel({
   const activePage = displayPages[0];
 
   return (
-    <Stack gap={0} h="100%" mih={0}>
+    <Box pos="relative" h="100%" mih={0} style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <Box
         ref={viewportRef}
         flex={1}
@@ -2054,9 +2112,10 @@ function StudySourcePanel({
             width: "max-content",
             minWidth: "100%",
             margin: "0 auto",
+            padding: "18px 16px 68px",
           }}
         >
-          <Stack gap={pageGap} align="center">
+          <Stack gap={pageGap > 0 ? 14 : 0} align="center">
             {pdfDoc &&
               displayPages.map((p) => {
                 const aspect = pageAspects[p] ?? 0;
@@ -2064,24 +2123,25 @@ function StudySourcePanel({
                   pageDisplayWidth > 0 && aspect > 0 ? pdfDisplayHeight(pageDisplayWidth, aspect) : undefined;
                 const isActivePage = p === activePage;
                 return (
-                  <Paper
+                  <Box
                     key={p}
                     data-pdf-page
                     ref={(el) => {
                       pageRefs.current[p] = el;
                     }}
-                    withBorder
-                    shadow="sm"
-                    radius="sm"
-                    bg={pageSurface}
                     pos="relative"
                     style={{
                       width: pageDisplayWidth > 0 ? pageDisplayWidth : "100%",
                       maxWidth: "100%",
                       lineHeight: 0,
-                      outline: isActivePage ? "3px solid var(--mantine-color-blue-filled)" : undefined,
-                      outlineOffset: 2,
+                      borderRadius: 10,
+                      background: pageSurface,
+                      border: "1px solid var(--mantine-color-default-border)",
+                      boxShadow: isActivePage
+                        ? "0 0 0 2px var(--mantine-color-lavender-5), 0 14px 40px rgba(35,34,32,0.14)"
+                        : "0 2px 6px rgba(35,34,32,0.06), 0 14px 30px rgba(35,34,32,0.06)",
                       overflow: "hidden",
+                      transition: "box-shadow 220ms ease",
                     }}
                   >
                     <canvas
@@ -2096,7 +2156,30 @@ function StudySourcePanel({
                         verticalAlign: "top",
                       }}
                     />
-                  </Paper>
+                    {displayPages.length > 1 && (
+                      <Box
+                        style={{
+                          position: "absolute",
+                          top: 8,
+                          left: 8,
+                          padding: "3px 9px",
+                          borderRadius: 999,
+                          fontSize: 10,
+                          fontWeight: 700,
+                          lineHeight: 1,
+                          fontFamily: "var(--font-sans), sans-serif",
+                          color: "#FFFFFF",
+                          background: isActivePage
+                            ? "var(--mantine-color-lavender-7)"
+                            : "rgba(35,34,32,0.5)",
+                          backdropFilter: "blur(4px)",
+                          WebkitBackdropFilter: "blur(4px)",
+                        }}
+                      >
+                        Page {p}
+                      </Box>
+                    )}
+                  </Box>
                 );
               })}
           </Stack>
@@ -2113,7 +2196,7 @@ function StudySourcePanel({
         isDark={isDark}
         canPan={canPan}
       />
-    </Stack>
+    </Box>
   );
 }
 
@@ -2124,8 +2207,6 @@ function PdfReaderToolbar({
   onZoomIn,
   onZoomOut,
   onFitWidth,
-  isDark,
-  canPan = false,
 }: {
   zoom: number;
   zoomMin: number;
@@ -2133,71 +2214,76 @@ function PdfReaderToolbar({
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFitWidth: () => void;
-  isDark: boolean;
+  isDark?: boolean;
   canPan?: boolean;
 }) {
   const atFit = Math.abs(zoom - 1) < 0.01;
-  const hint = canPan ? "Drag · scroll · ⌘/Ctrl+zoom" : "Scroll · ⌘/Ctrl+zoom";
 
   return (
     <Box
-      px="xs"
-      py={4}
       style={{
-        flexShrink: 0,
-        borderTop: "1px solid var(--mantine-color-default-border)",
-        background: isDark ? "var(--mantine-color-dark-7)" : "var(--mantine-color-white)",
+        position: "absolute",
+        bottom: 14,
+        left: "50%",
+        transform: "translateX(-50%)",
+        zIndex: 6,
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "6px 8px",
+        borderRadius: 999,
+        background: "color-mix(in srgb, var(--mantine-color-body) 86%, transparent)",
+        backdropFilter: "blur(12px)",
+        WebkitBackdropFilter: "blur(12px)",
+        border: "1px solid var(--mantine-color-default-border)",
+        boxShadow: "0 6px 24px rgba(35,34,32,0.16)",
       }}
     >
-      <Group justify="space-between" wrap="nowrap" gap={4}>
-        <Tooltip label="Fit page width">
-          <Button
-            variant={atFit ? "filled" : "light"}
+      <Tooltip label="Fit page width" withArrow>
+        <Button
+          variant={atFit ? "light" : "subtle"}
+          color={atFit ? "lavender" : "gray"}
+          size="compact-xs"
+          radius="xl"
+          leftSection={<IconArrowsMaximize size={13} />}
+          onClick={onFitWidth}
+          px="sm"
+        >
+          Fit width
+        </Button>
+      </Tooltip>
+      <Box style={{ width: 1, height: 18, background: "var(--mantine-color-default-border)" }} />
+      <Group gap={2} wrap="nowrap" align="center">
+        <Tooltip label="Zoom out" withArrow>
+          <ActionIcon
+            variant="subtle"
             color="gray"
-            size="compact-xs"
-            radius="md"
-            leftSection={<IconArrowsMaximize size={13} />}
-            onClick={onFitWidth}
-            px="xs"
+            size="sm"
+            radius="xl"
+            onClick={onZoomOut}
+            disabled={zoom <= zoomMin}
+            aria-label="Zoom out"
           >
-            Fit width
-          </Button>
+            <IconZoomOut size={15} stroke={2} />
+          </ActionIcon>
         </Tooltip>
-        <Group gap={2} wrap="nowrap">
-          <Tooltip label="Zoom out">
-            <ActionIcon
-              variant="light"
-              color="gray"
-              size="sm"
-              radius="md"
-              onClick={onZoomOut}
-              disabled={zoom <= zoomMin}
-              aria-label="Zoom out"
-            >
-              <IconZoomOut size={16} stroke={2} />
-            </ActionIcon>
-          </Tooltip>
-          <Text size="10px" fw={600} w={40} ta="center">
-            {Math.round(zoom * 100)}%
-          </Text>
-          <Tooltip label="Zoom in">
-            <ActionIcon
-              variant="light"
-              color="gray"
-              size="sm"
-              radius="md"
-              onClick={onZoomIn}
-              disabled={zoom >= zoomMax}
-              aria-label="Zoom in"
-            >
-              <IconZoomIn size={16} stroke={2} />
-            </ActionIcon>
-          </Tooltip>
-        </Group>
+        <Text size="11px" fw={700} w={40} ta="center" ff="monospace">
+          {Math.round(zoom * 100)}%
+        </Text>
+        <Tooltip label="Zoom in" withArrow>
+          <ActionIcon
+            variant="subtle"
+            color="gray"
+            size="sm"
+            radius="xl"
+            onClick={onZoomIn}
+            disabled={zoom >= zoomMax}
+            aria-label="Zoom in"
+          >
+            <IconZoomIn size={15} stroke={2} />
+          </ActionIcon>
+        </Tooltip>
       </Group>
-      <Text size="9px" c="dimmed" ta="center" mt={2} lh={1.2}>
-        {hint}
-      </Text>
     </Box>
   );
 }
@@ -2218,7 +2304,7 @@ function SourceStage({
   return (
     <Center h={compact || inDrawer ? "auto" : "100%"} px="xl" py={compact || inDrawer ? "xl" : 0}>
       <Stack align="center" gap="lg" maw={420}>
-        <ThemeIcon size={compact || inDrawer ? 52 : 72} radius="xl" variant="light" color="gray">
+        <ThemeIcon size={compact || inDrawer ? 52 : 72} radius="xl" variant="light" color="lavender">
           <IconFileText size={compact || inDrawer ? 26 : 36} stroke={1.5} />
         </ThemeIcon>
         <Stack gap={6} align="center">
@@ -2265,26 +2351,49 @@ function McqFeedbackCard({
 
   return (
     <Box
+      className="mcq-feedback"
       style={{
         flexShrink: 0,
         textAlign: "left",
         padding: compact ? "14px 16px" : "16px 18px",
-        borderRadius: 12,
+        borderRadius: 14,
         background: surface,
         border: `1px solid ${outline}`,
         maxHeight: compact ? 148 : 184,
         overflow: "auto",
       }}
     >
+      <style>{`
+        @keyframes mcq-fb { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+        .mcq-feedback { animation: mcq-fb 300ms cubic-bezier(0.32,0.72,0,1) both; }
+        @media (prefers-reduced-motion: reduce) { .mcq-feedback { animation: none !important; } }
+      `}</style>
+      <Group gap={10} wrap="nowrap" align="center" mb={8}>
+        <Box
+          style={{
+            width: 24,
+            height: 24,
+            borderRadius: "50%",
+            flexShrink: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: isCorrect ? "var(--mantine-color-sage-6)" : "var(--mantine-color-terracotta-6)",
+            color: "#FFFFFF",
+          }}
+        >
+          {isCorrect ? <IconCheck size={14} stroke={2.6} /> : <IconX size={14} stroke={2.6} />}
+        </Box>
+        <Text fw={700} size={compact ? "sm" : "md"} c={primaryText} style={{ letterSpacing: "-0.01em" }}>
+          {isCorrect ? "Correct" : "Not quite"}
+        </Text>
+      </Group>
       <Text
         size={compact ? "sm" : "md"}
         lh={1.7}
         c={primaryText}
         style={{ whiteSpace: "pre-wrap", fontSize: compact ? undefined : "1.0625rem" }}
       >
-        <Text component="span" fw={600} inherit>
-          {isCorrect ? "Exactly — " : "Not quite — "}
-        </Text>
         {lead}
       </Text>
       {detail ? (
@@ -2391,6 +2500,34 @@ function McqHeroPanel({
     setStatusTick(0);
   }, [waitStatus.rotateKey]);
 
+  // Keyboard: A–D (or 1–4) to pick an option, Enter to check / advance.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (waiting) return;
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (e.key === "Enter") {
+        if (graded) {
+          e.preventDefault();
+          onContinue();
+        } else if (selected !== null && !submitting) {
+          e.preventDefault();
+          onSubmit();
+        }
+        return;
+      }
+      const k = e.key.toLowerCase();
+      let idx = "abcd".indexOf(k);
+      if (idx < 0 && /[1-9]/.test(k)) idx = Number(k) - 1;
+      if (idx >= 0 && idx < safeOptions.length && !optionsLocked) {
+        e.preventDefault();
+        onSelect(String(idx));
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [waiting, graded, selected, submitting, optionsLocked, safeOptions.length, onSelect, onSubmit, onContinue]);
+
   if (waiting) {
     // Determinate progress during generation: turn the vague spinner into a
     // moving bar the user can watch fill toward the page's question budget.
@@ -2443,85 +2580,116 @@ function McqHeroPanel({
   }
 
   return (
-    <Stack gap={compact ? 12 : 16} align="stretch" mih={0} style={{ overflow: "hidden", maxHeight: "100%" }}>
+    <Stack key={stem} gap={compact ? 14 : 20} align="stretch" mih={0} style={{ overflow: "hidden", maxHeight: "100%" }}>
+      <style>{`
+        @keyframes mcq-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+        .mcq-q { animation: mcq-rise 420ms cubic-bezier(0.32,0.72,0,1) both; }
+        .mcq-opt {
+          animation: mcq-rise 420ms cubic-bezier(0.32,0.72,0,1) both;
+          transition: transform 160ms cubic-bezier(0.32,0.72,0,1), border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+        }
+        .mcq-opt:not(:disabled):hover { transform: translateY(-2px); box-shadow: var(--mantine-shadow-paper); border-color: var(--mantine-color-lavender-4) !important; }
+        .mcq-opt:not(:disabled):active { transform: translateY(0); }
+        @media (prefers-reduced-motion: reduce) { .mcq-q, .mcq-opt { animation: none !important; } }
+      `}</style>
+
       <Title
         order={2}
+        className="mcq-q"
         fw={500}
-        lh={1.35}
+        lh={1.3}
         ta="center"
         lineClamp={compact ? 4 : 3}
         style={{
           flexShrink: 0,
           fontFamily: "var(--font-serif), Georgia, serif",
-          fontSize: compact ? "clamp(0.95rem, 4.2vw, 1.25rem)" : "clamp(1.05rem, 2vw, 1.6rem)",
-          letterSpacing: "-0.005em",
+          fontSize: compact ? "clamp(1rem, 4.4vw, 1.3rem)" : "clamp(1.2rem, 2.2vw, 1.9rem)",
+          letterSpacing: "-0.01em",
+          maxWidth: 640,
+          marginInline: "auto",
         }}
       >
         {stem}
       </Title>
 
-      <Radio.Group
-        value={selected}
-        onChange={(value) => {
-          if (optionsLocked) return;
-          onSelect(value);
-        }}
-        name="mcq-options"
-      >
-        <Stack gap={compact ? 6 : 8} mih={0} style={{ flexShrink: 1, overflow: "hidden" }}>
-          {safeOptions.map((opt, i) => {
-            const value = String(i);
-            const isSelected = selected === value;
-            const isCorrectOption = graded && gradeState.correctIndex === i;
-            const isWrongSelected = graded && !gradeState.correct && isSelected;
-            let borderColor = "var(--mantine-color-default-border)";
-            let background = "transparent";
-            if (isCorrectOption) {
-              borderColor = "var(--mantine-color-sage-6)";
-              background = "var(--mantine-color-sage-0)";
-            } else if (isWrongSelected) {
-              borderColor = "var(--mantine-color-terracotta-6)";
-              background = "var(--mantine-color-terracotta-0)";
-            } else if (isSelected) {
-              borderColor = "var(--mantine-color-lavender-6)";
-              background = "var(--mantine-color-lavender-0)";
-            }
-            return (
-              <Radio
-                key={value}
-                value={value}
-                disabled={optionsLocked}
-                label={
-                  <Group wrap="nowrap" align="flex-start" gap="sm">
-                    <Text size="sm" c="dimmed" w={20} ta="center" ff="monospace" fw={600}>
-                      {String.fromCharCode(65 + i)}
-                    </Text>
-                    <Text size={compact ? "sm" : "md"} lh={1.5} style={{ flex: 1, fontSize: compact ? undefined : "1.0625rem" }}>
-                      {opt}
-                    </Text>
-                  </Group>
-                }
-                styles={{
-                  root: {
-                    width: "100%",
-                    borderRadius: 12,
-                    padding: compact ? "14px 12px" : "12px 14px",
-                    minHeight: 44,
-                    border: isSelected || isCorrectOption || isWrongSelected ? `2px solid ${borderColor}` : `1px solid ${borderColor}`,
-                    background,
-                    opacity: optionsLocked && !isCorrectOption && !isWrongSelected ? 0.65 : 1,
-                    transition: "border-color 120ms ease, background 120ms ease",
-                    cursor: optionsLocked ? "default" : "pointer",
-                  },
-                  body: { alignItems: "flex-start" },
-                  label: { width: "100%", paddingInlineStart: 8 },
-                  radio: { marginTop: 4 },
-                }}
-              />
-            );
-          })}
-        </Stack>
-      </Radio.Group>
+      <Stack gap={compact ? 8 : 10} mih={0} style={{ flexShrink: 1, overflow: "auto" }}>
+        {safeOptions.map((opt, i) => {
+          const value = String(i);
+          const isSelected = selected === value;
+          const isCorrectOption = graded && gradeState.correctIndex === i;
+          const isWrongSelected = graded && !gradeState.correct && isSelected;
+          let border = "var(--mantine-color-default-border)";
+          let background = "var(--mantine-color-gray-0)";
+          let chipBg = "var(--mantine-color-gray-2)";
+          let chipColor = "var(--mantine-color-gray-7)";
+          let borderWidth = 1;
+          if (isCorrectOption) {
+            border = "var(--mantine-color-sage-5)"; background = "var(--mantine-color-sage-0)";
+            chipBg = "var(--mantine-color-sage-6)"; chipColor = "#FFFFFF"; borderWidth = 2;
+          } else if (isWrongSelected) {
+            border = "var(--mantine-color-terracotta-5)"; background = "var(--mantine-color-terracotta-0)";
+            chipBg = "var(--mantine-color-terracotta-6)"; chipColor = "#FFFFFF"; borderWidth = 2;
+          } else if (isSelected) {
+            border = "var(--mantine-color-lavender-5)"; background = "var(--mantine-color-lavender-0)";
+            chipBg = "var(--mantine-color-lavender-7)"; chipColor = "#FFFFFF"; borderWidth = 2;
+          }
+          const dim = optionsLocked && !isCorrectOption && !isWrongSelected;
+          return (
+            <UnstyledButton
+              key={value}
+              className="mcq-opt"
+              disabled={optionsLocked}
+              onClick={() => { if (!optionsLocked) onSelect(value); }}
+              style={{
+                animationDelay: `${i * 55}ms`,
+                width: "100%",
+                borderRadius: 14,
+                padding: compact ? "12px 12px" : "14px 16px",
+                minHeight: 48,
+                border: `${borderWidth}px solid ${border}`,
+                background,
+                opacity: dim ? 0.6 : 1,
+              }}
+            >
+              <Group wrap="nowrap" align="center" gap={compact ? "sm" : "md"}>
+                <Box
+                  style={{
+                    flexShrink: 0,
+                    width: 26,
+                    height: 26,
+                    borderRadius: 8,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: chipBg,
+                    color: chipColor,
+                    fontFamily: "var(--font-sans), sans-serif",
+                    fontWeight: 700,
+                    fontSize: 13,
+                    transition: "background 160ms ease, color 160ms ease",
+                  }}
+                >
+                  {isCorrectOption ? (
+                    <IconCheck size={15} stroke={2.4} />
+                  ) : isWrongSelected ? (
+                    <IconX size={15} stroke={2.4} />
+                  ) : (
+                    String.fromCharCode(65 + i)
+                  )}
+                </Box>
+                <Text
+                  size={compact ? "sm" : "md"}
+                  lh={1.45}
+                  ta="left"
+                  style={{ flex: 1, fontSize: compact ? undefined : "1.0625rem", color: "var(--mantine-color-text)" }}
+                >
+                  {opt}
+                </Text>
+              </Group>
+            </UnstyledButton>
+          );
+        })}
+      </Stack>
 
       {feedback && (
         <McqFeedbackCard
@@ -2532,16 +2700,17 @@ function McqHeroPanel({
         />
       )}
 
-      <Stack align="center" gap="xs" style={{ flexShrink: 0 }}>
+      <Stack align="center" gap={8} style={{ flexShrink: 0 }}>
         {showNextQuestion ? (
           <Button
             radius="xl"
-            size={compact ? "md" : "md"}
+            size="md"
             color="sage"
-            maw={compact ? "100%" : 280}
+            maw={compact ? "100%" : 300}
             w="100%"
             loading={submitting}
             onClick={onContinue}
+            rightSection={<IconArrowRight size={18} stroke={2} />}
           >
             Next question
           </Button>
@@ -2550,7 +2719,7 @@ function McqHeroPanel({
             radius="xl"
             size="md"
             color="lavender"
-            maw={compact ? "100%" : 280}
+            maw={compact ? "100%" : 300}
             w="100%"
             onClick={onSubmit}
             loading={submitting}
@@ -2563,6 +2732,13 @@ function McqHeroPanel({
           <Button radius="xl" size="sm" variant="subtle" onClick={onAdvance}>
             Next page
           </Button>
+        )}
+        {!compact && (
+          <Text size="xs" c="dimmed" ta="center" style={{ opacity: 0.85 }}>
+            {showNextQuestion
+              ? "Press Enter for the next question"
+              : "Press A–D to choose · Enter to check"}
+          </Text>
         )}
       </Stack>
     </Stack>
