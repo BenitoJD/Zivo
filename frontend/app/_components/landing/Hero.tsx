@@ -37,30 +37,34 @@ function WavyTextAnimation() {
         xmlns="http://www.w3.org/2000/svg"
         style={{ display: "block", overflow: "visible" }}
       >
-        {/* Path 1: Source text — vertical arc from upper-left, sweeping down and into the pill */}
+        {/* Path 1: Source text — an elegant, massive counter-clockwise loop-de-loop.
+            Matches Wispr Flow exactly: enters from left, swoops under the loop,
+            up the right side, across the top, down the left, crosses over itself,
+            and flows smoothly into the pill. */}
         <path
           id="sourceCurve"
-          d="M -300 60 C -100 60, 30 60, 60 120 C 90 180, 50 300, 130 320 C 210 340, 340 280, 410 230 C 450 205, 460 200, 475 200"
+          d="M -200 250 C 50 250, 150 260, 250 260 C 400 260, 400 -20, 250 -20 C 100 -20, 100 260, 300 200 C 380 170, 420 200, 453 200"
           stroke="none"
         />
 
-        {/* Path 2: Question ribbon — thick dark band, nearly horizontal exit with gentle upward sweep */}
+        {/* Path 2: Question ribbon — sleek dark band */}
         <path
           id="questionCurve"
-          d="M 560 200 C 650 198, 770 185, 900 165 C 1050 142, 1300 110, 1600 90"
+          d="M 583 200 C 750 200, 850 190, 1000 160 C 1200 110, 1400 80, 1600 70"
           stroke="var(--mantine-color-text)"
-          strokeWidth="40"
+          strokeWidth="46"
           strokeLinecap="round"
         />
 
-        {/* Source text — faint whisper of raw material */}
+        {/* Source text — faint whisper, tiny and spaced out */}
         <text
           dominantBaseline="central"
           style={{
-            fontSize: 14,
+            fontSize: 13,
             fontFamily: "var(--font-sans), 'Figtree', sans-serif",
             fill: "var(--mantine-color-text)",
-            opacity: 0.32,
+            opacity: 0.45,
+            letterSpacing: "0.03em",
           }}
         >
           <textPath href="#sourceCurve" startOffset="-3000">
@@ -69,13 +73,14 @@ function WavyTextAnimation() {
           </textPath>
         </text>
 
-        {/* Question text inside the dark ribbon — cream/body-colored, serif */}
+        {/* Question text inside the dark ribbon — sleek sans-serif */}
         <text
           dominantBaseline="central"
           style={{
-            fontSize: 15,
-            fontFamily: "var(--font-serif), 'EB Garamond', Georgia, serif",
-            fontWeight: 600,
+            fontSize: 14,
+            fontFamily: "var(--font-sans), sans-serif",
+            fontWeight: 500,
+            letterSpacing: "0.02em",
             fill: "var(--mantine-color-body)",
           }}
         >
@@ -94,9 +99,10 @@ function WavyTextAnimation() {
             height="32"
             rx="16"
             fill="var(--mantine-color-gray-0)"
-            stroke="var(--mantine-color-dark-1)"
-            strokeWidth="0.75"
-            style={{ filter: "drop-shadow(0 2px 8px rgba(0,0,0,0.06))" }}
+            stroke="var(--mantine-color-text)"
+            strokeOpacity="0.15"
+            strokeWidth="1"
+            style={{ filter: "drop-shadow(0 4px 12px rgba(0,0,0,0.08))" }}
           >
             <animate attributeName="y" values="-16;-18;-16" dur="3s" repeatCount="indefinite" />
           </rect>
@@ -135,7 +141,7 @@ function WavyTextAnimation() {
             rx="28"
             fill="var(--mantine-color-gray-0)"
             stroke="var(--mantine-color-text)"
-            strokeWidth="1.5"
+            strokeWidth="2"
             style={{ filter: "drop-shadow(0 3px 12px rgba(0,0,0,0.08))" }}
           />
           {/* Dense waveform — 25 bars with dots interspersed, mimicking a real audio waveform.
@@ -144,39 +150,35 @@ function WavyTextAnimation() {
           <g transform="translate(-48, 0)">
             {[
               { x: 0,   h: 4,  dur: "1.4s" },
-              { x: 4,   h: 8,  dur: "1.1s" },
-              { x: 8,   h: 16, dur: "0.9s" },
-              { x: 12,  h: 28, dur: "0.7s" },
-              { x: 16,  h: 18, dur: "1.0s" },
-              { x: 20,  h: 36, dur: "0.65s" },
-              { x: 24,  h: 12, dur: "1.2s" },
-              { x: 28,  h: 30, dur: "0.75s" },
-              { x: 32,  h: 6,  dur: "1.35s" },
-              { x: 36,  h: 22, dur: "0.85s" },
-              { x: 40,  h: 38, dur: "0.6s" },
-              { x: 44,  h: 14, dur: "1.15s" },
-              { x: 48,  h: 32, dur: "0.7s" },
-              { x: 52,  h: 8,  dur: "1.3s" },
-              { x: 56,  h: 26, dur: "0.8s" },
-              { x: 60,  h: 34, dur: "0.65s" },
-              { x: 64,  h: 10, dur: "1.25s" },
-              { x: 68,  h: 20, dur: "0.9s" },
-              { x: 72,  h: 36, dur: "0.7s" },
-              { x: 76,  h: 16, dur: "1.05s" },
-              { x: 80,  h: 28, dur: "0.75s" },
-              { x: 84,  h: 6,  dur: "1.4s" },
-              { x: 88,  h: 14, dur: "1.1s" },
-              { x: 92,  h: 4,  dur: "1.3s" },
+              { x: 5,   h: 12, dur: "1.1s" },
+              { x: 10,  h: 24, dur: "0.9s" },
+              { x: 15,  h: 36, dur: "0.7s" },
+              { x: 20,  h: 16, dur: "1.0s" },
+              { x: 25,  h: 42, dur: "0.65s" },
+              { x: 30,  h: 8,  dur: "1.2s" },
+              { x: 35,  h: 32, dur: "0.75s" },
+              { x: 40,  h: 6,  dur: "1.35s" },
+              { x: 45,  h: 28, dur: "0.85s" },
+              { x: 50,  h: 40, dur: "0.6s" },
+              { x: 55,  h: 14, dur: "1.15s" },
+              { x: 60,  h: 34, dur: "0.7s" },
+              { x: 65,  h: 10, dur: "1.3s" },
+              { x: 70,  h: 26, dur: "0.8s" },
+              { x: 75,  h: 38, dur: "0.65s" },
+              { x: 80,  h: 18, dur: "1.25s" },
+              { x: 85,  h: 22, dur: "0.9s" },
+              { x: 90,  h: 36, dur: "0.7s" },
+              { x: 95,  h: 12, dur: "1.05s" },
             ].map((bar, i) => (
               <rect
                 key={i}
                 x={bar.x}
                 y={-bar.h / 2}
-                width="2"
+                width="2.5"
                 height={bar.h}
-                rx="1"
+                rx="1.25"
                 fill="var(--mantine-color-text)"
-                opacity="0.7"
+                opacity="0.9"
               >
                 <animate
                   attributeName="height"
