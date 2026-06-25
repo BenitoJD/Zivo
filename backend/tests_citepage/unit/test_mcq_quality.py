@@ -69,6 +69,51 @@ def test_detects_invalid_structure() -> None:
     assert any(f["code"] == "invalid_structure" for f in flaws)
 
 
+def test_detects_meta_page_reference_in_stem() -> None:
+    mcq = {
+        "question": "On page 12, what is photosynthesis?",
+        "options": ["Energy capture", "Water transport", "Cell division", "Protein synthesis"],
+        "correct_index": 0,
+        "explanation": "Chlorophyll absorbs light.",
+    }
+    flaws = run_heuristic_checks(mcq)
+    assert any(f["code"] == "meta_page_reference" for f in flaws)
+    assert has_fatal_heuristic_flaws(flaws)
+
+
+def test_detects_meta_page_reference_in_option() -> None:
+    mcq = {
+        "question": "What is photosynthesis?",
+        "options": [
+            "Energy capture",
+            "As stated in the passage, water transport",
+            "Cell division",
+            "Protein synthesis",
+        ],
+        "correct_index": 0,
+        "explanation": "Chlorophyll absorbs light.",
+    }
+    flaws = run_heuristic_checks(mcq)
+    assert any(f["code"] == "meta_page_reference" for f in flaws)
+
+
+def test_normalize_strips_explanation_meta_framing() -> None:
+    from app.services.mcq_quality import _normalize_mcq_payload
+
+    payload = _normalize_mcq_payload(
+        {
+            "question": "What is ATP?",
+            "options": ["Energy carrier", "Structural protein", "Enzyme", "Lipid"],
+            "correct_index": 0,
+            "explanation": "The text states that ATP stores chemical energy.",
+            "primary_concept_key": "atp",
+        },
+        {"key": "atp", "label": "ATP"},
+    )
+    assert "text states" not in payload["explanation"].lower()
+    assert "ATP" in payload["explanation"]
+
+
 def test_detects_duplicate_stem_vs_prior() -> None:
     mcq = _good_mcq()
     prior = [{"question": mcq["question"], "correct_answer": "other"}]

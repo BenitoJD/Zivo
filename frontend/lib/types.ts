@@ -63,8 +63,41 @@ export type AssertionPayload = {
 };
 
 const OPTION_LETTER_PREFIX = /^(?:[A-Da-d]|[1-4])[.)]\s+/;
-const PAGE_REFERENCE_STEM =
-  /^(?:(?:according|based)\s+to\s+(?:the\s+)?(?:page|text|passage|source|excerpt)|from\s+(?:the\s+)?(?:page|text|passage|source)|in\s+(?:the\s+)?(?:passage|text|excerpt)|(?:the\s+)?(?:page|text|passage|source)\s+(?:states|says|indicates|describes|explains)(?:\s+that)?)[,:]?\s+/i;
+const LEADING_META_PATTERNS = [
+  /^(?:(?:according|based)\s+to\s+(?:the\s+)?(?:page|text|passage|source|excerpt|reading|document|book|textbook|material)|from\s+(?:the\s+)?(?:page|text|passage|source|reading|document|book|textbook)|in\s+(?:the\s+)?(?:passage|text|excerpt|reading|document|book|textbook|material)|in\s+this\s+(?:book|text|reading|passage|document)|on\s+page\s+\d+|(?:the\s+)?(?:page|text|passage|source|reading|document|textbook)\s+(?:text\s+)?(?:specifies|states|says|indicates|describes|explains|mentions)(?:\s+that)?)[,:]?\s+/i,
+  /^as\s+(?:the\s+)?(?:page|text|passage|reading|document)\s+(?:states|says)[,:]?\s+/i,
+  /^the\s+text\s+states:\s*['"]?/i,
+  /^as\s+(?:stated|described)\s+(?:in|above)[,:]?\s+/i,
+  /^(?:on\s+page\s+\d+(?:\s+of\s+the\s+(?:text|book|passage))?)[,:]?\s+/i,
+  /^(?:in\s+this\s+(?:book|text|reading|passage|document))[,:]?\s+/i,
+];
+const DOCUMENT_META_RESIDUE =
+  /\b(?:page\s+text|page\s+\d+|on\s+page\s+\d+|according\s+to\s+the\s+(?:page|text|passage|reading|document|excerpt|source|book|textbook|material)|based\s+on\s+the\s+(?:page|text|passage|reading|document|excerpt|source|book|textbook|material)|(?:the\s+)?(?:passage|reading|excerpt|document)\s+(?:on\s+page\s+\d+\s+)?(?:states|says|indicates|describes|explains|mentions)|what\s+does\s+the\s+(?:passage|reading|excerpt|text|document)\s+(?:say|state|describe|mention)|from\s+the\s+(?:passage|reading|excerpt|text|document|source\s+material)|in\s+this\s+(?:book|text|reading|passage|document|chapter)|in\s+the\s+(?:passage|reading|excerpt|material)|(?:the\s+)?textbook\s+(?:says|states|describes|explains)|(?:the\s+)?source\s+material|as\s+(?:stated|described)\s+in\s+the\s+(?:text|passage|reading|material|document)|the\s+text\s+(?:states|says|specifies)|text\s+specifies|document\s+says|passage\s+states|chapter\s+\d+\s+(?:states|says|describes|explains))\b/i;
+
+function stripDocumentMeta(text: string): string {
+  let cleaned = String(text || "").trim().replace(/\s+/g, " ");
+  if (!cleaned) return "";
+  for (let pass = 0; pass < 8; pass += 1) {
+    let changed = false;
+    for (const pattern of LEADING_META_PATTERNS) {
+      const updated = cleaned.replace(pattern, "").trim();
+      if (updated !== cleaned) {
+        cleaned = updated;
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  cleaned = cleaned.replace(/\s*The text states:.*$/i, "").trim();
+  return cleaned;
+}
+
+function capitalizeFirst(text: string): string {
+  if (text && text[0] === text[0].toLowerCase()) {
+    return text[0].toUpperCase() + text.slice(1);
+  }
+  return text;
+}
 
 /** Strip leading A)/B. prefixes — the UI renders letter labels. */
 function sanitizeMcqOption(text: string): string {
@@ -74,16 +107,16 @@ function sanitizeMcqOption(text: string): string {
     .trim();
 }
 
-/** Remove meta framing like "According to the page," so the stem stands alone. */
+/** Remove exam-forbidden framing so the stem stands alone like a formal test item. */
 export function sanitizeMcqStem(text: string): string {
-  let cleaned = String(text || "").trim();
-  while (PAGE_REFERENCE_STEM.test(cleaned)) {
-    cleaned = cleaned.replace(PAGE_REFERENCE_STEM, "").trim();
-  }
-  if (cleaned && cleaned[0] === cleaned[0].toLowerCase()) {
-    cleaned = cleaned[0].toUpperCase() + cleaned.slice(1);
-  }
-  return cleaned;
+  return capitalizeFirst(stripDocumentMeta(text));
+}
+
+export function hasDocumentMetaReference(text: string): boolean {
+  const cleaned = String(text || "").trim();
+  if (!cleaned) return false;
+  if (LEADING_META_PATTERNS.some((pattern) => pattern.test(cleaned))) return true;
+  return DOCUMENT_META_RESIDUE.test(cleaned);
 }
 
 /** Coerce assertion payload options into a string array for the MCQ UI. */

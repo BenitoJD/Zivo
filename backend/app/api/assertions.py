@@ -16,9 +16,41 @@ from app.services.auth import get_current_user, get_optional_user, require_csrf
 from app.services.guest import can_access_document
 from app.services.guest_session import guest_session_for_read
 from app.services.jobs import enqueue_generate
+from app.services.mcq_dedup import (
+    coerce_mcq_options,
+    sanitize_mcq_explanation,
+    sanitize_mcq_stem,
+)
 from app.services.rate_limit import rate_limit_dependency
 
 router = APIRouter()
+
+
+def _sanitize_assertion_payload(payload: dict | None) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    out = dict(payload)
+    question = sanitize_mcq_stem(str(out.get("question") or out.get("stem") or ""))
+    if question:
+        out["question"] = question
+        out.pop("stem", None)
+    raw_options = out.get("options") or out.get("choices")
+    options = coerce_mcq_options(raw_options)
+    if options:
+        out["options"] = options
+        out.pop("choices", None)
+    explanation = sanitize_mcq_explanation(str(out.get("explanation") or ""))
+    if explanation:
+        out["explanation"] = explanation
+    return out
+
+
+def _sanitize_assertion_row(row: dict) -> dict:
+    out = dict(row)
+    payload = out.get("payload")
+    if isinstance(payload, dict):
+        out["payload"] = _sanitize_assertion_payload(payload)
+    return out
 
 
 def _assertion_access(
@@ -44,7 +76,7 @@ def _assertion_access(
         doc = db.get(Document, uuid.UUID(str(artifact_raw)))
         if not doc or not can_access_document(doc, user, guest_id):
             raise HTTPException(status_code=404, detail="Not found")
-    return dict(row)
+    return _sanitize_assertion_row(dict(row))
 
 
 class GenerateIn(BaseModel):
@@ -93,7 +125,7 @@ def list_assertions(
         ),
         {"artifact_id": str(artifact_id)},
     ).mappings().all()
-    return [dict(r) for r in rows]
+    return [_sanitize_assertion_row(dict(r)) for r in rows]
 
 
 @router.post("/generate", dependencies=[Depends(require_csrf), Depends(rate_limit_dependency)])

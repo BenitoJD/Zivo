@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services.mcq_dedup import SUBJECT_MATTER_PREFIX
+
 # User messages whose leading prefix is stable across generate/critic/rewrite/triage.
-_STABLE_PREFIX_MARKERS = ("Page text:", "Document excerpts", "Section summaries:")
+_STABLE_PREFIX_MARKERS = (SUBJECT_MATTER_PREFIX, "Document excerpts", "Section summaries:")
 
 
 def _anthropic_cached_block(text: str) -> list[dict[str, Any]]:

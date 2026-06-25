@@ -16,14 +16,47 @@ _signature_embed_cache: OrderedDict[str, list[float]] = OrderedDict()
 
 _NON_WORD_RE = re.compile(r"[^\w\s]+", re.UNICODE)
 _OPTION_LETTER_PREFIX = re.compile(r"^(?:[A-Da-d]|[1-4])[.)]\s+")
-_PAGE_REFERENCE_STEM = re.compile(
-    r"^(?:(?:according|based)\s+to\s+(?:the\s+)?(?:page|text|passage|source|excerpt)"
-    r"|from\s+(?:the\s+)?(?:page|text|passage|source)"
-    r"|in\s+(?:the\s+)?(?:passage|text|excerpt)"
-    r"|(?:the\s+)?(?:page|text|passage|source)\s+(?:states|says|indicates|describes|explains)(?:\s+that)?)"
-    r"[,:]?\s+",
+
+# Leading exam-forbidden framing — stripped in a loop from the start of stems/explanations.
+_LEADING_META_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"^(?:(?:according|based)\s+to\s+(?:the\s+)?(?:page|text|passage|source|excerpt|reading|document|book|textbook|material)"
+        r"|from\s+(?:the\s+)?(?:page|text|passage|source|reading|document|book|textbook)"
+        r"|in\s+(?:the\s+)?(?:passage|text|excerpt|reading|document|book|textbook|material)"
+        r"|in\s+this\s+(?:book|text|reading|passage|document)"
+        r"|on\s+page\s+\d+"
+        r"|(?:the\s+)?(?:page|text|passage|source|reading|document|textbook)\s+(?:text\s+)?"
+        r"(?:specifies|states|says|indicates|describes|explains|mentions)(?:\s+that)?)"
+        r"[,:]?\s+",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^as\s+(?:the\s+)?(?:page|text|passage|reading|document)\s+(?:states|says)[,:]?\s+", re.IGNORECASE),
+    re.compile(r"^the\s+text\s+states:\s*['\"]?", re.IGNORECASE),
+    re.compile(r"^as\s+(?:stated|described)\s+(?:in|above)[,:]?\s+", re.IGNORECASE),
+)
+
+# Exam-forbidden references anywhere in learner-visible MCQ text.
+_DOCUMENT_META_RESIDUE_RE = re.compile(
+    r"\b(?:"
+    r"page\s+text|page\s+\d+|on\s+page\s+\d+|pages?\s+\d+\s*(?:and|–|-|—|to)\s*\d+"
+    r"|according\s+to\s+the\s+(?:page|text|passage|reading|document|excerpt|source|book|textbook|material)"
+    r"|based\s+on\s+the\s+(?:page|text|passage|reading|document|excerpt|source|book|textbook|material)"
+    r"|(?:the\s+)?(?:passage|reading|excerpt|document)\s+(?:on\s+page\s+\d+\s+)?(?:states|says|indicates|describes|explains|mentions)"
+    r"|what\s+does\s+the\s+(?:passage|reading|excerpt|text|document)\s+(?:say|state|describe|mention)"
+    r"|from\s+the\s+(?:passage|reading|excerpt|text|document|source\s+material)"
+    r"|in\s+this\s+(?:book|text|reading|passage|document|chapter)"
+    r"|in\s+the\s+(?:passage|reading|excerpt|material)"
+    r"|(?:the\s+)?textbook\s+(?:says|states|describes|explains)"
+    r"|(?:the\s+)?source\s+material"
+    r"|as\s+(?:stated|described)\s+in\s+the\s+(?:text|passage|reading|material|document)"
+    r"|the\s+text\s+(?:states|says|specifies)"
+    r"|text\s+specifies|document\s+says|passage\s+states"
+    r"|chapter\s+\d+\s+(?:states|says|describes|explains)"
+    r")\b",
     re.IGNORECASE,
 )
+
+SUBJECT_MATTER_PREFIX = "Subject matter (internal reference — never mention in the question):"
 
 
 def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
@@ -69,21 +102,74 @@ def sanitize_mcq_option(text: str) -> str:
     return _OPTION_LETTER_PREFIX.sub("", (text or "").strip()).strip()
 
 
-def sanitize_mcq_stem(text: str) -> str:
-    """Remove meta framing like 'According to the page,' so the stem stands alone."""
-    cleaned = (text or "").strip()
-    while True:
-        match = _PAGE_REFERENCE_STEM.match(cleaned)
-        if not match:
+def strip_document_meta(text: str) -> str:
+    """Remove leading exam-forbidden framing clauses."""
+    cleaned = re.sub(r"\s+", " ", (text or "").strip())
+    if not cleaned:
+        return ""
+    for _ in range(8):
+        changed = False
+        for pattern in _LEADING_META_PATTERNS:
+            updated = pattern.sub("", cleaned).strip()
+            if updated != cleaned:
+                cleaned = updated
+                changed = True
+        if not changed:
             break
-        cleaned = cleaned[match.end() :].strip()
-    if cleaned and cleaned[0].islower():
-        cleaned = cleaned[0].upper() + cleaned[1:]
+    cleaned = re.sub(r"\s*The text states:.*$", "", cleaned, flags=re.IGNORECASE).strip()
+    # Strip mid-stem page anchors when they appear as a leading clause before the real question.
+    cleaned = re.sub(
+        r"^(?:on\s+page\s+\d+(?:\s+of\s+the\s+(?:text|book|passage))?)[,:]?\s+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    cleaned = re.sub(
+        r"^(?:in\s+this\s+(?:book|text|reading|passage|document))[,:]?\s+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
     return cleaned
 
 
+def has_document_meta_residue(text: str) -> bool:
+    return bool(_DOCUMENT_META_RESIDUE_RE.search(text or ""))
+
+
+def has_document_meta_reference(text: str) -> bool:
+    """True if learner-visible text still points at a book, page, passage, or document."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return False
+    if any(pattern.match(cleaned) for pattern in _LEADING_META_PATTERNS):
+        return True
+    return has_document_meta_residue(cleaned)
+
+
 def has_page_reference_stem(text: str) -> bool:
-    return bool(_PAGE_REFERENCE_STEM.match((text or "").strip()))
+    """Backward-compatible alias — prefer has_document_meta_reference."""
+    return has_document_meta_reference(text)
+
+
+def _capitalize_first(text: str) -> str:
+    if text and text[0].islower():
+        return text[0].upper() + text[1:]
+    return text
+
+
+def sanitize_mcq_stem(text: str) -> str:
+    """Remove exam-forbidden framing so the stem stands alone like a formal test item."""
+    return _capitalize_first(strip_document_meta(text))
+
+
+def sanitize_mcq_explanation(text: str) -> str:
+    """Strip document/page/passage framing from stored explanations."""
+    return _capitalize_first(strip_document_meta(text))
+
+
+def sanitize_mcq_options(options: list[str]) -> list[str]:
+    return [_capitalize_first(strip_document_meta(opt)) for opt in options if strip_document_meta(opt)]
 
 
 def coerce_mcq_options(raw: Any) -> list[str]:
@@ -116,7 +202,7 @@ def format_prior_mcqs_block(prior_mcqs: list[dict[str, Any]] | None, *, max_item
         return ""
     recent = list(prior_mcqs[-max_items:])
     lines = [
-        "Recent questions on this page — do NOT repeat these stems or test the same fact:"
+        "Recent questions already used — do NOT repeat these stems or test the same fact:"
     ]
     for i, item in enumerate(recent, start=1):
         label = item.get("aspect_label") or item.get("aspect_key") or "aspect"

@@ -11,10 +11,12 @@ from app.services.mcq_dedup import (
     dedupe_aspects,
     coerce_mcq_options,
     format_prior_mcqs_block,
+    has_document_meta_reference,
     has_page_reference_stem,
     is_mcq_too_similar,
     normalize_stem,
     prior_mcq_from_payload,
+    sanitize_mcq_explanation,
     sanitize_mcq_option,
     sanitize_mcq_stem,
     stems_match,
@@ -72,7 +74,34 @@ def test_sanitize_mcq_stem_strips_page_framing() -> None:
     stem = "According to the page, how did publication differ?"
     assert sanitize_mcq_stem(stem) == "How did publication differ?"
     assert has_page_reference_stem(stem) is True
-    assert has_page_reference_stem("How did publication differ?") is False
+    assert has_document_meta_reference(stem) is True
+    assert has_document_meta_reference("How did publication differ?") is False
+
+
+def test_detects_exam_forbidden_mid_stem_refs() -> None:
+    assert has_document_meta_reference("On page 12, what is photosynthesis?")
+    assert has_document_meta_reference("In this book, how did Bernier describe the court?")
+    assert has_document_meta_reference("What does the passage say about groundwater?")
+    assert not has_document_meta_reference("What is the primary function of chlorophyll?")
+
+
+def test_sanitize_mcq_stem_strips_on_page_prefix() -> None:
+    assert sanitize_mcq_stem("On page 12, what is photosynthesis?") == "What is photosynthesis?"
+
+
+def test_sanitize_mcq_explanation_strips_text_framing() -> None:
+    raw = "The text states that catalysts lower activation energy."
+    cleaned = sanitize_mcq_explanation(raw)
+    assert "text states" not in cleaned.lower()
+    assert "activation energy" in cleaned.lower()
+
+
+def test_format_prior_mcqs_block_uses_exam_neutral_label() -> None:
+    block = format_prior_mcqs_block(
+        [{"aspect_label": "Chlorophyll", "question": "Q?", "correct_answer": "A"}]
+    )
+    assert "already used" in block
+    assert "on this page" not in block
 
 
 def test_coerce_mcq_options_strips_prefixes() -> None:

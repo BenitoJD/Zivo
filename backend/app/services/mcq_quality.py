@@ -20,13 +20,15 @@ from app.services.mcq_dedup import (
     coerce_mcq_options,
     embed_signature_cached,
     format_prior_mcqs_block,
-    has_page_reference_stem,
+    has_document_meta_reference,
     is_mcq_too_similar,
     mcq_signature,
     mcq_signature,
     prior_mcq_embeddings,
+    sanitize_mcq_explanation,
     sanitize_mcq_stem,
     stems_match,
+    SUBJECT_MATTER_PREFIX,
 )
 from app.services.prompts import get_prompt
 from app.services.token_budget import PAGE_INPUT_MAX_TOKENS, truncate_to_tokens
@@ -101,13 +103,23 @@ def run_heuristic_checks(
     if _NONE_ALL_RE.search(question):
         flaws.append({"code": "none_or_all_of_above", "message": "Stem references none/all of the above"})
 
-    if has_page_reference_stem(question):
+    if has_document_meta_reference(question):
         flaws.append(
             {
                 "code": "meta_page_reference",
-                "message": "Stem frames the question around the page instead of testing knowledge directly",
+                "message": "Stem uses exam-forbidden book/page/passage framing instead of asking the concept directly",
             }
         )
+
+    for opt in options:
+        if has_document_meta_reference(opt):
+            flaws.append(
+                {
+                    "code": "meta_page_reference",
+                    "message": "Option references a book, page, passage, or document",
+                }
+            )
+            break
 
     if _FILL_BLANK_RE.search(question):
         flaws.append({"code": "unfocused_stem", "message": "Fill-in-the-blank style stem"})
@@ -301,6 +313,9 @@ def _trim_explanation(text: str, *, max_chars: int = 160) -> str:
 def _normalize_mcq_payload(data: dict[str, Any], target_aspect: dict[str, Any] | None) -> dict[str, Any]:
     question = sanitize_mcq_stem(str(data.get("question") or data.get("stem") or ""))
     options = coerce_mcq_options(data.get("options") or data.get("choices"))
+    explanation = sanitize_mcq_explanation(
+        _trim_explanation(str(data.get("explanation") or ""))
+    )
     if not question or len(options) < 2:
         raise ValueError("invalid mcq")
     key = data.get("primary_concept_key") or (target_aspect or {}).get("key") or "page-concept"
@@ -309,7 +324,7 @@ def _normalize_mcq_payload(data: dict[str, Any], target_aspect: dict[str, Any] |
         "question": question,
         "options": options,
         "correct_index": int(data.get("correct_index", 0)),
-        "explanation": _trim_explanation(str(data.get("explanation") or "")),
+        "explanation": explanation,
         "primary_concept_key": key,
         "primary_concept": label,
         "tags": data.get("tags") or ["auto"],
@@ -380,7 +395,7 @@ def _generate_draft_mcq(
     # trailing message. Z.AI / OpenAI-compatible providers cache the leading
     # prefix automatically and skip re-processing the ~12k-char page text.
     instructions = (
-        f"Generate exactly one multiple-choice question from this page excerpt.\n"
+        f"Generate exactly one multiple-choice question from the subject matter below.\n"
         f"Question index on this page: {sequence}\n"
         f"{aspect_line}{cognitive_line}\n"
         f"{prior_block}"
@@ -390,7 +405,7 @@ def _generate_draft_mcq(
         db,
         [
             {"role": "system", "content": system},
-            {"role": "user", "content": f"Page text:\n{excerpt}"},
+            {"role": "user", "content": f"{SUBJECT_MATTER_PREFIX}\n{excerpt}"},
             {"role": "user", "content": instructions},
         ],
         log_tag="generate_mcq",
@@ -436,7 +451,7 @@ def _rewrite_mcq(
         db,
         [
             {"role": "system", "content": system},
-            {"role": "user", "content": f"Page text:\n{excerpt}"},
+            {"role": "user", "content": f"{SUBJECT_MATTER_PREFIX}\n{excerpt}"},
             {"role": "user", "content": instructions},
         ],
         log_tag="rewrite_mcq",
@@ -490,7 +505,7 @@ def critique_mcq(
         db,
         [
             {"role": "system", "content": system},
-            {"role": "user", "content": f"Page text:\n{excerpt}"},
+            {"role": "user", "content": f"{SUBJECT_MATTER_PREFIX}\n{excerpt}"},
             {"role": "user", "content": critique_body},
         ],
         log_tag="critic_mcq",
@@ -769,7 +784,7 @@ def _generate_batch_drafts(
     system = get_prompt(db, "mcq_page_generate_system")
     instructions = (
         f"Generate exactly {len(targets)} multiple-choice questions — ONE per target aspect below. "
-        f"Each must test a distinct idea from the page.\n\n"
+        f"Each must test a distinct idea from the subject matter.\n\n"
         f"Target aspects:\n{targets_block}\n\n"
         f"{prior_block}"
         f"{hints_block}\n"
@@ -781,7 +796,7 @@ def _generate_batch_drafts(
         db,
         [
             {"role": "system", "content": system},
-            {"role": "user", "content": f"Page text:\n{excerpt}"},
+            {"role": "user", "content": f"{SUBJECT_MATTER_PREFIX}\n{excerpt}"},
             {"role": "user", "content": instructions},
         ],
         log_tag="generate_mcq_batch",

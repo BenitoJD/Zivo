@@ -10,50 +10,20 @@ from langgraph.graph import END, START, StateGraph
 from sqlalchemy.orm import Session
 
 from app.services.llm_router import complete_chat
+from app.services.mcq_dedup import (
+    has_document_meta_residue,
+    sanitize_mcq_explanation,
+    strip_document_meta,
+)
 from app.services.prompts import get_prompt
 from app.services.token_budget import GRADE_CONTEXT_MAX_TOKENS, truncate_to_tokens
 
 _LEARN_FEEDBACK_MAX = 280
 
-_FORMAL_META_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(
-        r"^(?:(?:according|based)\s+to\s+(?:the\s+)?(?:page|text|passage|source|excerpt)"
-        r"|from\s+(?:the\s+)?(?:page|text|passage|source)"
-        r"|in\s+(?:the\s+)?(?:passage|text|excerpt)"
-        r"|(?:the\s+)?(?:page|text|passage|source)\s+(?:text\s+)?"
-        r"(?:specifies|states|says|indicates|describes|explains|mentions)(?:\s+that)?)[,:]?\s+",
-        re.IGNORECASE,
-    ),
-    re.compile(r"^as\s+(?:the\s+)?(?:page|text|passage)\s+(?:states|says)[,:]?\s+", re.IGNORECASE),
-    re.compile(r"^the\s+text\s+states:\s*['\"]?", re.IGNORECASE),
-)
-
-_FORMAL_RESIDUE_RE = re.compile(
-    r"\b(?:page\s+text|the\s+text\s+states|according\s+to\s+the|passage\s+states|text\s+specifies|document\s+says)\b",
-    re.IGNORECASE,
-)
-
-
-def _strip_formal_meta(text: str) -> str:
-    cleaned = re.sub(r"\s+", " ", (text or "").strip())
-    if not cleaned:
-        return ""
-    for _ in range(6):
-        changed = False
-        for pattern in _FORMAL_META_PATTERNS:
-            updated = pattern.sub("", cleaned).strip()
-            if updated != cleaned:
-                cleaned = updated
-                changed = True
-        if not changed:
-            break
-    cleaned = re.sub(r"\s*The text states:.*$", "", cleaned, flags=re.IGNORECASE).strip()
-    return cleaned
-
 
 def _learnify_explanation(text: str) -> str:
     """Turn stored explanations into short, memorable teacher voice."""
-    cleaned = _strip_formal_meta(text)
+    cleaned = strip_document_meta(text)
     if not cleaned:
         return ""
 
@@ -61,13 +31,11 @@ def _learnify_explanation(text: str) -> str:
     summary = " ".join(sentences[:2])
     if len(summary) > _LEARN_FEEDBACK_MAX:
         summary = summary[: _LEARN_FEEDBACK_MAX - 1].rstrip() + "…"
-    if summary and summary[0].islower():
-        summary = summary[0].upper() + summary[1:]
-    return summary
+    return sanitize_mcq_explanation(summary)
 
 
 def _has_formal_residue(text: str) -> bool:
-    return bool(_FORMAL_RESIDUE_RE.search(text or ""))
+    return has_document_meta_residue(text)
 
 
 def _wrong_feedback(*, chosen: str, correct: str, explanation: str) -> str:
