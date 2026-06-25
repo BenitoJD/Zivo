@@ -95,6 +95,7 @@ export function LandingNav() {
           pt={{ base: "sm", md: condensed ? "xs" : "md" }}
           pb={{ base: "sm", md: condensed ? "xs" : "md" }}
         >
+          {/* Wispr-style floating rounded "paper" pill — frosted on scroll. */}
           <Box
             style={{
               borderRadius: "16px",
@@ -137,13 +138,13 @@ export function LandingNav() {
                       href={item.href}
                       size="sm"
                       fw={active ? 600 : 500}
-                      c={active ? "lavender.7" : "gray.7"}
+                      c={active ? "var(--mantine-color-text)" : "gray.7"}
                       style={{
                         textDecoration: "none",
                         fontFamily: "var(--font-sans), sans-serif",
                         padding: "6px 14px",
                         borderRadius: "10px",
-                        background: active ? "var(--mantine-color-lavender-0)" : "transparent",
+                        background: active ? "var(--mantine-color-default-hover)" : "transparent",
                         transition: reduce
                           ? "none"
                           : "color 200ms cubic-bezier(0.32, 0.72, 0, 1), background 200ms cubic-bezier(0.32, 0.72, 0, 1)",
@@ -207,11 +208,12 @@ export function LandingNav() {
       </Box>
 
       <style>{`
+        /* Wispr "Download for macOS" — soft lavender pill with subtle border. */
         .nav-cta-button {
           background-color: #E9DDF5 !important;
           color: var(--mantine-color-text) !important;
-          border: 1.5px solid var(--mantine-color-text) !important;
-          border-radius: 12px !important;
+          border: 1px solid #D6C2EC !important;
+          border-radius: 999px !important;
           font-family: var(--font-sans), sans-serif !important;
           font-weight: 600 !important;
         }
@@ -252,7 +254,7 @@ export function LandingNav() {
               size="lg"
               onClick={closeDrawer}
               style={{
-                fontFamily: "var(--font-serif), Georgia, serif",
+                fontFamily: "var(--font-sans), sans-serif",
                 fontWeight: 500,
                 padding: "12px 4px",
                 textDecoration: "none",

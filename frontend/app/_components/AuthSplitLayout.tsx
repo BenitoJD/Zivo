@@ -60,7 +60,7 @@ export function AuthSplitLayout({
                 order={2}
                 c="gray.0"
                 style={{
-                  fontFamily: "var(--font-serif), Georgia, serif",
+                  fontFamily: "var(--font-sans), sans-serif",
                   fontWeight: 500,
                   lineHeight: 1.25,
                   fontSize: "clamp(1.6rem, 2.5vw, 2.2rem)",

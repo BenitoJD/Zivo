@@ -1,13 +1,13 @@
 "use client";
 
-import Image from "next/image";
-import { Box, Title } from "@mantine/core";
+import { Box } from "@mantine/core";
 import { BRAND_LOGO_SRC, BRAND_LOGO_HEIGHT, BRAND_LOGO_WIDTH, BRAND_NAME } from "@/lib/brand";
 
 /**
- * Brand lockup: logo glyph + serif wordmark ("Zivo", title-case, EB Garamond 500,
- * tightened tracking). Used across the front door (landing, auth), the sidebar,
- * the mobile header, and the footer. Sized by the logo height.
+ * Brand lockup: a monochrome logo glyph + bold sans wordmark ("Zivo"), Wispr-Flow
+ * style. The glyph is rendered as a single-color silhouette (the logo PNG used as
+ * an alpha mask filled with currentColor) so it stays minimal and adapts to
+ * ink/paper across light and dark. Used on the landing, auth, sidebar, and footer.
  */
 export function BrandMark({
   height = 32,
@@ -26,19 +26,22 @@ export function BrandMark({
         color: "var(--mantine-color-text)",
       }}
     >
-      <Image
-        src={BRAND_LOGO_SRC}
-        alt={BRAND_NAME}
-        width={width}
-        height={height}
-        priority
-        unoptimized
+      <Box
+        role="img"
+        aria-label={BRAND_NAME}
         style={{
           width,
           height,
           flexShrink: 0,
-          objectFit: "contain",
-          display: "block",
+          backgroundColor: "currentColor",
+          WebkitMaskImage: `url(${BRAND_LOGO_SRC})`,
+          maskImage: `url(${BRAND_LOGO_SRC})`,
+          WebkitMaskSize: "contain",
+          maskSize: "contain",
+          WebkitMaskRepeat: "no-repeat",
+          maskRepeat: "no-repeat",
+          WebkitMaskPosition: "center",
+          maskPosition: "center",
         }}
       />
       {showWord && (

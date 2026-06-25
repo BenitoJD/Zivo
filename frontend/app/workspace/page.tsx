@@ -213,14 +213,14 @@ export default function WorkspaceIndexPage() {
           <Title
             order={2}
             style={{
-              fontFamily: "var(--font-serif), Georgia, serif",
+              fontFamily: "var(--font-sans), sans-serif",
               fontWeight: 500,
               letterSpacing: "-0.02em",
               fontSize: "clamp(1.8rem, 4.5vw, 2.6rem)",
             }}
           >
             Where does understanding{" "}
-            <Box component="span" fs="italic" c="lavender.7">
+            <Box component="span" c="lavender.7" style={{ fontWeight: 700 }}>
               begin?
             </Box>
           </Title>
@@ -447,7 +447,7 @@ export default function WorkspaceIndexPage() {
                 <Text
                   fw={600}
                   size="sm"
-                  style={{ fontFamily: "var(--font-serif), Georgia, serif" }}
+                  style={{ fontFamily: "var(--font-sans), sans-serif" }}
                 >
                   {s.title}
                 </Text>

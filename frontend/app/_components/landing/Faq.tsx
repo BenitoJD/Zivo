@@ -39,7 +39,7 @@ export function Faq() {
             order={2}
             ta="center"
             style={{
-              fontFamily: "var(--font-serif), Georgia, serif",
+              fontFamily: "var(--font-sans), sans-serif",
               fontWeight: 500,
               fontSize: "clamp(1.6rem, 3.2vw, 2.3rem)",
               letterSpacing: "-0.015em",

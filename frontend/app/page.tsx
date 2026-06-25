@@ -3,6 +3,10 @@
 import { Box } from "@mantine/core";
 import { LandingNav } from "@/app/_components/landing/LandingNav";
 import { Hero } from "@/app/_components/landing/Hero";
+import { SourceOrbit } from "@/app/_components/landing/SourceOrbit";
+import { LogoStrip } from "@/app/_components/landing/LogoStrip";
+import { SpeedStats } from "@/app/_components/landing/SpeedStats";
+import { Personas } from "@/app/_components/landing/Personas";
 import { Marquee } from "@/app/_components/landing/Marquee";
 import { Capabilities } from "@/app/_components/landing/Capabilities";
 import { Spotlight } from "@/app/_components/landing/Spotlight";
@@ -32,12 +36,16 @@ export default function LandingPage() {
       <LandingNav />
       <main>
         <Hero />
-        <Marquee />
-        <Capabilities />
-        <Spotlight />
+        <SourceOrbit />
+        <LogoStrip />
+        <SpeedStats />
         <Box id="how" style={{ scrollMarginTop: 100 }}>
           <HowItWorks />
         </Box>
+        <Personas />
+        <Marquee />
+        <Capabilities />
+        <Spotlight />
         <Box id="ethos" style={{ scrollMarginTop: 100 }}>
           <Ethos />
         </Box>

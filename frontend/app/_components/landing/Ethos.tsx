@@ -21,7 +21,7 @@ export function Ethos() {
           <Title
             order={2}
             style={{
-              fontFamily: "var(--font-serif), Georgia, serif",
+              fontFamily: "var(--font-sans), sans-serif",
               fontWeight: 500,
               fontSize: "clamp(1.9rem, 4vw, 2.9rem)",
               letterSpacing: "-0.02em",
@@ -29,12 +29,7 @@ export function Ethos() {
             }}
           >
             Questions are how understanding{" "}
-            <Box
-              component="span"
-              fs="italic"
-              c="lavender.7"
-              style={{ fontFamily: "var(--font-serif), Georgia, serif" }}
-            >
+            <Box component="span" c="lavender.7" style={{ fontWeight: 700 }}>
               reveals itself.
             </Box>
           </Title>

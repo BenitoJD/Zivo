@@ -108,7 +108,7 @@ const theme = mergeMantineTheme(
   createTheme({
     fontFamily: "var(--font-sans), -apple-system, BlinkMacSystemFont, sans-serif",
     headings: {
-      fontFamily: "var(--font-serif), Georgia, serif",
+      fontFamily: "'Newsreader', 'EB Garamond', Georgia, serif",
       fontWeight: "500",
     },
     primaryColor: "lavender",
@@ -251,17 +251,51 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
     "--mantine-color-gray-8": "#FAF9F6",          // Ink text (light)
     "--mantine-color-gray-9": "#FFFFFF",          // Deepest text
 
-    // Neutral dark scale overrides for dark mode (keep aligned with gray)
-    "--mantine-color-dark-0": "#22211F",
-    "--mantine-color-dark-1": "#1A1917",
-    "--mantine-color-dark-2": "#2C2B28",
-    "--mantine-color-dark-3": "#383632",
-    "--mantine-color-dark-4": "#4E4B45",
-    "--mantine-color-dark-5": "#8E8A7E",
-    "--mantine-color-dark-6": "#A8A296",
-    "--mantine-color-dark-7": "#D9D3C4",
-    "--mantine-color-dark-8": "#FAF9F6",
-    "--mantine-color-dark-9": "#FFFFFF",
+    // Mantine SURFACE scale for dark mode. Unlike `gray` (which the app inverts so
+    // high indices read as light TEXT), `dark.N` is used by Mantine internals AND
+    // the app's `isDark ? "dark.7"` surfaces as real backgrounds — so it must run
+    // normal: low = light, high = deep ink. This is what fixes pale inputs/panels.
+    "--mantine-color-dark-0": "#C9C7BE",
+    "--mantine-color-dark-1": "#A8A296",
+    "--mantine-color-dark-2": "#8E8A7E",
+    "--mantine-color-dark-3": "#6B675E",
+    "--mantine-color-dark-4": "#46433D",
+    "--mantine-color-dark-5": "#2C2B28",
+    "--mantine-color-dark-6": "#232220",
+    "--mantine-color-dark-7": "#1F1E1C",
+    "--mantine-color-dark-8": "#1A1917",
+    "--mantine-color-dark-9": "#141310",
+    "--mantine-color-default": "#232220",
+
+    // Forest accent — dark-mode remap. The light scale's low shades (#F2F7F6…)
+    // are near-white and were glowing as bright patches on the dark page. In dark
+    // mode the low shades become deep green-tinted SURFACES, and the high shades
+    // BRIGHTEN so accent text / icons keep contrast on ink. Solid-green buttons
+    // hardcode #034F46 directly, so brightening 7/8 here is safe for them.
+    "--mantine-color-forest-0": "#15241F",  // deep tint surface (accent bg)
+    "--mantine-color-forest-1": "#1A302A",  // raised tint surface
+    "--mantine-color-forest-2": "#234039",  // accent border
+    "--mantine-color-forest-3": "#2E5148",  // stronger accent border
+    "--mantine-color-forest-4": "#7FA39E",  // primary button bg (autoContrast)
+    "--mantine-color-forest-5": "#8FB3AD",
+    "--mantine-color-forest-6": "#A3C4BE",  // accent text / icon
+    "--mantine-color-forest-7": "#B3D1CB",  // primary accent text on ink
+    "--mantine-color-forest-8": "#CBE0DC",
+    "--mantine-color-forest-9": "#E4ECEB",
+
+    // Lavender (primary) — dark-mode remap, same approach as forest: low shades
+    // become deep lavender-tinted surfaces/borders, high shades brighten so
+    // accent text and primary buttons keep contrast on ink.
+    "--mantine-color-lavender-0": "#1E1A2A",  // deep tint surface
+    "--mantine-color-lavender-1": "#262034",  // raised tint surface
+    "--mantine-color-lavender-2": "#332B45",  // accent border
+    "--mantine-color-lavender-3": "#433A5C",
+    "--mantine-color-lavender-4": "#9C86C8",  // primary button bg (autoContrast)
+    "--mantine-color-lavender-5": "#AB97D2",
+    "--mantine-color-lavender-6": "#BCABDD",  // accent text / icon
+    "--mantine-color-lavender-7": "#CDBFEA",  // primary accent text on ink
+    "--mantine-color-lavender-8": "#DDD2F2",
+    "--mantine-color-lavender-9": "#EFE9F8",
   },
 });
 

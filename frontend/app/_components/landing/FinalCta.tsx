@@ -41,7 +41,7 @@ export function FinalCta() {
               c="gray.0"
               maw={640}
               style={{
-                fontFamily: "var(--font-serif), Georgia, serif",
+                fontFamily: "var(--font-sans), sans-serif",
                 fontWeight: 500,
                 fontSize: "clamp(1.7rem, 3.6vw, 2.5rem)",
                 letterSpacing: "-0.02em",

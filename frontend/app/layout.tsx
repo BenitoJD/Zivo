@@ -68,8 +68,14 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
               html, body, input, button, select, textarea {
                 font-family: var(--font-sans), 'Figtree', -apple-system, BlinkMacSystemFont, sans-serif !important;
               }
-              h1, h2, h3, h4, h5, h6, .serif-text {
+              /* Wispr-style: elegant serif display headings over a sans body. */
+              h1, h2, h3, h4, h5, h6 {
                 font-family: 'Newsreader', 'EB Garamond', Georgia, serif !important;
+                letter-spacing: -0.01em;
+              }
+              /* Escape hatch for anything that must stay sans inside a heading. */
+              .sans-text {
+                font-family: var(--font-sans), 'Figtree', sans-serif !important;
               }
               /* Premium warm/ink text selection */
               ::selection {

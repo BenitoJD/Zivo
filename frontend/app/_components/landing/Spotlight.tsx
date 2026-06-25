@@ -43,7 +43,7 @@ export function Spotlight() {
               <Title
                 order={2}
                 style={{
-                  fontFamily: "var(--font-serif), Georgia, serif",
+                  fontFamily: "var(--font-sans), sans-serif",
                   fontWeight: 500,
                   fontSize: "clamp(1.6rem, 3vw, 2.2rem)",
                   letterSpacing: "-0.015em",
@@ -51,12 +51,7 @@ export function Spotlight() {
                 }}
               >
                 A tutor that answers from{" "}
-                <Box
-                  component="span"
-                  fs="italic"
-                  c="lavender.7"
-                  style={{ fontFamily: "var(--font-serif), Georgia, serif" }}
-                >
+                <Box component="span" c="lavender.7" style={{ fontWeight: 700 }}>
                   your source
                 </Box>
                 , not the internet.
