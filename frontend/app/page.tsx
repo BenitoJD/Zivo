@@ -258,7 +258,7 @@ export default function LandingPage() {
       <Container size="lg" px={{ base: "md", md: "lg" }} py={{ base: "lg", md: 32 }}>
         <Group justify="space-between" wrap="nowrap" align="center">
           <BrandMark height={24} />
-          <Text size="xs" c="gray.5">
+          <Text size="xs" c="gray.5" suppressHydrationWarning>
             © {new Date().getFullYear()} Zivo. Question better.
           </Text>
         </Group>

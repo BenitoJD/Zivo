@@ -1,11 +1,16 @@
 import type { Metadata, Viewport } from "next";
+import { cookies } from "next/headers";
 import Script from "next/script";
 import { Plus_Jakarta_Sans, Newsreader } from "next/font/google";
 import "@mantine/core/styles.css";
 import "@mantine/dropzone/styles.css";
 import "@mantine/notifications/styles.css";
 import Providers from "@/app/providers";
-import { MANTINE_COLOR_SCHEME_SCRIPT, mantineHtmlProps } from "@/lib/mantine-color-scheme";
+import {
+  MANTINE_COLOR_SCHEME_COOKIE,
+  MANTINE_COLOR_SCHEME_SCRIPT,
+  readColorSchemeFromCookie,
+} from "@/lib/mantine-color-scheme";
 
 const plusJakartaSans = Plus_Jakarta_Sans({
   subsets: ["latin"],
@@ -33,9 +38,14 @@ export const viewport: Viewport = {
   viewportFit: "cover",
 };
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  const cookieStore = await cookies();
+  const colorScheme = readColorSchemeFromCookie(
+    cookieStore.get(MANTINE_COLOR_SCHEME_COOKIE)?.value,
+  );
+
   return (
-    <html lang="en" {...mantineHtmlProps}>
+    <html lang="en" data-mantine-color-scheme={colorScheme} suppressHydrationWarning>
       <head>
         <script
           data-mantine-script
@@ -49,7 +59,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         className={`${plusJakartaSans.variable} ${newsreader.variable}`}
         style={{ height: "100dvh", overflow: "hidden", margin: 0 }}
       >
-        <Providers>{children}</Providers>
+        <Providers colorScheme={colorScheme}>{children}</Providers>
       </body>
     </html>
   );
