@@ -1,4 +1,5 @@
-import { Box, Center, Skeleton, Stack } from "@mantine/core";
+import { Box, Center, Loader, Stack, Text } from "@mantine/core";
+import { BrandMark } from "@/app/_components/BrandMark";
 
 /**
  * Route-level loading state. A calm paper skeleton — used by Next.js while a
@@ -8,11 +9,17 @@ export default function Loading() {
   return (
     <Box bg="var(--mantine-color-body)" style={{ minHeight: "100dvh" }}>
       <Center style={{ minHeight: "100dvh" }} p="md">
-        <Stack gap="md" w="100%" maw={560}>
-          <Skeleton height={28} width="40%" radius="md" />
-          <Skeleton height={64} radius="md" />
-          <Skeleton height={64} radius="md" />
-          <Skeleton height={64} radius="md" />
+        <Stack gap="lg" align="center" ta="center">
+          <BrandMark height={36} />
+          <Loader size="sm" color="lavender" type="dots" />
+          <Text
+            size="sm"
+            c="gray.5"
+            fs="italic"
+            style={{ fontFamily: "var(--font-serif)", letterSpacing: "0.02em" }}
+          >
+            Turning ink into understanding…
+          </Text>
         </Stack>
       </Center>
     </Box>

@@ -22,11 +22,11 @@ import {
   IconLayoutSidebarLeftCollapse,
   IconLogin,
   IconMoon,
+  IconSettings,
   IconSun,
   IconTrash,
   IconUpload,
 } from "@tabler/icons-react";
-import { BRAND_NAME } from "@/lib/brand";
 import { BrandMark } from "@/app/_components/BrandMark";
 import type { SourceDocument } from "@/lib/types";
 
@@ -155,6 +155,7 @@ export type SidebarProps = {
   onSignIn: () => void;
   onOpenModels: () => void;
   onDeleteSource: (doc: SourceDocument) => void;
+  onOpenSettings: () => void;
 };
 
 export function Sidebar({
@@ -173,6 +174,7 @@ export function Sidebar({
   onSignIn,
   onOpenModels,
   onDeleteSource,
+  onOpenSettings,
 }: SidebarProps) {
   const { colorScheme, toggleColorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
@@ -194,19 +196,7 @@ export function Sidebar({
           <SidebarAnimatedLayer visible={wide} enterDelay={60} reduceMotion={reduceMotion}>
             <Group px="md" h={52} justify="space-between" wrap="nowrap" gap="sm">
               <Group gap="sm" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
-                <BrandMark showWord={false} height={30} />
-                <Text
-                  fw={600}
-                  size="lg"
-                  lineClamp={1}
-                  style={{
-                    letterSpacing: "-0.03em",
-                    fontFamily: "var(--font-serif), 'EB Garamond', Georgia, serif",
-                    color: "var(--mantine-color-text)",
-                  }}
-                >
-                  {BRAND_NAME}
-                </Text>
+                <BrandMark showWord={true} height={30} />
               </Group>
               <ActionIcon
                 variant="subtle"
@@ -347,9 +337,9 @@ export function Sidebar({
             >
               Add source
             </Button>
-            <Group justify="space-between" wrap="nowrap" align="center" gap="sm">
-              <Group gap="xs" wrap="nowrap" align="center">
-                <Text size="xs" c="gray.5">
+            <Stack gap="xs" mt="xs">
+              <Group justify="space-between" align="center">
+                <Text size="xs" c="gray.5" fw={500} style={{ fontFamily: "var(--font-sans)" }}>
                   Appearance
                 </Text>
                 <SegmentedControl
@@ -379,25 +369,42 @@ export function Sidebar({
                   aria-label={isDark ? "Dark mode on" : "Light mode on"}
                 />
               </Group>
-              <Button
-                variant="subtle"
-                size="compact-sm"
-                leftSection={<IconLogin size={14} />}
-                onClick={onSignIn}
-                px="xs"
-              >
-                {username ? `@${username}` : "Sign in"}
-              </Button>
-            </Group>
+              <Group justify="space-between" align="center">
+                <Button
+                  variant="subtle"
+                  color="gray"
+                  size="xs"
+                  leftSection={<IconSettings size={15} stroke={1.5} />}
+                  onClick={onOpenSettings}
+                  px="xs"
+                  styles={{ root: { height: 32 } }}
+                >
+                  Settings
+                </Button>
+                <Button
+                  variant="subtle"
+                  size="xs"
+                  leftSection={<IconLogin size={15} stroke={1.5} />}
+                  onClick={onSignIn}
+                  px="xs"
+                  styles={{ root: { height: 32 } }}
+                >
+                  {username ? `@${username}` : "Sign in"}
+                </Button>
+              </Group>
+            </Stack>
           </Box>
         ) : (
-          <Box pos="relative" mih={140} w="100%">
+          <Box pos="relative" mih={180} w="100%">
             <Stack gap={6} align="center" w="100%" py="xs">
               <MiniRailButton
                 label={isDark ? "Switch to light mode" : "Switch to dark mode"}
                 onClick={() => toggleColorScheme()}
               >
                 {isDark ? <IconMoon size={18} stroke={1.5} /> : <IconSun size={18} stroke={1.5} />}
+              </MiniRailButton>
+              <MiniRailButton label="Settings" onClick={onOpenSettings}>
+                <IconSettings size={18} stroke={1.5} />
               </MiniRailButton>
               <MiniRailButton label="Add source" emphasized onClick={onAddSource}>
                 <IconUpload size={18} stroke={1.5} />

@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Center, Paper, Stack, Text, Title } from "@mantine/core";
+import { Box, Button, Center, Paper, Stack, Text, Title } from "@mantine/core";
 import { IconRefresh } from "@tabler/icons-react";
 
 export default function Error({
@@ -12,8 +12,30 @@ export default function Error({
 }) {
   return (
     <Center mih="100dvh" p="md" bg="var(--mantine-color-body)">
-      <Paper radius="xl" p={{ base: "xl", md: 48 }} shadow="paper" bg="gray.0" maw={460} w="100%">
-        <Stack align="center" gap={14} ta="center">
+      <Paper
+        radius="xl"
+        p={{ base: "xl", md: 48 }}
+        shadow="paper"
+        bg="gray.0"
+        maw={460}
+        w="100%"
+        style={{
+          position: "relative",
+          overflow: "hidden",
+          border: "1px solid var(--mantine-color-default-border)",
+          boxShadow: "var(--mantine-shadow-paper-lg)",
+        }}
+      >
+        <Box
+          style={{
+            position: "absolute",
+            inset: 0,
+            pointerEvents: "none",
+            zIndex: 0,
+            background: "radial-gradient(circle 350px at 50% 120%, rgba(220, 100, 80, 0.04), transparent 75%)",
+          }}
+        />
+        <Stack align="center" gap={14} ta="center" style={{ position: "relative", zIndex: 1 }}>
           <Text size="xs" fw={600} tt="uppercase" lts={2} c="terracotta.7">
             Something broke
           </Text>

@@ -54,7 +54,19 @@ export function Capabilities() {
           <Group gap="lg" grow align="stretch" w="100%">
             {FEATURES.map((f) => (
               <Reveal key={f.title} as="div">
-                <Paper radius="lg" p="xl" shadow="paper" bg="gray.0" h="100%">
+                <Paper
+                  radius="lg"
+                  p="xl"
+                  shadow="paper"
+                  bg="gray.0"
+                  h="100%"
+                  className="capability-card"
+                  style={{
+                    transition: "transform 280ms cubic-bezier(0.32, 0.72, 0, 1), box-shadow 280ms cubic-bezier(0.32, 0.72, 0, 1), border-color 280ms cubic-bezier(0.32, 0.72, 0, 1)",
+                    border: "1px solid var(--mantine-color-default-border)",
+                    cursor: "default",
+                  }}
+                >
                   <Stack gap={14} h="100%">
                     <Box
                       style={{
@@ -89,6 +101,13 @@ export function Capabilities() {
           </Group>
         </Stagger>
       </Stack>
+      <style>{`
+        .capability-card:hover {
+          transform: translateY(-4px);
+          box-shadow: var(--mantine-shadow-paper-lg) !important;
+          border-color: var(--mantine-color-lavender-3) !important;
+        }
+      `}</style>
     </Container>
   );
 }

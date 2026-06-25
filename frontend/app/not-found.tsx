@@ -14,8 +14,30 @@ export default function NotFound() {
         </Group>
       </Container>
       <Center style={{ minHeight: "calc(100dvh - 72px)" }} px="md" pb={80}>
-        <Paper radius="xl" p={{ base: "xl", md: 56 }} shadow="paper" bg="gray.0" maw={520} w="100%">
-          <Stack align="center" gap={16} ta="center">
+        <Paper
+          radius="xl"
+          p={{ base: "xl", md: 56 }}
+          shadow="paper"
+          bg="gray.0"
+          maw={520}
+          w="100%"
+          style={{
+            position: "relative",
+            overflow: "hidden",
+            border: "1px solid var(--mantine-color-default-border)",
+            boxShadow: "var(--mantine-shadow-paper-lg)",
+          }}
+        >
+          <Box
+            style={{
+              position: "absolute",
+              inset: 0,
+              pointerEvents: "none",
+              zIndex: 0,
+              background: "radial-gradient(circle 350px at 50% 120%, rgba(123, 93, 166, 0.04), transparent 75%)",
+            }}
+          />
+          <Stack align="center" gap={16} ta="center" style={{ position: "relative", zIndex: 1 }}>
             <Text
               size="xs"
               fw={600}

@@ -100,9 +100,15 @@ export function LandingNav() {
               borderRadius: "16px",
               padding: condensed ? "8px 12px 8px 24px" : "12px 18px 12px 28px",
               transition,
-              background: "var(--zivo-header-bg)",
+              background: condensed
+                ? "color-mix(in srgb, var(--mantine-color-body) 82%, transparent)"
+                : "var(--zivo-header-bg)",
+              backdropFilter: condensed ? "blur(12px)" : "none",
+              WebkitBackdropFilter: condensed ? "blur(12px)" : "none",
               border: "1px solid var(--mantine-color-default-border)",
-              boxShadow: "var(--mantine-shadow-paper-lg)",
+              boxShadow: condensed
+                ? "0 4px 20px rgba(0, 0, 0, 0.03), var(--mantine-shadow-paper)"
+                : "var(--mantine-shadow-paper-lg)",
             }}
           >
             <Group justify="space-between" wrap="nowrap" h={brandH}>

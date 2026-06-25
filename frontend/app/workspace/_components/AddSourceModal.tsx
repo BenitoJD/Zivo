@@ -205,6 +205,7 @@ export function AddSourceModal({
             loading={importBusy}
             maxFiles={1}
             radius="md"
+            className="zivo-dropzone"
           >
             {importBusy ? (
               <Stack align="center" justify="center" gap="sm" mih={{ base: 160, sm: 220 }} px="md">
@@ -298,6 +299,19 @@ export function AddSourceModal({
           </Stack>
         </Tabs.Panel>
       </Tabs>
+      <style>{`
+        .zivo-dropzone {
+          border: 1.5px dashed var(--mantine-color-default-border) !important;
+          background: var(--mantine-color-gray-0) !important;
+          transition: all 280ms cubic-bezier(0.32, 0.72, 0, 1) !important;
+          cursor: pointer;
+        }
+        .zivo-dropzone:hover {
+          border-color: var(--mantine-color-lavender-5) !important;
+          background: var(--mantine-color-lavender-0) !important;
+          transform: scale(0.995);
+        }
+      `}</style>
     </Modal>
   );
 }

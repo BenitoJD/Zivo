@@ -16,9 +16,23 @@ export function Spotlight() {
         p={{ base: "xl", md: 48 }}
         bg="gray.0"
         shadow="paper"
-        style={{ overflow: "hidden" }}
+        style={{
+          position: "relative",
+          overflow: "hidden",
+          border: "1px solid var(--mantine-color-default-border)",
+          boxShadow: "var(--mantine-shadow-paper-lg)",
+        }}
       >
-        <Group align="center" grow wrap="nowrap" gap={48}>
+        <Box
+          style={{
+            position: "absolute",
+            inset: 0,
+            pointerEvents: "none",
+            zIndex: 0,
+            background: "radial-gradient(circle 400px at 90% 80%, rgba(123, 93, 166, 0.05), transparent 70%)",
+          }}
+        />
+        <Group align="center" grow wrap="nowrap" gap={48} style={{ position: "relative", zIndex: 1 }}>
           <Stack gap={20} maw={520}>
             <Reveal>
               <Text size="xs" fw={600} tt="uppercase" lts={2} c="lavender.7">

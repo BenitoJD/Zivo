@@ -79,8 +79,28 @@ export function ProductMock() {
   }
 
   return (
-    <Paper shadow="paper-lg" radius="xl" p={{ base: "lg", md: 28 }} bg="gray.0">
-      <Stack gap={18}>
+    <Paper
+      shadow="paper-lg"
+      radius="xl"
+      p={{ base: "lg", md: 28 }}
+      bg="gray.0"
+      style={{
+        position: "relative",
+        overflow: "hidden",
+        border: "1px solid var(--mantine-color-default-border)",
+        boxShadow: "var(--mantine-shadow-paper-lg)",
+      }}
+    >
+      <Box
+        style={{
+          position: "absolute",
+          inset: 0,
+          pointerEvents: "none",
+          zIndex: 0,
+          background: "radial-gradient(circle 300px at 80% 20%, rgba(123, 93, 166, 0.04), transparent 70%)",
+        }}
+      />
+      <Stack gap={18} style={{ position: "relative", zIndex: 1 }}>
         <AnimatePresence mode="wait">
           <motion.div
             key={index}

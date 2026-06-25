@@ -59,6 +59,9 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
         <Script id="unregister-stale-sw" strategy="beforeInteractive">
           {`if("serviceWorker" in navigator){navigator.serviceWorker.getRegistrations().then((rs)=>{rs.forEach((r)=>r.unregister())})}`}
         </Script>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400..700;1,400..700&family=Newsreader:ital,opsz,wght@0,6..72,200..800;1,6..72,200..800&display=swap" rel="stylesheet" />
         <style
           dangerouslySetInnerHTML={{
             __html: `
@@ -66,7 +69,48 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
                 font-family: var(--font-sans), 'Figtree', -apple-system, BlinkMacSystemFont, sans-serif !important;
               }
               h1, h2, h3, h4, h5, h6, .serif-text {
-                font-family: var(--font-serif), 'EB Garamond', Georgia, serif !important;
+                font-family: 'Newsreader', 'EB Garamond', Georgia, serif !important;
+              }
+              /* Premium warm/ink text selection */
+              ::selection {
+                background: var(--mantine-color-lavender-1);
+                color: var(--mantine-color-lavender-9);
+              }
+              /* Custom scrollbars */
+              ::-webkit-scrollbar {
+                width: 6px;
+                height: 6px;
+              }
+              ::-webkit-scrollbar-track {
+                background: transparent;
+              }
+              ::-webkit-scrollbar-thumb {
+                background: var(--mantine-color-gray-3);
+                border-radius: 4px;
+              }
+              ::-webkit-scrollbar-thumb:hover {
+                background: var(--mantine-color-gray-4);
+              }
+              /* Ambient background light glows */
+              .spotlight-glow {
+                position: absolute;
+                inset: 0;
+                pointer-events: none;
+                z-index: 0;
+                background: radial-gradient(circle 800px at 50% -200px, rgba(123, 93, 166, 0.06), transparent 80%);
+              }
+              [data-mantine-color-scheme="dark"] .spotlight-glow {
+                background: radial-gradient(circle 800px at 50% -200px, rgba(179, 161, 204, 0.03), transparent 80%);
+              }
+              /* Shimmer loader style */
+              @keyframes paper-shimmer {
+                0% { background-position: -200% 0; }
+                100% { background-position: 200% 0; }
+              }
+              .shimmer-bg {
+                background: linear-gradient(90deg, var(--mantine-color-gray-0) 25%, var(--mantine-color-gray-2) 50%, var(--mantine-color-gray-0) 75%);
+                background-size: 200% 100%;
+                animation: paper-shimmer 1.8s infinite linear;
               }
             `,
           }}

@@ -44,8 +44,8 @@ export function BrandMark({
       {showWord && (
         <Title
           order={4}
+          className="serif-text"
           style={{
-            fontFamily: "var(--font-serif), 'EB Garamond', Georgia, serif",
             fontWeight: 500,
             letterSpacing: "-0.02em",
             color: "inherit",

@@ -20,6 +20,8 @@ import {
 import { AddSourceModal } from "@/app/workspace/_components/AddSourceModal";
 import { DeleteSourceModal } from "@/app/workspace/_components/DeleteSourceModal";
 import { sourceLabel } from "@/app/workspace/_components/Sidebar";
+import { SettingsModal } from "@/app/workspace/_components/SettingsModal";
+import { OnboardingGuide } from "@/app/workspace/_components/OnboardingGuide";
 
 const MOBILE_HEADER_HEIGHT = 52;
 
@@ -54,6 +56,18 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
 
   const [addOpen, setAddOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<SourceDocument | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const completed = localStorage.getItem("zivo-onboarding-completed");
+      if (completed !== "true") {
+        const t = setTimeout(() => setOnboardingOpen(true), 100);
+        return () => clearTimeout(t);
+      }
+    }
+  }, []);
 
   const invalidateSources = useInvalidateSources();
   const sourcesQuery = useSourcesQuery();
@@ -118,7 +132,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
             display: "flex",
             flexDirection: "column",
             borderRight: "1px solid var(--mantine-color-default-border)",
-            background: "var(--mantine-color-default)",
+            background: "var(--mantine-color-gray-0)",
           },
           main: {
             height: "100%",
@@ -185,6 +199,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
               if (isMobile) closeMobile();
             }}
             onDeleteSource={(doc) => setDeleteTarget(doc)}
+            onOpenSettings={() => setSettingsOpen(true)}
           />
         </AppShell.Navbar>
 
@@ -199,6 +214,13 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
         documents={documents}
         onDeleted={() => invalidateSources()}
       />
+      <SettingsModal
+        opened={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        username={username}
+        onReplayOnboarding={() => setOnboardingOpen(true)}
+      />
+      <OnboardingGuide opened={onboardingOpen} onClose={() => setOnboardingOpen(false)} />
     </WorkspaceShellContext.Provider>
   );
 }

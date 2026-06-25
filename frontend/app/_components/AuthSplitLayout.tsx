@@ -24,14 +24,27 @@ export function AuthSplitLayout({
   return (
     <Box bg="var(--mantine-color-body)" style={{ minHeight: "100dvh" }}>
       <Group align="stretch" wrap="nowrap" gap={0} style={{ minHeight: "100dvh" }}>
-        {/* Brand panel */}
         <Box
           visibleFrom="md"
-          bg="gray.8"
-          style={{ flex: "1 1 0", minHeight: "100dvh", position: "relative" }}
+          bg="gray.9"
+          style={{
+            flex: "1 1 0",
+            minHeight: "100dvh",
+            position: "relative",
+            overflow: "hidden",
+          }}
           p="xl"
         >
-          <Stack justify="space-between" style={{ minHeight: "100dvh" }} gap={0}>
+          <Box
+            style={{
+              position: "absolute",
+              inset: 0,
+              pointerEvents: "none",
+              zIndex: 0,
+              background: "radial-gradient(circle 600px at 20% 80%, rgba(123, 93, 166, 0.12), transparent 80%)",
+            }}
+          />
+          <Stack justify="space-between" style={{ minHeight: "100dvh", position: "relative", zIndex: 1 }} gap={0}>
             <BrandMark height={28} />
             <Stack gap={20} maw={480}>
               <Text
