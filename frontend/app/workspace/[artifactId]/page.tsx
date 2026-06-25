@@ -720,10 +720,10 @@ export default function WorkspaceArtifactPage({
     return (
       <Center mih="50vh">
         <Stack align="center" gap="md" maw={420}>
-          <Alert color="red" title="Could not load source" variant="light">
+          <Alert color="terracotta" title="Could not load source" variant="light">
             {setupError}
           </Alert>
-          <Button variant="white" c="dark.9" onClick={() => router.push("/workspace")}>
+          <Button variant="default" onClick={() => router.push("/workspace")}>
             Back to library
           </Button>
         </Stack>
@@ -784,12 +784,14 @@ export default function WorkspaceArtifactPage({
       <Center mih="70vh">
         <Paper withBorder p="xl" maw={480} w="100%">
           <Stack gap="md" align="center">
-            <Title order={3}>Indexing failed</Title>
-            <Text c="dimmed" ta="center">
+            <Title order={3} style={{ fontFamily: "var(--font-serif), Georgia, serif", fontWeight: 500 }}>
+              Indexing failed
+            </Title>
+            <Text c="dimmed" ta="center" lh={1.6}>
               We could not finish preparing pages {selectedRange?.from}–{selectedRange?.to}. Try a smaller
               range or upload the file again.
             </Text>
-            <Button variant="white" c="dark.9" onClick={() => window.location.reload()}>
+            <Button variant="default" onClick={() => window.location.reload()}>
               Reload
             </Button>
           </Stack>
@@ -808,7 +810,7 @@ export default function WorkspaceArtifactPage({
           <Stack gap="lg">
             <Stack gap="xs" align="center">
               <Loader type="oval" size="sm" />
-              <Text size="lg" fw={500} ta="center" style={{ letterSpacing: "-0.02em" }}>
+              <Text size="lg" fw={500} ta="center" style={{ letterSpacing: "-0.02em", fontFamily: "var(--font-serif), Georgia, serif" }}>
                 {stage.title}
               </Text>
               <Text c="dimmed" ta="center" size="sm">
@@ -829,7 +831,7 @@ export default function WorkspaceArtifactPage({
                   {progress}%
                 </Text>
               </Group>
-              <Progress value={progress} size="md" radius="xl" animated={progress < 100} />
+              <Progress value={progress} size="md" radius="xl" color="lavender" animated={progress < 100} />
             </Stack>
           </Stack>
         </Paper>
@@ -952,7 +954,7 @@ export default function WorkspaceArtifactPage({
                 side="left"
                 icon={<IconFileText size={20} stroke={2} />}
                 label="Source"
-                color="blue"
+                color="lavender"
                 onClick={openSource}
               />
             )}
@@ -961,7 +963,7 @@ export default function WorkspaceArtifactPage({
                 side="right"
                 icon={<IconMessageCircle size={20} stroke={2} />}
                 label={ZIVO_ASSISTANT_NAME}
-                color="grape"
+                color="sage"
                 onClick={openTutor}
               />
             )}
@@ -1151,14 +1153,14 @@ function DocumentCompleteScreen({
     <Center py={compact ? "lg" : "xl"} px="md" h="100%">
       <Stack align="center" gap={compact ? "lg" : "xl"} maw={440}>
         <Stack align="center" gap="xs">
-          <ThemeIcon size={52} radius="xl" variant="light" color="green">
+          <ThemeIcon size={52} radius="xl" variant="light" color="sage">
             <IconClipboardList size={26} stroke={1.5} />
           </ThemeIcon>
           <Title
             order={2}
             ta="center"
-            fw={600}
-            style={{ letterSpacing: "-0.04em", lineHeight: 1.15 }}
+            fw={500}
+            style={{ letterSpacing: "-0.01em", lineHeight: 1.2, fontFamily: "var(--font-serif), Georgia, serif" }}
           >
             {pageLabel} complete
           </Title>
@@ -1467,16 +1469,16 @@ function StudyMobileShell({
                   minHeight: 52,
                   padding: "6px 4px",
                   borderRadius: 0,
-                  background: selected ? "var(--mantine-color-blue-light)" : "transparent",
+                  background: selected ? "var(--mantine-color-lavender-1)" : "transparent",
                 }}
               >
                 <Stack gap={2} align="center">
                   <Icon
                     size={22}
                     stroke={selected ? 2.25 : 1.75}
-                    color={selected ? "var(--mantine-color-blue-filled)" : "var(--mantine-color-dimmed)"}
+                    color={selected ? "var(--mantine-color-lavender-7)" : "var(--mantine-color-dimmed)"}
                   />
-                  <Text size="10px" fw={selected ? 700 : 500} c={selected ? "blue" : "dimmed"} lh={1.1}>
+                  <Text size="10px" fw={selected ? 700 : 500} c={selected ? "lavender.7" : "dimmed"} lh={1.1}>
                     {tab.label}
                   </Text>
                 </Stack>
@@ -2016,7 +2018,7 @@ function StudySourcePanel({
   if (pdfError) {
     return (
       <Center flex={1} px="md">
-        <Text c="red" size="sm" ta="center">
+        <Text c="terracotta.7" size="sm" ta="center">
           {pdfError}
         </Text>
       </Center>
@@ -2151,7 +2153,7 @@ function PdfReaderToolbar({
         <Tooltip label="Fit page width">
           <Button
             variant={atFit ? "filled" : "light"}
-            color="blue"
+            color="gray"
             size="compact-xs"
             radius="md"
             leftSection={<IconArrowsMaximize size={13} />}
@@ -2165,7 +2167,7 @@ function PdfReaderToolbar({
           <Tooltip label="Zoom out">
             <ActionIcon
               variant="light"
-              color="blue"
+              color="gray"
               size="sm"
               radius="md"
               onClick={onZoomOut}
@@ -2181,7 +2183,7 @@ function PdfReaderToolbar({
           <Tooltip label="Zoom in">
             <ActionIcon
               variant="light"
-              color="blue"
+              color="gray"
               size="sm"
               radius="md"
               onClick={onZoomIn}
@@ -2253,21 +2255,13 @@ function McqFeedbackCard({
   const detail = parts.slice(1).join("\n\n");
 
   const surface = isCorrect
-    ? isDark
-      ? "rgba(64, 192, 87, 0.07)"
-      : "rgba(64, 192, 87, 0.05)"
-    : isDark
-      ? "rgba(255, 255, 255, 0.03)"
-      : "rgba(0, 0, 0, 0.02)";
+    ? "var(--mantine-color-sage-0)"
+    : "var(--mantine-color-terracotta-0)";
   const outline = isCorrect
-    ? isDark
-      ? "rgba(64, 192, 87, 0.18)"
-      : "rgba(64, 192, 87, 0.22)"
-    : isDark
-      ? "var(--mantine-color-dark-5)"
-      : "var(--mantine-color-gray-2)";
-  const primaryText = isDark ? "var(--mantine-color-gray-1)" : "var(--mantine-color-dark-7)";
-  const secondaryText = isDark ? "var(--mantine-color-gray-4)" : "var(--mantine-color-gray-7)";
+    ? "var(--mantine-color-sage-3)"
+    : "var(--mantine-color-terracotta-3)";
+  const primaryText = isCorrect ? "var(--mantine-color-sage-9)" : "var(--mantine-color-terracotta-9)";
+  const secondaryText = isCorrect ? "var(--mantine-color-sage-8)" : "var(--mantine-color-terracotta-8)";
 
   return (
     <Box
@@ -2415,13 +2409,12 @@ function McqHeroPanel({
             radius="xl"
             w={180}
             animated
-            color={progressPct >= 100 && hasDeterminate ? "teal" : "blue"}
+            color={progressPct >= 100 && hasDeterminate ? "sage" : "lavender"}
           />
           <Text
             size="lg"
             fw={500}
             ta="center"
-            c={isDark ? "gray.2" : "dark.6"}
             style={{ letterSpacing: "-0.025em" }}
           >
             {waitStatus.title}
@@ -2453,14 +2446,15 @@ function McqHeroPanel({
     <Stack gap={compact ? 12 : 16} align="stretch" mih={0} style={{ overflow: "hidden", maxHeight: "100%" }}>
       <Title
         order={2}
-        fw={600}
-        lh={1.3}
+        fw={500}
+        lh={1.35}
         ta="center"
         lineClamp={compact ? 4 : 3}
         style={{
           flexShrink: 0,
-          fontSize: compact ? "clamp(0.95rem, 4.2vw, 1.25rem)" : "clamp(1rem, 2vw, 1.5rem)",
-          letterSpacing: "-0.02em",
+          fontFamily: "var(--font-serif), Georgia, serif",
+          fontSize: compact ? "clamp(0.95rem, 4.2vw, 1.25rem)" : "clamp(1.05rem, 2vw, 1.6rem)",
+          letterSpacing: "-0.005em",
         }}
       >
         {stem}
@@ -2483,14 +2477,14 @@ function McqHeroPanel({
             let borderColor = "var(--mantine-color-default-border)";
             let background = "transparent";
             if (isCorrectOption) {
-              borderColor = "var(--mantine-color-green-filled)";
-              background = isDark ? "rgba(64, 192, 87, 0.16)" : "rgba(64, 192, 87, 0.1)";
+              borderColor = "var(--mantine-color-sage-6)";
+              background = "var(--mantine-color-sage-0)";
             } else if (isWrongSelected) {
-              borderColor = "var(--mantine-color-red-filled)";
-              background = isDark ? "rgba(250, 82, 82, 0.14)" : "rgba(250, 82, 82, 0.08)";
+              borderColor = "var(--mantine-color-terracotta-6)";
+              background = "var(--mantine-color-terracotta-0)";
             } else if (isSelected) {
-              borderColor = "var(--mantine-color-blue-filled)";
-              background = isDark ? "rgba(51, 154, 240, 0.14)" : "rgba(51, 154, 240, 0.08)";
+              borderColor = "var(--mantine-color-lavender-6)";
+              background = "var(--mantine-color-lavender-0)";
             }
             return (
               <Radio
@@ -2543,7 +2537,7 @@ function McqHeroPanel({
           <Button
             radius="xl"
             size={compact ? "md" : "md"}
-            color="green"
+            color="sage"
             maw={compact ? "100%" : 280}
             w="100%"
             loading={submitting}
@@ -2555,7 +2549,7 @@ function McqHeroPanel({
           <Button
             radius="xl"
             size="md"
-            color="blue"
+            color="lavender"
             maw={compact ? "100%" : 280}
             w="100%"
             onClick={onSubmit}
@@ -2765,7 +2759,7 @@ function TutorPanel({
                 radius="xl"
                 size={32}
                 variant="light"
-                color="red"
+                color="terracotta"
                 onClick={onStop}
                 aria-label="Stop response"
               >
@@ -3005,7 +2999,7 @@ function PageSelectionScreen({
       }}
     >
       {pdfError && (
-        <Text c="red" size="sm" px="md" pt="xs">
+        <Text c="terracotta.7" size="sm" px="md" pt="xs">
           {pdfError}
         </Text>
       )}
@@ -3275,7 +3269,7 @@ function PageSelectionDock({
       size={isCompact ? "sm" : "md"}
       radius="xl"
       variant="filled"
-      color="blue"
+      color="lavender"
       px={isCompact ? "lg" : "xl"}
       fw={600}
       fullWidth={isCompact}
@@ -3284,15 +3278,6 @@ function PageSelectionDock({
       onClick={onConfirm}
       loading={confirming}
       disabled={!hasSelection}
-      styles={{
-        root: {
-          boxShadow: hasSelection
-            ? isDark
-              ? "0 6px 20px rgba(51, 154, 240, 0.32)"
-              : "0 6px 16px rgba(34, 139, 230, 0.24)"
-            : undefined,
-        },
-      }}
     >
       {confirmLabel}
     </Button>
@@ -3362,7 +3347,7 @@ function PageSelectionDock({
           </Group>
           {confirmButton}
           {setupError && (
-            <Text size="xs" c="red" ta="center">
+            <Text size="xs" c="terracotta.7" ta="center">
               {setupError}
             </Text>
           )}
@@ -3576,7 +3561,7 @@ function PageSelectionDock({
               </Group>
             )}
             {setupError && (
-              <Text size="xs" c="red" ta={isCompact ? "center" : undefined}>
+              <Text size="xs" c="terracotta.7" ta={isCompact ? "center" : undefined}>
                 {setupError}
               </Text>
             )}
@@ -3746,8 +3731,8 @@ function PageThumbnailCell({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
   const [frameWidth, setFrameWidth] = useState(compact ? 0 : thumbWidth);
-  const ringColor = isDark ? "var(--mantine-color-blue-4)" : "var(--mantine-color-blue-6)";
-  const idleRing = isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-4)";
+  const ringColor = "var(--mantine-color-lavender-6)";
+  const idleRing = "var(--mantine-color-default-border)";
   const ringWidth = selected ? 3 : 1;
   const innerRadius = compact ? 12 : 14;
   const outerRadius = innerRadius + ringWidth;
@@ -3773,10 +3758,11 @@ function PageThumbnailCell({
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    thumbCanvasRefs.current[page] = canvas;
+    const registry = thumbCanvasRefs.current;
+    registry[page] = canvas;
     return () => {
-      if (thumbCanvasRefs.current[page] === canvas) {
-        delete thumbCanvasRefs.current[page];
+      if (registry[page] === canvas) {
+        delete registry[page];
       }
     };
   }, [page, thumbCanvasRefs]);
@@ -3901,7 +3887,7 @@ function PageThumbnailCell({
           ta="center"
           mt={compact ? 8 : 12}
           fw={selected ? 700 : 500}
-          c={selected ? "blue" : "dimmed"}
+          c={selected ? "lavender.7" : "dimmed"}
           lh={1}
         >
           {page}
@@ -3913,9 +3899,9 @@ function PageThumbnailCell({
             right={ringWidth + 6}
             size={32}
             radius="xl"
-            color="blue"
+            color="lavender"
             variant="filled"
-            style={{ boxShadow: "0 3px 12px rgba(0,0,0,0.35)" }}
+            style={{ boxShadow: "0 3px 12px rgba(0,0,0,0.18)" }}
           >
             <IconCheck size={18} stroke={3} />
           </ThemeIcon>

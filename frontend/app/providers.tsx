@@ -16,41 +16,58 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 import { createQueryClient } from "@/lib/api/query-client";
 
-/** Custom editorial dark scale — warm charcoal tones instead of default grey. */
-const DARK_PALETTE = [
-  "#FAF7EE", // 0 (Cream text / foreground highlights)
-  "#E5E1D3", // 1
-  "#C4C0B3", // 2
-  "#9D9A8D", // 3
-  "#7B786C", // 4
-  "#5D5A50", // 5
-  "#3E3C36", // 6
-  "#2E2D2B", // 7 (Borders)
-  "#1C1C1A", // 8 (Card background)
-  "#121211", // 9 (Body background)
+/**
+ * Calm Paper — a light-first, book-like study aesthetic.
+ * Warm paper surfaces, ink text, restrained color, generous air, tactile cards.
+ */
+
+/** Neutral paper/ink scale — warm oat to deep ink (not cold grey). */
+const NEUTRAL_PALETTE = [
+  "#FBFAF6", // 0 — lifted paper (cards)
+  "#F4F1E9", // 1 — page (app background)
+  "#EFEBE1", // 2 — hover
+  "#E7E2D6", // 3 — hairline border
+  "#D9D3C4", // 4 — stronger border
+  "#A8A296", // 5 — dimmed text
+  "#6B675E", // 6 — secondary text
+  "#46433D", // 7 — strong muted
+  "#232220", // 8 — ink text
+  "#1A1917", // 9 — deepest ink
 ] as const;
 
-/** Custom editorial brand violet/lilac scale. */
+/** Brand lavender accent — used sparingly (links, active states, subtle highlights). */
 const LAVENDER_PALETTE = [
-  "#FAF9FC", // 0
-  "#F0ECF7", // 1
-  "#E0D7ED", // 2
-  "#CBBEE0", // 3
-  "#B3A0D1", // 4
-  "#967CBD", // 5
-  "#7C5EC2", // 6 (Light primary brand color)
-  "#6244A6", // 7
-  "#4C3285", // 8
-  "#372063", // 9
+  "#F7F4FB", // 0
+  "#EFE9F6", // 1
+  "#E1D6EF", // 2
+  "#CDBBDD", // 3 — light tint for subtle backgrounds
+  "#B3A1CC", // 4
+  "#947CB8", // 5
+  "#7B5DA6", // 6 — light-scheme primary
+  "#644791", // 7 — dark-scheme primary
+  "#4E3774", // 8
+  "#372259", // 9
+] as const;
+
+/** Sage green — "correct / success" feedback, calm not loud. */
+const SAGE_PALETTE = [
+  "#F1F6EF", "#E3EEDF", "#CBDDC4", "#A8C9A0", "#82AE79",
+  "#5F9156", "#4B7A43", "#3A6034", "#2C4A28", "#1F3520",
+] as const;
+
+/** Terracotta — "wrong / error" feedback, warm not alarming. */
+const TERRACOTTA_PALETTE = [
+  "#FBF1ED", "#F4DFD3", "#E8C2AE", "#D69B7D", "#C57454",
+  "#AE5634", "#90432A", "#73341F", "#582716", "#3E1B0E",
 ] as const;
 
 function resolvedColorScheme(): "light" | "dark" {
-  if (typeof document === "undefined") return "dark";
+  if (typeof document === "undefined") return "light";
   const scheme = document.documentElement.getAttribute("data-mantine-color-scheme");
-  return scheme === "light" ? "light" : "dark";
+  return scheme === "dark" ? "dark" : "light";
 }
 
-/** Gray primary fills are light in dark mode — force dark text on those surfaces. */
+/** Big primary buttons are ink with cream text; lavender fills keep readable contrast. */
 const variantColorResolver: VariantColorsResolver = (input) => {
   const resolved = defaultVariantColorsResolver(input);
   const autoContrast =
@@ -80,26 +97,46 @@ const theme = mergeMantineTheme(
       fontWeight: "500",
     },
     primaryColor: "lavender",
-    primaryShade: { light: 6, dark: 5 },
+    primaryShade: { light: 7, dark: 4 },
     autoContrast: true,
     variantColorResolver,
     defaultRadius: "xl",
     radius: {
-      xs: "4px",
-      sm: "8px",
+      xs: "6px",
+      sm: "10px",
       md: "14px",
       lg: "20px",
       xl: "28px",
     },
     colors: {
-      dark: [...DARK_PALETTE],
+      dark: [...NEUTRAL_PALETTE],
+      gray: [...NEUTRAL_PALETTE],
       lavender: [...LAVENDER_PALETTE],
+      sage: [...SAGE_PALETTE],
+      terracotta: [...TERRACOTTA_PALETTE],
+      // Keep semantic color scales calm by aliasing them.
+      green: [...SAGE_PALETTE],
+      red: [...TERRACOTTA_PALETTE],
+      blue: [...LAVENDER_PALETTE],
+    },
+    lineHeights: {
+      xs: "1.4",
+      sm: "1.5",
+      md: "1.6",
+      lg: "1.7",
+      xl: "1.85",
+    },
+    shadows: {
+      // Soft "paper lift" — calm, not Material-heavy.
+      paper: "0 1px 2px rgba(35, 34, 32, 0.04), 0 4px 16px rgba(35, 34, 32, 0.05)",
+      "paper-lg": "0 2px 6px rgba(35, 34, 32, 0.06), 0 12px 36px rgba(35, 34, 32, 0.08)",
     },
     components: {
       Paper: {
         defaultProps: {
           radius: "xl",
           withBorder: true,
+          shadow: "paper",
         },
       },
       Button: {
@@ -109,24 +146,24 @@ const theme = mergeMantineTheme(
       },
       TextInput: {
         defaultProps: {
-          radius: "xl",
+          radius: "md",
         },
       },
       PasswordInput: {
         defaultProps: {
-          radius: "xl",
+          radius: "md",
         },
       },
       Textarea: {
         defaultProps: {
-          radius: "lg",
+          radius: "md",
         },
       },
       Modal: {
         defaultProps: {
           radius: "xl",
           overlayProps: {
-            backgroundOpacity: 0.6,
+            backgroundOpacity: 0.45,
             blur: 8,
           },
         },
@@ -140,21 +177,25 @@ const theme = mergeMantineTheme(
   }),
 );
 
-const cssVariablesResolver: CSSVariablesResolver = (theme) => ({
+const cssVariablesResolver: CSSVariablesResolver = () => ({
   variables: {},
   light: {
-    "--mantine-color-body": "#FAF7EE",          // Warm cream background
-    "--mantine-color-text": "#1C1C1A",          // Rich dark grey text
-    "--mantine-color-default-border": "#E5E1D3",  // Soft warm beige border
-    "--mantine-color-default-hover": "#F0EDE2",   // Hover over cream items
-    "--mantine-color-placeholder": "#8E8C82",    // Placeholder color
+    "--mantine-color-body": "#F4F1E9",            // Warm oat paper background
+    "--mantine-color-text": "#232220",            // Ink text
+    "--mantine-color-default-border": "#E7E2D6",  // Warm hairline border
+    "--mantine-color-default-hover": "#EFEBE1",   // Hover over paper items
+    "--mantine-color-placeholder": "#8E8A7E",     // Placeholder
+    "--mantine-skeleton-color": "#EFEBE1",
+    "--mantine-skeleton-color-da": "#E7E2D6",
   },
   dark: {
-    "--mantine-color-body": "#121211",          // Soft warm off-black background
-    "--mantine-color-text": "#FAF7EE",          // Warm cream text
-    "--mantine-color-default-border": "#2E2D2B",  // Soft warm charcoal border
-    "--mantine-color-default-hover": "#1C1C1A",   // Hover over charcoal items
-    "--mantine-color-placeholder": "#605E58",    // Placeholder color
+    "--mantine-color-body": "#1A1917",            // Soft warm ink background
+    "--mantine-color-text": "#F4F1E9",            // Warm paper text
+    "--mantine-color-default-border": "#2E2C28",  // Soft charcoal border
+    "--mantine-color-default-hover": "#262522",   // Hover over charcoal items
+    "--mantine-color-placeholder": "#7A756B",     // Placeholder
+    "--mantine-skeleton-color": "#262522",
+    "--mantine-skeleton-color-da": "#2E2C28",
   },
 });
 
@@ -162,7 +203,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(createQueryClient);
   return (
     <QueryClientProvider client={queryClient}>
-      <MantineProvider theme={theme} cssVariablesResolver={cssVariablesResolver} defaultColorScheme="dark">
+      <MantineProvider theme={theme} cssVariablesResolver={cssVariablesResolver} defaultColorScheme="light">
         <Notifications position="top-right" />
         {children}
       </MantineProvider>
