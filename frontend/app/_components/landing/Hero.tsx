@@ -24,7 +24,7 @@ function WavyTextAnimation() {
         position: "relative",
         width: "100%",
         maxWidth: 960,
-        height: 280,
+        height: 340,
         margin: "0 auto",
         overflow: "visible",
       }}
@@ -32,37 +32,32 @@ function WavyTextAnimation() {
       <svg
         width="100%"
         height="100%"
-        viewBox="0 0 1000 280"
+        viewBox="0 0 1000 340"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
         style={{ display: "block", overflow: "visible" }}
       >
-        {/* Path 1: Source text — vertical circular arc on the left.
-            Text enters from far upper-left, sweeps downward in a compact arc,
-            curves around the bottom, then rises back to enter the pill.
-            Arc bottom stays within viewport height (y ≤ 280). */}
+        {/* Path 1: Source text — vertical arc from upper-left, sweeping down and into the pill */}
         <path
           id="sourceCurve"
-          d="M -300 60 C -100 60, 30 60, 60 110 C 90 160, 50 260, 120 275 C 190 290, 300 250, 370 210 C 420 180, 450 172, 470 170"
+          d="M -300 60 C -100 60, 30 60, 60 120 C 90 180, 50 300, 130 320 C 210 340, 340 280, 410 230 C 450 205, 460 200, 475 200"
           stroke="none"
         />
 
-        {/* Path 2: Question ribbon — exits the pill almost perfectly flat,
-            then very gradually, almost imperceptibly curves upward.
-            The initial stretch (first 200px) is nearly horizontal. */}
+        {/* Path 2: Question ribbon — thick dark band, nearly horizontal exit with gentle upward sweep */}
         <path
           id="questionCurve"
-          d="M 530 170 C 600 168, 720 160, 850 145 C 1000 128, 1250 105, 1600 90"
+          d="M 560 200 C 650 198, 770 185, 900 165 C 1050 142, 1300 110, 1600 90"
           stroke="var(--mantine-color-text)"
-          strokeWidth="34"
+          strokeWidth="40"
           strokeLinecap="round"
         />
 
-        {/* Source text — faint whisper of raw material flowing along the C-curve */}
+        {/* Source text — faint whisper of raw material */}
         <text
           dominantBaseline="central"
           style={{
-            fontSize: 13,
+            fontSize: 14,
             fontFamily: "var(--font-sans), 'Figtree', sans-serif",
             fill: "var(--mantine-color-text)",
             opacity: 0.32,
@@ -78,7 +73,7 @@ function WavyTextAnimation() {
         <text
           dominantBaseline="central"
           style={{
-            fontSize: 13,
+            fontSize: 15,
             fontFamily: "var(--font-serif), 'EB Garamond', Georgia, serif",
             fontWeight: 600,
             fill: "var(--mantine-color-body)",
@@ -90,57 +85,107 @@ function WavyTextAnimation() {
           </textPath>
         </text>
 
-        {/* Central pill junction — densely packed waveform bars like a real audio visualizer */}
-        <g transform="translate(500, 170)">
+        {/* Floating badge above the pill — matches Wispr Flow's "Grammar corrected" badge */}
+        <g transform="translate(518, 145)">
           <rect
-            x="-44"
-            y="-22"
-            width="88"
-            height="44"
-            rx="22"
+            x="-72"
+            y="-16"
+            width="144"
+            height="32"
+            rx="16"
+            fill="var(--mantine-color-sage-1)"
+            stroke="var(--mantine-color-sage-4)"
+            strokeWidth="1"
+          >
+            <animate attributeName="y" values="-16;-18;-16" dur="3s" repeatCount="indefinite" />
+          </rect>
+          {/* Checkmark circle */}
+          <circle cx="-52" cy="0" r="8" fill="var(--mantine-color-sage-6)">
+            <animate attributeName="cy" values="0;-2;0" dur="3s" repeatCount="indefinite" />
+          </circle>
+          <path d="M -55.5 0 L -53 2.5 L -48.5 -2" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none">
+            <animate attributeName="d" values="M -55.5 0 L -53 2.5 L -48.5 -2;M -55.5 -2 L -53 0.5 L -48.5 -4;M -55.5 0 L -53 2.5 L -48.5 -2" dur="3s" repeatCount="indefinite" />
+          </path>
+          {/* Badge text */}
+          <text
+            x="-38"
+            y="1"
+            dominantBaseline="central"
+            style={{
+              fontSize: 11,
+              fontFamily: "var(--font-sans), sans-serif",
+              fontWeight: 600,
+              fill: "var(--mantine-color-sage-9)",
+            }}
+          >
+            Questions generated
+            <animate attributeName="y" values="1;-1;1" dur="3s" repeatCount="indefinite" />
+          </text>
+        </g>
+
+        {/* Central pill junction — large, prominent, with dense realistic waveform */}
+        <g transform="translate(518, 200)">
+          {/* Pill background — larger, thicker border, subtle shadow */}
+          <rect
+            x="-65"
+            y="-28"
+            width="130"
+            height="56"
+            rx="28"
             fill="var(--mantine-color-gray-0)"
             stroke="var(--mantine-color-text)"
-            strokeWidth="1"
-            style={{ filter: "drop-shadow(0 2px 8px rgba(0,0,0,0.05))" }}
+            strokeWidth="1.5"
+            style={{ filter: "drop-shadow(0 3px 12px rgba(0,0,0,0.08))" }}
           />
-          {/* Dense waveform bars — 16 thin bars packed tightly */}
-          <g transform="translate(-30, 0)">
+          {/* Dense waveform — 25 bars with dots interspersed, mimicking a real audio waveform.
+              Heights vary dramatically: some are just dots (2-3px), others reach near-max (36px).
+              This creates the authentic "audio waveform" silhouette from the Wispr Flow close-up. */}
+          <g transform="translate(-48, 0)">
             {[
-              { x: 0,  h: 14, dur: "1.2s" },
-              { x: 4,  h: 22, dur: "0.8s" },
-              { x: 8,  h: 10, dur: "1.4s" },
-              { x: 12, h: 18, dur: "1.0s" },
-              { x: 16, h: 26, dur: "0.7s" },
-              { x: 20, h: 12, dur: "1.3s" },
-              { x: 24, h: 20, dur: "0.9s" },
-              { x: 28, h: 16, dur: "1.1s" },
-              { x: 32, h: 24, dur: "0.75s" },
-              { x: 36, h: 10, dur: "1.35s" },
-              { x: 40, h: 18, dur: "0.85s" },
-              { x: 44, h: 14, dur: "1.15s" },
-              { x: 48, h: 22, dur: "0.95s" },
-              { x: 52, h: 8,  dur: "1.25s" },
-              { x: 56, h: 16, dur: "0.65s" },
+              { x: 0,   h: 4,  dur: "1.4s" },
+              { x: 4,   h: 8,  dur: "1.1s" },
+              { x: 8,   h: 16, dur: "0.9s" },
+              { x: 12,  h: 28, dur: "0.7s" },
+              { x: 16,  h: 18, dur: "1.0s" },
+              { x: 20,  h: 36, dur: "0.65s" },
+              { x: 24,  h: 12, dur: "1.2s" },
+              { x: 28,  h: 30, dur: "0.75s" },
+              { x: 32,  h: 6,  dur: "1.35s" },
+              { x: 36,  h: 22, dur: "0.85s" },
+              { x: 40,  h: 38, dur: "0.6s" },
+              { x: 44,  h: 14, dur: "1.15s" },
+              { x: 48,  h: 32, dur: "0.7s" },
+              { x: 52,  h: 8,  dur: "1.3s" },
+              { x: 56,  h: 26, dur: "0.8s" },
+              { x: 60,  h: 34, dur: "0.65s" },
+              { x: 64,  h: 10, dur: "1.25s" },
+              { x: 68,  h: 20, dur: "0.9s" },
+              { x: 72,  h: 36, dur: "0.7s" },
+              { x: 76,  h: 16, dur: "1.05s" },
+              { x: 80,  h: 28, dur: "0.75s" },
+              { x: 84,  h: 6,  dur: "1.4s" },
+              { x: 88,  h: 14, dur: "1.1s" },
+              { x: 92,  h: 4,  dur: "1.3s" },
             ].map((bar, i) => (
               <rect
                 key={i}
                 x={bar.x}
                 y={-bar.h / 2}
-                width="1.8"
+                width="2"
                 height={bar.h}
-                rx="0.9"
+                rx="1"
                 fill="var(--mantine-color-text)"
-                opacity="0.6"
+                opacity="0.7"
               >
                 <animate
                   attributeName="height"
-                  values={`${bar.h * 0.4};${bar.h};${bar.h * 0.4}`}
+                  values={`${bar.h * 0.35};${bar.h};${bar.h * 0.35}`}
                   dur={bar.dur}
                   repeatCount="indefinite"
                 />
                 <animate
                   attributeName="y"
-                  values={`${-bar.h * 0.2};${-bar.h / 2};${-bar.h * 0.2}`}
+                  values={`${-bar.h * 0.175};${-bar.h / 2};${-bar.h * 0.175}`}
                   dur={bar.dur}
                   repeatCount="indefinite"
                 />
