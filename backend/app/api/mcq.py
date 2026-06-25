@@ -83,7 +83,19 @@ def grade(
     artifact_id = _resolve_assertion_artifact(db, body.assertion_id, user, guest_id)
     result = grade_mcq(db, body.assertion_id, body.choice_index)
 
-    if user:
+    # Record the answer event for calibration. Logged-in users resolve to their
+    # account entity; anonymous guests resolve to a stable per-guest entity so
+    # their practice answers still feed intel.measurement → intel.projection.
+    subject_entity_id = _resolve_subject_entity(db, user, guest_id)
+    if subject_entity_id is not None:
+        value_json = {"choice_index": body.choice_index}
+        if guest_id and not user:
+            value_json["guest_id"] = guest_id
+            value_json["mode"] = body.mode
+        if body.latency_ms is not None:
+            value_json["latency_ms"] = body.latency_ms
+        if body.confidence is not None:
+            value_json["confidence"] = body.confidence
         db.execute(
             text(
                 """
@@ -91,19 +103,18 @@ def grade(
                   metric_concept_id, subject_entity_id, source_assertion_id,
                   value_numeric, value_json, observed_at
                 )
-                SELECT c.id, ae.entity_id, :assertion_id, :correct,
+                SELECT c.id, :subject_entity_id, :assertion_id, :correct,
                        CAST(:value_json AS jsonb), now()
                 FROM intel.concept c
-                LEFT JOIN qb.account_entity ae ON ae.account_id = :account_id
                 WHERE c.uri = '/vocab/metric/answer.correct'
                 LIMIT 1
                 """
             ),
             {
+                "subject_entity_id": subject_entity_id,
                 "assertion_id": body.assertion_id,
-                "account_id": user.id,
                 "correct": 1 if result.get("correct") else 0,
-                "value_json": json.dumps({"choice_index": body.choice_index}),
+                "value_json": json.dumps(value_json),
             },
         )
         db.commit()
@@ -118,3 +129,28 @@ def grade(
     record_answer(db, artifact_id, body.assertion_id)
 
     return result
+
+
+def _resolve_subject_entity(db: Session, user: Account | None, guest_id: str | None) -> uuid.UUID | None:
+    """Resolve the measurement subject for an answer event.
+
+    Logged-in users → their linked intel.entity (qb.account_entity).
+    Anonymous guests → a stable per-guest concept entity (lazily created), so
+    their practice answers still feed calibration without an account. Returns
+    None only if neither identity is available.
+    """
+    if user:
+        row = db.execute(
+            text("SELECT entity_id FROM qb.account_entity WHERE account_id = :id"),
+            {"id": user.id},
+        ).first()
+        return row[0] if row else None
+
+    if not guest_id:
+        return None
+
+    from app.repositories.intel import get_or_create_concept_entity
+
+    # Stable canonical_uri per guest; type 'concept' keeps it in the graph without
+    # needing a 'person' type. The guest_id is the identity for calibration.
+    return get_or_create_concept_entity(db, f"guest:{guest_id}", f"Guest {guest_id[:8]}")

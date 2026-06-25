@@ -459,6 +459,7 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
             payloads_to_persist,
             page_number=page_number,
             facet_rows=facet_rows,
+            pinned_qid=options.get("practice_qid"),
         )
     if asked_keys:
         mark_aspects_asked(db, document_id, page_number, asked_keys)
@@ -537,6 +538,50 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
     return {"questions_saved": saved, "page_number": page_number}
 
 
+def _link_assertion_concepts(
+    db: Session,
+    assertion_id: uuid.UUID,
+    payload: dict[str, Any],
+    pinned_qid: str | None = None,
+) -> None:
+    """Link an assertion to the Wikidata concepts it tests (intel.assertion_participant).
+
+    Sources concepts from payload['tested_concepts'] (emitted by the LLM) and
+    optionally a pinned concept from the generation job (practice-library mode).
+    Idempotent. Failures are non-fatal — tagging never blocks question creation.
+    """
+    try:
+        from app.repositories.intel import (
+            get_or_create_concept_entity,
+            link_assertion_concept,
+        )
+    except Exception:
+        return
+
+    candidates: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for concept in payload.get("tested_concepts") or []:
+        qid = str(concept.get("qid") or "").strip().upper()
+        label = str(concept.get("label") or "").strip()
+        if qid and qid not in seen and label:
+            candidates.append({"qid": qid, "label": label})
+            seen.add(qid)
+    if pinned_qid:
+        pinned_qid = pinned_qid.strip().upper()
+        if pinned_qid not in seen:
+            candidates.append({"qid": pinned_qid, "label": payload.get("primary_concept") or pinned_qid})
+            seen.add(pinned_qid)
+
+    for concept in candidates:
+        try:
+            entity_id = get_or_create_concept_entity(db, concept["qid"], concept["label"])
+            link_assertion_concept(db, assertion_id, entity_id)
+        except Exception:
+            # Tagging is best-effort; a missing vocab seed or transient error
+            # must not roll back the assertion INSERT that already succeeded.
+            continue
+
+
 def _persist_assertion(
     db: Session,
     document_id: uuid.UUID,
@@ -589,6 +634,7 @@ def _persist_assertion(
         sequence=sequence,
         payload=payload,
     )
+    _link_assertion_concepts(db, assertion_id, payload)
 
 
 def _persist_assertions(
@@ -598,6 +644,7 @@ def _persist_assertions(
     *,
     page_number: int,
     facet_rows: list[dict[str, Any]] | None = None,
+    pinned_qid: str | None = None,
 ) -> list[dict[str, Any]]:
     """Batched persist — one executemany INSERT for assertions + one for facets.
 
@@ -669,4 +716,8 @@ def _persist_assertions(
     upsert_facets(db, facet_input)
     if facet_rows is not None:
         facet_rows.extend(facet_input)
+    for payload in finalized:
+        assertion_id_str = payload.get("_assertion_id")
+        if assertion_id_str:
+            _link_assertion_concepts(db, uuid.UUID(assertion_id_str), payload, pinned_qid)
     return finalized

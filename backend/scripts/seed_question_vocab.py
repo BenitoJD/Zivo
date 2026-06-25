@@ -14,6 +14,8 @@ CONCEPTS = [
     ("/vocab/activity/embed_segments", "activity_type", "Embed segments"),
     ("/vocab/activity/evaluate_quality", "activity_type", "Evaluate question quality"),
     ("/vocab/activity/ingest", "activity_type", "Ingest source"),
+    # Practice library: concept-graph categorization via Wikidata QIDs.
+    ("/vocab/activity/generate_practice", "activity_type", "Generate practice questions"),
     ("/vocab/link/variant", "link_type", "Question variant"),
     ("/vocab/link/follow_up_after_miss", "link_type", "Remediation after miss"),
     ("/vocab/link/prerequisite", "link_type", "Prerequisite link"),
@@ -25,6 +27,11 @@ CONCEPTS = [
     ("/vocab/projection/student.concept_mastery", "projection_type", "Concept mastery"),
     ("/vocab/projection/student.page_mastery", "projection_type", "Page mastery"),
     ("/vocab/domain/user_learning", "source_domain", "User learning material"),
+    # Practice library: entity types + roles + relations for the concept graph.
+    ("/vocab/entity/concept", "entity_type", "Concept"),
+    ("/vocab/role/tests", "participant_role", "Tests concept"),
+    ("/vocab/relation/subclass_of", "relation_type", "Subclass of"),
+    ("/vocab/relation/instance_of", "relation_type", "Instance of"),
 ]
 
 SOURCES = [
@@ -32,6 +39,9 @@ SOURCES = [
     ("url-import", "URL import"),
     ("github-repo", "GitHub repository"),
     ("paste-text", "Pasted text"),
+    # Practice library: platform-owned public sources.
+    ("wikipedia", "Wikipedia"),
+    ("practice-library", "Practice library"),
 ]
 
 

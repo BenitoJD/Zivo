@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     # Smallest FastEmbed cross-encoder (0.08 GB ONNX); CPU-friendly MS MARCO reranker.
     rerank_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"
 
+    # Practice library — Wikidata + Wikipedia backbones for the concept graph.
+    wikidata_api_base: str = "https://www.wikidata.org/w/api.php"
+    wikipedia_api_base: str = "https://en.wikipedia.org/api/rest_v1"
+    # When false, the public practice endpoints return 404 (kill switch).
+    practice_enabled: bool = True
+
     session_days: int = 7
     session_remember_days: int = 30
     guest_document_limit: int = 1
