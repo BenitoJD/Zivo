@@ -273,7 +273,7 @@ def _prepare_chat_stream(
         db.commit()
 
         return {
-            "doc_snapshot": doc,
+            "document_id": doc.id,
             "thread_id": thread.id,
             "prior_messages": prior,
             "request_message": body.message,
@@ -293,7 +293,7 @@ async def chat_stream(
 ) -> EventSourceResponse:
     db.close()
     setup = await asyncio.to_thread(_prepare_chat_stream, body, request, user, guest_id)
-    doc_snapshot = setup["doc_snapshot"]
+    document_id = setup["document_id"]
     thread_id = setup["thread_id"]
     prior_messages = setup["prior_messages"]
     request_message = setup["request_message"]
@@ -308,7 +308,7 @@ async def chat_stream(
         try:
             yield {"event": "status", "data": json.dumps({"phase": "thinking"})}
             try:
-                doc = stream_db.get(Document, doc_snapshot.id)
+                doc = stream_db.get(Document, document_id)
                 if not doc or not can_access_document(doc, user, guest_id):
                     yield _stream_error_event("Document not found.")
                     return
