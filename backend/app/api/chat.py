@@ -39,6 +39,7 @@ router = APIRouter()
 # dominates answer quality in a tutor chat.
 _HISTORY_LIMIT = 6
 _LIST_MESSAGES_LIMIT = 100
+_CHAT_BUSY_MESSAGE = "Tutor is busy. Try again."
 
 # Matches messages that look like a quiz/test request. Only when this hits do
 # we inject the ~300-token mcq_format prompt — otherwise it's dead weight on
@@ -56,6 +57,10 @@ def _looks_like_quiz(message: str) -> bool:
 
 def _stream_error_event(message: str) -> dict[str, str]:
     return {"event": "error", "data": json.dumps({"message": message})}
+
+
+def _is_transient_assistant_error(content: str | None) -> bool:
+    return (content or "").strip() == _CHAT_BUSY_MESSAGE
 
 
 class ChatScope(BaseModel):
@@ -267,6 +272,7 @@ def _prepare_chat_stream(
             {"role": m.role, "content": m.content}
             for m in history
             if (m.content or "").strip()
+            and not (m.role == "assistant" and _is_transient_assistant_error(m.content))
         ]
 
         db.add(ChatMessage(thread_id=thread.id, role="user", content=body.message))
@@ -403,7 +409,7 @@ async def chat_stream(
                     )
             except Exception as exc:
                 logger.exception("chat setup failed: %s", exc)
-                yield _stream_error_event("Tutor is busy. Try again.")
+                yield _stream_error_event(_CHAT_BUSY_MESSAGE)
                 return
 
             if cached:
@@ -425,7 +431,7 @@ async def chat_stream(
                     yield {"event": "done", "data": "{}"}
                 except Exception as exc:
                     logger.exception("cached chat replay failed: %s", exc)
-                    yield _stream_error_event("Tutor is busy. Try again.")
+                    yield _stream_error_event(_CHAT_BUSY_MESSAGE)
                 return
 
             full = ""
@@ -464,21 +470,8 @@ async def chat_stream(
                 yield {"event": "sources", "data": json.dumps({"citations": citations})}
                 yield {"event": "done", "data": "{}"}
             except Exception as exc:
-                error_text = "Tutor is busy. Try again."
                 logger.exception("chat stream failed: %s", exc)
-                try:
-                    stream_db.add(
-                        ChatMessage(
-                            thread_id=thread_id,
-                            role="assistant",
-                            content=error_text,
-                            citations=None,
-                        )
-                    )
-                    stream_db.commit()
-                except Exception:
-                    logger.exception("failed to persist assistant error message")
-                yield _stream_error_event(error_text)
+                yield _stream_error_event(_CHAT_BUSY_MESSAGE)
         finally:
             stream_db.close()
 

@@ -66,7 +66,7 @@ import {
 } from "@/lib/api/queries";
 import { BRAND_LOGO_HEIGHT, BRAND_LOGO_SRC, BRAND_LOGO_WIDTH, ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import { AssistantMarkdown } from "@/lib/chatMarkdown";
-import { indexingStage } from "@/lib/constants";
+import { indexingStage, isTransientChatAssistantMessage } from "@/lib/constants";
 import { learnWaitStatus } from "@/lib/learnStatus";
 import {
   bucketPdfThumbWidth,
@@ -267,6 +267,7 @@ export default function WorkspaceArtifactPage({
     setChatMessages(
       chatMessagesQuery.data
         .filter((m) => (m.content || "").trim())
+        .filter((m) => !(m.role === "assistant" && isTransientChatAssistantMessage(m.content)))
         .map((m) => ({ role: m.role, content: m.content })),
     );
   }, [artifactId, chatBusy, chatMessagesQuery.data]);

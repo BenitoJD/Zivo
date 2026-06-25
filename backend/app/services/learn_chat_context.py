@@ -180,11 +180,11 @@ def learn_scope_fields(
         return {}
     progress = get_progress(doc)
     state = build_learn_queue_state(db, document_id, doc, progress)
+    assertion_id = state.get("current_assertion_id")
     fields: dict[str, int | str | bool | None] = {
         "question_number": int(state["question_number"]),
-        "current_assertion_id": state.get("current_assertion_id"),
+        "current_assertion_id": str(assertion_id) if assertion_id is not None else None,
     }
-    assertion_id = state.get("current_assertion_id")
     if assertion_id:
         last = progress.get("last_confirmed_answer") or {}
         if str(last.get("assertion_id")) == str(assertion_id):

@@ -2,6 +2,16 @@ const GB_BYTES = 1024 * 1024 * 1024;
 export const STORAGE_LIMIT_BYTES = GB_BYTES;
 const MAX_UPLOAD_BYTES = GB_BYTES;
 
+/** Assistant replies that must not be re-shown after reload (transient backend failures). */
+export const TRANSIENT_CHAT_ASSISTANT_MESSAGES = new Set([
+  "Tutor is busy. Try again.",
+]);
+
+export function isTransientChatAssistantMessage(content: string | null | undefined): boolean {
+  const trimmed = (content || "").trim();
+  return trimmed.length > 0 && TRANSIENT_CHAT_ASSISTANT_MESSAGES.has(trimmed);
+}
+
 const INDEXING_STAGES = [
   { min: 0, title: "Starting", detail: "Setting up your study session" },
   { min: 10, title: "Reading", detail: "Pulling text from your source" },
