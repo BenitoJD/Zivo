@@ -202,6 +202,6 @@ use `fastapi`, `postgres`, `production-release-deploy`, `debug-kubernetes` as ne
 
 **Skills do not fork the rules.** [docs/CONVENTIONS.md](docs/CONVENTIONS.md) and
 [docs/adr/](docs/adr/0000-index.md) are canonical; a skill links to them rather than
-restating a rule. Several skills were ported from another project and still reference
-`webapp/`, `pnpm`, `apiClient`, or "shoot" — those are wrong for this repo (`frontend/`,
-`npm`) and are being reconciled; do not trust a skill that contradicts the docs above.
+restating a rule. The skills were ported from another project and have been reconciled
+to this repo (a `frontend/` + `npm` codebase); if you ever find one that contradicts the
+canonical docs above, treat the docs as correct and fix the skill in the same PR.

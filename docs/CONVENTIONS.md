@@ -26,8 +26,9 @@ The monorepo layout and the local-dev commands are in
 
 The one thing to internalize: **backend is `backend/`, frontend is `frontend/`, and
 the package manager is `npm`** — proof: [frontend/package-lock.json](../frontend/package-lock.json),
-CI `npm ci` ([.github/workflows/ci.yml](../.github/workflows/ci.yml)). There is no
-`webapp/` and no `pnpm`. If a skill or doc says otherwise, it is stale — fix it.
+CI `npm ci` ([.github/workflows/ci.yml](../.github/workflows/ci.yml)). If a skill or
+doc names a different frontend directory or a different package manager, it was ported
+from another project and is stale — fix it to match the proof above.
 
 ## 2. Backend (FastAPI + SQLAlchemy + raw SQL)
 
