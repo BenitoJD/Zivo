@@ -21,7 +21,6 @@ import {
   IconMessageCircle,
   IconSparkles,
 } from "@tabler/icons-react";
-import { AnimatePresence, motion } from "framer-motion";
 
 type OnboardingGuideProps = {
   opened: boolean;
@@ -111,14 +110,12 @@ export function OnboardingGuide({ opened, onClose }: OnboardingGuideProps) {
         {/* Step indicator bar */}
         <Progress value={pct} size="xs" color="lavender" mb="xl" style={{ borderRadius: 2 }} />
 
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={activeStep}
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -20 }}
-            transition={{ duration: 0.35, ease: [0.32, 0.72, 0, 1] }}
-          >
+        <style>{`
+          @keyframes zivo-ob-step { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
+          .zivo-ob-step { animation: zivo-ob-step 320ms cubic-bezier(0.32,0.72,0,1) both; }
+          @media (prefers-reduced-motion: reduce) { .zivo-ob-step { animation: none; } }
+        `}</style>
+        <div key={activeStep} className="zivo-ob-step">
             <Stack align="center" gap="lg" px="sm" ta="center">
               <ThemeIcon
                 size={64}
@@ -150,8 +147,7 @@ export function OnboardingGuide({ opened, onClose }: OnboardingGuideProps) {
                 </Text>
               </Stack>
             </Stack>
-          </motion.div>
-        </AnimatePresence>
+        </div>
 
         <Group justify="space-between" mt={48} px="sm">
           <Button

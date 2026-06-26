@@ -120,6 +120,17 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
                 background-size: 200% 100%;
                 animation: paper-shimmer 1.8s infinite linear;
               }
+              /* Landing reveal — one-shot fade-up on mount (see _components/landing/motion.tsx). */
+              @keyframes zivo-reveal-in {
+                from { opacity: 0; transform: translateY(20px); }
+                to { opacity: 1; transform: none; }
+              }
+              .zivo-reveal {
+                animation: zivo-reveal-in 600ms cubic-bezier(0.32, 0.72, 0, 1) both;
+              }
+              @media (prefers-reduced-motion: reduce) {
+                .zivo-reveal { animation: none !important; }
+              }
             `,
           }}
         />

@@ -9,8 +9,8 @@ import {
   IconFlask,
   type Icon,
 } from "@tabler/icons-react";
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Reveal, EASE } from "./motion";
+import { useReducedMotion } from "framer-motion";
+import { Reveal } from "./motion";
 
 type Persona = {
   id: string;
@@ -163,14 +163,12 @@ export function Personas() {
             overflow: "hidden",
           }}
         >
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={persona.id}
-              initial={reduce ? false : { opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={reduce ? undefined : { opacity: 0, y: -10 }}
-              transition={{ duration: 0.32, ease: EASE }}
-            >
+          <style>{`
+            @keyframes zivo-persona-fade { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+            .zivo-persona-fade { animation: zivo-persona-fade 340ms cubic-bezier(0.32,0.72,0,1) both; }
+            @media (prefers-reduced-motion: reduce) { .zivo-persona-fade { animation: none; } }
+          `}</style>
+          <div key={persona.id} className="zivo-persona-fade">
               <Box
                 style={{
                   padding: "14px 22px",
@@ -246,8 +244,7 @@ export function Personas() {
                   })}
                 </Stack>
               </Stack>
-            </motion.div>
-          </AnimatePresence>
+            </div>
         </Box>
       </Stack>
     </Container>
