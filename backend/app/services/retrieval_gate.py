@@ -56,3 +56,15 @@ def needs_retrieval(
     if scope.get("selection_text"):
         return True
     return not _NO_RETRIEVE_RE.match(message)
+
+
+def is_conversational_followup(message: str) -> bool:
+    """True for short, scope-free conversational turns in an ongoing chat.
+
+    These are acknowledgements, nudges, and rephrase requests ("thanks",
+    "go on", "wait, say that again", "huh?", "can you rephrase") — turns where
+    the learner is reacting to the conversation, not asking a fresh content
+    question. Used to avoid re-lecturing or re-applying heavy quiz guardrails
+    when the learner is just engaging naturally.
+    """
+    return bool(_NO_RETRIEVE_RE.match((message or "").strip()))

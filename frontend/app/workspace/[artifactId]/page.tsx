@@ -187,7 +187,6 @@ export default function WorkspaceArtifactPage({
   const [chatMessages, setChatMessages] = useState<{ role: string; content: string }[]>([]);
   const [chatBusy, setChatBusy] = useState(false);
   const chatAbortRef = useRef<AbortController | null>(null);
-  const [chatThinking, setChatThinking] = useState(false);
   const [sourceOpen, { open: openSource, close: closeSource }] = useDisclosure(false);
   const [tutorOpen, { open: openTutor, close: closeTutor }] = useDisclosure(false);
   const studyRowRef = useRef<HTMLDivElement>(null);
@@ -626,7 +625,6 @@ export default function WorkspaceArtifactPage({
     const userMsg = chatInput.trim();
     setChatInput("");
     setChatBusy(true);
-    setChatThinking(true);
     chatAbortRef.current?.abort();
     const abort = new AbortController();
     chatAbortRef.current = abort;
@@ -650,12 +648,8 @@ export default function WorkspaceArtifactPage({
         message: userMsg,
         scope,
       }, {
-        onStatus: (phase) => {
-          if (phase === "thinking") setChatThinking(true);
-        },
         onChunk: (chunk) => {
           gotToken = true;
-          setChatThinking(false);
           assistant += chunk;
           setChatMessages((m) => {
             const copy = [...m];
@@ -705,7 +699,6 @@ export default function WorkspaceArtifactPage({
     } finally {
       if (chatAbortRef.current === abort) chatAbortRef.current = null;
       setChatBusy(false);
-      setChatThinking(false);
     }
   }
 
@@ -1053,7 +1046,6 @@ export default function WorkspaceArtifactPage({
                 messages={chatMessages}
                 input={chatInput}
                 busy={chatBusy}
-                thinking={chatThinking}
                 contextReady={chatContextReady}
                 onInputChange={setChatInput}
                 onSend={() => void sendChat()}
@@ -1083,7 +1075,6 @@ export default function WorkspaceArtifactPage({
               messages={chatMessages}
               input={chatInput}
               busy={chatBusy}
-              thinking={chatThinking}
               contextReady={chatContextReady}
               onInputChange={setChatInput}
               onSend={() => void sendChat()}
@@ -2784,7 +2775,6 @@ function TutorPanel({
   messages,
   input,
   busy,
-  thinking = false,
   contextReady = true,
   onInputChange,
   onSend,
@@ -2793,7 +2783,6 @@ function TutorPanel({
   messages: { role: string; content: string }[];
   input: string;
   busy: boolean;
-  thinking?: boolean;
   contextReady?: boolean;
   onInputChange: (value: string) => void;
   onSend: () => void;
@@ -2888,9 +2877,6 @@ function TutorPanel({
                     message={m}
                     isUser={m.role === "user"}
                     streaming={!busy ? false : m.role === "assistant" && i === messages.length - 1}
-                    thinking={
-                      thinking && m.role === "assistant" && i === messages.length - 1 && !m.content
-                    }
                     isDark={isDark}
                   />
                 ))}
@@ -3048,7 +3034,6 @@ const CHAT_SUGGESTIONS = [
 
 function ThinkingIndicator({ isDark }: { isDark: boolean }) {
   const dot = isDark ? "#AEAEB2" : "#8E8A7E";
-  const label = isDark ? "var(--mantine-color-gray-8)" : "var(--mantine-color-gray-7)";
 
   return (
     <>
@@ -3064,25 +3049,16 @@ function ThinkingIndicator({ isDark }: { isDark: boolean }) {
           .zivo-think-dot { animation: none; opacity: 0.55; }
         }
       `}</style>
-      <Group gap={10} align="center" aria-live="polite" aria-label="Thinking">
-        <Group gap={5} align="center" aria-hidden>
-          {[0, 1, 2].map((i) => (
-            <Box
-              key={i}
-              className="zivo-think-dot"
-              w={5}
-              h={5}
-              style={{ borderRadius: 999, backgroundColor: dot }}
-            />
-          ))}
-        </Group>
-        <Text
-          size="sm"
-          fw={500}
-          style={{ color: label, letterSpacing: "-0.015em" }}
-        >
-          Thinking…
-        </Text>
+      <Group gap={5} align="center" aria-live="polite" aria-label="Thinking">
+        {[0, 1, 2].map((i) => (
+          <Box
+            key={i}
+            className="zivo-think-dot"
+            w={5}
+            h={5}
+            style={{ borderRadius: 999, backgroundColor: dot }}
+          />
+        ))}
       </Group>
     </>
   );
