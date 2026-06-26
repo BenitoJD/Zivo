@@ -87,21 +87,38 @@ const TERRACOTTA_PALETTE = [
 /** Big primary buttons are ink with cream text; lavender fills keep readable contrast. */
 const variantColorResolver: VariantColorsResolver = (input) => {
   const resolved = defaultVariantColorsResolver(input);
+  const variant = input.variant ?? "filled";
+  const colorName = input.color || input.theme.primaryColor;
+
+  // Ghost gray buttons (subtle/light/transparent/default) get their label color from
+  // low gray shades. Our gray scale is INVERTED for dark mode (low = dark), so Mantine
+  // computes dark-on-dark labels — which is why "Settings", "Sign in", "Upload file",
+  // etc. went invisible at night. Force a readable, scheme-aware label for gray ghosts.
+  if (
+    (colorName === "gray" || colorName === "dark") &&
+    (variant === "subtle" || variant === "light" || variant === "transparent" || variant === "default")
+  ) {
+    return {
+      ...resolved,
+      color: "var(--mantine-color-text)",
+      hoverColor: "var(--mantine-color-text)",
+    };
+  }
+
   const autoContrast =
     typeof input.autoContrast === "boolean" ? input.autoContrast : input.theme.autoContrast;
-  if (!autoContrast || (input.variant ?? "filled") !== "filled") return resolved;
+  if (!autoContrast || variant !== "filled") return resolved;
 
-  const colorName = input.color || input.theme.primaryColor;
   const palette = input.theme.colors[colorName];
   if (!palette) return resolved;
 
   const surface = palette[getPrimaryShade(input.theme, resolveColorScheme())];
   if (!isLightColor(surface, input.theme.luminanceThreshold ?? 0.3)) return resolved;
 
-  const onLightSurface =
-    resolveColorScheme() === "dark"
-      ? "var(--mantine-color-gray-9)"
-      : "var(--mantine-color-black)";
+  // The button surface is light, so its label must be dark ink for contrast.
+  // Use a literal ink rather than gray-9 / black tokens — those are inverted to
+  // near-white in dark mode, which is exactly what made dark-mode buttons unreadable.
+  const onLightSurface = "#1A1917";
 
   return {
     ...resolved,
@@ -210,6 +227,46 @@ const theme = mergeMantineTheme(
           },
         },
       },
+      Notification: {
+        defaultProps: { radius: "xl", withBorder: false },
+        // Premium frosted-glass toast: a soft blurred surface that lifts off the
+        // page with layered shadow + a fine top highlight, and a refined inset
+        // rounded color accent (not a loud full-height bar). Calm in both schemes.
+        styles: {
+          root: {
+            background: "color-mix(in srgb, var(--mantine-color-body) 80%, transparent)",
+            backdropFilter: "blur(20px) saturate(1.5)",
+            WebkitBackdropFilter: "blur(20px) saturate(1.5)",
+            border: "1px solid var(--mantine-color-default-border)",
+            boxShadow:
+              "0 18px 50px rgba(20, 19, 16, 0.18), 0 4px 14px rgba(20, 19, 16, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.16)",
+            padding: "13px 14px 13px 18px",
+            "&::before": {
+              left: 8,
+              top: 13,
+              bottom: 13,
+              width: 3,
+              borderRadius: 999,
+            },
+          },
+          title: {
+            fontWeight: 600,
+            fontSize: "0.9rem",
+            letterSpacing: "-0.01em",
+            color: "var(--mantine-color-text)",
+          },
+          description: {
+            fontSize: "0.82rem",
+            lineHeight: 1.45,
+            color: "var(--mantine-color-dimmed)",
+          },
+          icon: { borderRadius: "var(--mantine-radius-md)" },
+          closeButton: {
+            color: "var(--mantine-color-dimmed)",
+            borderRadius: "var(--mantine-radius-md)",
+          },
+        },
+      },
     },
   }),
 );
@@ -217,7 +274,7 @@ const theme = mergeMantineTheme(
 const cssVariablesResolver: CSSVariablesResolver = () => ({
   variables: {},
   light: {
-    "--mantine-color-body": "#FAF9F6",            // Warm oat paper background
+    "--mantine-color-body": "#FCFBEF",            // Warm ivory cream (Wispr-matched)
     "--mantine-color-text": "#232220",            // Ink text
     "--mantine-color-default-border": "#E7E2D6",  // Warm hairline border
     "--mantine-color-default-hover": "#F3EFE6",   // Hover over paper items
@@ -225,13 +282,13 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
     "--mantine-color-dimmed": "#6B675E",          // Secondary labels
     "--mantine-skeleton-color": "#F3EFE6",
     "--mantine-skeleton-color-da": "#E7E2D6",
-    "--zivo-header-bg": "#FFFFFF",
+    "--zivo-header-bg": "#FFFEFA",
     "--zivo-tooltip-bg": "#232220",
-    "--zivo-tooltip-fg": "#FAF9F6",
+    "--zivo-tooltip-fg": "#FCFBEF",
 
-    // Neutral gray scale overrides for light mode
-    "--mantine-color-gray-0": "#FFFFFF",
-    "--mantine-color-gray-1": "#FAF9F6",
+    // Neutral gray scale overrides for light mode — warm ivory page, warm-white cards.
+    "--mantine-color-gray-0": "#FFFEFA",
+    "--mantine-color-gray-1": "#FCFBEF",
     "--mantine-color-gray-2": "#F3EFE6",
     "--mantine-color-gray-3": "#E7E2D6",
     "--mantine-color-gray-4": "#D9D3C4",
@@ -242,8 +299,8 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
     "--mantine-color-gray-9": "#1A1917",
 
     // Neutral dark scale overrides for light mode (keep aligned with gray)
-    "--mantine-color-dark-0": "#FFFFFF",
-    "--mantine-color-dark-1": "#FAF9F6",
+    "--mantine-color-dark-0": "#FFFEFA",
+    "--mantine-color-dark-1": "#FCFBEF",
     "--mantine-color-dark-2": "#F3EFE6",
     "--mantine-color-dark-3": "#E7E2D6",
     "--mantine-color-dark-4": "#D9D3C4",
@@ -403,7 +460,7 @@ export default function Providers({
       >
         <ColorSchemeCookieSync />
         <LandingSchemeSync />
-        <Notifications position="top-right" />
+        <Notifications position="bottom-center" />
         {children}
       </MantineProvider>
     </QueryClientProvider>

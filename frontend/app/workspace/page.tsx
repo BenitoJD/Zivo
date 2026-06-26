@@ -10,6 +10,7 @@ import {
   Paper,
   Stack,
   Text,
+  TextInput,
   ThemeIcon,
   Title,
   Textarea,
@@ -23,13 +24,19 @@ import {
   IconFileText,
   IconSparkles,
 } from "@tabler/icons-react";
-import { useWorkspaceShell } from "@/app/workspace/layout";
-import { motion, AnimatePresence } from "framer-motion";
 import { apiUploadFile, apiPost, ensureGuestSession, isArtifactId } from "@/lib/api/client";
 import { useInvalidateSources } from "@/lib/api/queries";
 import { notifications } from "@mantine/notifications";
 
-const FORMATS = ["PDF", "Word", "URL", "Paste", "GitHub"];
+const FORMATS = ["PDF", "Word", "URL", "Paste", "GitHub"] as const;
+type DeckTab = "file" | "paste" | "link" | "github";
+const TAG_TO_TAB: Record<(typeof FORMATS)[number], DeckTab> = {
+  PDF: "file",
+  Word: "file",
+  URL: "link",
+  Paste: "paste",
+  GitHub: "github",
+};
 
 const STEPS = [
   {
@@ -54,28 +61,43 @@ const STEPS = [
 
 export default function WorkspaceIndexPage() {
   const router = useRouter();
-  const { openAddSource } = useWorkspaceShell();
   const invalidateSources = useInvalidateSources();
 
   // State
-  const [activeTab, setActiveTab] = useState<"file" | "paste">("file");
+  const [activeTab, setActiveTab] = useState<"file" | "paste" | "link" | "github">("file");
   const [pasteContent, setPasteContent] = useState("");
+  const [importUrl, setImportUrl] = useState("");
+  const [importGithub, setImportGithub] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [isBusy, setIsBusy] = useState(false);
 
-  // Mouse coords for interactive spotlight
-  const [mousePos, setMousePos] = useState({ x: "50%", y: "50%" });
-
   // Refs
   const uploadAbortRef = useRef<AbortController | null>(null);
+  // Interactive spotlight is driven through CSS variables on a ref (rAF-throttled)
+  // rather than React state, so moving the mouse never re-renders the page.
+  const glowRef = useRef<HTMLDivElement>(null);
+  const glowRafRef = useRef<number | null>(null);
 
   const handleMouseMove = (e: React.MouseEvent) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = `${((e.clientX - rect.left) / rect.width) * 100}%`;
-    const y = `${((e.clientY - rect.top) / rect.height) * 100}%`;
-    setMousePos({ x, y });
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    if (glowRafRef.current != null) return;
+    glowRafRef.current = requestAnimationFrame(() => {
+      glowRafRef.current = null;
+      const el = glowRef.current;
+      if (!el) return;
+      el.style.setProperty("--zx", `${x}%`);
+      el.style.setProperty("--zy", `${y}%`);
+    });
   };
+
+  useEffect(() => {
+    return () => {
+      if (glowRafRef.current != null) cancelAnimationFrame(glowRafRef.current);
+    };
+  }, []);
 
   // Drag and drop handlers
   const handleDragOver = (e: React.DragEvent) => {
@@ -164,6 +186,38 @@ export default function WorkspaceIndexPage() {
     }
   };
 
+  const runImport = async (kind: "url" | "github") => {
+    const value = kind === "url" ? importUrl : importGithub;
+    if (!value.trim()) return;
+    setIsBusy(true);
+    try {
+      await ensureGuestSession();
+      const path = kind === "github" ? "/api/sources/import-github" : "/api/sources/import-url";
+      const body = kind === "github" ? { github_url: importGithub } : { url: importUrl };
+      const data = await apiPost<{ id: string }>(path, body);
+      notifications.show({ title: "Imported", message: "Source added", color: "sage" });
+      setImportUrl("");
+      setImportGithub("");
+      void invalidateSources();
+      if (isArtifactId(data?.id)) {
+        router.push(`/workspace/${data.id}`);
+      }
+    } catch (e) {
+      notifications.show({
+        title: "Import failed",
+        message:
+          e instanceof Error && e.message === "Sign in to add more documents"
+            ? "Guest limit reached — delete a source or sign in to add more."
+            : e instanceof Error
+              ? e.message
+              : "Could not import.",
+        color: "terracotta",
+      });
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   return (
     <Box
       flex={1}
@@ -180,15 +234,16 @@ export default function WorkspaceIndexPage() {
         justifyContent: "center",
       }}
     >
-      {/* Ambient interactive light glow */}
+      {/* Ambient interactive light glow — position fed via --zx/--zy CSS vars. */}
       <Box
+        ref={glowRef}
         style={{
           position: "absolute",
           inset: 0,
           pointerEvents: "none",
           zIndex: 0,
-          background: `radial-gradient(circle 500px at ${mousePos.x} ${mousePos.y}, rgba(123, 93, 166, 0.04), transparent 70%)`,
-          transition: "background 0.1s ease-out",
+          background:
+            "radial-gradient(circle 500px at var(--zx, 50%) var(--zy, 50%), rgba(123, 93, 166, 0.04), transparent 70%)",
         }}
       />
 
@@ -264,15 +319,8 @@ export default function WorkspaceIndexPage() {
             </Button>
           </Group>
 
-          <AnimatePresence mode="wait">
+          <div key={activeTab} className="tab-swap">
             {activeTab === "file" ? (
-              <motion.div
-                key="file"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
-              >
                 <Box
                   onDragOver={handleDragOver}
                   onDragLeave={handleDragLeave}
@@ -332,15 +380,7 @@ export default function WorkspaceIndexPage() {
                     )}
                   </Stack>
                 </Box>
-              </motion.div>
-            ) : (
-              <motion.div
-                key="paste"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
-              >
+            ) : activeTab === "paste" ? (
                 <Stack gap="md">
                   <Textarea
                     placeholder="Paste article, slides, or study notes here..."
@@ -371,26 +411,74 @@ export default function WorkspaceIndexPage() {
                     Build from paste
                   </Button>
                 </Stack>
-              </motion.div>
+            ) : activeTab === "link" ? (
+                <Stack gap="md">
+                  <TextInput
+                    placeholder="https://… article or web page"
+                    value={importUrl}
+                    onChange={(e) => setImportUrl(e.currentTarget.value)}
+                    disabled={isBusy}
+                    size="md"
+                    radius="md"
+                    styles={{ input: { background: "var(--mantine-color-default-hover)", border: "1px solid var(--mantine-color-default-border)" } }}
+                  />
+                  <Button
+                    fullWidth
+                    size="md"
+                    color="lavender"
+                    loading={isBusy}
+                    disabled={!importUrl.trim()}
+                    rightSection={<IconSparkles size={16} />}
+                    onClick={() => void runImport("url")}
+                  >
+                    Import from link
+                  </Button>
+                </Stack>
+            ) : (
+                <Stack gap="md">
+                  <TextInput
+                    placeholder="https://github.com/owner/repo"
+                    value={importGithub}
+                    onChange={(e) => setImportGithub(e.currentTarget.value)}
+                    disabled={isBusy}
+                    size="md"
+                    radius="md"
+                    styles={{ input: { background: "var(--mantine-color-default-hover)", border: "1px solid var(--mantine-color-default-border)" } }}
+                  />
+                  <Button
+                    fullWidth
+                    size="md"
+                    color="lavender"
+                    loading={isBusy}
+                    disabled={!importGithub.trim()}
+                    rightSection={<IconSparkles size={16} />}
+                    onClick={() => void runImport("github")}
+                  >
+                    Import repository
+                  </Button>
+                </Stack>
             )}
-          </AnimatePresence>
+          </div>
 
-          {/* Quick link actions */}
+          {/* Quick format switches — jump straight to the matching input. */}
           <Group gap="xs" justify="center" mt="xl" wrap="wrap">
-            {FORMATS.map((tag) => (
+            {FORMATS.map((tag) => {
+              const tab = TAG_TO_TAB[tag];
+              const active = activeTab === tab;
+              return (
               <Box
                 key={tag}
-                onClick={openAddSource}
+                onClick={() => setActiveTab(tab)}
                 style={{
                   padding: "6px 14px",
                   borderRadius: "var(--mantine-radius-md)",
-                  border: "1px solid var(--mantine-color-default-border)",
-                  background: "var(--mantine-color-default-hover)",
+                  border: `1px solid ${active ? "var(--mantine-color-lavender-3)" : "var(--mantine-color-default-border)"}`,
+                  background: active ? "var(--mantine-color-lavender-0)" : "var(--mantine-color-default-hover)",
                   fontSize: "11px",
                   fontWeight: 600,
                   textTransform: "uppercase",
                   letterSpacing: "0.03em",
-                  color: "var(--mantine-color-gray-6)",
+                  color: active ? "var(--mantine-color-lavender-7)" : "var(--mantine-color-gray-6)",
                   cursor: "pointer",
                   transition: "all 150ms ease",
                 }}
@@ -398,7 +486,8 @@ export default function WorkspaceIndexPage() {
               >
                 {tag}
               </Box>
-            ))}
+              );
+            })}
           </Group>
         </Paper>
 
@@ -448,6 +537,11 @@ export default function WorkspaceIndexPage() {
       </Stack>
 
       <style>{`
+        /* Reliable CSS tab cross-fade (framer AnimatePresence stalls under React 19
+           strict mode here, leaving content stuck invisible). Re-keyed per tab. */
+        @keyframes tab-swap-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        .tab-swap { animation: tab-swap-in 260ms cubic-bezier(0.32, 0.72, 0, 1) both; }
+        @media (prefers-reduced-motion: reduce) { .tab-swap { animation: none; } }
         .interactive-dropzone:hover {
           transform: translateY(-1px);
         }

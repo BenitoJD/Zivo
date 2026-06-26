@@ -95,21 +95,23 @@ export function LandingNav() {
           pt={{ base: "sm", md: condensed ? "xs" : "md" }}
           pb={{ base: "sm", md: condensed ? "xs" : "md" }}
         >
-          {/* Wispr-style floating rounded "paper" pill — frosted on scroll. */}
+          {/* Wispr-style floating rounded "paper" bar — a softly-lifted warm cream
+              pill with a hairline border at rest (the fill is barely lighter than the
+              page, so there's no white seam), condensing into a frosted bar on scroll. */}
           <Box
             style={{
-              borderRadius: "16px",
-              padding: condensed ? "8px 12px 8px 24px" : "12px 18px 12px 28px",
+              borderRadius: "18px",
+              padding: condensed ? "8px 12px 8px 22px" : "10px 16px 10px 24px",
               transition,
               background: condensed
-                ? "color-mix(in srgb, var(--mantine-color-body) 82%, transparent)"
-                : "var(--zivo-header-bg)",
+                ? "color-mix(in srgb, var(--mantine-color-body) 80%, transparent)"
+                : "color-mix(in srgb, var(--mantine-color-body) 64%, #FFFFFF)",
               backdropFilter: condensed ? "blur(12px)" : "none",
               WebkitBackdropFilter: condensed ? "blur(12px)" : "none",
               border: "1px solid var(--mantine-color-default-border)",
               boxShadow: condensed
-                ? "0 4px 20px rgba(0, 0, 0, 0.03), var(--mantine-shadow-paper)"
-                : "var(--mantine-shadow-paper-lg)",
+                ? "0 6px 24px rgba(35, 34, 32, 0.06), var(--mantine-shadow-paper)"
+                : "0 2px 10px rgba(35, 34, 32, 0.04), 0 1px 2px rgba(35, 34, 32, 0.03)",
             }}
           >
             <Group justify="space-between" wrap="nowrap" h={brandH}>
@@ -210,15 +212,15 @@ export function LandingNav() {
       <style>{`
         /* Wispr "Download for macOS" — soft lavender pill with subtle border. */
         .nav-cta-button {
-          background-color: #E9DDF5 !important;
+          background-color: #EFDBFB !important;
           color: var(--mantine-color-text) !important;
-          border: 1px solid #D6C2EC !important;
+          border: 1px solid #E1C9F5 !important;
           border-radius: 999px !important;
           font-family: var(--font-sans), sans-serif !important;
           font-weight: 600 !important;
         }
         .nav-cta-button:hover {
-          background-color: #DFCDED !important;
+          background-color: #E8D0F8 !important;
           transform: translateY(-1px);
         }
       `}</style>

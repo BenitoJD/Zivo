@@ -47,8 +47,10 @@ import {
   IconFileText,
   IconGripVertical,
   IconMessageCircle,
+  IconPencil,
   IconPlayerStop,
   IconPoint,
+  IconRefresh,
   IconX,
   IconZoomIn,
   IconZoomOut,
@@ -65,7 +67,7 @@ import {
 } from "@/lib/api/queries";
 import { ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import { BrandMark } from "@/app/_components/BrandMark";
-import { mcqOptionChrome } from "@/app/_components/mcq/McqCard";
+import { mcqOptionChrome, McqFeedbackCard } from "@/app/_components/mcq/McqCard";
 import { AssistantMarkdown, MessageCopyAction } from "@/lib/chatMarkdown";
 import { indexingStage, isTransientChatAssistantMessage } from "@/lib/constants";
 import { learnWaitStatus } from "@/lib/learnStatus";
@@ -620,15 +622,13 @@ export default function WorkspaceArtifactPage({
     setLastClickedPage(page);
   }
 
-  async function sendChat() {
-    if (!chatInput.trim() || chatBusy || !chatContextReady) return;
-    const userMsg = chatInput.trim();
-    setChatInput("");
+  // Core streamer — assumes chatMessages already ends with the user turn + an empty
+  // assistant placeholder to fill. Shared by send, regenerate, and edit-and-resend.
+  async function runAssistant(userMsg: string) {
     setChatBusy(true);
     chatAbortRef.current?.abort();
     const abort = new AbortController();
     chatAbortRef.current = abort;
-    setChatMessages((m) => [...m, { role: "user", content: userMsg }, { role: "assistant", content: "" }]);
     try {
       await ensureGuestSession();
       const currentPage = queue?.current_page;
@@ -700,6 +700,35 @@ export default function WorkspaceArtifactPage({
       if (chatAbortRef.current === abort) chatAbortRef.current = null;
       setChatBusy(false);
     }
+  }
+
+  function sendChat() {
+    if (!chatInput.trim() || chatBusy || !chatContextReady) return;
+    const userMsg = chatInput.trim();
+    setChatInput("");
+    setChatMessages((m) => [...m, { role: "user", content: userMsg }, { role: "assistant", content: "" }]);
+    void runAssistant(userMsg);
+  }
+
+  // Regenerate the most recent answer: drop the trailing assistant turn and re-ask
+  // the last user message.
+  function regenerateChat() {
+    if (chatBusy || !chatContextReady) return;
+    const lastUserIdx = chatMessages.map((x) => x.role).lastIndexOf("user");
+    if (lastUserIdx === -1) return;
+    const lastUser = chatMessages[lastUserIdx].content;
+    setChatMessages([...chatMessages.slice(0, lastUserIdx + 1), { role: "assistant", content: "" }]);
+    void runAssistant(lastUser);
+  }
+
+  // Edit a previous question: lift it back into the composer and trim the thread
+  // from that point, so the user can tweak and resend (ChatGPT-style).
+  function editChatFromUser(index: number) {
+    if (chatBusy) return;
+    const msg = chatMessages[index];
+    if (!msg || msg.role !== "user") return;
+    setChatInput(msg.content);
+    setChatMessages(chatMessages.slice(0, index));
   }
 
   function stopChat() {
@@ -871,15 +900,31 @@ export default function WorkspaceArtifactPage({
         style={{
           display: "flex",
           flexDirection: "column",
+          // Top-anchored (not centered) so revealing the explanation grows the card
+          // downward instead of re-centering the whole panel — no layout jump.
           overflow: "hidden",
-          justifyContent: "center",
+          justifyContent: "flex-start",
+          paddingTop: "clamp(12px, 6vh, 56px)",
           minHeight: 0,
         }}
       >
-        <Box maw={680} w="100%" mx="auto" mih={0} style={{ maxHeight: "100%", overflow: "hidden" }}>
+        <Box
+          maw={680}
+          w="100%"
+          mx="auto"
+          mih={0}
+          px={4}
+          style={{
+            maxHeight: "100%",
+            overflowY: "auto",
+            overflowX: "hidden",
+            overscrollBehavior: "contain",
+            scrollbarGutter: "stable",
+          }}
+        >
           {showNoQuestions ? (
             <Stack align="center" gap="sm" py="xl" ta="center">
-              <Text ff="var(--font-serif)" fz={isCompact ? 22 : 28} fw={500} c="dark.9">
+              <Text ff="var(--font-serif)" fz={isCompact ? 22 : 28} fw={500} c="var(--mantine-color-text)">
                 Nothing to quiz here
               </Text>
               <Text c="dimmed" maw={420}>
@@ -1050,6 +1095,8 @@ export default function WorkspaceArtifactPage({
                 onInputChange={setChatInput}
                 onSend={() => void sendChat()}
                 onStop={stopChat}
+                onRegenerate={regenerateChat}
+                onEditUser={editChatFromUser}
               />
             </StudyPushRail>
           </Box>
@@ -1079,6 +1126,8 @@ export default function WorkspaceArtifactPage({
               onInputChange={setChatInput}
               onSend={() => void sendChat()}
               onStop={stopChat}
+              onRegenerate={regenerateChat}
+              onEditUser={editChatFromUser}
             />
           )}
         />
@@ -1585,39 +1634,45 @@ function StudyEdgeTrigger({
   color: string;
   onClick: () => void;
 }) {
-  const edgeBorder = "2px solid var(--mantine-color-default-border)";
-  const accent = `var(--mantine-color-${color}-filled)`;
-
   return (
-    <Tooltip label={`Open ${label}`} position={side === "left" ? "right" : "left"} withArrow>
+    <Tooltip label={`Open ${label}`} position={side === "left" ? "right" : "left"} withArrow openDelay={350}>
       <UnstyledButton
         onClick={onClick}
         aria-label={`Open ${label}`}
-        style={{
-          position: "absolute",
-          top: "50%",
-          transform: "translateY(-50%)",
-          [side]: 0,
-          zIndex: 6,
-          minWidth: 52,
-          padding: "12px 10px",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: 5,
-          borderRadius: side === "left" ? "0 12px 12px 0" : "12px 0 0 12px",
-          borderTop: edgeBorder,
-          borderBottom: edgeBorder,
-          borderLeft: side === "left" ? "none" : edgeBorder,
-          borderRight: side === "right" ? "none" : edgeBorder,
-          background: `color-mix(in srgb, ${accent} 14%, var(--mantine-color-body))`,
-          color: accent,
-        }}
+        className={`zivo-edge zivo-edge-${side}`}
+        style={{ position: "absolute", top: "50%", [side]: 10, zIndex: 6 }}
       >
-        {icon}
-        <Text size="10px" fw={700} tt="uppercase" lh={1} c={color} style={{ letterSpacing: "0.05em" }}>
-          {label}
-        </Text>
+        <style>{`
+          .zivo-edge {
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 7px;
+            padding: 10px 9px;
+            border-radius: 16px;
+            background: var(--mantine-color-gray-0);
+            border: 1px solid var(--mantine-color-default-border);
+            box-shadow: 0 8px 24px rgba(35, 34, 32, 0.10), 0 1px 2px rgba(35, 34, 32, 0.04);
+            transition: transform 220ms cubic-bezier(0.32,0.72,0,1), box-shadow 220ms ease, border-color 220ms ease;
+          }
+          .zivo-edge:hover { box-shadow: 0 12px 32px rgba(35, 34, 32, 0.16), 0 2px 4px rgba(35, 34, 32, 0.06); }
+          .zivo-edge-left:hover { transform: translateY(-50%) translateX(4px); }
+          .zivo-edge-right:hover { transform: translateY(-50%) translateX(-4px); }
+          .zivo-edge-chip {
+            width: 32px; height: 32px; border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+          }
+          .zivo-edge-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; line-height: 1; color: var(--mantine-color-dimmed); }
+          @media (prefers-reduced-motion: reduce) { .zivo-edge { transition: none; } }
+        `}</style>
+        <span
+          className="zivo-edge-chip"
+          style={{ background: `var(--mantine-color-${color}-0)`, color: `var(--mantine-color-${color}-7)` }}
+        >
+          {icon}
+        </span>
+        <span className="zivo-edge-label">{label}</span>
       </UnstyledButton>
     </Tooltip>
   );
@@ -1723,23 +1778,23 @@ function StudyPushRail({
         }}
       >
         <Group
-          px="sm"
-          py={6}
+          px="md"
+          py={8}
           justify="space-between"
           wrap="nowrap"
           gap="xs"
           style={{
             flexShrink: 0,
             borderBottom: open ? railBorder : undefined,
-            minHeight: 36,
+            minHeight: 44,
             background: "var(--mantine-color-body)",
           }}
         >
-          <Text size="xs" fw={600} truncate tt="uppercase" style={{ letterSpacing: "0.04em" }}>
+          <Text size="sm" fw={600} truncate c="var(--mantine-color-text)" style={{ letterSpacing: "-0.01em" }}>
             {title}
           </Text>
-          <ActionIcon variant="subtle" color="gray" radius="xl" size="sm" onClick={onClose} aria-label={`Close ${title}`}>
-            <IconX size={16} />
+          <ActionIcon variant="subtle" color="gray" radius="xl" size="md" onClick={onClose} aria-label={`Close ${title}`} style={{ flexShrink: 0 }}>
+            <IconX size={17} stroke={1.8} />
           </ActionIcon>
         </Group>
         <Box flex={1} mih={0} style={{ display: "flex", flexDirection: "column" }}>
@@ -2344,106 +2399,6 @@ function SourceStage({
   );
 }
 
-function McqFeedbackCard({
-  feedback,
-  isCorrect,
-  compact,
-  isDark,
-}: {
-  feedback: string;
-  isCorrect: boolean;
-  compact?: boolean;
-  isDark: boolean;
-}) {
-  const parts = feedback.split("\n\n").map((p) => p.trim()).filter(Boolean);
-  const lead = parts[0] ?? feedback;
-  const detail = parts.slice(1).join("\n\n");
-
-  const surface = isCorrect
-    ? isDark
-      ? "var(--mantine-color-sage-1)"
-      : "var(--mantine-color-sage-0)"
-    : isDark
-      ? "var(--mantine-color-terracotta-1)"
-      : "var(--mantine-color-terracotta-0)";
-  const outline = isCorrect ? "var(--mantine-color-sage-3)" : "var(--mantine-color-terracotta-3)";
-  const primaryText = isCorrect
-    ? isDark
-      ? "var(--mantine-color-sage-8)"
-      : "var(--mantine-color-sage-9)"
-    : isDark
-      ? "var(--mantine-color-terracotta-8)"
-      : "var(--mantine-color-terracotta-9)";
-  const secondaryText = isCorrect
-    ? isDark
-      ? "var(--mantine-color-sage-7)"
-      : "var(--mantine-color-sage-8)"
-    : isDark
-      ? "var(--mantine-color-terracotta-7)"
-      : "var(--mantine-color-terracotta-8)";
-
-  return (
-    <Box
-      className="mcq-feedback"
-      style={{
-        flexShrink: 0,
-        textAlign: "left",
-        padding: compact ? "14px 16px" : "16px 18px",
-        borderRadius: 14,
-        background: surface,
-        border: `1px solid ${outline}`,
-        maxHeight: compact ? 148 : 184,
-        overflow: "auto",
-      }}
-    >
-      <style>{`
-        @keyframes mcq-fb { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-        .mcq-feedback { animation: mcq-fb 300ms cubic-bezier(0.32,0.72,0,1) both; }
-        @media (prefers-reduced-motion: reduce) { .mcq-feedback { animation: none !important; } }
-      `}</style>
-      <Group gap={10} wrap="nowrap" align="center" mb={8}>
-        <Box
-          style={{
-            width: 24,
-            height: 24,
-            borderRadius: "50%",
-            flexShrink: 0,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: isCorrect ? "var(--mantine-color-sage-6)" : "var(--mantine-color-terracotta-6)",
-            color: "var(--mantine-color-gray-9)",
-          }}
-        >
-          {isCorrect ? <IconCheck size={14} stroke={2.6} /> : <IconX size={14} stroke={2.6} />}
-        </Box>
-        <Text fw={700} size={compact ? "sm" : "md"} c={primaryText} style={{ letterSpacing: "-0.01em" }}>
-          {isCorrect ? "Correct" : "Not quite"}
-        </Text>
-      </Group>
-      <Text
-        size={compact ? "sm" : "md"}
-        lh={1.7}
-        c={primaryText}
-        style={{ whiteSpace: "pre-wrap", fontSize: compact ? undefined : "1.0625rem" }}
-      >
-        {lead}
-      </Text>
-      {detail ? (
-        <Text
-          size={compact ? "sm" : "md"}
-          lh={1.7}
-          mt={10}
-          c={secondaryText}
-          style={{ whiteSpace: "pre-wrap", fontSize: compact ? undefined : "1.0625rem" }}
-        >
-          {detail}
-        </Text>
-      ) : null}
-    </Box>
-  );
-}
-
 function McqHeroPanel({
   stem,
   options,
@@ -2611,17 +2566,25 @@ function McqHeroPanel({
   }
 
   return (
-    <Stack key={stem} gap={compact ? 14 : 20} align="stretch" mih={0} style={{ overflow: "hidden", maxHeight: "100%" }}>
+    <Stack key={stem} gap={compact ? 14 : 20} align="stretch" mih={0} py={compact ? 4 : 8}>
       <style>{`
-        @keyframes mcq-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
-        .mcq-q { animation: mcq-rise 420ms cubic-bezier(0.32,0.72,0,1) both; }
+        @keyframes mcq-rise {
+          from { opacity: 0; transform: translateY(14px) scale(0.99); filter: blur(4px); }
+          to { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+        }
+        /* Premium "focus-pull" entrance on every question swap. Pure CSS keyframes —
+           reliable across SSR/strict-mode (framer AnimatePresence stalls here). The
+           title leads; options cascade in via per-item animation-delay below. */
+        .mcq-q { animation: mcq-rise 460ms cubic-bezier(0.32,0.72,0,1) both; }
         .mcq-opt {
-          animation: mcq-rise 420ms cubic-bezier(0.32,0.72,0,1) both;
+          animation: mcq-rise 460ms cubic-bezier(0.32,0.72,0,1) both;
           transition: transform 160ms cubic-bezier(0.32,0.72,0,1), border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
         }
         .mcq-opt:not(:disabled):hover { transform: translateY(-2px); box-shadow: var(--mantine-shadow-paper); border-color: var(--mantine-color-lavender-4) !important; }
         .mcq-opt:not(:disabled):active { transform: translateY(0); }
-        @media (prefers-reduced-motion: reduce) { .mcq-q, .mcq-opt { animation: none !important; } }
+        @media (prefers-reduced-motion: reduce) {
+          .mcq-q, .mcq-opt { animation: none !important; }
+        }
       `}</style>
 
       <Title
@@ -2630,7 +2593,6 @@ function McqHeroPanel({
         fw={500}
         lh={1.3}
         ta="center"
-        lineClamp={compact ? 4 : 3}
         c="var(--mantine-color-text)"
         style={{
           flexShrink: 0,
@@ -2644,7 +2606,7 @@ function McqHeroPanel({
         {stem}
       </Title>
 
-      <Stack gap={compact ? 8 : 10} mih={0} style={{ flexShrink: 1, overflow: "auto" }}>
+      <Stack gap={compact ? 8 : 10} mih={0} style={{ flexShrink: 0 }}>
         {safeOptions.map((opt, i) => {
           const value = String(i);
           const isSelected = selected === value;
@@ -2663,7 +2625,7 @@ function McqHeroPanel({
               disabled={optionsLocked}
               onClick={() => { if (!optionsLocked) onSelect(value); }}
               style={{
-                animationDelay: `${i * 55}ms`,
+                animationDelay: `${90 + i * 60}ms`,
                 width: "100%",
                 borderRadius: 14,
                 padding: compact ? "12px 12px" : "14px 16px",
@@ -2779,6 +2741,8 @@ function TutorPanel({
   onInputChange,
   onSend,
   onStop,
+  onRegenerate,
+  onEditUser,
 }: {
   messages: { role: string; content: string }[];
   input: string;
@@ -2787,6 +2751,8 @@ function TutorPanel({
   onInputChange: (value: string) => void;
   onSend: () => void;
   onStop?: () => void;
+  onRegenerate?: () => void;
+  onEditUser?: (index: number) => void;
 }) {
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
@@ -2824,12 +2790,17 @@ function TutorPanel({
 
   return (
     <Stack gap={0} h="100%" mih={0} bg={isDark ? "dark.8" : "white"}>
+      <style>{`
+        @keyframes chat-msg-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        .chat-msg { animation: chat-msg-in 320ms cubic-bezier(0.32,0.72,0,1) both; }
+        @media (prefers-reduced-motion: reduce) { .chat-msg { animation: none; } }
+      `}</style>
       <Box flex={1} mih={0} pos="relative">
         <Box
           ref={scrollRef}
           h="100%"
           onScroll={handleScroll}
-          style={{ overflow: "auto", overscrollBehavior: "contain" }}
+          style={{ overflow: "auto", overscrollBehavior: "contain", scrollbarGutter: "stable" }}
         >
           {messages.length === 0 ? (
             <Center mih="100%" px="sm" py="md">
@@ -2878,6 +2849,11 @@ function TutorPanel({
                     isUser={m.role === "user"}
                     streaming={!busy ? false : m.role === "assistant" && i === messages.length - 1}
                     isDark={isDark}
+                    canRegenerate={
+                      !busy && m.role === "assistant" && i === messages.length - 1 && Boolean(onRegenerate)
+                    }
+                    onRegenerate={onRegenerate}
+                    onEdit={onEditUser && !busy ? () => onEditUser(i) : undefined}
                   />
                 ))}
               </Stack>
@@ -3092,18 +3068,42 @@ function MessageActionRail({
     </Group>
   );
 }
+function ChatIconAction({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip label={label} position="top" withArrow openDelay={250}>
+      <ActionIcon variant="subtle" color="gray" size="sm" radius="md" aria-label={label} onClick={onClick}>
+        {children}
+      </ActionIcon>
+    </Tooltip>
+  );
+}
+
 function ChatMessage({
   message,
   isUser,
   streaming,
   thinking = false,
   isDark,
+  canRegenerate = false,
+  onRegenerate,
+  onEdit,
 }: {
   message: { role: string; content: string };
   isUser: boolean;
   streaming: boolean;
   thinking?: boolean;
   isDark: boolean;
+  canRegenerate?: boolean;
+  onRegenerate?: () => void;
+  onEdit?: () => void;
 }) {
   const { hovered, ref } = useHover();
   const actionsEnabled =
@@ -3114,6 +3114,7 @@ function ChatMessage({
     return (
       <Box
         ref={ref}
+        className="chat-msg"
         style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}
       >
         <Paper
@@ -3128,6 +3129,11 @@ function ChatMessage({
           </Text>
         </Paper>
         <MessageActionRail visible={showActions} enabled={actionsEnabled} align="flex-end">
+          {onEdit && (
+            <ChatIconAction label="Edit & resend" onClick={onEdit}>
+              <IconPencil size={15} stroke={1.8} />
+            </ChatIconAction>
+          )}
           <MessageCopyAction value={message.content} label="Copy message" />
         </MessageActionRail>
       </Box>
@@ -3135,7 +3141,7 @@ function ChatMessage({
   }
 
   return (
-    <Group ref={ref} align="flex-start" gap="sm" wrap="nowrap" maw="100%">
+    <Group ref={ref} className="chat-msg" align="flex-start" gap="sm" wrap="nowrap" maw="100%">
       <AssistantLogo size={28} />
       <Box pt={4} style={{ flex: 1, minWidth: 0 }}>
         {thinking || (streaming && !message.content) ? (
@@ -3149,6 +3155,11 @@ function ChatMessage({
         )}
         <MessageActionRail visible={showActions} enabled={actionsEnabled}>
           <MessageCopyAction value={message.content} label="Copy message" />
+          {canRegenerate && onRegenerate && (
+            <ChatIconAction label="Regenerate" onClick={onRegenerate}>
+              <IconRefresh size={15} stroke={1.8} />
+            </ChatIconAction>
+          )}
         </MessageActionRail>
       </Box>
     </Group>
@@ -3595,7 +3606,7 @@ function PageSelectionDock({
                 fw={600}
                 size="sm"
                 lineClamp={1}
-                c={hasSelection ? (isDark ? "gray.1" : "dark.8") : "dimmed"}
+                c={hasSelection ? "var(--mantine-color-text)" : "dimmed"}
               >
                 {summary}
               </Text>
@@ -3755,7 +3766,7 @@ function PageSelectionDock({
                   size="sm"
                   ta="center"
                   lineClamp={2}
-                  c={hasSelection ? (isDark ? "gray.1" : "dark.8") : "dimmed"}
+                  c={hasSelection ? "var(--mantine-color-text)" : "dimmed"}
                 >
                   {summary}
                 </Text>
@@ -3805,7 +3816,7 @@ function PageSelectionDock({
                       size="sm"
                       ta="right"
                       lineClamp={2}
-                      c={hasSelection ? (isDark ? "gray.1" : "dark.8") : "dimmed"}
+                      c={hasSelection ? "var(--mantine-color-text)" : "dimmed"}
                     >
                       {summary}
                     </Text>
@@ -3845,7 +3856,7 @@ function PageSelectionDock({
                     size="sm"
                     ta="center"
                     lineClamp={1}
-                    c={hasSelection ? (isDark ? "gray.1" : "dark.8") : "dimmed"}
+                    c={hasSelection ? "var(--mantine-color-text)" : "dimmed"}
                   >
                     {summary}
                   </Text>

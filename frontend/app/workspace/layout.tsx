@@ -16,8 +16,9 @@ import {
   Sidebar,
   SIDEBAR_EXPANDED_WIDTH,
   SIDEBAR_MINI_WIDTH,
+  SHELL_MS,
+  SHELL_EASE,
 } from "@/app/workspace/_components/Sidebar";
-import { AddSourceModal } from "@/app/workspace/_components/AddSourceModal";
 import { DeleteSourceModal } from "@/app/workspace/_components/DeleteSourceModal";
 import { sourceLabel } from "@/app/workspace/_components/Sidebar";
 import { SettingsModal } from "@/app/workspace/_components/SettingsModal";
@@ -58,7 +59,6 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
       ? SIDEBAR_EXPANDED_WIDTH
       : SIDEBAR_MINI_WIDTH;
 
-  const [addOpen, setAddOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<SourceDocument | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
@@ -117,10 +117,10 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <WorkspaceShellContext.Provider value={{ openAddSource: () => setAddOpen(true) }}>
+    <WorkspaceShellContext.Provider value={{ openAddSource: () => router.push("/workspace") }}>
       <AppShell
-        transitionDuration={reduceMotion ? 0 : 280}
-        transitionTimingFunction="cubic-bezier(0.32, 0.72, 0, 1)"
+        transitionDuration={reduceMotion ? 0 : SHELL_MS}
+        transitionTimingFunction={SHELL_EASE}
         header={{ height: { base: MOBILE_HEADER_HEIGHT, sm: 0 } }}
         navbar={{
           width: sidebarWidth,
@@ -136,7 +136,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
             display: "flex",
             flexDirection: "column",
             borderRight: "1px solid var(--mantine-color-default-border)",
-            background: "var(--mantine-color-gray-0)",
+            background: "var(--mantine-color-body)",
           },
           main: {
             height: "100%",
@@ -167,7 +167,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
                 variant="subtle"
                 color="gray"
                 aria-label="Add source"
-                onClick={() => setAddOpen(true)}
+                onClick={() => router.push("/workspace")}
                 w={34}
                 style={{ flexShrink: 0 }}
               >
@@ -191,7 +191,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
             onToggleSidebar={toggleSidebar}
             onNavigateSource={navigateSource}
             onAddSource={() => {
-              setAddOpen(true);
+              router.push("/workspace");
               if (isMobile) closeMobile();
             }}
             onSignIn={() => {
@@ -210,7 +210,6 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
         <AppShell.Main>{children}</AppShell.Main>
       </AppShell>
 
-      <AddSourceModal opened={addOpen} onClose={() => setAddOpen(false)} isMobile={Boolean(isMobile)} />
       <DeleteSourceModal
         target={deleteTarget}
         onClose={() => setDeleteTarget(null)}

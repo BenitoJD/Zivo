@@ -18,6 +18,18 @@ import { ProductMock } from "./ProductMock";
  * on a curved dashed path, collapses into a central waveform pill, and re-emerges
  * as polished exam questions on a solid dark ribbon. Gated on reduced-motion.
  */
+// Long looping marquee strings — built once at module load, not on every render.
+const SOURCE_SPEECH_TEXT = Array(40)
+  .fill(
+    "Umm, I have this biology PDF on cellular respiration... glycolysis yields 2 ATP... wait, carbon bonds break... what is the citric acid cycle? Prep reaction produces acetyl CoA... Electron transport chain generates NADH... I need to memorize this for the exam... cellular respiration occurs in the mitochondria... oxygen is the final electron acceptor... ",
+  )
+  .join("");
+const QUESTION_STREAM_TEXT = Array(40)
+  .fill(
+    "Q: What is the final electron acceptor in the electron transport chain? · Q: Where does cellular respiration take place? · Q: What is the net yield of ATP from glycolysis? · Q: Which coenzymes are produced during the citric acid cycle? · Q: What is the role of NADH? · ",
+  )
+  .join("");
+
 function WavyTextAnimation() {
   const reduce = useReducedMotion();
   if (reduce) return null;
@@ -66,11 +78,7 @@ function WavyTextAnimation() {
           }}
         >
           <textPath href="#sourceCurve" startOffset="-6000">
-            {Array(40)
-              .fill(
-                "Umm, I have this biology PDF on cellular respiration... glycolysis yields 2 ATP... wait, carbon bonds break... what is the citric acid cycle? Prep reaction produces acetyl CoA... Electron transport chain generates NADH... I need to memorize this for the exam... cellular respiration occurs in the mitochondria... oxygen is the final electron acceptor... ",
-              )
-              .join("")}
+            {SOURCE_SPEECH_TEXT}
             <animate attributeName="startOffset" from="-6000" to="0" dur="120s" repeatCount="indefinite" />
           </textPath>
         </text>
@@ -87,48 +95,67 @@ function WavyTextAnimation() {
           }}
         >
           <textPath href="#questionCurve" startOffset="-6000">
-            {Array(40)
-              .fill(
-                "Q: What is the final electron acceptor in the electron transport chain? · Q: Where does cellular respiration take place? · Q: What is the net yield of ATP from glycolysis? · Q: Which coenzymes are produced during the citric acid cycle? · Q: What is the role of NADH? · ",
-              )
-              .join("")}
+            {QUESTION_STREAM_TEXT}
             <animate attributeName="startOffset" from="-6000" to="0" dur="90s" repeatCount="indefinite" />
           </textPath>
         </text>
 
-        {/* Floating "Questions generated" badge */}
+        {/* Cycling "thinking" badges — Zivo narrating its work, each phrase popping
+            in then giving way to the next, so the moment of generation feels alive. */}
         <g transform="translate(518, 145)">
-          <rect
-            x="-72"
-            y="-16"
-            width="144"
-            height="32"
-            rx="16"
-            fill="#034F46"
-            style={{ filter: "drop-shadow(0 4px 12px rgba(3,79,70,0.22))" }}
-          >
-            <animate attributeName="y" values="-16;-18;-16" dur="3s" repeatCount="indefinite" />
-          </rect>
-          <circle cx="-52" cy="0" r="8" fill="#FFFFFF">
-            <animate attributeName="cy" values="0;-2;0" dur="3s" repeatCount="indefinite" />
-          </circle>
-          <path d="M -55.5 0 L -53 2.5 L -48.5 -2" stroke="#034F46" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none">
-            <animate attributeName="d" values="M -55.5 0 L -53 2.5 L -48.5 -2;M -55.5 -2 L -53 0.5 L -48.5 -4;M -55.5 0 L -53 2.5 L -48.5 -2" dur="3s" repeatCount="indefinite" />
-          </path>
-          <text
-            x="-38"
-            y="1"
-            dominantBaseline="central"
-            style={{
-              fontSize: 11,
-              fontFamily: "var(--font-sans), sans-serif",
-              fontWeight: 600,
-              fill: "#FFFFFF",
-            }}
-          >
-            Questions generated
-            <animate attributeName="y" values="1;-1;1" dur="3s" repeatCount="indefinite" />
-          </text>
+          {(() => {
+            const phrases = [
+              { t: "Reading your source", c: "#7B5DA6" },
+              { t: "Mapping key concepts", c: "#034F46" },
+              { t: "Spotting misconceptions", c: "#C57454" },
+              { t: "Questions generated", c: "#034F46", check: true },
+              { t: "Tuning difficulty", c: "#7B5DA6" },
+              { t: "Ready to quiz", c: "#4B7A43", check: true },
+            ];
+            const N = phrases.length;
+            const T = N * 2; // ~2s on screen per phrase
+            return phrases.map((p, i) => {
+              const a = i / N;
+              const b = (i + 1) / N;
+              const f = 0.012;
+              const kt = `0;${a.toFixed(3)};${(a + f).toFixed(3)};${(b - f).toFixed(3)};${b.toFixed(3)};1`;
+              return (
+                <g key={i} opacity={0}>
+                  <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes={kt} dur={`${T}s`} repeatCount="indefinite" />
+                  <animateTransform attributeName="transform" type="scale" values="0.82;0.82;1;1;0.96;0.96" keyTimes={kt} dur={`${T}s`} repeatCount="indefinite" />
+                  {/* Solid accent pill with white text — Wispr "Removed Umm" style, with
+                      a soft accent-tinted glow for a premium lift. */}
+                  <rect
+                    x="-100"
+                    y="-17"
+                    width="200"
+                    height="34"
+                    rx="17"
+                    fill={p.c}
+                    style={{ filter: `drop-shadow(0 10px 22px ${p.c}55)` }}
+                  />
+                  {p.check ? (
+                    <>
+                      <circle cx="-80" cy="0" r="8" fill="#FFFFFF" />
+                      <path d="M -83.5 0 L -81 2.6 L -76.5 -2.8" stroke={p.c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                    </>
+                  ) : (
+                    <circle cx="-80" cy="0" r="5" fill="#FFFFFF">
+                      <animate attributeName="opacity" values="1;0.45;1" dur="1.1s" repeatCount="indefinite" />
+                    </circle>
+                  )}
+                  <text
+                    x="-64"
+                    y="1"
+                    dominantBaseline="central"
+                    style={{ fontSize: 12.5, fontFamily: "var(--font-sans), sans-serif", fontWeight: 600, fill: "#FFFFFF", letterSpacing: "0.01em" }}
+                  >
+                    {p.t}
+                  </text>
+                </g>
+              );
+            });
+          })()}
         </g>
 
         {/* Central waveform pill */}

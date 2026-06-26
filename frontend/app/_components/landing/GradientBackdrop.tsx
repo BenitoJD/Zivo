@@ -35,28 +35,28 @@ export function GradientBackdrop({
       <Box
         className="zivo-blob zivo-blob-1"
         style={{
-          background: `radial-gradient(circle at center, rgba(165, 193, 189, ${o(0.55)}), transparent 70%)`,
+          background: `radial-gradient(circle at center, rgba(165, 193, 189, ${o(0.16)}), transparent 72%)`,
           animationPlayState: reduce ? "paused" : "running",
         }}
       />
       <Box
         className="zivo-blob zivo-blob-2"
         style={{
-          background: `radial-gradient(circle at center, rgba(205, 187, 221, ${o(0.5)}), transparent 70%)`,
+          background: `radial-gradient(circle at center, rgba(205, 187, 221, ${o(0.15)}), transparent 72%)`,
           animationPlayState: reduce ? "paused" : "running",
         }}
       />
       <Box
         className="zivo-blob zivo-blob-3"
         style={{
-          background: `radial-gradient(circle at center, rgba(127, 163, 158, ${o(0.4)}), transparent 70%)`,
+          background: `radial-gradient(circle at center, rgba(127, 163, 158, ${o(0.12)}), transparent 72%)`,
           animationPlayState: reduce ? "paused" : "running",
         }}
       />
       <Box
         className="zivo-blob zivo-blob-4"
         style={{
-          background: `radial-gradient(circle at center, rgba(247, 222, 200, ${o(0.5)}), transparent 70%)`,
+          background: `radial-gradient(circle at center, rgba(247, 222, 200, ${o(0.14)}), transparent 72%)`,
           animationPlayState: reduce ? "paused" : "running",
         }}
       />
@@ -65,8 +65,12 @@ export function GradientBackdrop({
         .zivo-blob {
           position: absolute;
           border-radius: 50%;
-          filter: blur(70px);
+          filter: blur(100px);
           will-change: transform;
+          /* Multiply so overlapping pastels deepen into richer tints on the warm
+             page instead of alpha-stacking into a blown-out white hotspot. Kept
+             very faint so the page reads as near-uniform cream — no edge color shift. */
+          mix-blend-mode: multiply;
         }
         .zivo-blob-1 {
           width: 46vw; height: 46vw; max-width: 620px; max-height: 620px;
@@ -107,10 +111,12 @@ export function GradientBackdrop({
         @media (prefers-reduced-motion: reduce) {
           .zivo-blob { animation: none !important; }
         }
-        /* In dark mode the pastels read as harsh glows — calm them right down. */
+        /* In dark mode the pastels read as harsh glows — calm them right down.
+           Screen blend keeps them as a soft additive glow without the white blowout. */
         [data-mantine-color-scheme="dark"] .zivo-blob {
           opacity: 0.4;
           filter: blur(90px);
+          mix-blend-mode: screen;
         }
       `}</style>
     </Box>
