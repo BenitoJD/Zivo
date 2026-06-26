@@ -82,10 +82,12 @@ function CodeBlock({
         py={6}
         wrap="nowrap"
       >
-        <Text size="xs" c="dimmed" tt="lowercase" truncate>
+        <Text size="xs" c="dimmed" tt="lowercase" truncate flex={1}>
           {label}
         </Text>
-        <CopyIconAction value={text} label="Copy code" />
+        <Box w={28} h={28} style={{ flexShrink: 0 }}>
+          <CopyIconAction value={text} label="Copy code" />
+        </Box>
       </Group>
       <Divider color={isDark ? "dark.4" : "gray.3"} />
       <Code block fz="xs" p="sm" bg="transparent" style={{ whiteSpace: "pre-wrap" }}>
