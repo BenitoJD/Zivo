@@ -291,6 +291,40 @@ def _concept_keys_for_ids(
     return {r["id"]: r["key"] for r in rows}
 
 
+def _difficulty_for_ids(db: Session, ids: list[str]) -> dict[str, float]:
+    """Map assertion id -> latest calibrated difficulty for the given ids.
+
+    One indexed point-read per item (DISTINCT ON newest as_of). Items with no
+    calibration row yet are simply absent — the difficulty_edge policy treats them
+    as neutral and degrades to sequence order when none are calibrated.
+    """
+    if not ids:
+        return {}
+    from app.repositories.intel import concept_id
+    from app.services.calibration import DIFFICULTY_PROJECTION_URI
+
+    rows = db.execute(
+        text(
+            """
+            SELECT DISTINCT ON (subject_assertion_id)
+                   subject_assertion_id::text AS id, value->>'rating' AS rating
+            FROM intel.projection
+            WHERE type_concept_id = :type_id
+              AND subject_assertion_id = ANY(:ids)
+            ORDER BY subject_assertion_id, as_of DESC
+            """
+        ),
+        {"type_id": concept_id(db, DIFFICULTY_PROJECTION_URI), "ids": ids},
+    ).mappings().all()
+    out: dict[str, float] = {}
+    for r in rows:
+        try:
+            out[r["id"]] = float(r["rating"])
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def select_next_assertion(
     db: Session,
     document_id: uuid.UUID,
@@ -320,9 +354,17 @@ def select_next_assertion(
 
     from app.services.selection import build_learner_state, choose_next_assertion
 
-    concept_by_id = _concept_keys_for_ids(db, candidates)
     state = build_learner_state(progress)
-    return choose_next_assertion(policy, candidates, concept_by_id, state)
+    # Load only the signal the active policy needs (default path stays query-free).
+    concept_by_id = (
+        _concept_keys_for_ids(db, candidates) if policy == "concept_reinforce" else {}
+    )
+    difficulty_by_id = (
+        _difficulty_for_ids(db, candidates) if policy == "difficulty_edge" else {}
+    )
+    return choose_next_assertion(
+        policy, candidates, concept_by_id, state, difficulty_by_id
+    )
 
 
 def next_assertion_id(
@@ -1211,11 +1253,14 @@ def save_confirmed_answer(
     *,
     choice_index: int,
     correct: bool,
+    learner_ability: float | None = None,
 ) -> None:
     """Persist the learner's latest confirmed MCQ choice for tutor chat context.
 
     Also records the question's concept key so the selection loop can react to
-    the last answer (reinforce a missed concept, advance past a mastered one).
+    the last answer (reinforce a missed concept, advance past a mastered one), and
+    mirrors the learner's freshly calibrated ability into progress so the
+    difficulty_edge policy can target their edge without an extra read.
     """
     doc = db.get(Document, document_id)
     if not doc:
@@ -1224,18 +1269,17 @@ def save_confirmed_answer(
         text("SELECT payload->>'primary_concept_key' FROM intel.assertion WHERE id = :id"),
         {"id": assertion_id},
     ).scalar()
-    save_progress(
-        db,
-        doc,
-        {
-            "last_confirmed_answer": {
-                "assertion_id": str(assertion_id),
-                "choice_index": int(choice_index),
-                "correct": bool(correct),
-                "concept_key": concept_key,
-            }
-        },
-    )
+    patch: dict[str, Any] = {
+        "last_confirmed_answer": {
+            "assertion_id": str(assertion_id),
+            "choice_index": int(choice_index),
+            "correct": bool(correct),
+            "concept_key": concept_key,
+        }
+    }
+    if learner_ability is not None:
+        patch["learner_ability"] = float(learner_ability)
+    save_progress(db, doc, patch)
     db.commit()
 
 

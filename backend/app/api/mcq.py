@@ -88,6 +88,7 @@ def grade(
     # account entity; anonymous guests resolve to a stable per-guest entity so
     # their practice answers still feed intel.measurement → intel.projection.
     subject_entity_id = _resolve_subject_entity(db, user, guest_id)
+    learner_ability: float | None = None
     if subject_entity_id is not None:
         value_json = {"choice_index": body.choice_index}
         if guest_id and not user:
@@ -124,12 +125,13 @@ def grade(
         if get_settings().calibration_enabled:
             from app.services.calibration import record_outcome
 
-            record_outcome(
+            calibration = record_outcome(
                 db,
                 subject_entity_id=subject_entity_id,
                 assertion_id=body.assertion_id,
                 correct=bool(result.get("correct")),
             )
+            learner_ability = calibration.ability
         db.commit()
 
     save_confirmed_answer(
@@ -138,6 +140,7 @@ def grade(
         body.assertion_id,
         choice_index=body.choice_index,
         correct=bool(result.get("correct")),
+        learner_ability=learner_ability,
     )
     record_answer(db, artifact_id, body.assertion_id)
 
