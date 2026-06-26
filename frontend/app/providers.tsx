@@ -14,10 +14,12 @@ import {
 } from "@mantine/core";
 import { Notifications } from "@mantine/notifications";
 import { QueryClientProvider } from "@tanstack/react-query";
+import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { createQueryClient } from "@/lib/api/query-client";
 import {
   type MantineColorScheme,
+  isLightOnlyPath,
   resolveColorScheme,
   setSsrColorScheme,
   writeColorSchemeCookie,
@@ -300,10 +302,32 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
 });
 
 function ColorSchemeCookieSync() {
+  const pathname = usePathname();
   const { colorScheme } = useMantineColorScheme();
   useEffect(() => {
+    if (isLightOnlyPath(pathname)) return;
     writeColorSchemeCookie(colorScheme === "dark" ? "dark" : "light");
-  }, [colorScheme]);
+  }, [colorScheme, pathname]);
+  return null;
+}
+
+/** Keep the root html attribute aligned when client-navigating to/from landing. */
+function LandingSchemeSync() {
+  const pathname = usePathname();
+  const lightOnly = isLightOnlyPath(pathname);
+  const { colorScheme } = useMantineColorScheme();
+
+  useEffect(() => {
+    if (lightOnly) {
+      document.documentElement.setAttribute("data-mantine-color-scheme", "light");
+      return;
+    }
+    document.documentElement.setAttribute(
+      "data-mantine-color-scheme",
+      colorScheme === "dark" ? "dark" : "light",
+    );
+  }, [lightOnly, colorScheme]);
+
   return null;
 }
 
@@ -314,7 +338,9 @@ export default function Providers({
   children: React.ReactNode;
   colorScheme?: MantineColorScheme;
 }) {
-  setSsrColorScheme(colorScheme);
+  const pathname = usePathname();
+  const lightOnly = isLightOnlyPath(pathname);
+  setSsrColorScheme(lightOnly ? "light" : colorScheme);
   const [queryClient] = useState(createQueryClient);
   return (
     <QueryClientProvider client={queryClient}>
@@ -322,8 +348,10 @@ export default function Providers({
         theme={theme}
         cssVariablesResolver={cssVariablesResolver}
         defaultColorScheme={colorScheme}
+        forceColorScheme={lightOnly ? "light" : undefined}
       >
         <ColorSchemeCookieSync />
+        <LandingSchemeSync />
         <Notifications position="top-right" />
         {children}
       </MantineProvider>

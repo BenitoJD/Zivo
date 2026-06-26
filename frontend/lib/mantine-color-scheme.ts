@@ -19,20 +19,29 @@ export const MANTINE_COLOR_SCHEME_SCRIPT = `try {
   function _writeCookie(scheme) {
     document.cookie = "${MANTINE_COLOR_SCHEME_COOKIE}=" + scheme + ";path=/;max-age=31536000;SameSite=Lax";
   }
-  var fromCookie = _readCookie("${MANTINE_COLOR_SCHEME_COOKIE}");
-  var fromStorage = window.localStorage.getItem("mantine-color-scheme-value");
-  var preference = fromCookie || fromStorage || "light";
-  var colorScheme = preference === "light" || preference === "dark" || preference === "auto" ? preference : "light";
-  var computedColorScheme = colorScheme !== "auto"
-    ? colorScheme
-    : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  document.documentElement.setAttribute("data-mantine-color-scheme", computedColorScheme);
-  _writeCookie(computedColorScheme);
-  if (!fromStorage || fromStorage !== colorScheme) {
-    window.localStorage.setItem("mantine-color-scheme-value", colorScheme);
+  if (window.location.pathname === "/") {
+    document.documentElement.setAttribute("data-mantine-color-scheme", "light");
+  } else {
+    var fromCookie = _readCookie("${MANTINE_COLOR_SCHEME_COOKIE}");
+    var fromStorage = window.localStorage.getItem("mantine-color-scheme-value");
+    var preference = fromCookie || fromStorage || "light";
+    var colorScheme = preference === "light" || preference === "dark" || preference === "auto" ? preference : "light";
+    var computedColorScheme = colorScheme !== "auto"
+      ? colorScheme
+      : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-mantine-color-scheme", computedColorScheme);
+    _writeCookie(computedColorScheme);
+    if (!fromStorage || fromStorage !== colorScheme) {
+      window.localStorage.setItem("mantine-color-scheme-value", colorScheme);
+    }
   }
 } catch (e) {}
 `;
+
+/** Public marketing routes that always render in light mode (workspace keeps theme toggle). */
+export function isLightOnlyPath(pathname: string): boolean {
+  return pathname === "/";
+}
 
 export function writeColorSchemeCookie(scheme: MantineColorScheme): void {
   if (typeof document === "undefined") return;

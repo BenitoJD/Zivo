@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import Script from "next/script";
 import { Figtree, EB_Garamond } from "next/font/google";
 import "@mantine/core/styles.css";
@@ -40,9 +40,11 @@ export const viewport: Viewport = {
 
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const cookieStore = await cookies();
-  const colorScheme = readColorSchemeFromCookie(
-    cookieStore.get(MANTINE_COLOR_SCHEME_COOKIE)?.value,
-  );
+  const headerStore = await headers();
+  const forceLight = headerStore.get("x-zivo-force-light") === "1";
+  const colorScheme = forceLight
+    ? "light"
+    : readColorSchemeFromCookie(cookieStore.get(MANTINE_COLOR_SCHEME_COOKIE)?.value);
 
   return (
     <html
