@@ -115,19 +115,25 @@ export function McqFeedbackCard({
         borderRadius: 12,
         background: surface,
         border: `1px solid ${outline}`,
-        maxHeight: compact ? 148 : 184,
+        maxHeight: compact ? 168 : 208,
         overflow: "auto",
       }}
     >
+      <Text
+        fw={700}
+        size={compact ? "sm" : "md"}
+        c={primaryText}
+        mb={6}
+        style={{ letterSpacing: "-0.01em" }}
+      >
+        {isCorrect ? "Correct" : "Not quite"}
+      </Text>
       <Text
         size={compact ? "sm" : "md"}
         lh={1.7}
         c={primaryText}
         style={{ whiteSpace: "pre-wrap", fontSize: compact ? undefined : "1.0625rem" }}
       >
-        <Text component="span" fw={600} inherit>
-          {isCorrect ? "Exactly — " : "Not quite — "}
-        </Text>
         {lead}
       </Text>
       {detail ? (

@@ -85,6 +85,29 @@ def test_detects_exam_forbidden_mid_stem_refs() -> None:
     assert not has_document_meta_reference("What is the primary function of chlorophyll?")
 
 
+@pytest.mark.parametrize(
+    "stem",
+    [
+        "As mentioned above, which reaction is exothermic?",
+        "Refer to the figure above. Which part is labeled X?",
+        "According to the given text, what is the main cause?",
+        "In the provided passage, who led the revolt?",
+        "As shown earlier, what does the diagram depict?",
+        "What does the aforementioned case demonstrate?",
+        "As noted in the reading, where is the Calvin cycle located?",
+    ],
+)
+def test_detects_widened_exam_forbidden_refs(stem: str) -> None:
+    """Residual source-pointing phrasings must all be caught after the net was widened."""
+    assert has_document_meta_reference(stem), f"missed forbidden framing: {stem!r}"
+
+
+def test_clean_standalone_stem_is_not_flagged() -> None:
+    clean = "Which source supplies most cities with drinking water?"
+    assert not has_document_meta_reference(clean)
+    assert sanitize_mcq_stem(clean) == clean
+
+
 def test_sanitize_mcq_stem_strips_on_page_prefix() -> None:
     assert sanitize_mcq_stem("On page 12, what is photosynthesis?") == "What is photosynthesis?"
 

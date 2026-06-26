@@ -14,7 +14,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.db import SessionLocal, get_db
 from app.graphs.chat_graph import run_retrieve
-from app.graphs.mcq_graph import grade_mcq_answer, try_grade_mcq_fast
+from app.graphs.mcq_graph import grade_mcq_answer
 from app.models import Account, ChatMessage, ChatThread, Document
 from app.schemas.mcq import McqGradeRequest, McqGradeResponse
 from app.services.auth import get_optional_user, require_csrf_or_guest
@@ -497,20 +497,6 @@ async def grade_mcq(
     doc = await asyncio.to_thread(_load_doc)
     if body.correct_index >= len(body.options) or body.selected_index >= len(body.options):
         raise HTTPException(status_code=400, detail="Invalid option index")
-
-    fast = try_grade_mcq_fast(
-        options=body.options,
-        correct_index=body.correct_index,
-        selected_index=body.selected_index,
-        explanation=body.explanation,
-    )
-    if fast is not None:
-        return McqGradeResponse(
-            is_correct=bool(fast["is_correct"]),
-            correct_index=body.correct_index,
-            selected_index=body.selected_index,
-            feedback=fast["feedback"],
-        )
 
     # Stored explanation usually grounds grading; skip retrieval unless missing.
     context = ""

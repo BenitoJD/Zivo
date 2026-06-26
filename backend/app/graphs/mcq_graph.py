@@ -1,8 +1,7 @@
-"""LangGraph MCQ grading — check answer → explain (when wrong)."""
+"""LangGraph MCQ grading — check answer → teach (LLM feedback for every answer)."""
 
 from __future__ import annotations
 
-import re
 import uuid
 from typing import Any, Literal, TypedDict
 
@@ -10,46 +9,18 @@ from langgraph.graph import END, START, StateGraph
 from sqlalchemy.orm import Session
 
 from app.services.llm_router import complete_chat
-from app.services.mcq_dedup import (
-    has_document_meta_residue,
-    sanitize_mcq_explanation,
-    strip_document_meta,
-)
+from app.services.mcq_dedup import sanitize_mcq_explanation
 from app.services.prompts import get_prompt
 from app.services.token_budget import GRADE_CONTEXT_MAX_TOKENS, truncate_to_tokens
 
-_LEARN_FEEDBACK_MAX = 280
 
+def _sanitize_feedback(text: str) -> str:
+    """Light touch-up: strip any stray document/page/passage residue from LLM feedback.
 
-def _learnify_explanation(text: str) -> str:
-    """Turn stored explanations into short, memorable teacher voice."""
-    cleaned = strip_document_meta(text)
-    if not cleaned:
-        return ""
-
-    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", cleaned) if s.strip()]
-    summary = " ".join(sentences[:2])
-    if len(summary) > _LEARN_FEEDBACK_MAX:
-        summary = summary[: _LEARN_FEEDBACK_MAX - 1].rstrip() + "…"
-    return sanitize_mcq_explanation(summary)
-
-
-def _has_formal_residue(text: str) -> bool:
-    return has_document_meta_residue(text)
-
-
-def _wrong_feedback(*, chosen: str, correct: str, explanation: str) -> str:
-    takeaway = _learnify_explanation(explanation)
-    if takeaway:
-        return (
-            f"The answer is {correct}. {takeaway}\n\n"
-            f"You chose {chosen} — close, but that misses the main point here."
-        )
-    return f"The answer is {correct}. You chose {chosen} — look for the option that matches that idea."
-
-
-def _correct_feedback(explanation: str) -> str:
-    return _learnify_explanation(explanation)
+    We deliberately do NOT truncate — the grader prompt controls length, and
+    cutting it destroys the teaching prose.
+    """
+    return sanitize_mcq_explanation((text or "").strip())
 
 
 class McqGradeState(TypedDict, total=False):
@@ -58,26 +29,18 @@ class McqGradeState(TypedDict, total=False):
     correct_index: int
     selected_index: int
     explanation: str
+    aspect_label: str
     document_context: str
     is_correct: bool
     feedback: str
+    feedback_ready: bool
 
 
 def _check_answer(state: McqGradeState) -> dict[str, Any]:
-    fast = try_grade_mcq_fast(
-        options=state.get("options") or [],
-        correct_index=int(state["correct_index"]),
-        selected_index=int(state["selected_index"]),
-        explanation=(state.get("explanation") or ""),
-    )
-    if fast is not None:
-        return {
-            "is_correct": bool(fast["is_correct"]),
-            "feedback": (fast.get("feedback") or "").strip(),
-            "feedback_ready": True,
-        }
+    """Decide correctness instantly (index compare); always defer feedback to the LLM."""
     return {
-        "is_correct": state["selected_index"] == state["correct_index"],
+        "is_correct": int(state["selected_index"]) == int(state["correct_index"]),
+        # Always route to the teach node so feedback is freshly generated.
         "feedback_ready": False,
     }
 
@@ -89,29 +52,22 @@ def try_grade_mcq_fast(
     selected_index: int,
     explanation: str = "",
 ) -> dict[str, Any] | None:
-    """Return grading result without retrieval/LLM when the explanation is already learner-ready."""
-    exp = (explanation or "").strip()
+    """Correctness-only fast path for the API layer.
+
+    Returns the cheap binary verdict plus an EMPTY feedback string. The caller
+    (the graph / ``grade_mcq_answer``) is then expected to run the LLM teach
+    node to write the world-class feedback. Returning ``feedback=""`` keeps the
+    request/response contract while signalling "feedback still pending".
+    """
+    is_correct = int(selected_index) == int(correct_index)
     correct = options[correct_index] if correct_index < len(options) else ""
     chosen = options[selected_index] if selected_index < len(options) else ""
 
-    if selected_index == correct_index:
-        plain = _correct_feedback(exp)
-        if plain and not _has_formal_residue(plain):
-            return {"is_correct": True, "feedback": plain}
-        if not exp:
-            return {"is_correct": True, "feedback": ""}
+    # No need for the LLM when there's nothing meaningful to say — but only when
+    # the request lacks options entirely (defensive). Otherwise always teach.
+    if not options or not correct or not chosen:
         return None
-
-    if not exp:
-        return None
-
-    plain = _learnify_explanation(exp)
-    if plain and not _has_formal_residue(plain):
-        return {
-            "is_correct": False,
-            "feedback": _wrong_feedback(chosen=chosen, correct=correct, explanation=exp),
-        }
-    return None
+    return {"is_correct": is_correct, "feedback": ""}
 
 
 async def _teach_feedback(state: McqGradeState, *, db: Session) -> dict[str, Any]:
@@ -119,38 +75,73 @@ async def _teach_feedback(state: McqGradeState, *, db: Session) -> dict[str, Any
     correct = options[state["correct_index"]] if state["correct_index"] < len(options) else ""
     chosen = options[state["selected_index"]] if state["selected_index"] < len(options) else ""
     is_correct = bool(state.get("is_correct"))
-    system = get_prompt(db, "mcq_grader_system")
-    outcome = "The learner answered correctly." if is_correct else "The learner answered incorrectly."
-    user = (
-        f"Question: {state.get('question', '')}\n"
-        f"Options:\n"
-        + "\n".join(f"{i}. {opt}" for i, opt in enumerate(options))
-        + f"\n{outcome}\n"
-        f"Student chose: {chosen}\n"
-        f"Correct answer: {correct}\n"
-        f"Author explanation: {(state.get('explanation') or '').strip() or '(none)'}\n"
-    )
-    if state.get("document_context"):
-        user += f"\n(See document context above.)\n"
-    user += "\nWrite teacher feedback only — no labels like 'Feedback:' or markdown."
+    aspect = (state.get("aspect_label") or "").strip()
+    explanation = (state.get("explanation") or "").strip()
 
-    messages = [{"role": "system", "content": system}]
+    system = get_prompt(db, "mcq_grader_system")
+    outcome = "The learner answered CORRECTLY." if is_correct else "The learner answered INCORRECTLY."
+    user_lines = [
+        f"Question: {state.get('question', '')}",
+        "Options:",
+        *[f"{i}. {opt}" for i, opt in enumerate(options)],
+        outcome,
+        f"Learner chose: {chosen}",
+        f"Correct answer: {correct}",
+    ]
+    if aspect:
+        user_lines.append(f"Concept being tested: {aspect}")
+    if explanation:
+        user_lines.append(f"Author explanation (ground truth — stay faithful to it): {explanation}")
+    else:
+        user_lines.append("Author explanation: (none provided)")
+    user = "\n".join(user_lines)
+
+    if is_correct:
+        user += (
+            "\n\nThey were right. Write the two-paragraph feedback described in your "
+            "instructions (lead = the idea that makes it stick; second paragraph = a "
+            "short note on why it matters or a trap to avoid next time)."
+        )
+    else:
+        user += (
+            f"\n\nThey were wrong — they picked \"{chosen}\". Your second paragraph MUST "
+            f"address that specific choice: name it, explain the misconception it embodies, "
+            f"and give the one sentence that separates it from the correct answer "
+            f"(\"{correct}\"). Make the mistake click."
+        )
+    user += (
+        "\n\nReturn ONLY the feedback prose — two paragraphs separated by a blank line, "
+        "no labels, no markdown, no preamble."
+    )
+
+    messages: list[dict] = [{"role": "system", "content": system}]
     doc_ctx = (state.get("document_context") or "").strip()
     if doc_ctx:
         messages.append(
             {
                 "role": "user",
-                "content": f"Document context (stable across grading on this page):\n{truncate_to_tokens(doc_ctx, GRADE_CONTEXT_MAX_TOKENS)}",
+                "content": (
+                    "Grounding context (authoritative facts for this question — use only to stay "
+                    "accurate, never quote it or mention a document):\n"
+                    + truncate_to_tokens(doc_ctx, GRADE_CONTEXT_MAX_TOKENS)
+                ),
             }
         )
     messages.append({"role": "user", "content": user})
 
-    feedback = await complete_chat(
-        messages,
-        db,
-        log_tag="grade_mcq",
-    )
-    return {"feedback": _learnify_explanation(feedback.strip()) or feedback.strip()}
+    try:
+        feedback = await complete_chat(messages, db, log_tag="grade_mcq")
+    except Exception:
+        # Last-resort fallback so a provider hiccup never breaks grading.
+        feedback = _fallback_feedback(is_correct=is_correct, correct=correct, chosen=chosen)
+    return {"feedback": _sanitize_feedback(feedback) or feedback.strip()}
+
+
+def _fallback_feedback(*, is_correct: bool, correct: str, chosen: str) -> str:
+    """Used only if the LLM call throws — keeps grading functional, never user-facing by design."""
+    if is_correct:
+        return f"The right answer is {correct} — well reasoned."
+    return f"The right answer is {correct}. You picked {chosen}, which is the common trap here."
 
 
 def build_mcq_grade_graph():
@@ -193,19 +184,10 @@ async def grade_mcq_answer(
     correct_index: int,
     selected_index: int,
     explanation: str = "",
+    aspect_label: str = "",
     document_context: str = "",
 ) -> dict[str, Any]:
-    fast = try_grade_mcq_fast(
-        options=options,
-        correct_index=correct_index,
-        selected_index=selected_index,
-        explanation=explanation,
-    )
-    if fast is not None:
-        return {
-            "is_correct": bool(fast["is_correct"]),
-            "feedback": (fast.get("feedback") or "").strip(),
-        }
+    is_correct = int(selected_index) == int(correct_index)
 
     graph = get_mcq_grade_graph()
     state: McqGradeState = {
@@ -214,16 +196,18 @@ async def grade_mcq_answer(
         "correct_index": correct_index,
         "selected_index": selected_index,
         "explanation": explanation,
+        "aspect_label": aspect_label,
         "document_context": document_context,
-        "is_correct": selected_index == correct_index,
+        "is_correct": is_correct,
     }
     result = await graph.ainvoke(state, config={"configurable": {"db": db}})
-    is_correct = selected_index == correct_index
     feedback = (result.get("feedback") or "").strip()
-    if not feedback and is_correct:
-        feedback = ""
-    elif not feedback:
-        feedback = "Let's look at this again — the right answer fits the idea we were testing."
+    if not feedback:
+        feedback = _fallback_feedback(
+            is_correct=is_correct,
+            correct=options[correct_index] if correct_index < len(options) else "",
+            chosen=options[selected_index] if selected_index < len(options) else "",
+        )
     return {
         "is_correct": is_correct,
         "feedback": feedback,
@@ -253,6 +237,7 @@ def grade_mcq(db: Session, assertion_id: uuid.UUID, choice_index: int) -> dict[s
             correct_index=correct_index,
             selected_index=choice_index,
             explanation=payload.get("explanation") or "",
+            aspect_label=payload.get("primary_concept") or payload.get("primary_concept_key") or "",
         )
     )
     return {

@@ -97,6 +97,70 @@ def test_detects_meta_page_reference_in_option() -> None:
     assert any(f["code"] == "meta_page_reference" for f in flaws)
 
 
+# ---------------------------------------------------------------------------
+# not_self_contained — questions must be answerable without the source document
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "stem",
+    [
+        "As shown in the figure, which layer contains most chloroplasts?",
+        "In the diagram above, what is labeled X?",
+        "Refer to the table above. Which value is highest?",
+        "From the given text, what is the main cause of the revolt?",
+        "What does the aforementioned case demonstrate?",
+        "As described earlier, which reaction is exothermic?",
+        "In the example shown, what is the output?",
+    ],
+)
+def test_detects_not_self_contained_in_stem(stem: str) -> None:
+    """Stems that dangle a reference only visible in the source must be flagged."""
+    mcq = {
+        "question": stem,
+        "options": ["Option A", "Option B", "Option C", "Option D"],
+        "correct_index": 0,
+        "explanation": "Some explanation.",
+    }
+    flaws = run_heuristic_checks(mcq)
+    assert any(f["code"] == "not_self_contained" for f in flaws)
+    assert has_fatal_heuristic_flaws(flaws)
+
+
+def test_detects_not_self_contained_in_option() -> None:
+    mcq = {
+        "question": "Which layer of a leaf contains the most chloroplasts?",
+        "options": [
+            "The palisade mesophyll",
+            "As shown in the figure above, the epidermis",
+            "The cuticle",
+            "The vascular bundle",
+        ],
+        "correct_index": 0,
+        "explanation": "Palisade mesophyll is packed with chloroplasts.",
+    }
+    flaws = run_heuristic_checks(mcq)
+    assert any(f["code"] == "not_self_contained" for f in flaws)
+
+
+def test_truly_standalone_question_passes() -> None:
+    """A question with all facts inline and no dangling refs must pass cleanly."""
+    mcq = {
+        "question": "In the 1857 revolt against the British East India Company, what was a primary cause?",
+        "options": [
+            "Discontent over greased rifle cartridges",
+            "A shortage of tea imports",
+            "A royal succession dispute in France",
+            "The invention of the telegraph",
+        ],
+        "correct_index": 0,
+        "explanation": "The cartridge grease issue offended both Hindu and Muslim sepoys.",
+    }
+    flaws = run_heuristic_checks(mcq)
+    codes = {f["code"] for f in flaws}
+    assert "not_self_contained" not in codes
+    assert "meta_page_reference" not in codes
+
+
 def test_normalize_strips_explanation_meta_framing() -> None:
     from app.services.mcq_quality import _normalize_mcq_payload
 

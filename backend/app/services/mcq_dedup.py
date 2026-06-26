@@ -25,6 +25,8 @@ _LEADING_META_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"|in\s+(?:the\s+)?(?:passage|text|excerpt|reading|document|book|textbook|material)"
         r"|in\s+this\s+(?:book|text|reading|passage|document)"
         r"|on\s+page\s+\d+"
+        r"|as\s+mentioned\s+(?:in|above|earlier|previously)"
+        r"|refer\s+to\s+the\s+(?:figure|diagram|table|chart|image|example|text|passage|case)"
         r"|(?:the\s+)?(?:page|text|passage|source|reading|document|textbook)\s+(?:text\s+)?"
         r"(?:specifies|states|says|indicates|describes|explains|mentions)(?:\s+that)?)"
         r"[,:]?\s+",
@@ -32,26 +34,31 @@ _LEADING_META_PATTERNS: tuple[re.Pattern[str], ...] = (
     ),
     re.compile(r"^as\s+(?:the\s+)?(?:page|text|passage|reading|document)\s+(?:states|says)[,:]?\s+", re.IGNORECASE),
     re.compile(r"^the\s+text\s+states:\s*['\"]?", re.IGNORECASE),
-    re.compile(r"^as\s+(?:stated|described)\s+(?:in|above)[,:]?\s+", re.IGNORECASE),
+    re.compile(r"^as\s+(?:stated|described|mentioned|shown|depicted|illustrated)\s+(?:in|above|earlier)[,:]?\s+", re.IGNORECASE),
+    re.compile(r"^in\s+the\s+(?:given|provided)\s+(?:text|passage|reading|excerpt|example|case|scenario)[,:]?\s+", re.IGNORECASE),
+    re.compile(r"^the\s+(?:above|aforementioned)[- ](?:mentioned\s+)?(?:text|passage|reading|example|case|scenario)[,:]?\s+", re.IGNORECASE),
 )
 
 # Exam-forbidden references anywhere in learner-visible MCQ text.
 _DOCUMENT_META_RESIDUE_RE = re.compile(
     r"\b(?:"
     r"page\s+text|page\s+\d+|on\s+page\s+\d+|pages?\s+\d+\s*(?:and|–|-|—|to)\s*\d+"
-    r"|according\s+to\s+the\s+(?:page|text|passage|reading|document|excerpt|source|book|textbook|material)"
-    r"|based\s+on\s+the\s+(?:page|text|passage|reading|document|excerpt|source|book|textbook|material)"
+    r"|according\s+to\s+the\s+(?:given\s+|provided\s+)?(?:page|text|passage|reading|document|excerpt|source|book|textbook|material)"
+    r"|based\s+on\s+the\s+(?:given\s+|provided\s+)?(?:page|text|passage|reading|document|excerpt|source|book|textbook|material)"
     r"|(?:the\s+)?(?:passage|reading|excerpt|document)\s+(?:on\s+page\s+\d+\s+)?(?:states|says|indicates|describes|explains|mentions)"
     r"|what\s+does\s+the\s+(?:passage|reading|excerpt|text|document)\s+(?:say|state|describe|mention)"
     r"|from\s+the\s+(?:passage|reading|excerpt|text|document|source\s+material)"
     r"|in\s+this\s+(?:book|text|reading|passage|document|chapter)"
-    r"|in\s+the\s+(?:passage|reading|excerpt|material)"
+    r"|in\s+the\s+(?:passage|reading|excerpt|material|given\s+text|provided\s+text)"
     r"|(?:the\s+)?textbook\s+(?:says|states|describes|explains)"
     r"|(?:the\s+)?source\s+material"
-    r"|as\s+(?:stated|described)\s+in\s+the\s+(?:text|passage|reading|material|document)"
+    r"|as\s+(?:stated|described|mentioned|shown|depicted|illustrated)\s+in\s+the\s+(?:text|passage|reading|material|document|figure|diagram|table)"
     r"|the\s+text\s+(?:states|says|specifies)"
     r"|text\s+specifies|document\s+says|passage\s+states"
     r"|chapter\s+\d+\s+(?:states|says|describes|explains)"
+    r"|as\s+(?:mentioned|noted)\s+(?:above|earlier|previously|in\s+the\s+(?:text|passage|reading|material|document))"
+    r"|refer\s+to\s+the\s+(?:figure|diagram|table|chart|image|example|text|passage|case)"
+    r"|the\s+(?:above|aforementioned|preceding|previous)[- ]?(?:mentioned\s+)?(?:text|passage|reading|example|case|scenario|discussion)"
     r")\b",
     re.IGNORECASE,
 )

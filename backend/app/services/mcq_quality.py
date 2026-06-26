@@ -48,6 +48,7 @@ FATAL_FLAW_CODES = frozenset(
         "invalid_structure",
         "too_similar_to_prior",
         "meta_page_reference",
+        "not_self_contained",
     }
 )
 
@@ -60,6 +61,24 @@ _NEGATIVE_STEM_RE = re.compile(
     re.IGNORECASE,
 )
 _FILL_BLANK_RE = re.compile(r"_{3,}|\.{3,}\s*$|\[\s*\]")
+# Dangling references — the stem/option points at something the reader can't see
+# (a figure, the text above, an example, an "aforementioned" noun). A question
+# with these can't stand alone outside the source document.
+_NOT_SELF_CONTAINED_RE = re.compile(
+    r"\b(?:"
+    r"the\s+above(?:[-\s]mentioned)?"
+    r"|the\s+aforementioned"
+    r"|as\s+(?:shown|depicted|illustrated|described|mentioned|discussed|stated)(?:\s+(?:above|earlier|previously|in\s+the\s+(?:figure|diagram|table|example|text|passage)))?"
+    r"|in\s+the\s+(?:figure|diagram|table|chart|image|example|illustration|passage|reading|excerpt|text|case)\s*(?:above|below|shown|depicted)?"
+    r"|this\s+(?:figure|diagram|table|chart|image|example|illustration|passage|reading|excerpt|text|case|section|chapter)"
+    r"|the\s+(?:figure|diagram|table|chart|image|illustration)\s+(?:above|below|shown|depicted|illustrating)"
+    r"|refer\s+to\s+the\s+(?:figure|diagram|table|chart|image|example|text|passage)"
+    r"|see\s+(?:figure|diagram|table|chart|image|example|above|below)"
+    r"|given\s+(?:text|passage|reading|excerpt|example|case|scenario)"
+    r"|from\s+the\s+(?:above|aforementioned|preceding|previous|given)\s+(?:text|passage|reading|excerpt|example|case|scenario|discussion)"
+    r")\b",
+    re.IGNORECASE,
+)
 _ABSOLUTE_RE = re.compile(r"\b(always|never|only|all|none)\b", re.IGNORECASE)
 
 
@@ -115,6 +134,24 @@ def run_heuristic_checks(
                 {
                     "code": "meta_page_reference",
                     "message": "Option references a book, page, passage, or document",
+                }
+            )
+            break
+
+    # Self-contained check — the question must be answerable without the source.
+    if _NOT_SELF_CONTAINED_RE.search(question):
+        flaws.append(
+            {
+                "code": "not_self_contained",
+                "message": "Stem dangles a reference (figure/above/example/text) only visible in the source",
+            }
+        )
+    for opt in options:
+        if _NOT_SELF_CONTAINED_RE.search(opt):
+            flaws.append(
+                {
+                    "code": "not_self_contained",
+                    "message": "Option dangles a reference only visible in the source",
                 }
             )
             break
