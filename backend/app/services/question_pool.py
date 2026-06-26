@@ -134,6 +134,8 @@ def save_page_coverage(
     rationale: str = "",
     triage_activity_id: str | None = None,
     aspect_dedup: dict[str, Any] | None = None,
+    content_type: str | None = None,
+    non_content: bool = False,
 ) -> None:
     doc = db.get(Document, document_id)
     if not doc:
@@ -141,9 +143,13 @@ def save_page_coverage(
     entry: dict[str, Any] = {
         "question_budget": question_budget,
         "aspects": aspects,
-        "coverage_complete": False,
+        # A deliberate zero-question verdict counts as complete immediately —
+        # distinct from "no aspects yet" (a pre-index race), which is not.
+        "coverage_complete": bool(non_content),
         "rationale": rationale,
         "triage_activity_id": triage_activity_id,
+        "content_type": content_type,
+        "non_content": bool(non_content),
     }
     if aspect_dedup:
         entry["aspect_dedup"] = aspect_dedup
@@ -152,8 +158,17 @@ def save_page_coverage(
     db.refresh(doc)
 
 
+def is_non_content_page(doc: Document, page: int) -> bool:
+    """True when triage deliberately judged this page to have zero testable content."""
+    return bool(get_page_coverage(doc, page).get("non_content"))
+
+
 def get_question_budget(doc: Document, page: int) -> int:
     cov = get_page_coverage(doc, page)
+    # A deliberate zero verdict is honoured exactly (no floor) — the whole point
+    # of open-world: ask nothing on a cover page rather than force filler.
+    if cov.get("non_content"):
+        return 0
     budget = int(cov.get("question_budget") or INITIAL_BATCH_SIZE)
     return max(INITIAL_BATCH_SIZE, min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, budget))
 
@@ -175,6 +190,10 @@ def effective_question_budget(
 
 def is_coverage_complete(doc: Document, page: int) -> bool:
     cov = get_page_coverage(doc, page)
+    # A deliberate zero-question verdict is complete the moment triage lands —
+    # empty aspects here mean "nothing to ask", not "not triaged yet".
+    if cov.get("non_content"):
+        return True
     aspects = cov.get("aspects") or []
     if not aspects:
         # coverage_complete without triage aspects is stale (e.g. pre-index race).
@@ -247,6 +266,59 @@ def _count_available(
     return sum(1 for row_id in rows if row_id not in answered)
 
 
+def _concept_keys_for_ids(
+    db: Session, ids: list[str]
+) -> dict[str, str | None]:
+    """Map assertion id -> primary_concept_key for the given ids."""
+    if not ids:
+        return {}
+    rows = db.execute(
+        text(
+            """
+            SELECT id::text AS id, payload->>'primary_concept_key' AS key
+            FROM intel.assertion
+            WHERE id::text = ANY(:ids)
+            """
+        ),
+        {"ids": ids},
+    ).mappings().all()
+    return {r["id"]: r["key"] for r in rows}
+
+
+def select_next_assertion(
+    db: Session,
+    document_id: uuid.UUID,
+    doc: Document,
+    progress: dict[str, Any],
+    *,
+    page_ids: list[str] | None = None,
+) -> str | None:
+    """The loop's choosing step — swappable policy over the unanswered candidates.
+
+    Default ("sequence") returns the first unanswered question, identical to the
+    legacy behaviour. "concept_reinforce" reacts to the learner's last answer.
+    Candidates stay in sequence order so any policy degrades safely to legacy.
+    """
+    page = int(progress.get("current_page") or 1)
+    answered = {str(x) for x in progress.get("answered_ids") or []}
+    rows = page_ids if page_ids is not None else page_assertion_ids(db, document_id, page)
+    candidates = [rid for rid in rows if rid not in answered]
+    if not candidates:
+        return None
+
+    from app.config import get_settings
+
+    policy = (get_settings().selection_policy or "sequence").lower()
+    if policy == "sequence" or len(candidates) == 1:
+        return candidates[0]
+
+    from app.services.selection import build_learner_state, choose_next_assertion
+
+    concept_by_id = _concept_keys_for_ids(db, candidates)
+    state = build_learner_state(progress)
+    return choose_next_assertion(policy, candidates, concept_by_id, state)
+
+
 def next_assertion_id(
     db: Session,
     document_id: uuid.UUID,
@@ -254,13 +326,10 @@ def next_assertion_id(
     *,
     page_ids: list[str] | None = None,
 ) -> str | None:
-    page = int(progress.get("current_page") or 1)
-    answered = {str(x) for x in progress.get("answered_ids") or []}
-    rows = page_ids if page_ids is not None else page_assertion_ids(db, document_id, page)
-    for row_id in rows:
-        if row_id not in answered:
-            return row_id
-    return None
+    doc = db.get(Document, document_id)
+    if doc is None:
+        return None
+    return select_next_assertion(db, document_id, doc, progress, page_ids=page_ids)
 
 
 def selected_page_list(doc: Document) -> list[int]:
@@ -288,6 +357,10 @@ def is_page_complete(
     *,
     page_ids: list[str] | None = None,
 ) -> bool:
+    # Non-content pages are complete by definition — never block advancement on
+    # a cover page just because it produced zero questions.
+    if is_non_content_page(doc, int(progress.get("current_page") or 1)):
+        return True
     if progress.get("generation_pending"):
         return False
     if next_assertion_id(db, doc.id, progress, page_ids=page_ids):
@@ -317,11 +390,20 @@ def build_learn_queue_state(
     questions_generated = len(page_ids)
     questions_answered = sum(1 for row_id in page_ids if row_id in answered_set)
     budget = effective_question_budget(doc, page, progress)
-    next_id = next((row_id for row_id in page_ids if row_id not in answered_set), None)
+    # Loop's choosing step (policy-driven; defaults to sequence order).
+    next_id = select_next_assertion(db, document_id, doc, progress, page_ids=page_ids)
     coverage_complete = is_coverage_complete(doc, page)
     page_complete = is_page_complete(db, doc, progress, page_ids=page_ids)
+    non_content = is_non_content_page(doc, page)
     last_study_page = study_pages[-1] if study_pages else page_to
     document_complete = page_complete and page == last_study_page
+
+    # Open-world empty state: surface a reason only when the whole study range
+    # genuinely produced nothing to ask, so the UI can say so instead of spinning.
+    no_questions_reason: str | None = None
+    if document_complete and questions_generated == 0 and questions_answered == 0:
+        if _study_range_has_no_questions(db, document_id, doc):
+            no_questions_reason = "no_testable_content"
 
     from app.services.rag_window import get_rag_window, is_rag_window_ready
 
@@ -341,6 +423,8 @@ def build_learn_queue_state(
         "page_triage_complete": bool(get_page_coverage(doc, page)),
         "coverage_complete": coverage_complete,
         "page_complete": page_complete,
+        "non_content": non_content,
+        "no_questions_reason": no_questions_reason,
         "document_complete": document_complete,
         "pool_available": sum(1 for row_id in page_ids if row_id not in answered_set),
         "generated_on_page": questions_generated,
@@ -349,6 +433,27 @@ def build_learn_queue_state(
         "rag_window_pages": rag_pages,
         "rag_window_ready": rag_ready,
     }
+
+
+def _study_range_has_no_questions(
+    db: Session, document_id: uuid.UUID, doc: Document
+) -> bool:
+    """True when not a single active question exists across the selected pages."""
+    pages = selected_page_list(doc)
+    if not pages:
+        return False
+    count = db.execute(
+        text(
+            """
+            SELECT COUNT(*)::int FROM intel.assertion
+            WHERE payload->>'artifact_id' = :aid
+              AND status = 'active'
+              AND (payload->>'page_number')::int = ANY(:pages)
+            """
+        ),
+        {"aid": str(document_id), "pages": [int(p) for p in pages]},
+    ).scalar()
+    return int(count or 0) == 0
 
 
 def enqueue_page_triage(db: Session, doc: Document, *, page: int, precompute: bool = False) -> Job:
@@ -523,6 +628,10 @@ def on_triage_completed(
     db.commit()
 
     budget = get_question_budget(doc, page)
+    # Non-content / zero-yield page: nothing to generate. The learn queue will
+    # treat it as complete and advance past it.
+    if budget <= 0:
+        return None
     generated = count_assertions_on_page(db, document_id, page)
     if generated > 0:
         return None
@@ -1048,10 +1157,18 @@ def save_confirmed_answer(
     choice_index: int,
     correct: bool,
 ) -> None:
-    """Persist the learner's latest confirmed MCQ choice for tutor chat context."""
+    """Persist the learner's latest confirmed MCQ choice for tutor chat context.
+
+    Also records the question's concept key so the selection loop can react to
+    the last answer (reinforce a missed concept, advance past a mastered one).
+    """
     doc = db.get(Document, document_id)
     if not doc:
         return
+    concept_key = db.execute(
+        text("SELECT payload->>'primary_concept_key' FROM intel.assertion WHERE id = :id"),
+        {"id": assertion_id},
+    ).scalar()
     save_progress(
         db,
         doc,
@@ -1060,6 +1177,7 @@ def save_confirmed_answer(
                 "assertion_id": str(assertion_id),
                 "choice_index": int(choice_index),
                 "correct": bool(correct),
+                "concept_key": concept_key,
             }
         },
     )

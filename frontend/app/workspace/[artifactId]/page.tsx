@@ -854,6 +854,7 @@ export default function WorkspaceArtifactPage({
   const showPageComplete =
     Boolean(queue?.page_complete) && !queue?.current_assertion_id && !queue?.document_complete;
   const showDocumentComplete = Boolean(queue?.document_complete) && !reselectOpen;
+  const showNoQuestions = Boolean(queue?.no_questions_reason) && !reselectOpen;
   const chatContextReady = queue?.rag_window_ready !== false;
   const completedRange = selectedRange;
   const nextRangeSuggestion = completedRange
@@ -884,7 +885,20 @@ export default function WorkspaceArtifactPage({
         }}
       >
         <Box maw={680} w="100%" mx="auto" mih={0} style={{ maxHeight: "100%", overflow: "hidden" }}>
-          {showDocumentComplete && completedRange ? (
+          {showNoQuestions ? (
+            <Stack align="center" gap="sm" py="xl" ta="center">
+              <Text ff="var(--font-serif)" fz={isCompact ? 22 : 28} fw={500} c="dark.9">
+                Nothing to quiz here
+              </Text>
+              <Text c="dimmed" maw={420}>
+                This material doesn&rsquo;t contain testable content — it looks like a cover
+                page, contents, or reference list. Choose different pages to study.
+              </Text>
+              <Button variant="light" color="lavender" radius="xl" mt="xs" onClick={openReselectPages}>
+                Choose pages
+              </Button>
+            </Stack>
+          ) : showDocumentComplete && completedRange ? (
             <DocumentCompleteScreen
               completedFrom={completedRange.from}
               completedTo={completedRange.to}

@@ -54,6 +54,17 @@ class Settings(BaseSettings):
     llm_pool_enabled: bool = True
     # MCQ reuse across documents with identical page text: all | demo | off
     mcq_reuse_scope: str = "all"
+    # Open-world tutor loop (one PR, three independent switches — all default off
+    # so production behaviour is unchanged until each is enabled deliberately).
+    # 1. Allow a page to honestly yield ZERO questions (cover pages, TOCs, junk,
+    #    non-content) instead of forcing the old minimum-5 floor.
+    allow_zero_questions: bool = False
+    # 2. Let generation adapt its question style + truth model to the material's
+    #    content_type (expository/narrative/argumentative/procedural/reference).
+    content_aware_generation: bool = False
+    # 3. How the next question is chosen: "sequence" (legacy, by generation order)
+    #    or "concept_reinforce" (adaptive — reacts to the last answer).
+    selection_policy: str = "sequence"
     embed_model: str = "BAAI/bge-small-en-v1.5"
     embed_dimension: int = 384
     rerank_enabled: bool = True
