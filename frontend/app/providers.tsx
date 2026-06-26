@@ -199,10 +199,14 @@ const theme = mergeMantineTheme(
       Tooltip: {
         styles: {
           tooltip: {
-            backgroundColor: "var(--mantine-color-dark-8)",
-            color: "var(--mantine-color-text)",
+            backgroundColor: "var(--zivo-tooltip-bg)",
+            color: "var(--zivo-tooltip-fg)",
             border: "1px solid var(--mantine-color-default-border)",
             boxShadow: "var(--mantine-shadow-paper)",
+          },
+          arrow: {
+            backgroundColor: "var(--zivo-tooltip-bg)",
+            border: "1px solid var(--mantine-color-default-border)",
           },
         },
       },
@@ -222,6 +226,8 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
     "--mantine-skeleton-color": "#F3EFE6",
     "--mantine-skeleton-color-da": "#E7E2D6",
     "--zivo-header-bg": "#FFFFFF",
+    "--zivo-tooltip-bg": "#232220",
+    "--zivo-tooltip-fg": "#FAF9F6",
 
     // Neutral gray scale overrides for light mode
     "--mantine-color-gray-0": "#FFFFFF",
@@ -259,6 +265,8 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
     "--mantine-skeleton-color": "#262522",
     "--mantine-skeleton-color-da": "#2E2C28",
     "--zivo-header-bg": "#22211F",
+    "--zivo-tooltip-bg": "#2E2C28",
+    "--zivo-tooltip-fg": "#FAF9F6",
 
     // Neutral gray scale overrides for dark mode (inverted logic)
     "--mantine-color-gray-0": "#22211F",          // Lifted paper (dark card background)

@@ -3064,6 +3064,34 @@ function ThinkingIndicator({ isDark }: { isDark: boolean }) {
   );
 }
 
+function MessageActionRail({
+  visible,
+  enabled,
+  children,
+  align = "flex-start",
+}: {
+  visible: boolean;
+  enabled: boolean;
+  children: ReactNode;
+  align?: "flex-start" | "flex-end";
+}) {
+  return (
+    <Group
+      gap={4}
+      mt={align === "flex-end" ? 4 : 6}
+      justify={align}
+      h={enabled ? 28 : 0}
+      style={{
+        opacity: visible ? 1 : 0,
+        pointerEvents: visible ? "auto" : "none",
+        overflow: "hidden",
+        transition: "opacity 150ms ease",
+      }}
+    >
+      {enabled ? children : null}
+    </Group>
+  );
+}
 function ChatMessage({
   message,
   isUser,
@@ -3078,8 +3106,9 @@ function ChatMessage({
   isDark: boolean;
 }) {
   const { hovered, ref } = useHover();
-  const showActions =
-    hovered && Boolean(message.content.trim()) && !streaming && !thinking;
+  const actionsEnabled =
+    Boolean(message.content.trim()) && !streaming && !thinking;
+  const showActions = hovered && actionsEnabled;
 
   if (isUser) {
     return (
@@ -3098,11 +3127,9 @@ function ChatMessage({
             {message.content}
           </Text>
         </Paper>
-        {showActions ? (
-          <Group gap={4} mt={4} justify="flex-end">
-            <MessageCopyAction value={message.content} label="Copy message" />
-          </Group>
-        ) : null}
+        <MessageActionRail visible={showActions} enabled={actionsEnabled} align="flex-end">
+          <MessageCopyAction value={message.content} label="Copy message" />
+        </MessageActionRail>
       </Box>
     );
   }
@@ -3120,11 +3147,9 @@ function ChatMessage({
             streaming={streaming}
           />
         )}
-        {showActions ? (
-          <Group gap={4} mt={6}>
-            <MessageCopyAction value={message.content} label="Copy message" />
-          </Group>
-        ) : null}
+        <MessageActionRail visible={showActions} enabled={actionsEnabled}>
+          <MessageCopyAction value={message.content} label="Copy message" />
+        </MessageActionRail>
       </Box>
     </Group>
   );
