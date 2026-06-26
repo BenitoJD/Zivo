@@ -28,7 +28,7 @@ const ebGaramond = EB_Garamond({
 });
 
 export const metadata: Metadata = {
-  title: "Zivo — Question Better.",
+  title: "Zivo | Question Better.",
   description: "Upload anything. Get exam-style questions, scoped exactly to what you read, with a tutor that knows your source.",
 };
 

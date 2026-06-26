@@ -110,7 +110,17 @@ export async function ensureGuestSession(): Promise<void> {
       body: "{}",
     });
     captureResponseMeta(res);
-    if (!res.ok && res.status !== 401) {
+    if (res.ok) {
+      // The guest endpoint returns the CSRF token for the new anonymous session.
+      // Without capturing it here, the very first write (e.g. an upload) goes out
+      // with no token and the server rejects it with "CSRF token required".
+      try {
+        const guest = (await res.json()) as { csrf_token?: string };
+        if (guest.csrf_token) setCsrfToken(guest.csrf_token);
+      } catch {
+        /* non-JSON body — nothing to capture */
+      }
+    } else if (res.status !== 401) {
       await res.text();
     }
   })();

@@ -58,12 +58,22 @@ const STEPS = [
 export function OnboardingGuide({ opened, onClose }: OnboardingGuideProps) {
   const [activeStep, setActiveStep] = useState(0);
 
+  // Mark onboarding done on ANY close (finish, escape, or overlay click) so it
+  // only ever appears once for a new user.
+  const dismiss = () => {
+    try {
+      localStorage.setItem("zivo-onboarding-completed", "true");
+    } catch {
+      /* ignore */
+    }
+    onClose();
+  };
+
   const handleNext = () => {
     if (activeStep < STEPS.length - 1) {
       setActiveStep((prev) => prev + 1);
     } else {
-      localStorage.setItem("zivo-onboarding-completed", "true");
-      onClose();
+      dismiss();
     }
   };
 
@@ -80,8 +90,9 @@ export function OnboardingGuide({ opened, onClose }: OnboardingGuideProps) {
   return (
     <Modal
       opened={opened}
-      onClose={onClose}
+      onClose={dismiss}
       withCloseButton={false}
+      centered
       size="md"
       overlayProps={{
         backgroundOpacity: 0.45,

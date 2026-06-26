@@ -29,6 +29,11 @@ export type McqOptionVisualState = {
  */
 export function mcqOptionChrome(isDark: boolean, state: McqOptionVisualState) {
   const { isSelected, isCorrectOption, isWrongSelected } = state;
+  // Filled accent chips (shade-6) read dark in light mode and light in dark mode,
+  // so the letter on them must flip: paper-white on light scheme, ink on dark.
+  // Using literals avoids the inverted gray scale (where gray-9 is white in dark).
+  const chipInk = isDark ? "#1A1917" : "#FFFFFF";
+
   let border = isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-default-border)";
   let background = isDark ? "var(--mantine-color-dark-7)" : "var(--mantine-color-gray-0)";
   // Idle chip: a quiet tinted square. Keep the letter readable on it in both schemes.
@@ -40,19 +45,21 @@ export function mcqOptionChrome(isDark: boolean, state: McqOptionVisualState) {
     border = isDark ? "var(--mantine-color-sage-4)" : "var(--mantine-color-sage-5)";
     background = isDark ? "var(--mantine-color-sage-1)" : "var(--mantine-color-sage-0)";
     chipBg = "var(--mantine-color-sage-6)";
-    chipColor = "var(--mantine-color-gray-9)";
+    chipColor = chipInk;
     borderWidth = 2;
   } else if (isWrongSelected) {
     border = isDark ? "var(--mantine-color-terracotta-4)" : "var(--mantine-color-terracotta-5)";
     background = isDark ? "var(--mantine-color-terracotta-1)" : "var(--mantine-color-terracotta-0)";
     chipBg = "var(--mantine-color-terracotta-6)";
-    chipColor = "var(--mantine-color-gray-9)";
+    chipColor = chipInk;
     borderWidth = 2;
   } else if (isSelected) {
-    border = isDark ? "var(--mantine-color-lavender-4)" : "var(--mantine-color-lavender-5)";
-    background = isDark ? "var(--mantine-color-lavender-1)" : "var(--mantine-color-lavender-0)";
+    // A decisive, on-brand selection — a present lavender tint and a saturated
+    // brand-primary outline, not the near-white wash it had before.
+    border = isDark ? "var(--mantine-color-lavender-5)" : "var(--mantine-color-lavender-6)";
+    background = isDark ? "var(--mantine-color-lavender-1)" : "var(--mantine-color-lavender-1)";
     chipBg = "var(--mantine-color-lavender-6)";
-    chipColor = "var(--mantine-color-gray-9)";
+    chipColor = chipInk;
     borderWidth = 2;
   }
 
@@ -70,80 +77,42 @@ export function McqFeedbackCard({
   compact?: boolean;
   isDark: boolean;
 }) {
-  const parts = feedback.split("\n\n").map((p) => p.trim()).filter(Boolean);
-  const lead = parts[0] ?? feedback;
-  const detail = parts.slice(1).join("\n\n");
-
-  const surface = isCorrect
-    ? isDark
-      ? "var(--mantine-color-sage-1)"
-      : "var(--mantine-color-sage-0)"
-    : isDark
-      ? "var(--mantine-color-terracotta-1)"
-      : "var(--mantine-color-terracotta-0)";
-  const outline = isCorrect
-    ? isDark
-      ? "var(--mantine-color-sage-3)"
-      : "var(--mantine-color-sage-3)"
-    : isDark
-      ? "var(--mantine-color-terracotta-3)"
-      : "var(--mantine-color-terracotta-3)";
-  const primaryText = isCorrect
-    ? isDark
-      ? "var(--mantine-color-sage-8)"
-      : "var(--mantine-color-sage-9)"
-    : isDark
-      ? "var(--mantine-color-terracotta-8)"
-      : "var(--mantine-color-terracotta-9)";
-  const secondaryText = isCorrect
-    ? isDark
-      ? "var(--mantine-color-sage-7)"
-      : "var(--mantine-color-sage-8)"
-    : isDark
-      ? "var(--mantine-color-terracotta-7)"
-      : "var(--mantine-color-terracotta-8)";
+  // The selected/correct option chips already signal right vs wrong in colour, so
+  // the explanation reads as a calm, serif-italic footnote — premium and small, so
+  // revealing it barely changes the card height (no jarring jump).
+  const text = feedback
+    .split("\n\n")
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .join("  ");
 
   return (
     <Box
+      className="mcq-feedback"
       style={{
         flexShrink: 0,
-        textAlign: "left",
-        padding: compact ? "14px 16px" : "16px 18px",
-        borderRadius: 12,
-        background: surface,
-        border: `1px solid ${outline}`,
-        maxHeight: compact ? 168 : 208,
-        overflow: "auto",
+        textAlign: "center",
+        padding: compact ? "2px 12px 0" : "6px 28px 0",
       }}
     >
+      <style>{`
+        @keyframes mcq-fb { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+        .mcq-feedback { animation: mcq-fb 360ms cubic-bezier(0.32,0.72,0,1) both; }
+        @media (prefers-reduced-motion: reduce) { .mcq-feedback { animation: none !important; } }
+      `}</style>
       <Text
-        fw={700}
-        size={compact ? "sm" : "md"}
-        c={primaryText}
-        mb={6}
-        style={{ letterSpacing: "-0.01em" }}
+        c="dimmed"
+        style={{
+          fontFamily: "var(--font-serif), Georgia, serif",
+          fontStyle: "italic",
+          lineHeight: 1.6,
+          fontSize: compact ? "0.8rem" : "0.95rem",
+          maxWidth: 560,
+          marginInline: "auto",
+        }}
       >
-        {isCorrect ? "Correct" : "Not quite"}
+        {text}
       </Text>
-      <Text
-        size={compact ? "sm" : "md"}
-        lh={1.7}
-        c={primaryText}
-        style={{ whiteSpace: "pre-wrap", fontSize: compact ? undefined : "1.0625rem" }}
-      >
-        {lead}
-      </Text>
-      {detail ? (
-        <Text
-          size={compact ? "sm" : "md"}
-          lh={1.7}
-          mt={10}
-          c={secondaryText}
-          style={{ whiteSpace: "pre-wrap", fontSize: compact ? undefined : "1.0625rem" }}
-        >
-          {detail}
-        </Text>
-      ) : null}
     </Box>
   );
 }
@@ -197,13 +166,12 @@ export function McqCard({
   }
 
   return (
-    <Stack gap={compact ? 12 : 16} align="stretch" mih={0} style={{ overflow: "hidden", maxHeight: "100%" }}>
+    <Stack gap={compact ? 12 : 16} align="stretch" mih={0}>
       <Title
         order={2}
         fw={500}
         lh={1.35}
         ta="center"
-        lineClamp={compact ? 4 : 3}
         c="var(--mantine-color-text)"
         style={{
           flexShrink: 0,
@@ -223,7 +191,7 @@ export function McqCard({
         }}
         name="mcq-options"
       >
-        <Stack gap={compact ? 6 : 8} mih={0} style={{ flexShrink: 1, overflow: "hidden" }}>
+        <Stack gap={compact ? 6 : 8} mih={0}>
           {safeOptions.map((opt, i) => {
             const value = String(i);
             const isSelected = selected === value;

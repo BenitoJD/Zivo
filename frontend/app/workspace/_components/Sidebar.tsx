@@ -33,7 +33,9 @@ import type { SourceDocument } from "@/lib/types";
 export const SIDEBAR_MINI_WIDTH = 64;
 export const SIDEBAR_EXPANDED_WIDTH = 280;
 export const SHELL_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
-export const SHELL_MS = 280;
+// A touch longer than a snap — the rail glides open and pushes the page with it,
+// settling on the brand ease for a buttery, Apple-like expand.
+export const SHELL_MS = 340;
 const MINI_RAIL_ICON_SIZE = 42;
 
 function SidebarAnimatedLayer({
@@ -135,6 +137,78 @@ export function sourceDescription(status: SourceDocument["status"], progress: nu
   return status;
 }
 
+/** Quiet status signal — a colored dot + short label, instead of raw status text. */
+function sourceStatusMeta(status: SourceDocument["status"], progress: number) {
+  if (status === "indexing")
+    return { dot: "var(--mantine-color-lavender-5)", label: `Indexing ${progress}%`, pulse: true };
+  if (status === "pending")
+    return { dot: "var(--mantine-color-gray-5)", label: "Choose pages", pulse: false };
+  if (status === "ready" || status === "indexed")
+    return { dot: "var(--mantine-color-sage-5)", label: "Ready", pulse: false };
+  return { dot: "var(--mantine-color-gray-5)", label: status, pulse: false };
+}
+
+/**
+ * A single source in the expanded rail — Wispr-calm: a tight, single-line row with
+ * a tinted glyph chip, a truncated title, and a quiet status dot. The active row
+ * lifts onto a soft lavender surface; the delete affordance stays hidden until hover.
+ */
+function SourceRow({
+  doc,
+  active,
+  onNavigate,
+  onDelete,
+}: {
+  doc: SourceDocument;
+  active: boolean;
+  onNavigate: () => void;
+  onDelete: () => void;
+}) {
+  const label = sourceLabel(doc.filename);
+  const meta = sourceStatusMeta(doc.status, doc.index_progress);
+  return (
+    <UnstyledButton
+      className="zivo-source-row"
+      data-active={active || undefined}
+      onClick={onNavigate}
+      aria-label={label}
+    >
+      <span className="zivo-source-chip" aria-hidden>
+        <IconFileText size={16} stroke={1.7} />
+      </span>
+      <span className="zivo-source-body">
+        <Text size="sm" fw={500} truncate className="zivo-source-title">
+          {label}
+        </Text>
+        <span className="zivo-source-status">
+          <span
+            className={meta.pulse ? "zivo-source-dot zivo-source-dot-pulse" : "zivo-source-dot"}
+            style={{ background: meta.dot }}
+          />
+          <Text size="xs" c="dimmed" truncate>
+            {meta.label}
+          </Text>
+        </span>
+      </span>
+      <Tooltip label="Delete source" position="right" withArrow openDelay={300}>
+        <span
+          role="button"
+          tabIndex={-1}
+          aria-label={`Delete ${label}`}
+          className="zivo-source-del"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onDelete();
+          }}
+        >
+          <IconTrash size={15} stroke={1.7} />
+        </span>
+      </Tooltip>
+    </UnstyledButton>
+  );
+}
+
 export type SidebarProps = {
   /** Source list. */
   documents: SourceDocument[];
@@ -181,6 +255,89 @@ export function Sidebar({
 
   return (
     <>
+      <style>{`
+        /* Source row — Wispr-calm: tight, single line, tinted glyph chip, hover-reveal delete. */
+        .zivo-source-row {
+          position: relative;
+          width: 100%;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 8px 10px;
+          border-radius: 12px;
+          border: 1px solid transparent;
+          transition: background 140ms ease, border-color 140ms ease;
+        }
+        .zivo-source-row:hover { background: var(--mantine-color-default-hover); }
+        .zivo-source-row[data-active] {
+          background: var(--mantine-color-lavender-0);
+          border-color: var(--mantine-color-lavender-2);
+        }
+        .zivo-source-chip {
+          flex-shrink: 0;
+          width: 32px;
+          height: 32px;
+          border-radius: 9px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: var(--mantine-color-default-hover);
+          color: var(--mantine-color-dimmed);
+          transition: background 140ms ease, color 140ms ease;
+        }
+        .zivo-source-row:hover .zivo-source-chip { background: var(--mantine-color-gray-2); }
+        .zivo-source-row[data-active] .zivo-source-chip {
+          background: var(--mantine-color-lavender-1);
+          color: var(--mantine-color-lavender-7);
+        }
+        .zivo-source-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; text-align: left; }
+        .zivo-source-row[data-active] .zivo-source-title { color: var(--mantine-color-lavender-8); }
+        .zivo-source-status { display: flex; align-items: center; gap: 6px; min-width: 0; }
+        .zivo-source-dot { flex-shrink: 0; width: 6px; height: 6px; border-radius: 999px; }
+        .zivo-source-dot-pulse { animation: zivo-dot-pulse 1.6s ease-in-out infinite; }
+        @keyframes zivo-dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+        .zivo-source-del {
+          position: absolute;
+          right: 8px;
+          top: 50%;
+          transform: translateY(-50%);
+          width: 28px;
+          height: 28px;
+          border-radius: 8px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: var(--mantine-color-dimmed);
+          background: var(--mantine-color-gray-2);
+          opacity: 0;
+          transition: opacity 120ms ease, background 140ms ease, color 140ms ease;
+          cursor: pointer;
+        }
+        .zivo-source-row:hover .zivo-source-del { opacity: 1; }
+        .zivo-source-del:hover { background: var(--mantine-color-terracotta-0); color: var(--mantine-color-terracotta-6); }
+
+        /* Add source — Wispr soft lavender pill (ink text), not a heavy saturated fill. */
+        .zivo-add-source {
+          background: #EFDBFB !important;
+          color: var(--mantine-color-text) !important;
+          border: 1px solid #E1C9F5 !important;
+          box-shadow: none !important;
+          font-weight: 600 !important;
+          transition: background 160ms ease, transform 140ms ease, border-color 160ms ease !important;
+        }
+        .zivo-add-source:hover { background: #E8D0F8 !important; transform: translateY(-1px); }
+        .zivo-add-source:active { transform: translateY(0); }
+        [data-mantine-color-scheme="dark"] .zivo-add-source {
+          background: var(--mantine-color-lavender-2) !important;
+          border-color: var(--mantine-color-lavender-3) !important;
+          color: var(--mantine-color-lavender-9) !important;
+        }
+        [data-mantine-color-scheme="dark"] .zivo-add-source:hover { background: var(--mantine-color-lavender-3) !important; }
+        @media (prefers-reduced-motion: reduce) {
+          .zivo-add-source, .zivo-source-row, .zivo-source-chip, .zivo-source-del { transition: none !important; }
+          .zivo-source-dot-pulse { animation: none !important; }
+        }
+      `}</style>
       {/* Header row (desktop only) */}
       {!isMobile && (
         <Box pos="relative" h={52} w="100%">
@@ -249,46 +406,48 @@ export function Sidebar({
             px="xs"
             pt={isMobile ? "md" : "xs"}
           >
-            <Text size="xs" tt="uppercase" fw={700} c="gray.5" px="sm" mb={6} lts={1}>
-              Sources
-            </Text>
-            {documents.length === 0 ? (
-              <Text size="sm" c="gray.5" px="sm" lh={1.5}>
-                No sources yet. Add a PDF or article to start.
+            <Group justify="space-between" align="center" px="sm" mb={8} mt={2}>
+              <Text size="xs" tt="uppercase" fw={700} c="dimmed" lts={1.4} style={{ fontSize: 11 }}>
+                Sources
               </Text>
+              {documents.length > 0 && (
+                <Text size="xs" c="dimmed" fw={600} style={{ fontVariantNumeric: "tabular-nums", opacity: 0.7 }}>
+                  {documents.length}
+                </Text>
+              )}
+            </Group>
+            {documents.length === 0 ? (
+              <Stack align="center" gap={6} px="md" py="lg" ta="center">
+                <Box
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: 12,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: "var(--mantine-color-default-hover)",
+                    color: "var(--mantine-color-dimmed)",
+                  }}
+                >
+                  <IconFileText size={20} stroke={1.5} />
+                </Box>
+                <Text size="sm" c="dimmed" lh={1.5} maw={200}>
+                  No sources yet. Add a PDF, doc, or notes to start studying.
+                </Text>
+              </Stack>
             ) : (
-              documents.map((d) => {
-                const lbl = sourceLabel(d.filename);
-                const description = sourceDescription(d.status, d.index_progress);
-                return (
-                  <NavLink
+              <Stack gap={2}>
+                {documents.map((d) => (
+                  <SourceRow
                     key={d.id}
-                    label={lbl}
-                    description={description}
-                    leftSection={<IconFileText size={18} stroke={1.5} />}
-                    rightSection={
-                      <Tooltip label="Delete source" position="left" withArrow>
-                        <ActionIcon
-                          variant="subtle"
-                          color="terracotta"
-                          size="sm"
-                          aria-label={`Delete ${lbl}`}
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            onDeleteSource(d);
-                          }}
-                        >
-                          <IconTrash size={16} stroke={1.5} />
-                        </ActionIcon>
-                      </Tooltip>
-                    }
+                    doc={d}
                     active={artifactId === d.id}
-                    onClick={() => onNavigateSource(d.id)}
-                    styles={{ root: { borderRadius: "var(--mantine-radius-md)" } }}
+                    onNavigate={() => onNavigateSource(d.id)}
+                    onDelete={() => onDeleteSource(d)}
                   />
-                );
-              })
+                ))}
+              </Stack>
             )}
           </ScrollArea>
         </SidebarAnimatedLayer>
@@ -331,15 +490,17 @@ export function Sidebar({
             <Button
               fullWidth
               size={isMobile ? "md" : "sm"}
-              leftSection={<IconUpload size={16} />}
+              radius="xl"
+              leftSection={<IconUpload size={16} stroke={2} />}
               onClick={onAddSource}
-              mb={isMobile ? "xs" : "sm"}
+              mb={isMobile ? "sm" : "md"}
+              className="zivo-add-source"
             >
               Add source
             </Button>
-            <Stack gap="xs" mt="xs">
+            <Stack gap={10} mt={4}>
               <Group justify="space-between" align="center">
-                <Text size="xs" c="gray.5" fw={500} style={{ fontFamily: "var(--font-sans)" }}>
+                <Text size="xs" c="dimmed" fw={500} style={{ fontFamily: "var(--font-sans)" }}>
                   Appearance
                 </Text>
                 <SegmentedControl
@@ -369,25 +530,26 @@ export function Sidebar({
                   aria-label={isDark ? "Dark mode on" : "Light mode on"}
                 />
               </Group>
-              <Group justify="space-between" align="center">
+              <Group gap={4} align="center" grow>
                 <Button
                   variant="subtle"
                   color="gray"
                   size="xs"
-                  leftSection={<IconSettings size={15} stroke={1.5} />}
+                  leftSection={<IconSettings size={15} stroke={1.7} />}
                   onClick={onOpenSettings}
                   px="xs"
-                  styles={{ root: { height: 32 } }}
+                  styles={{ root: { height: 34, fontWeight: 500 }, label: { fontWeight: 500 } }}
                 >
                   Settings
                 </Button>
                 <Button
                   variant="subtle"
+                  color="gray"
                   size="xs"
-                  leftSection={<IconLogin size={15} stroke={1.5} />}
+                  leftSection={<IconLogin size={15} stroke={1.7} />}
                   onClick={onSignIn}
                   px="xs"
-                  styles={{ root: { height: 32 } }}
+                  styles={{ root: { height: 34, fontWeight: 500 }, label: { fontWeight: 500 } }}
                 >
                   {username ? `@${username}` : "Sign in"}
                 </Button>

@@ -27,9 +27,15 @@ INITIAL_BATCH_SIZE = 5
 FIRST_QUESTION_BATCH_SIZE = INITIAL_BATCH_SIZE
 REFILL_BATCH_SIZE = 5
 REFILL_AFTER_ANSWERED = 2
+# Proactive low-water mark: keep refilling so the ready buffer never silently
+# drains to empty before the next question is needed. The moment the count of
+# ready, unanswered questions dips below this, a refill batch is staged — instead
+# of only topping up every REFILL_AFTER_ANSWERED answers or once fully drained.
+# This is what keeps a fast solver from ever catching up to an empty pool.
+READY_LOW_WATER = int(os.getenv("ZIVO_READY_LOW_WATER", "6"))
 TRANSITION_PREFETCH_RATIO = float(os.getenv("ZIVO_TRANSITION_PREFETCH_RATIO", "0.70"))
 TRANSITION_GENERATION_RATIO = float(os.getenv("ZIVO_TRANSITION_GENERATION_RATIO", "0.30"))
-GENERATION_AHEAD_BUFFER = int(os.getenv("ZIVO_GENERATION_AHEAD_BUFFER", "10"))
+GENERATION_AHEAD_BUFFER = int(os.getenv("ZIVO_GENERATION_AHEAD_BUFFER", "12"))
 # Eagerly triage the current page + this many pages ahead at init, so the document
 # is understood before the reader arrives. Triage only (cheap, ~1 call/page);
 # batches stay on-demand + next-page prefetch, so we don't burn tokens generating
@@ -1245,11 +1251,13 @@ def maybe_refill_pool(db: Session, document_id: uuid.UUID) -> Job | None:
     if is_coverage_complete(doc, page) or generated_on_page >= budget:
         return None
 
-    if (
-        answered_on_page > 0
-        and answered_on_page % REFILL_AFTER_ANSWERED == 0
-        and generated_on_page < budget
-    ):
+    # Stage another batch whenever the ready buffer is running low, on the periodic
+    # answered cadence, or if the pool has fully drained — so there is always a deep
+    # backlog of questions ready and the reader never waits on generation.
+    low_water = available < READY_LOW_WATER
+    periodic = answered_on_page > 0 and answered_on_page % REFILL_AFTER_ANSWERED == 0
+    drained = available == 0
+    if low_water or periodic or drained:
         remaining = budget - generated_on_page
         batch = min(REFILL_BATCH_SIZE, remaining)
         if batch > 0:
@@ -1260,18 +1268,5 @@ def maybe_refill_pool(db: Session, document_id: uuid.UUID) -> Job | None:
                 batch_size=batch,
                 start_sequence=generated_on_page,
             )
-
-    if available == 0 and generated_on_page < budget:
-        remaining = budget - generated_on_page
-        batch = min(REFILL_BATCH_SIZE, remaining)
-        if batch <= 0:
-            return None
-        return enqueue_page_batch(
-            db,
-            doc,
-            page=page,
-            batch_size=batch,
-            start_sequence=generated_on_page,
-        )
 
     return None

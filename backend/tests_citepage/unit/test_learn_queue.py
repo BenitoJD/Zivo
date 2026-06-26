@@ -54,7 +54,8 @@ def test_build_learn_queue_state_resume_at_question_three() -> None:
     assert state["question_number"] == 3
     assert state["questions_answered"] == 2
     # effective_question_budget caps ahead of consumption when answered_on_page unset
-    assert state["question_budget"] == 10
+    # (defaults to the GENERATION_AHEAD_BUFFER depth — a deeper staged backlog).
+    assert state["question_budget"] == 12
     assert state["current_assertion_id"] == "id-3"
     assert state["page_complete"] is False
     assert state["page_triage_complete"] is True

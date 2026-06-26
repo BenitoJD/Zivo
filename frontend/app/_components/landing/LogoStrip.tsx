@@ -9,16 +9,23 @@ import { useReducedMotion } from "framer-motion";
  * fields learners prep for, rendered as muted wordmarks that scroll seamlessly.
  */
 const LABELS = [
+  "JEE",
   "MCAT",
+  "NEET",
   "USMLE",
-  "Bar Exam",
+  "UPSC",
   "CFA",
+  "GATE",
   "GRE",
-  "AP Bio",
-  "NCLEX",
+  "CAT",
   "GMAT",
-  "PE Exam",
+  "NCLEX",
+  "Bar Exam",
+  "CLAT",
+  "AP Bio",
+  "UGC NET",
   "A-Levels",
+  "PE Exam",
 ];
 
 function Row() {

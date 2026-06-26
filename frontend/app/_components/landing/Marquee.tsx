@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Container, Group, Stack, Text } from "@mantine/core";
+import { Box, Container, Stack, Text } from "@mantine/core";
 import { useReducedMotion } from "framer-motion";
 import {
   IconFileText,
@@ -12,13 +12,52 @@ import {
 } from "@tabler/icons-react";
 
 const ITEMS = [
-  { icon: IconFileText, label: "PDFs" },
-  { icon: IconPresentation, label: "Lecture slides" },
-  { icon: IconArticle, label: "Articles" },
-  { icon: IconNotebook, label: "Your notes" },
-  { icon: IconBrandGithub, label: "GitHub repos" },
-  { icon: IconMicrophone, label: "Transcripts" },
-];
+  { icon: IconFileText, label: "PDFs", c: "terracotta" },
+  { icon: IconPresentation, label: "Lecture slides", c: "lavender" },
+  { icon: IconArticle, label: "Articles", c: "forest" },
+  { icon: IconNotebook, label: "Your notes", c: "sage" },
+  { icon: IconBrandGithub, label: "GitHub repos", c: "gray" },
+  { icon: IconMicrophone, label: "Transcripts", c: "lavender" },
+] as const;
+
+const CHIP_STYLES = `
+  .zivo-mq-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    padding: 7px 16px 7px 7px;
+    border-radius: 999px;
+    background: var(--mantine-color-gray-0);
+    border: 1px solid var(--mantine-color-default-border);
+    box-shadow: 0 2px 8px rgba(35, 34, 32, 0.05), 0 1px 2px rgba(35, 34, 32, 0.04);
+    white-space: nowrap;
+    list-style: none;
+  }
+  .zivo-mq-ico {
+    width: 30px; height: 30px; border-radius: 9px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+`;
+
+function Chip({ item }: { item: (typeof ITEMS)[number] }) {
+  const Icon = item.icon;
+  return (
+    <Box component="li" className="zivo-mq-chip">
+      <span
+        className="zivo-mq-ico"
+        style={{
+          background: `var(--mantine-color-${item.c}-0)`,
+          color: `var(--mantine-color-${item.c}-7)`,
+        }}
+      >
+        <Icon size={16} stroke={1.8} />
+      </span>
+      <Text size="sm" fw={600} c="var(--mantine-color-text)" component="span">
+        {item.label}
+      </Text>
+    </Box>
+  );
+}
 
 /** A single row of the marquee. Duplicated for a seamless loop. */
 function MarqueeRow() {
@@ -27,8 +66,8 @@ function MarqueeRow() {
       component="ul"
       style={{
         display: "flex",
-        gap: 56,
-        paddingRight: 56,
+        gap: 18,
+        paddingRight: 18,
         alignItems: "center",
         listStyle: "none",
         margin: 0,
@@ -37,27 +76,15 @@ function MarqueeRow() {
       }}
     >
       {ITEMS.map((it) => (
-        <Box component="li" key={it.label} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <it.icon size={16} stroke={1.6} />
-          <Text
-            size="sm"
-            c="gray.6"
-            fw={500}
-            component="span"
-            style={{ whiteSpace: "nowrap" }}
-          >
-            {it.label}
-          </Text>
-        </Box>
+        <Chip key={it.label} item={it} />
       ))}
     </Box>
   );
 }
 
 /**
- * Infinite "works with" strip. Uses a duplicated row translated by -50% under a
- * CSS keyframe, looped seamlessly. Pauses on hover. When reduced-motion is set,
- * the strip renders statically (centered, no animation).
+ * Infinite "works with" strip — premium pill chips with colored source-type tiles,
+ * scrolling seamlessly. Pauses on hover; renders statically under reduced-motion.
  */
 export function Marquee() {
   const reduce = useReducedMotion();
@@ -65,20 +92,27 @@ export function Marquee() {
   if (reduce) {
     return (
       <Container size="lg" px={{ base: "md", md: "lg" }} py="md">
-        <Stack align="center" gap={10}>
-          <Text size="xs" fw={600} tt="uppercase" lts={2} c="gray.5">
+        <style>{CHIP_STYLES}</style>
+        <Stack align="center" gap={14}>
+          <Text size="xs" fw={600} tt="uppercase" lts={2} c="dimmed">
             Works with whatever you study
           </Text>
-          <Group gap={28} wrap="nowrap" justify="center">
+          <Box
+            component="ul"
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 14,
+              justifyContent: "center",
+              listStyle: "none",
+              margin: 0,
+              padding: 0,
+            }}
+          >
             {ITEMS.map((it) => (
-              <Group key={it.label} gap={8} wrap="nowrap">
-                <it.icon size={16} stroke={1.6} />
-                <Text size="sm" c="gray.7" fw={500}>
-                  {it.label}
-                </Text>
-              </Group>
+              <Chip key={it.label} item={it} />
             ))}
-          </Group>
+          </Box>
         </Stack>
       </Container>
     );
@@ -86,23 +120,27 @@ export function Marquee() {
 
   return (
     <Box py="md">
-      <Container size="lg" px={{ base: "md", md: "lg" }} pb="sm">
-        <Text size="xs" fw={600} tt="uppercase" lts={2} c="gray.5" ta="center">
+      <style>{CHIP_STYLES}</style>
+      <Container size="lg" px={{ base: "md", md: "lg" }} pb="md">
+        <Text size="xs" fw={600} tt="uppercase" lts={2} c="dimmed" ta="center">
           Works with whatever you study
         </Text>
       </Container>
       <Box
         style={{
           overflow: "hidden",
+          // Wide edge fade so chips dissolve well before the edge — the loop seam
+          // (and the duplicated row) is never visible.
           WebkitMaskImage:
-            "linear-gradient(to right, transparent, #000 8%, #000 92%, transparent)",
+            "linear-gradient(to right, transparent 0%, #000 16%, #000 84%, transparent 100%)",
           maskImage:
-            "linear-gradient(to right, transparent, #000 8%, #000 92%, transparent)",
+            "linear-gradient(to right, transparent 0%, #000 16%, #000 84%, transparent 100%)",
         }}
       >
         <Box
           style={{
             display: "flex",
+            gap: 18,
             width: "max-content",
             animation: "zivo-marquee 34s linear infinite",
           }}
