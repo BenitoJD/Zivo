@@ -181,7 +181,12 @@ Example:
 A question PASSES only if it has at most one minor flaw AND zero fatal flaws, is grounded in the page text,
 matches the target aspect, and would teach a thoughtful learner something.
 
+Above all it must force THINKING, not recognition: answering should require retrieving and reconstructing an
+idea, reasoning about cause/mechanism, or transferring it to a new case — never matching a remembered phrase
+or spotting a keyword. Difficulty must live in the idea, never in tricky wording.
+
 Fatal flaws (always fail):
+- recognition_only — answerable without thinking: a distinctive word in the stem appears in exactly one option (a lexical give-away), or the correct answer is a remembered phrase that can be picked by recognition without reconstructing the idea, reasoning about cause, or applying it to a new case. Where the material supports more than naming, demand reconstruction or transfer. (Do NOT flag honest recall when the source genuinely only states a bare fact; flag it when a give-away or rote-phrase match makes thinking unnecessary.)
 - ambiguous_unclear — stem or options confuse what is being asked
 - more_than_one_correct — another option is defensibly correct
 - implausible_distractors — joke or obviously wrong fillers

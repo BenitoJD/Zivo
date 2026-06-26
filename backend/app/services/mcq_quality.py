@@ -35,6 +35,11 @@ MAX_GENERATION_ATTEMPTS = 3
 
 FATAL_FLAW_CODES = frozenset(
     {
+        # Gate A — the question must force thinking, not recognition. A stem whose
+        # answer can be keyword-matched or recalled as a rote phrase is a flaw now,
+        # not a pass: it fails the testing-effect bar (recall builds memory,
+        # recognition does not).
+        "recognition_only",
         "ambiguous_unclear",
         "more_than_one_correct",
         "implausible_distractors",
