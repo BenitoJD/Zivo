@@ -158,6 +158,9 @@ export async function loadPdfForArtifact(
 
 export const PDF_ZOOM_PRESETS = [0.75, 1, 1.25, 1.5, 2, 2.5, 3] as const;
 
+/** Default source reader zoom when a PDF panel opens. */
+export const PDF_DEFAULT_ZOOM: number = PDF_ZOOM_PRESETS[0];
+
 export function snapPdfZoom(value: number, direction: -1 | 1): number {
   const presets = PDF_ZOOM_PRESETS;
   if (direction > 0) {
@@ -273,7 +276,7 @@ export async function renderPdfPageToCanvas(
   }
 }
 
-/** Thumbnail render â€” cover-fills frame with slight zoom so no dead space at edges. */
+/** Thumbnail render — cover-fills frame with slight zoom so no dead space at edges. */
 export async function renderPdfThumbToCanvas(
   pdf: PDFDocumentProxy,
   pageNumber: number,

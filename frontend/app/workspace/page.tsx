@@ -13,7 +13,6 @@ import {
   ThemeIcon,
   Title,
   Textarea,
-  Progress,
 } from "@mantine/core";
 import {
   IconArrowRight,
@@ -318,18 +317,9 @@ export default function WorkspaceIndexPage() {
                       <IconBookUpload size={24} style={{ color: "var(--mantine-color-lavender-7)" }} />
                     </ThemeIcon>
                     {isBusy ? (
-                      <Stack gap="xs" w="100%" maw={280} align="center">
-                        <Progress
-                          value={uploadProgress ?? 0}
-                          size="xs"
-                          w="100%"
-                          animated={uploadProgress === null}
-                          color="lavender"
-                        />
-                        <Text size="xs" c="gray.6">
-                          {uploadProgress !== null ? `Uploading… ${uploadProgress}%` : "Indexing source…"}
-                        </Text>
-                      </Stack>
+                      <Text size="xs" c="gray.6">
+                        {uploadProgress !== null ? `Uploading… ${uploadProgress}%` : "Indexing source…"}
+                      </Text>
                     ) : (
                       <Stack gap={2}>
                         <Text size="sm" fw={600}>

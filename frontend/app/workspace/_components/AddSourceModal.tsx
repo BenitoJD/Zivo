@@ -7,7 +7,6 @@ import {
   Button,
   Group,
   Modal,
-  Progress,
   Stack,
   Tabs,
   Text,
@@ -202,14 +201,12 @@ export function AddSourceModal({
           <Dropzone
             onDrop={(files) => files[0] && void uploadFile(files[0])}
             accept={[MIME_TYPES.pdf, MIME_TYPES.doc, MIME_TYPES.docx, "text/plain", "text/markdown", "image/*"]}
-            loading={importBusy}
             maxFiles={1}
             radius="md"
             className="zivo-dropzone"
           >
             {importBusy ? (
-              <Stack align="center" justify="center" gap="sm" mih={{ base: 160, sm: 220 }} px="md">
-                <Progress value={uploadProgress ?? 0} size="sm" w="100%" maw={280} animated={uploadProgress === null} />
+              <Stack align="center" justify="center" mih={{ base: 160, sm: 220 }} px="md">
                 <Text size="sm" c="gray.6">
                   {uploadProgress !== null ? `Uploading… ${uploadProgress}%` : "Uploading…"}
                 </Text>

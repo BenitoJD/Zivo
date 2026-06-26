@@ -81,6 +81,7 @@ import {
   renderPdfThumbToCanvas,
   snapPdfZoom,
   PDF_ZOOM_PRESETS,
+  PDF_DEFAULT_ZOOM,
 } from "@/lib/pdf";
 import {
   normalizeMcqOptions,
@@ -1871,7 +1872,7 @@ function StudySourcePanel({
 }) {
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(PDF_DEFAULT_ZOOM);
   const [viewerWidth, setViewerWidth] = useState(0);
   const [pageAspects, setPageAspects] = useState<Record<number, number>>({});
   const [panning, setPanning] = useState(false);
@@ -1899,7 +1900,7 @@ function StudySourcePanel({
 
   useEffect(() => {
     if (!open) {
-      setZoom(1);
+      setZoom(PDF_DEFAULT_ZOOM);
       setViewerWidth(0);
     }
   }, [open]);
