@@ -84,6 +84,8 @@ def run_page_triage(
         rationale=result.get("rationale", ""),
         triage_activity_id=activity_id,
         aspect_dedup=result.get("aspect_dedup"),
+        content_type=result.get("content_type"),
+        non_content=bool(result.get("non_content")),
     )
     on_triage_completed(db, document_id, page=page_number, precompute=precompute)
 
@@ -150,6 +152,37 @@ def _normalize_aspect(item: Any, index: int, page_number: int) -> dict[str, Any]
     return None
 
 
+def _looks_like_junk(text: str) -> bool:
+    """Cheap pre-LLM gate: is this coherent language a learner could be quizzed on?
+
+    Conservative by design — only flags material that is clearly unusable
+    (empty, mostly non-letters like raw tables/OCR noise, or too few real words).
+    Used only when zero questions are permitted; legacy behaviour never calls it.
+    """
+    t = (text or "").strip()
+    if len(t) < 24:
+        return True
+    letters = sum(1 for c in t if c.isalpha())
+    if letters / max(len(t), 1) < 0.45:
+        return True
+    words = re.findall(r"[^\W\d_]{2,}", t, re.UNICODE)
+    return len(words) < 8
+
+
+def _non_content_result(
+    *, content_type: str = "non_content", rationale: str = ""
+) -> dict[str, Any]:
+    """A deliberate, honest zero-question verdict (distinct from a parse failure)."""
+    return {
+        "question_budget": 0,
+        "aspects": [],
+        "rationale": rationale or "No testable content on this page.",
+        "aspect_dedup": None,
+        "content_type": content_type or "non_content",
+        "non_content": True,
+    }
+
+
 def _fallback_triage(page_text: str, page_number: int) -> dict[str, Any]:
     words = len(page_text.split()) if page_text else 0
     paragraphs = [p.strip() for p in page_text.split("\n\n") if p.strip()] if page_text else []
@@ -188,6 +221,7 @@ def _finalize_triage(
     aspects: list[dict[str, Any]],
     budget: int,
     rationale: str,
+    content_type: str | None = None,
 ) -> dict[str, Any]:
     deduped, meta = dedupe_aspects(aspects)
     new_budget = min(budget, len(deduped)) if deduped else 0
@@ -201,6 +235,8 @@ def _finalize_triage(
         "aspects": deduped[:new_budget] if new_budget else deduped,
         "rationale": (rationale + dedup_note).strip(),
         "aspect_dedup": meta,
+        "content_type": content_type,
+        "non_content": False,
     }
 
 
@@ -209,7 +245,20 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
     if cached is not None:
         return cached
 
+    from app.config import get_settings
+
+    allow_zero = get_settings().allow_zero_questions
+
     excerpt = truncate_to_tokens(page_text, _TRIAGE_PAGE_MAX_TOKENS) if page_text else ""
+
+    # Open-world pre-LLM gate: when zero is permitted, short-circuit obviously
+    # non-content material (empty/junk) without spending an LLM call. Legacy
+    # behaviour (flag off) never reaches this and keeps the >=5 floor below.
+    if allow_zero and (not excerpt or _looks_like_junk(excerpt)):
+        result = _non_content_result(rationale="Page has no coherent testable text.")
+        _triage_cache.put(page_text, page_number, result)
+        return result
+
     if excerpt:
         try:
             # Pin triage to the default model rather than round-robining the pool,
@@ -238,14 +287,46 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
             )
             parsed = _parse_triage_json(raw)
             if parsed:
-                budget = int(parsed.get("question_budget") or INITIAL_BATCH_SIZE)
-                budget = max(INITIAL_BATCH_SIZE, min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, budget))
+                content_type = (str(parsed.get("content_type") or "").strip().lower() or None)
+                usable = parsed.get("usable")
+                raw_yield = parsed.get("testable_yield")
+                if raw_yield is None:
+                    raw_yield = parsed.get("question_budget")
                 aspects_raw = parsed.get("aspects") or []
                 aspects: list[dict[str, Any]] = []
                 for i, item in enumerate(aspects_raw):
                     norm = _normalize_aspect(item, i + 1, page_number)
                     if norm:
                         aspects.append(norm)
+                rationale = (parsed.get("rationale") or "").strip()
+
+                if allow_zero:
+                    # Honest zero: the model judged non-content, unusable, or had
+                    # nothing worth asking. This is a valid high-quality verdict.
+                    budget = int(raw_yield or 0)
+                    if content_type == "non_content" or usable is False or budget <= 0 or not aspects:
+                        result = _non_content_result(
+                            content_type=content_type or "non_content",
+                            rationale=rationale,
+                        )
+                        _triage_cache.put(page_text, page_number, result)
+                        return result
+                    budget = max(1, min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, budget))
+                    if budget < len(aspects):
+                        budget = min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, len(aspects))
+                    result = _finalize_triage(
+                        aspects=aspects[:budget],
+                        budget=budget,
+                        rationale=rationale,
+                        content_type=content_type,
+                    )
+                    _triage_cache.put(page_text, page_number, result)
+                    return result
+
+                # Legacy path (flag off): keep the >=5 floor; content_type is
+                # captured for free but never forces a zero.
+                budget = int(raw_yield or INITIAL_BATCH_SIZE)
+                budget = max(INITIAL_BATCH_SIZE, min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, budget))
                 if not aspects:
                     return _fallback_triage(page_text, page_number)
                 if budget < len(aspects):
@@ -253,7 +334,8 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
                 result = _finalize_triage(
                     aspects=aspects[:budget],
                     budget=budget,
-                    rationale=(parsed.get("rationale") or "").strip(),
+                    rationale=rationale,
+                    content_type=content_type,
                 )
                 _triage_cache.put(page_text, page_number, result)
                 return result

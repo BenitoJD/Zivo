@@ -347,6 +347,25 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
     if not doc:
         return {"questions_saved": 0, "page_number": page_number}
 
+    # Open-world: a page triage judged non-content yields zero questions on
+    # purpose. Mark it complete and stop — never let the speculative-aspect
+    # fallback below resurrect filler questions on a cover page or TOC.
+    from app.services.question_pool import is_non_content_page
+
+    if is_non_content_page(doc, page_number):
+        set_coverage_complete(db, document_id, page_number)
+        on_batch_completed(db, document_id, page=page_number, saved=0)
+        if activity_id:
+            update_activity(
+                db,
+                uuid.UUID(str(activity_id)),
+                status="succeeded",
+                stats={"questions_saved": 0, "page_number": page_number, "non_content": True},
+                finished=True,
+            )
+        db.commit()
+        return {"questions_saved": 0, "page_number": page_number, "non_content": True}
+
     chunks = fetch_chunks_for_page_range(
         db,
         document_ids=[document_id],
@@ -423,6 +442,7 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
 
     stable_context = get_cacheable_page_context(db, document_id, page_number, page_text)
     aspect_hints = _aspect_retrieval_hints(db, document_id, page_number, targets, page_text)
+    content_type = get_page_coverage(doc, page_number).get("content_type")
     kept = generate_quality_mcq_batch(
         db,
         page_text=stable_context,
@@ -430,6 +450,7 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
         targets=targets,
         prior_mcqs=prior_mcqs,
         aspect_hints=aspect_hints,
+        content_type=content_type,
     )
 
     saved = 0
@@ -492,6 +513,7 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
                 sequence=sequence,
                 target_aspect=target,
                 prior_mcqs=prior_mcqs,
+                content_type=content_type,
             )
             if not payload:
                 continue

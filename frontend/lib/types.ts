@@ -42,6 +42,8 @@ export type McqState = {
   questions_generated?: number;
   coverage_complete?: boolean;
   page_complete?: boolean;
+  non_content?: boolean;
+  no_questions_reason?: string | null;
   document_complete?: boolean;
   pool_available?: number;
   rag_window_pages?: number[];

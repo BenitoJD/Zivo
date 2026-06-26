@@ -11,7 +11,6 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.services.embed import embed_texts
 from app.services.llm_router import acomplete_chat
 from app.services.llm_sync import run_coro_in_worker
 from app.services.mcq_dedup import (
@@ -20,7 +19,6 @@ from app.services.mcq_dedup import (
     format_prior_mcqs_block,
     has_document_meta_reference,
     is_mcq_too_similar,
-    mcq_signature,
     mcq_signature,
     prior_mcq_embeddings,
     sanitize_mcq_explanation,
@@ -212,6 +210,23 @@ def _complete_chat_sync(
     return run_coro_in_worker(
         acomplete_chat(messages, db, log_tag=log_tag, model_id=model_id)
     )
+
+
+def _content_style_line(content_type: str | None) -> str:
+    """One-line generation directive for the material's content_type.
+
+    Returns '' unless content-aware generation is enabled, so the universal MCQ
+    rubric is unchanged by default. When on, it shifts the *kind* of thinking and
+    the truth model (e.g. interpretation for narrative) without touching the gate.
+    """
+    from app.config import get_settings
+
+    if not get_settings().content_aware_generation:
+        return ""
+    from app.services.prompts import content_type_style
+
+    style = content_type_style(content_type)
+    return f"\nMATERIAL TYPE — {style}\n" if style else ""
 
 
 def _parse_mcq_json(raw: str) -> dict[str, Any] | None:
@@ -438,6 +453,7 @@ def _generate_draft_mcq(
     target_aspect: dict[str, Any] | None,
     prior_mcqs: list[dict[str, Any]] | None,
     model_id: uuid.UUID | None = None,
+    content_type: str | None = None,
 ) -> dict[str, Any] | None:
     excerpt = truncate_to_tokens(page_text, _PAGE_EXCERPT_MAX_TOKENS)
     aspect_line = ""
@@ -462,7 +478,7 @@ def _generate_draft_mcq(
     instructions = (
         f"Generate exactly one multiple-choice question from the subject matter below.\n"
         f"Question index on this page: {sequence}\n"
-        f"{aspect_line}{cognitive_line}\n"
+        f"{aspect_line}{cognitive_line}{_content_style_line(content_type)}\n"
         f"{prior_block}"
         "Return only one ```zv-mcq``` JSON block. Include primary_concept_key matching the target aspect."
     )
@@ -599,6 +615,7 @@ def generate_quality_mcq(
     asked_labels: list[str] | None = None,
     max_attempts: int = MAX_GENERATION_ATTEMPTS,
     model_id: uuid.UUID | None = None,
+    content_type: str | None = None,
 ) -> dict[str, Any] | None:
     """Generate → heuristic check → LLM critic → embedding gate → rewrite until pass or exhausted."""
     if not page_text or not page_text.strip():
@@ -629,6 +646,7 @@ def generate_quality_mcq(
                 target_aspect=target_aspect,
                 prior_mcqs=prior_mcqs,
                 model_id=model_id,
+                content_type=content_type,
             )
         else:
             if draft is None:
@@ -640,6 +658,7 @@ def generate_quality_mcq(
                     target_aspect=target_aspect,
                     prior_mcqs=prior_mcqs,
                     model_id=model_id,
+                    content_type=content_type,
                 )
             elif last_critique_bundle.get("flaws") or last_critique_bundle.get("rewrite_hints"):
                 draft = _rewrite_mcq(
@@ -661,6 +680,7 @@ def generate_quality_mcq(
                     target_aspect=target_aspect,
                     prior_mcqs=prior_mcqs,
                     model_id=model_id,
+                    content_type=content_type,
                 )
 
         if draft is None:
@@ -763,6 +783,7 @@ def _generate_batch_drafts(
     prior_mcqs: list[dict[str, Any]] | None,
     model_id: uuid.UUID | None = None,
     aspect_hints: str = "",
+    content_type: str | None = None,
 ) -> list[dict[str, Any]]:
     """One LLM call producing up to N MCQs (one per target aspect).
 
@@ -781,7 +802,8 @@ def _generate_batch_drafts(
     system = get_prompt(db, "mcq_page_generate_system")
     instructions = (
         f"Generate exactly {len(targets)} multiple-choice questions — ONE per target aspect below. "
-        f"Each must test a distinct idea from the subject matter.\n\n"
+        f"Each must test a distinct idea from the subject matter.\n"
+        f"{_content_style_line(content_type)}\n"
         f"Target aspects:\n{targets_block}\n\n"
         f"{prior_block}"
         f"{hints_block}\n"
@@ -822,6 +844,7 @@ def generate_quality_mcq_batch(
     prior_mcqs: list[dict[str, Any]] | None = None,
     model_id: uuid.UUID | None = None,
     aspect_hints: str = "",
+    content_type: str | None = None,
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     """Generate N MCQs in ONE LLM call, then run quality gates on each.
 
@@ -854,6 +877,7 @@ def generate_quality_mcq_batch(
             prior_mcqs=prior_mcqs,
             model_id=model_id,
             aspect_hints=aspect_hints,
+            content_type=content_type,
         )
         if drafts:
             cache_put(db, kind="batch_drafts", cache_key=drafts_cache_key, value=drafts)
