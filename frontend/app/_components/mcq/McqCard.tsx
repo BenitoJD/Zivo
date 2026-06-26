@@ -15,11 +15,49 @@ import { normalizeMcqOptions } from "@/lib/types";
 
 export type GradeState = { correct: boolean; correctIndex: number } | null;
 
+export type McqOptionVisualState = {
+  isSelected: boolean;
+  isCorrectOption: boolean;
+  isWrongSelected: boolean;
+};
+
+/** Option chrome shared by workspace McqHeroPanel and practice McqCard. */
+export function mcqOptionChrome(isDark: boolean, state: McqOptionVisualState) {
+  const { isSelected, isCorrectOption, isWrongSelected } = state;
+  let border = isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-default-border)";
+  let background = isDark ? "var(--mantine-color-dark-7)" : "var(--mantine-color-gray-0)";
+  let chipBg = isDark ? "var(--mantine-color-dark-5)" : "var(--mantine-color-gray-2)";
+  let chipColor = isDark ? "var(--mantine-color-gray-2)" : "var(--mantine-color-gray-7)";
+  let borderWidth = 1;
+
+  if (isCorrectOption) {
+    border = isDark ? "var(--mantine-color-sage-4)" : "var(--mantine-color-sage-5)";
+    background = isDark ? "var(--mantine-color-sage-1)" : "var(--mantine-color-sage-0)";
+    chipBg = "var(--mantine-color-sage-6)";
+    chipColor = "#FFFFFF";
+    borderWidth = 2;
+  } else if (isWrongSelected) {
+    border = isDark ? "var(--mantine-color-terracotta-4)" : "var(--mantine-color-terracotta-5)";
+    background = isDark ? "var(--mantine-color-terracotta-1)" : "var(--mantine-color-terracotta-0)";
+    chipBg = "var(--mantine-color-terracotta-6)";
+    chipColor = "#FFFFFF";
+    borderWidth = 2;
+  } else if (isSelected) {
+    border = isDark ? "var(--mantine-color-lavender-4)" : "var(--mantine-color-lavender-5)";
+    background = isDark ? "var(--mantine-color-lavender-1)" : "var(--mantine-color-lavender-0)";
+    chipBg = "var(--mantine-color-lavender-7)";
+    chipColor = "#FFFFFF";
+    borderWidth = 2;
+  }
+
+  return { border, background, chipBg, chipColor, borderWidth };
+}
+
 export function McqFeedbackCard({
   feedback,
   isCorrect,
   compact,
-  isDark: _isDark,
+  isDark,
 }: {
   feedback: string;
   isCorrect: boolean;
@@ -31,13 +69,33 @@ export function McqFeedbackCard({
   const detail = parts.slice(1).join("\n\n");
 
   const surface = isCorrect
-    ? "var(--mantine-color-sage-0)"
-    : "var(--mantine-color-terracotta-0)";
+    ? isDark
+      ? "var(--mantine-color-sage-1)"
+      : "var(--mantine-color-sage-0)"
+    : isDark
+      ? "var(--mantine-color-terracotta-1)"
+      : "var(--mantine-color-terracotta-0)";
   const outline = isCorrect
-    ? "var(--mantine-color-sage-3)"
-    : "var(--mantine-color-terracotta-3)";
-  const primaryText = isCorrect ? "var(--mantine-color-sage-9)" : "var(--mantine-color-terracotta-9)";
-  const secondaryText = isCorrect ? "var(--mantine-color-sage-8)" : "var(--mantine-color-terracotta-8)";
+    ? isDark
+      ? "var(--mantine-color-sage-3)"
+      : "var(--mantine-color-sage-3)"
+    : isDark
+      ? "var(--mantine-color-terracotta-3)"
+      : "var(--mantine-color-terracotta-3)";
+  const primaryText = isCorrect
+    ? isDark
+      ? "var(--mantine-color-sage-8)"
+      : "var(--mantine-color-sage-9)"
+    : isDark
+      ? "var(--mantine-color-terracotta-8)"
+      : "var(--mantine-color-terracotta-9)";
+  const secondaryText = isCorrect
+    ? isDark
+      ? "var(--mantine-color-sage-7)"
+      : "var(--mantine-color-sage-8)"
+    : isDark
+      ? "var(--mantine-color-terracotta-7)"
+      : "var(--mantine-color-terracotta-8)";
 
   return (
     <Box
@@ -116,7 +174,7 @@ export function McqCard({
   if (loading || safeOptions.length === 0) {
     return (
       <Stack align="center" justify="center" gap="sm" mih={220}>
-        <Text size="lg" fw={500} ta="center" style={{ letterSpacing: "-0.025em" }}>
+        <Text size="lg" fw={500} ta="center" c="var(--mantine-color-text)" style={{ letterSpacing: "-0.025em" }}>
           {loadingLabel}
         </Text>
         <Text size="sm" c="dimmed" ta="center" lh={1.55} maw={300}>
@@ -134,6 +192,7 @@ export function McqCard({
         lh={1.35}
         ta="center"
         lineClamp={compact ? 4 : 3}
+        c="var(--mantine-color-text)"
         style={{
           flexShrink: 0,
           fontFamily: "var(--font-serif), Georgia, serif",
@@ -158,18 +217,10 @@ export function McqCard({
             const isSelected = selected === value;
             const isCorrectOption = graded && gradeState.correctIndex === i;
             const isWrongSelected = graded && !gradeState.correct && isSelected;
-            let borderColor = "var(--mantine-color-default-border)";
-            let background = "transparent";
-            if (isCorrectOption) {
-              borderColor = "var(--mantine-color-sage-6)";
-              background = "var(--mantine-color-sage-0)";
-            } else if (isWrongSelected) {
-              borderColor = "var(--mantine-color-terracotta-6)";
-              background = "var(--mantine-color-terracotta-0)";
-            } else if (isSelected) {
-              borderColor = "var(--mantine-color-lavender-6)";
-              background = "var(--mantine-color-lavender-0)";
-            }
+            const { border: borderColor, background, borderWidth } = mcqOptionChrome(
+              isDark,
+              { isSelected, isCorrectOption, isWrongSelected },
+            );
             return (
               <Radio
                 key={value}
@@ -180,7 +231,12 @@ export function McqCard({
                     <Text size="sm" c="dimmed" w={20} ta="center" ff="monospace" fw={600}>
                       {String.fromCharCode(65 + i)}
                     </Text>
-                    <Text size={compact ? "sm" : "md"} lh={1.5} style={{ flex: 1, fontSize: compact ? undefined : "1.0625rem" }}>
+                    <Text
+                      size={compact ? "sm" : "md"}
+                      lh={1.5}
+                      c="var(--mantine-color-text)"
+                      style={{ flex: 1, fontSize: compact ? undefined : "1.0625rem" }}
+                    >
                       {opt}
                     </Text>
                   </Group>
@@ -191,7 +247,7 @@ export function McqCard({
                     borderRadius: 12,
                     padding: compact ? "14px 12px" : "12px 14px",
                     minHeight: 44,
-                    border: isSelected || isCorrectOption || isWrongSelected ? `2px solid ${borderColor}` : `1px solid ${borderColor}`,
+                    border: `${borderWidth}px solid ${borderColor}`,
                     background,
                     opacity: optionsLocked && !isCorrectOption && !isWrongSelected ? 0.65 : 1,
                     transition: "border-color 120ms ease, background 120ms ease",

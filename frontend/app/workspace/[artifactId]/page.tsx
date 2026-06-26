@@ -64,6 +64,7 @@ import {
 } from "@/lib/api/queries";
 import { ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import { BrandMark } from "@/app/_components/BrandMark";
+import { mcqOptionChrome } from "@/app/_components/mcq/McqCard";
 import { AssistantMarkdown } from "@/lib/chatMarkdown";
 import { indexingStage, isTransientChatAssistantMessage } from "@/lib/constants";
 import { learnWaitStatus } from "@/lib/learnStatus";
@@ -466,6 +467,14 @@ export default function WorkspaceArtifactPage({
     queue?.generation_pending,
     queue?.pool_available,
   ]);
+
+  useEffect(() => {
+    if (invalidArtifactId || queue?.current_assertion_id) return;
+    setOptions([]);
+    setSelected(null);
+    setGradeState(null);
+    setFeedback(null);
+  }, [invalidArtifactId, queue?.current_assertion_id]);
 
   useEffect(() => {
     if (invalidArtifactId || !queue?.current_assertion_id) return;
@@ -2341,13 +2350,27 @@ function McqFeedbackCard({
   const detail = parts.slice(1).join("\n\n");
 
   const surface = isCorrect
-    ? "var(--mantine-color-sage-0)"
-    : "var(--mantine-color-terracotta-0)";
-  const outline = isCorrect
-    ? "var(--mantine-color-sage-3)"
-    : "var(--mantine-color-terracotta-3)";
-  const primaryText = isCorrect ? "var(--mantine-color-sage-9)" : "var(--mantine-color-terracotta-9)";
-  const secondaryText = isCorrect ? "var(--mantine-color-sage-8)" : "var(--mantine-color-terracotta-8)";
+    ? isDark
+      ? "var(--mantine-color-sage-1)"
+      : "var(--mantine-color-sage-0)"
+    : isDark
+      ? "var(--mantine-color-terracotta-1)"
+      : "var(--mantine-color-terracotta-0)";
+  const outline = isCorrect ? "var(--mantine-color-sage-3)" : "var(--mantine-color-terracotta-3)";
+  const primaryText = isCorrect
+    ? isDark
+      ? "var(--mantine-color-sage-8)"
+      : "var(--mantine-color-sage-9)"
+    : isDark
+      ? "var(--mantine-color-terracotta-8)"
+      : "var(--mantine-color-terracotta-9)";
+  const secondaryText = isCorrect
+    ? isDark
+      ? "var(--mantine-color-sage-7)"
+      : "var(--mantine-color-sage-8)"
+    : isDark
+      ? "var(--mantine-color-terracotta-7)"
+      : "var(--mantine-color-terracotta-8)";
 
   return (
     <Box
@@ -2459,11 +2482,8 @@ function McqHeroPanel({
   const waiting =
     mcqLoading ||
     artifactStatus === "indexing" ||
-    (Boolean(queue?.generation_pending) && !queue?.current_assertion_id) ||
-    (!queue?.current_assertion_id &&
-      artifactStatus === "ready" &&
-      safeOptions.length === 0 &&
-      (queue?.generation_pending || (queue?.questions_generated ?? 0) === 0));
+    !hasQuestion ||
+    (Boolean(queue?.generation_pending) && !queue?.current_assertion_id);
 
   const [statusTick, setStatusTick] = useState(0);
   const stagnant =
@@ -2552,6 +2572,7 @@ function McqHeroPanel({
             size="lg"
             fw={500}
             ta="center"
+            c="var(--mantine-color-text)"
             style={{ letterSpacing: "-0.025em" }}
           >
             {waitStatus.title}
@@ -2600,6 +2621,7 @@ function McqHeroPanel({
         lh={1.3}
         ta="center"
         lineClamp={compact ? 4 : 3}
+        c="var(--mantine-color-text)"
         style={{
           flexShrink: 0,
           fontFamily: "var(--font-serif), Georgia, serif",
@@ -2618,21 +2640,11 @@ function McqHeroPanel({
           const isSelected = selected === value;
           const isCorrectOption = graded && gradeState.correctIndex === i;
           const isWrongSelected = graded && !gradeState.correct && isSelected;
-          let border = "var(--mantine-color-default-border)";
-          let background = "var(--mantine-color-gray-0)";
-          let chipBg = "var(--mantine-color-gray-2)";
-          let chipColor = "var(--mantine-color-gray-7)";
-          let borderWidth = 1;
-          if (isCorrectOption) {
-            border = "var(--mantine-color-sage-5)"; background = "var(--mantine-color-sage-0)";
-            chipBg = "var(--mantine-color-sage-6)"; chipColor = "#FFFFFF"; borderWidth = 2;
-          } else if (isWrongSelected) {
-            border = "var(--mantine-color-terracotta-5)"; background = "var(--mantine-color-terracotta-0)";
-            chipBg = "var(--mantine-color-terracotta-6)"; chipColor = "#FFFFFF"; borderWidth = 2;
-          } else if (isSelected) {
-            border = "var(--mantine-color-lavender-5)"; background = "var(--mantine-color-lavender-0)";
-            chipBg = "var(--mantine-color-lavender-7)"; chipColor = "#FFFFFF"; borderWidth = 2;
-          }
+          const { border, background, chipBg, chipColor, borderWidth } = mcqOptionChrome(isDark, {
+            isSelected,
+            isCorrectOption,
+            isWrongSelected,
+          });
           const dim = optionsLocked && !isCorrectOption && !isWrongSelected;
           return (
             <UnstyledButton

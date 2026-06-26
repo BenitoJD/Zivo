@@ -298,6 +298,30 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
     "--mantine-color-lavender-7": "#CDBFEA",  // primary accent text on ink
     "--mantine-color-lavender-8": "#DDD2F2",
     "--mantine-color-lavender-9": "#EFE9F8",
+
+    // Sage — dark-mode remap (feedback + correct-option surfaces)
+    "--mantine-color-sage-0": "#1A2B1F",
+    "--mantine-color-sage-1": "#243628",
+    "--mantine-color-sage-2": "#2E4535",
+    "--mantine-color-sage-3": "#3A5843",
+    "--mantine-color-sage-4": "#5F9156",
+    "--mantine-color-sage-5": "#82AE79",
+    "--mantine-color-sage-6": "#A8C9A0",
+    "--mantine-color-sage-7": "#C5D8BE",
+    "--mantine-color-sage-8": "#DDEAD6",
+    "--mantine-color-sage-9": "#EEF5EB",
+
+    // Terracotta — dark-mode remap (wrong-option + error feedback)
+    "--mantine-color-terracotta-0": "#2B1A14",
+    "--mantine-color-terracotta-1": "#3A2319",
+    "--mantine-color-terracotta-2": "#4A2E22",
+    "--mantine-color-terracotta-3": "#5E3B2C",
+    "--mantine-color-terracotta-4": "#C57454",
+    "--mantine-color-terracotta-5": "#D69B7D",
+    "--mantine-color-terracotta-6": "#E8B09A",
+    "--mantine-color-terracotta-7": "#F0C4B2",
+    "--mantine-color-terracotta-8": "#F7D8CC",
+    "--mantine-color-terracotta-9": "#FBECE6",
   },
 });
 
