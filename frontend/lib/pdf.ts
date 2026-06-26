@@ -28,7 +28,7 @@ async function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
 
 const activeRenderTasks = new WeakMap<HTMLCanvasElement, RenderTask>();
 
-const THUMB_RENDER_VERSION = 3;
+const THUMB_RENDER_VERSION = 4;
 
 type CanvasRenderFingerprint = {
   pdf: PDFDocumentProxy;
@@ -276,14 +276,13 @@ export async function renderPdfPageToCanvas(
   }
 }
 
-/** Thumbnail render - cover-fills frame with slight zoom so no dead space at edges. */
+/** Thumbnail render - fit entire page inside frame (no edge cropping). */
 export async function renderPdfThumbToCanvas(
   pdf: PDFDocumentProxy,
   pageNumber: number,
   canvas: HTMLCanvasElement,
   displayCssWidth: number,
   displayCssHeight: number,
-  zoom = 1.08,
 ): Promise<void> {
   const cssWidth = Math.round(displayCssWidth);
   const cssHeight = Math.round(displayCssHeight);
@@ -322,10 +321,10 @@ export async function renderPdfThumbToCanvas(
     context.fillStyle = "#ffffff";
     context.fillRect(0, 0, outputW, outputH);
 
-    const widthScale = (cssWidth / base.width) * zoom;
-    const heightScale = (cssHeight / base.height) * zoom;
-    const cssCoverScale = Math.max(widthScale, heightScale);
-    const renderViewport = page.getViewport({ scale: cssCoverScale * pixelRatio });
+    const widthScale = cssWidth / base.width;
+    const heightScale = cssHeight / base.height;
+    const cssFitScale = Math.min(widthScale, heightScale);
+    const renderViewport = page.getViewport({ scale: cssFitScale * pixelRatio });
     const offsetX = (outputW - renderViewport.width) / 2;
     const offsetY = (outputH - renderViewport.height) / 2;
 

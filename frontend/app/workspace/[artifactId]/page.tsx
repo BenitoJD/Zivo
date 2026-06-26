@@ -120,10 +120,8 @@ const SELECTION_PAD_X_COMPACT = 16;
 const SELECTION_DOCK_WIDTH = "80%";
 const SELECTION_DOCK_RESERVE = 156;
 const SELECTION_DOCK_RESERVE_COMPACT = 168;
-const THUMB_FRAME_ASPECT = 1.38;
-const THUMB_FRAME_ASPECT_COMPACT = 1.36;
-const THUMB_COVER_ZOOM = 1.08;
-const THUMB_COVER_ZOOM_COMPACT = 1.1;
+const THUMB_FRAME_ASPECT = 1.414;
+const THUMB_FRAME_ASPECT_COMPACT = 1.414;
 
 function shellBleedPx(compact: boolean): number {
   return compact ? 0 : 16;
@@ -3919,7 +3917,10 @@ function PageThumbnailCell({
 }) {
   const [hovered, setHovered] = useState(false);
   const [nearViewport, setNearViewport] = useState(false);
-  const [renderedForWidth, setRenderedForWidth] = useState(0);
+  const [renderedSize, setRenderedSize] = useState({ width: 0, height: 0 });
+  const [pageAspect, setPageAspect] = useState(
+    compact ? THUMB_FRAME_ASPECT_COMPACT : THUMB_FRAME_ASPECT,
+  );
   const cellRef = useRef<HTMLButtonElement>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
@@ -3930,10 +3931,11 @@ function PageThumbnailCell({
   const innerRadius = compact ? 12 : 14;
   const outerRadius = innerRadius + ringWidth;
   const renderWidth = compact ? (frameWidth > 0 ? frameWidth : thumbWidth) : thumbWidth;
-  const frameHeight = Math.round(
-    renderWidth * (compact ? THUMB_FRAME_ASPECT_COMPACT : THUMB_FRAME_ASPECT),
-  );
-  const rendered = renderedForWidth === renderWidth && renderWidth > 0;
+  const frameHeight = Math.round(renderWidth * pageAspect);
+  const rendered =
+    renderedSize.width === renderWidth &&
+    renderedSize.height === frameHeight &&
+    renderWidth > 0;
 
   useEffect(() => {
     if (!compact) {
@@ -3948,6 +3950,18 @@ function PageThumbnailCell({
     ro.observe(el);
     return () => ro.disconnect();
   }, [compact, thumbWidth]);
+
+  useEffect(() => {
+    if (!pdfDoc || !isPdf) return;
+    let cancelled = false;
+    void (async () => {
+      const aspect = await pdfPageAspectRatio(pdfDoc, page);
+      if (!cancelled) setPageAspect(aspect);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pdfDoc, isPdf, page]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -3983,14 +3997,13 @@ function PageThumbnailCell({
     if (!nearViewport || !pdfDoc || !isPdf || renderWidth < 1) return;
 
     let cancelled = false;
-    const coverZoom = compact ? THUMB_COVER_ZOOM_COMPACT : THUMB_COVER_ZOOM;
 
     void (async () => {
       const canvas = canvasRef.current;
       if (!canvas || cancelled) return;
       try {
-        await renderPdfThumbToCanvas(pdfDoc, page, canvas, renderWidth, frameHeight, coverZoom);
-        if (!cancelled) setRenderedForWidth(renderWidth);
+        await renderPdfThumbToCanvas(pdfDoc, page, canvas, renderWidth, frameHeight);
+        if (!cancelled) setRenderedSize({ width: renderWidth, height: frameHeight });
       } catch {
         if (!cancelled) return;
       }
@@ -3999,7 +4012,7 @@ function PageThumbnailCell({
     return () => {
       cancelled = true;
     };
-  }, [nearViewport, pdfDoc, isPdf, page, renderWidth, frameHeight, compact]);
+  }, [nearViewport, pdfDoc, isPdf, page, renderWidth, frameHeight]);
 
   return (
     <UnstyledButton
