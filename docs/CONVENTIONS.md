@@ -96,7 +96,7 @@ CI `npm ci` ([.github/workflows/ci.yml](../.github/workflows/ci.yml)). There is 
   only the `pg_notify` notification.
 - **Status.** ~54 broad `except` blocks exist in `backend/app`; not all are
   best-effort. Narrowing the core-path ones is tracked in
-  [ADR 0005](adr/0005-refactor-backlog.md) — do not add new broad excepts on the core
+  [ADR 0005](adr/0005-enforcement-and-known-divergences.md) — do not add new broad excepts on the core
   path.
 
 ### 2.7 Typing and naming
@@ -146,20 +146,22 @@ truth for UI; this file does not restate it.
   ([.github/workflows/ci.yml](../.github/workflows/ci.yml)); the skip pattern is in
   `tests_citepage/integration/test_learn_queue_api.py:19-29`.
 - **Status.** Two parallel test trees is a known wart (6 files vs 54). Consolidation
-  is tracked in [ADR 0005](adr/0005-refactor-backlog.md).
+  is tracked in [ADR 0005](adr/0005-enforcement-and-known-divergences.md).
 
 ## 5. What is enforced, and what is not (yet)
 
 | Rule area | Enforcement today | Gap |
 |-----------|-------------------|-----|
 | Import health, migrations, unit tests | CI (`ci.yml`) | — |
+| Dead code, unused imports, undefined names | **`ruff check` (E9, F) in CI** ([backend/ruff.toml](../backend/ruff.toml)) | ruleset is conservative |
 | Frontend build | CI (`npm run build`) | `npm run lint` is **not** in CI |
-| Python style/format | none | no `ruff` config yet |
+| Python format + broader lint (`I`/`B`) | none | `ruff format`, import sorting not on yet |
 | Python types | none | no `mypy` config yet |
-| Module size, broad excepts, dead code | none | manual review |
+| Module size, broad excepts | none | manual review |
 
-Closing these gaps (add `ruff`/`mypy`, put `lint` in CI) is the un-driftability work
-tracked in [ADR 0005](adr/0005-refactor-backlog.md). Until a rule above is
+Closing the remaining gaps (expand `ruff`, add `mypy`, put `npm run lint` in CI) is the
+un-driftability work tracked in
+[ADR 0005](adr/0005-enforcement-and-known-divergences.md). Until a rule above is
 machine-enforced, its `file:line` proof is what keeps it honest — **a reviewer may
 reject a change that contradicts a proof in this doc.**
 

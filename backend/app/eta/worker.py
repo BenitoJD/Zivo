@@ -1,6 +1,5 @@
 import logging
 import os
-import time
 import uuid
 from collections.abc import Callable, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait

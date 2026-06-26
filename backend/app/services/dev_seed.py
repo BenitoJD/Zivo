@@ -51,7 +51,7 @@ def assert_local_dev_seed_allowed() -> None:
         raise RuntimeError(f"Refusing to seed users against non-local database host: {host}")
 
 
-def upsert_seed_user(db: Session, spec: SeedUserSpec) -> tuple[Account, bool]:
+def upsert_seed_user(db: Session, spec: SeedUserSpec) -> tuple[User, bool]:
     """Insert or update a seed user. Returns ``(user, created)``."""
     user = db.query(User).filter(User.username == spec.username).first()
     password_hash = hash_password(spec.password)

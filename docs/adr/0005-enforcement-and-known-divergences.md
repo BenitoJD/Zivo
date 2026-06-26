@@ -15,8 +15,10 @@ trustworthy and gives each cleanup a definition of done.
 
 ## Open divergences (close in small, safe slices)
 
-1. **No Python lint/format config.** Target: add `ruff` (format + a conservative lint
-   set) under `backend/`, fix violations, then add it to CI. Current: none.
+1. **Python lint — started (2026-06-27).** `ruff check` (rule sets `E9`, `F`) is now
+   enforced in CI via [backend/ruff.toml](../../backend/ruff.toml); enabling it cleaned
+   5 dead-code / undefined-name findings. Still open: `ruff format`, import sorting
+   (`I`), and bugbear (`B`) — each lands with its fixes in its own slice.
 2. **No Python type checking.** Target: add `mypy` (start lenient, tighten), then CI.
    Current: none.
 3. **Frontend `lint` not gated.** CI runs `npm run build` only
