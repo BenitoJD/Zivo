@@ -310,7 +310,7 @@ def _difficulty_for_ids(db: Session, ids: list[str]) -> dict[str, float]:
                    subject_assertion_id::text AS id, value->>'rating' AS rating
             FROM intel.projection
             WHERE type_concept_id = :type_id
-              AND subject_assertion_id = ANY(:ids)
+              AND subject_assertion_id::text = ANY(:ids)
             ORDER BY subject_assertion_id, as_of DESC
             """
         ),
