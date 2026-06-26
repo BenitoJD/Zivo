@@ -14,6 +14,33 @@ Not MCQs. Not exams. Not education as a category. **Understanding.** Questions a
 
 When we succeed, "Question Better." stops being a tagline. It becomes a description of the company.
 
+## The unchanging core (the 100-year law)
+
+> **Build the unchanging loop that always finds the best question for whoever shows up — and never let the format, the model, or the metric into the part you call permanent.**
+
+A frozen system cannot stay the best — the world moves underneath it. The only things that stay supreme for a century are **self-improving loops**, not artifacts: the scientific method, double-entry bookkeeping, the Socratic method, evolution. None is a thing; each is a process that changes its every output while its core stays fixed. We are not the pyramid of questions. We are the scientific method of questions.
+
+So we freeze the **law and the loop**, and keep everything else liquid.
+
+**What is permanent (the laws):**
+
+1. **Purpose** — a question exists to change the person answering it. Value = understanding gained.
+2. **Relativity** — "best" is always relative to one learner at their edge. There is no best question in the abstract.
+3. **Revelation** — understanding is known only through response. The system listens; it never assumes.
+4. **The loop** — ask → observe the response → choose the next prompt that maximizes understanding → repeat, getting better at the choosing.
+5. **Simplicity** — the prompt is as simple as it can be and no simpler. Difficulty lives in the thinking, not the wording.
+6. **Goal fixed, method open** — the goal (maximize understanding) never changes; *how* we reach it is always learned and replaced.
+
+**What must stay swappable (era-guesses — never in the foundation):**
+
+- **The format.** The MCQ is today's vessel for "a prompt that forces a revealing response." Store the function; render the format. In 100 years the format will be unrecognizable.
+- **The model and vendor.** Always behind an abstraction. A config row, never an identity.
+- **The metric.** A frozen definition of "good question" invites Goodhart. The evaluator must be learned from outcomes, not carved in stone.
+
+**The one substrate-independent asset to accumulate:** the record of how real humans responded. Questions age, code rots, models get replaced — but "when a human at this level of understanding met this idea, here is what they revealed" is as valid in 2125 as today. That signal is the soil the loop grows in.
+
+**The decision test:** for any feature, schema, or dependency — *is this an expression of a law, or a guess about the current era?* Laws are permanent and protected. Era-guesses are trivially replaceable, and our identity never depends on them.
+
 ## Product principles
 
 1. **One sharp wedge first.** Ship the best question generator before anything else.
