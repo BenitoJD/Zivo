@@ -19,6 +19,7 @@ from app.models import Account, ChatMessage, ChatThread, Document
 from app.schemas.mcq import McqGradeRequest, McqGradeResponse
 from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.services.chat_scope import normalize_chat_scope
+from app.services.retrieval_gate import is_conversational_followup
 from app.services.learn_chat_context import build_learn_chat_context, learn_scope_fields
 from app.services.embed import embed_query
 from app.services.llm_router import is_failover_eligible, stream_chat_completion
@@ -94,6 +95,37 @@ def _user_requests_mcq_answer(message: str) -> bool:
 
 def _learn_context_has_active_question(learn_context: str | None) -> bool:
     return bool(learn_context and "Current question stem:" in learn_context)
+
+
+def _cache_eligible(
+    *,
+    include_image: bool,
+    selection_text: str | None,
+    has_citations: bool,
+    doc_count: int,
+    has_history: bool,
+) -> bool:
+    """Whether a semantic cache lookup/store is safe for this turn.
+
+    The cache matches a new message to a stored reply by embedding similarity
+    alone — it has no awareness of conversation history. So a follow-up like
+    "no, I meant the other thing" or "go deeper" can be answered with the
+    *original* cached reply, which is the main cause of the tutor "answering a
+    different question". Restrict cache hits to fresh, standalone first turns
+    with no prior history; once there's a back-and-forth, always call the model
+    so replies track what the learner actually said.
+    """
+    if include_image:
+        return False
+    if selection_text:
+        return False
+    if not has_citations:
+        return False
+    if doc_count != 1:
+        return False
+    if has_history:
+        return False
+    return True
 
 
 def _stream_error_event(message: str) -> dict[str, str]:
@@ -448,27 +480,42 @@ async def chat_stream(
                 trailer_parts: list[str] = []
                 if learn_context:
                     trailer_parts.append(learn_context)
-                if (
+                has_history = bool(prior_messages)
+                # The quiz answer guardrail stops the tutor from revealing the
+                # correct option. But on a purely conversational follow-up
+                # ("thanks", "go on", "can you rephrase that") re-appending it
+                # biases the model to re-lecture from excerpts instead of just
+                # responding. Keep it only when the turn is a real content
+                # question that could otherwise leak the answer.
+                guardrail_applies = (
                     learn_context
                     and _learn_context_has_active_question(learn_context)
                     and not _user_requests_mcq_answer(request_message)
-                ):
+                    and not (has_history and is_conversational_followup(request_message))
+                )
+                if guardrail_applies:
                     trailer_parts.append(_MCQ_ANSWER_GUARDRAIL)
                 if trailer_parts:
                     user_content = user_content + "\n\n" + "\n\n".join(trailer_parts)
                 messages.append({"role": "user", "content": user_content})
 
-                cache_eligible = (
-                    not include_image
-                    and not scope.get("selection_text")
-                    and bool(citations)
-                    and len(doc_ids) == 1
+                cache_eligible = _cache_eligible(
+                    include_image=include_image,
+                    selection_text=scope.get("selection_text"),
+                    has_citations=bool(citations),
+                    doc_count=len(doc_ids),
+                    has_history=has_history,
                 )
                 artifact_id, artifact_captured_at = _artifact_ref(doc)
                 cached: dict | None = None
                 query_embedding: list[float] | None = None
                 if cache_eligible:
                     query_embedding = await asyncio.to_thread(embed_query, request_message)
+                elif has_history:
+                    logger.debug(
+                        "chat cache skipped: follow-up turn (has_history) doc=%s",
+                        document_id,
+                    )
                     cached = await asyncio.to_thread(
                         get_cached_response,
                         stream_db,

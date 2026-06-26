@@ -16,6 +16,18 @@ def test_tutor_system_prompt_forbids_unsolicited_mcq_answer() -> None:
     assert "unless the learner explicitly asks" in prompt.lower()
 
 
+def test_tutor_system_prompt_has_warm_concise_voice_directives() -> None:
+    """Lock in the warm, plain, concise voice so the rewrite is not eroded."""
+    prompt = DEFAULTS["tutor_system"].lower()
+    # Answers the actual question first, in plain words.
+    assert "answer" in prompt and "first" in prompt
+    assert "plain" in prompt
+    # Explicitly forbids robotic document-anchored openers (the directive
+    # matters, not merely that the phrase is absent — the prompt names the
+    # forbidden phrases to instruct against them).
+    assert "never open with" in prompt
+
+
 def test_user_requests_mcq_answer_detects_explicit_asks() -> None:
     assert _user_requests_mcq_answer("What's the correct answer?")
     assert _user_requests_mcq_answer("Which option is right?")
