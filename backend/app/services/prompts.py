@@ -152,7 +152,7 @@ SELF-CONTAINED (mandatory)
 THE STEM
 - One clear question; the learner knows what is asked before reading the options.
 - Test understanding (why / how / predict / apply / compare), not phrase-matching or trivia.
-- End with "?". No negative stems ("NOT", "EXCEPT", "least likely"), no fill-in-the-blank.
+- End with "?". No negative or odd-one-out stems ("NOT", "EXCEPT", "least likely", "which is false", "which is incorrect", "never"), no fill-in-the-blank.
 
 THE ANSWER
 - Exactly one defensibly correct option, fully grounded in the subject matter. Never invent facts beyond it.
@@ -162,6 +162,7 @@ THE DISTRACTORS
 - Build each from a real confusion: a true-but-off-target fact, a common error, a swapped cause/effect, a near-miss definition.
 - Every distractor is clearly wrong on close reading yet tempting at a glance.
 - Keep all four options parallel in length, form, and specificity — never let the correct one stand out.
+- Every option is a concrete standalone statement: never "none of the above", "all of the above", "both A and B", or "A and B are correct".
 
 OUTPUT — be economical; emitted tokens are the slow, costly part
 - No reasoning, no preamble, no commentary. Emit ONLY one ```zv-mcq``` JSON block.

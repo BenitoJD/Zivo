@@ -678,11 +678,7 @@ def enqueue_initial_pool(db: Session, document_id: uuid.UUID) -> Job | None:
         job = _enqueue_first_question_batch(db, doc, page=page_from)
     # Eagerly triage the next few pages in the background so the document is
     # understood ahead of the reader and transitions never wait on triage.
-    study = selected_page_list(doc)
-    if page_from in study:
-        start = study.index(page_from) + 1
-        for ahead_page in study[start : start + EAGER_TRIAGE_LOOKAHEAD]:
-            enqueue_page_triage(db, doc, page=ahead_page, precompute=True)
+    _enqueue_eager_triage_lookahead(db, doc, from_page=page_from)
     return job
 
 
@@ -913,6 +909,54 @@ def _has_active_generate_job_for_page(db: Session, document_id: uuid.UUID, page:
     return active is not None
 
 
+def _has_active_triage_job_for_page(db: Session, document_id: uuid.UUID, page: int) -> bool:
+    """True when a page_triage job for this page is already queued or running.
+
+    Lets the rolling eager-triage re-seed stay idempotent: a page that is already
+    being triaged must not get a duplicate triage job (double LLM cost + a race on
+    save_page_coverage).
+    """
+    active = db.execute(
+        text(
+            """
+            SELECT 1 FROM jobs
+            WHERE name = 'generate.questions'
+              AND payload->>'document_id' = :document_id
+              AND payload->>'page_number' = :page
+              AND payload->>'mode' = 'page_triage'
+              AND status IN ('queued', 'running')
+            LIMIT 1
+            """
+        ),
+        {"document_id": str(document_id), "page": str(page)},
+    ).scalar()
+    return active is not None
+
+
+def _enqueue_eager_triage_lookahead(db: Session, doc: Document, *, from_page: int) -> None:
+    """Keep page triage rolling EAGER_TRIAGE_LOOKAHEAD pages ahead of the reader.
+
+    Triage is cheap (~1 LLM call/page) but must land BEFORE the transition
+    prefetch (which fires at 70% of a page) can generate the next page's pool —
+    transition_prep only generates a next page whose coverage already exists.
+    Seeding once at init left the window static: on documents longer than the
+    lookahead, every transition past the seeded window hit a cold triage→generate
+    when the reader arrived (~30s wait). Re-seeding on each advance keeps the
+    window ahead of the reader. Idempotent: skips pages already triaged or with a
+    triage job in flight, so calling it on every advance adds no duplicate work.
+    """
+    study = selected_page_list(doc)
+    if from_page not in study:
+        return
+    start = study.index(from_page) + 1
+    for ahead_page in study[start : start + EAGER_TRIAGE_LOOKAHEAD]:
+        if get_page_coverage(doc, ahead_page):
+            continue
+        if _has_active_triage_job_for_page(db, doc.id, ahead_page):
+            continue
+        enqueue_page_triage(db, doc, page=ahead_page, precompute=True)
+
+
 def _cancel_queued_generate_jobs_for_page(db: Session, document_id: uuid.UUID, page: int) -> None:
     db.execute(
         text(
@@ -1048,6 +1092,11 @@ def advance_to_next_page(db: Session, doc: Document) -> Job | None:
         },
     )
     db.commit()
+
+    # Re-seed the rolling triage window so pages beyond the initial lookahead are
+    # understood before the reader reaches them (the transition prefetch can only
+    # pre-generate a next page whose coverage already exists).
+    _enqueue_eager_triage_lookahead(db, doc, from_page=new_page)
 
     if not get_page_coverage(doc, new_page):
         return enqueue_page_triage(db, doc, page=new_page)

@@ -511,11 +511,6 @@ async def chat_stream(
                 query_embedding: list[float] | None = None
                 if cache_eligible:
                     query_embedding = await asyncio.to_thread(embed_query, request_message)
-                elif has_history:
-                    logger.debug(
-                        "chat cache skipped: follow-up turn (has_history) doc=%s",
-                        document_id,
-                    )
                     cached = await asyncio.to_thread(
                         get_cached_response,
                         stream_db,
@@ -523,6 +518,11 @@ async def chat_stream(
                         artifact_captured_at=artifact_captured_at,
                         scope=scope,
                         query_embedding=query_embedding,
+                    )
+                elif has_history:
+                    logger.debug(
+                        "chat cache skipped: follow-up turn (has_history) doc=%s",
+                        document_id,
                     )
             except Exception as exc:
                 logger.exception("chat setup failed: %s", exc)
