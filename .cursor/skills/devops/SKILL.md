@@ -39,10 +39,10 @@ services. You automate everything and make deployments boring.
 FROM node:20-alpine AS builder
 WORKDIR /app
 RUN corepack enable
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+COPY package.json package-lock.json ./
+RUN npm ci
 COPY . .
-RUN pnpm run build
+RUN npm run build
 
 FROM node:20-alpine
 WORKDIR /app
@@ -138,7 +138,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: pnpm install --frozen-lockfile && pnpm run lint && pnpm run type-check
+      - run: npm ci && npm run lint && npm run build
       - run: pip install -r requirements.txt && pytest
 
   build:

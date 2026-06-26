@@ -98,7 +98,7 @@ Do not write boilerplate like "looks good" or "no issues found" without naming w
 List exact commands and outcomes. Examples:
 
 - `pytest backend/tests/...` — passed
-- `pnpm run type-check` — passed
+- `npm run build` — passed
 - `scripts/dev.sh curl ...` — 200 OK
 - `scripts/check_platform_skill_drift.py --staged` — passed (when agent instructions changed)
 

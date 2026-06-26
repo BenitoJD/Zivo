@@ -268,7 +268,7 @@ Backend:
 Frontend:
 
 - colocated `*.test.ts` or `*.test.tsx` for unit/component tests
-- `webapp/e2e/` for `playwright` tests if the repo uses that layout
+- this repo has no `playwright`/E2E suite today (see the `e2e-testing` skill)
 
 External live integration checks:
 
@@ -324,8 +324,8 @@ Add targeted tests for:
 
 Run:
 
-- `cd webapp && pnpm run lint`
-- `cd webapp && pnpm run type-check`
+- `cd frontend && npm run lint`
+- `cd frontend && npm run build`
 
 Add targeted UI/component tests with `vitest` + React Testing Library where behavior changed. Add `playwright` coverage for important flow changes.
 

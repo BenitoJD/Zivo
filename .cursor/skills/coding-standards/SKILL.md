@@ -22,8 +22,8 @@ worth recording, add it to `docs/CONVENTIONS.md` (with a proof) in the same PR.
 ## Repo facts (so this skill never misleads)
 
 - Backend is FastAPI in **`backend/`**; frontend is Next.js in **`frontend/`**.
-- Package manager is **`npm`** (`frontend/package-lock.json`). There is no `webapp/`
-  and no `pnpm`.
+- Package manager is **`npm`** (lockfile `frontend/package-lock.json`); the frontend
+  directory is **`frontend/`**.
 - Frontend API calls and shared client logic live in `frontend/lib/`.
 - This is the **Zivo / Question Better** codebase — its domain nouns are
   `assertion` (question), `entity`/`account` (learner), `measurement` (answer). Do not

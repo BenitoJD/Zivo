@@ -110,12 +110,12 @@ Before installing, check:
 For this repo, prefer package managers in this order:
 
 1. **Project-local** (if tool is project dependency):
-   - Frontend: `pnpm` (never `npm`)
+   - Frontend: `npm`
    - Backend: `pip` or `uv` (respect `requirements.txt`/`pyproject.toml`)
-   - Global in project: `pnpm add -D <pkg>` or `pip install -e .`
+   - Dev dependency: `npm install -D <pkg>` (frontend) or `pip install -e .` (backend)
 
 2. **Language-specific** (if tool is a CLI written in that language):
-   - Node.js tools → `pnpm add -g` or `npx`
+   - Node.js tools → `npm install -g` or `npx`
    - Python tools → `pipx` or `uv tool install`
    - Rust tools → `cargo install`
    - Go tools → `go install`

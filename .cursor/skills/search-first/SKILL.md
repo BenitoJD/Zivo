@@ -24,7 +24,7 @@ something else:
 1. Existing repo code and tests
 2. Repo-local skills
 3. Official docs via `documentation-lookup`
-4. Existing package ecosystems (`pnpm` for frontend, PyPI for backend)
+4. Existing package ecosystems (`npm` for frontend, PyPI for backend)
 5. GitHub or broader web search
 
 ## Workflow
@@ -37,7 +37,7 @@ something else:
 ├─────────────────────────────────────────────┤
 │  2. PARALLEL SEARCH                         │
 │     ┌──────────┐ ┌──────────┐ ┌──────────┐  │
-│     │  pnpm /  │ │  MCP /   │ │  GitHub / │  │
+│     │  npm /   │ │  MCP /   │ │  GitHub / │  │
 │     │  PyPI    │ │  Skills  │ │  Web      │  │
 │     └──────────┘ └──────────┘ └──────────┘  │
 ├─────────────────────────────────────────────┤
@@ -73,7 +73,7 @@ something else:
 Before writing a utility or adding functionality, mentally run through:
 
 0. Does this already exist in the repo? → `rg` through relevant modules/tests first
-1. Is this a common problem? → Search `pnpm` ecosystem or PyPI
+1. Is this a common problem? → Search `npm` ecosystem or PyPI
 2. Is there an MCP or official integration for this? → Check available agent tools and current docs
 3. Is there a skill for this? → Check repo-local and user-level skills
 4. Is there a GitHub implementation/template? → Run GitHub code search for maintained OSS before writing net-new code
@@ -89,7 +89,7 @@ Constraints: [ANY]
 
 Search:
 - repo code and tests first
-- package ecosystem (`pnpm` or PyPI)
+- package ecosystem (`npm` or PyPI)
 - official docs via Context7 when available
 - GitHub code or web search for maintained implementations
 - existing repo-local skills before inventing a new workflow
@@ -158,9 +158,9 @@ Combine with `documentation-lookup` for progressive discovery:
 
 ```
 Need: Check markdown files for broken links
-Search: `pnpm` ecosystem "markdown dead link checker"
+Search: `npm` ecosystem "markdown dead link checker"
 Found: textlint-rule-no-dead-link (score: 9/10)
-Action: ADOPT — `pnpm add -D textlint-rule-no-dead-link`
+Action: ADOPT — `npm install -D textlint-rule-no-dead-link`
 Result: Zero custom code, battle-tested solution
 ```
 
@@ -170,7 +170,7 @@ Result: Zero custom code, battle-tested solution
 Need: Resilient HTTP client with retries and timeout handling
 Search: npm "http client retry", PyPI "httpx retry"
 Found: got (Node) with retry plugin, httpx (Python) with built-in retry
-Action: ADOPT — use `apiClient` on the frontend or `httpx` in backend scripts/services where appropriate
+Action: ADOPT — use the frontend API helpers in `frontend/lib/` or `httpx` in backend scripts/services where appropriate
 Result: Zero custom code, production-proven libraries
 ```
 
@@ -178,7 +178,7 @@ Result: Zero custom code, production-proven libraries
 
 ```
 Need: Validate project config files against a schema
-Search: `pnpm` ecosystem "config linter schema", "json schema validator cli"
+Search: `npm` ecosystem "config linter schema", "json schema validator cli"
 Found: ajv-cli (score: 8/10)
 Action: ADOPT + EXTEND — install ajv-cli, write project-specific schema
 Result: 1 package + 1 schema file, no custom validation logic
