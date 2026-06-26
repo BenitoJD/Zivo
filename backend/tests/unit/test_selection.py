@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from app.services.selection import (
-    PRODUCTIVE_STRUGGLE_MARGIN,
+    TARGET_SUCCESS,
     LearnerState,
+    _target_difficulty,
     build_learner_state,
     choose_next_assertion,
 )
@@ -29,11 +30,22 @@ def test_difficulty_edge_degrades_to_sequence_when_no_item_calibrated() -> None:
     assert out == "a"
 
 
-def test_difficulty_edge_targets_ability_plus_margin() -> None:
+def test_target_difficulty_yields_the_intended_success_rate() -> None:
+    # The item at _target_difficulty(ability) is one the learner should get right
+    # ~TARGET_SUCCESS of the time — a desirable difficulty, below raw ability.
+    from app.services.calibration import expected_correct
+
+    ability = 1.3
+    d = _target_difficulty(ability)
+    assert d < ability  # the productive item sits below the learner's ability
+    assert abs(expected_correct(ability, d) - TARGET_SUCCESS) < 1e-9
+
+
+def test_difficulty_edge_picks_the_item_in_the_productive_band() -> None:
     ability = 1.0
-    target = ability + PRODUCTIVE_STRUGGLE_MARGIN  # 1.5
-    # b sits exactly at the edge; a is too easy, c too hard.
-    difficulties = {"a": 0.0, "b": target, "c": 4.0}
+    target = _target_difficulty(ability)
+    # b sits in the productive band; a is far too easy, c far too hard.
+    difficulties = {"a": target - 2.0, "b": target, "c": target + 2.0}
     out = choose_next_assertion(
         "difficulty_edge", ["a", "b", "c"], {}, _state(ability), difficulties
     )
@@ -49,23 +61,26 @@ def test_strong_learner_climbs_weak_learner_bends_back() -> None:
     weak = choose_next_assertion(
         "difficulty_edge", candidates, {}, _state(-1.0), difficulties
     )
-    assert strong == "hard"  # high ability → reaches for the hardest available
-    assert weak == "easy"    # low ability → meets them where they can rebuild
+    # The stronger learner is served a strictly harder item than the weaker one —
+    # questions climb with ability while each stays in the learner's own band.
+    assert difficulties[strong] > difficulties[weak]
+    assert strong == "mid" and weak == "easy"
 
 
 def test_difficulty_edge_uses_neutral_prior_for_cold_items() -> None:
-    # One calibrated item far from the edge; a cold item ("b") is treated as
-    # sitting at the learner's ability, so it wins as the closest to the target.
+    # One calibrated item far from the band; a cold item ("b") is treated as sitting
+    # at the learner's ability, so it wins as the closest to the target.
     out = choose_next_assertion(
         "difficulty_edge", ["a", "b"], {}, _state(0.0), {"a": 5.0}
     )
     assert out == "b"
 
 
-def test_cold_first_question_with_calibrated_pool_picks_near_average_edge() -> None:
-    # No ability yet (first answer) but the pool is calibrated → start a notch
-    # above the average item rather than always question #1.
-    difficulties = {"a": 0.0, "b": PRODUCTIVE_STRUGGLE_MARGIN, "c": 3.0}
+def test_cold_first_question_with_calibrated_pool_picks_the_band_item() -> None:
+    # No ability yet (first answer) but the pool is calibrated → start in the band
+    # for an average learner rather than always question #1.
+    target = _target_difficulty(0.0)
+    difficulties = {"a": target + 2.0, "b": target, "c": target + 4.0}
     out = choose_next_assertion(
         "difficulty_edge", ["a", "b", "c"], {}, _state(None), difficulties
     )

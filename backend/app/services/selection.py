@@ -9,12 +9,26 @@ seam, no caller changes.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
-# Where to aim, in rating units above the learner's current ability. A small
-# positive offset is a *desirable* difficulty (Bjork): hard enough to force
-# reconstruction (~60-65% expected success), not so hard it becomes noise/guessing.
-PRODUCTIVE_STRUGGLE_MARGIN = 0.5
+# Aim each question at the productive-struggle band: serve the item this learner is
+# expected to get right about TARGET_SUCCESS of the time. On the shared logit scale
+# (the same scale the calibrator uses), that is an item a little *below* the learner's
+# ability — a desirable difficulty (Bjork): mostly succeeding, genuinely stretched.
+# As ability rises, the served items climb with it. 0.75 sits inside the 0.70–0.85
+# band that the learning-science evidence (and this work's acceptance gate) calls for.
+TARGET_SUCCESS = 0.75
+
+
+def _target_difficulty(ability: float, target_success: float = TARGET_SUCCESS) -> float:
+    """The item difficulty at which `ability` yields `target_success` expected success.
+
+    Inverts the logistic the calibrator assumes: P = 1/(1+e^-(ability-difficulty)),
+    so difficulty = ability - logit(P). Lives here (not imported from the calibrator)
+    to keep selection a self-contained policy; it only assumes the shared logit scale.
+    """
+    return ability - math.log(target_success / (1.0 - target_success))
 
 
 @dataclass(frozen=True)
@@ -67,14 +81,16 @@ def _difficulty_edge(
     difficulty_by_id: dict[str, float],
     state: LearnerState,
     *,
-    target_margin: float = PRODUCTIVE_STRUGGLE_MARGIN,
+    target_success: float = TARGET_SUCCESS,
 ) -> str:
     """Choose the warm question whose difficulty sits at this learner's edge.
 
-    Targets ``ability + target_margin`` and returns the candidate closest to it.
-    A confident streak lifts ability so the next question climbs; a miss lowers it
-    so the next bends back toward where they broke — without any new LLM call, just
-    arithmetic over already-warm questions.
+    Targets the difficulty at which the learner is expected to succeed
+    ~``target_success`` of the time (``_target_difficulty``) and returns the closest
+    candidate — keeping the served question inside the productive-struggle band. A
+    confident streak lifts ability so the next question climbs; a miss lowers it so
+    the next bends back toward where they broke — no LLM call, just arithmetic over
+    already-warm questions.
 
     Degrades safely: if not one candidate is calibrated yet (thin data), falls back
     to sequence order. Cold items among calibrated ones are treated as neutral (at
@@ -85,7 +101,7 @@ def _difficulty_edge(
         return candidates[0]
 
     ability = state.ability if state.ability is not None else 0.0
-    target = ability + target_margin
+    target = _target_difficulty(ability, target_success)
     best_id = candidates[0]
     best_dist: float | None = None
     for cid in candidates:
