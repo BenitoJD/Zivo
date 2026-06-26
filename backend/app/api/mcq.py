@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.db import get_db
 from app.graphs.mcq_graph import grade_mcq
 from app.models import Account, Document
@@ -117,6 +118,18 @@ def grade(
                 "value_json": json.dumps(value_json),
             },
         )
+        # Calibrate from the outcome: one O(1) Elo step (no LLM) updating this
+        # learner's ability and this item's difficulty on a shared scale, so the
+        # next question can be chosen at their edge. Same DB txn as the signal row.
+        if get_settings().calibration_enabled:
+            from app.services.calibration import record_outcome
+
+            record_outcome(
+                db,
+                subject_entity_id=subject_entity_id,
+                assertion_id=body.assertion_id,
+                correct=bool(result.get("correct")),
+            )
         db.commit()
 
     save_confirmed_answer(

@@ -62,9 +62,14 @@ class Settings(BaseSettings):
     # 2. Let generation adapt its question style + truth model to the material's
     #    content_type (expository/narrative/argumentative/procedural/reference).
     content_aware_generation: bool = False
-    # 3. How the next question is chosen: "sequence" (legacy, by generation order)
-    #    or "concept_reinforce" (adaptive — reacts to the last answer).
+    # 3. How the next question is chosen: "sequence" (legacy, by generation order),
+    #    "concept_reinforce" (adaptive — reacts to the last answer), or
+    #    "difficulty_edge" (targets the productive-struggle band from calibration).
     selection_policy: str = "sequence"
+    # 4. Calibrate per-item difficulty + per-learner ability from real answer
+    #    outcomes (online Elo → intel.projection). Off by default so the moat fills
+    #    only when enabled; "difficulty_edge" selection needs this on to have data.
+    calibration_enabled: bool = False
     embed_model: str = "BAAI/bge-small-en-v1.5"
     embed_dimension: int = 384
     rerank_enabled: bool = True

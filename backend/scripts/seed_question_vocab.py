@@ -26,6 +26,10 @@ CONCEPTS = [
     ("/vocab/metric/hint.used", "metric_type", "Hint used"),
     ("/vocab/projection/student.concept_mastery", "projection_type", "Concept mastery"),
     ("/vocab/projection/student.page_mastery", "projection_type", "Page mastery"),
+    # Calibration (online Elo today, IRT-swappable): per-learner ability and
+    # per-item difficulty learned from real answer outcomes, on one shared scale.
+    ("/vocab/projection/student.ability", "projection_type", "Learner ability"),
+    ("/vocab/projection/item.difficulty", "projection_type", "Item difficulty"),
     ("/vocab/domain/user_learning", "source_domain", "User learning material"),
     # Practice library: entity types + roles + relations for the concept graph.
     ("/vocab/entity/concept", "entity_type", "Concept"),

@@ -29,6 +29,15 @@ def _concept_id(db: Session, uri: str) -> uuid.UUID:
     return row[0]
 
 
+def concept_id(db: Session, uri: str) -> uuid.UUID:
+    """Public accessor for a seeded vocab concept's id by uri (cached).
+
+    Raises ValueError if the concept is not seeded — callers depend on the
+    vocabulary existing (see scripts/seed_question_vocab.py).
+    """
+    return _concept_id(db, uri)
+
+
 def _source_id(db: Session, slug: str) -> uuid.UUID:
     cached = _source_id_store.get(slug)
     if cached is not None:
