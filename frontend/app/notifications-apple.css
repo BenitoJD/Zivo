@@ -1,0 +1,115 @@
+/*
+ * Apple / macOS-style notifications.
+ *
+ * Restyles every Mantine notification globally (frosted translucent material,
+ * soft rounded corners, layered shadow, spring entry) so all existing
+ * `notifications.show(...)` call sites get the look with no per-site changes.
+ */
+
+/* Stack container — sit just inside the top-right corner, comfortable width. */
+.mantine-Notifications-root {
+  top: 14px !important;
+  right: 14px !important;
+  width: 384px;
+  max-width: calc(100vw - 28px);
+}
+
+@keyframes zivo-notif-in {
+  from {
+    opacity: 0;
+    transform: translate3d(8px, -6px, 0) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+/* The notification card — frosted vibrancy material. */
+.mantine-Notification-root {
+  position: relative;
+  padding: 13px 15px;
+  border-radius: 18px;
+  background: rgba(250, 250, 252, 0.72);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  backdrop-filter: blur(22px) saturate(180%);
+  border: 0.5px solid rgba(0, 0, 0, 0.08);
+  box-shadow:
+    0 1px 1px rgba(0, 0, 0, 0.04),
+    0 8px 22px -6px rgba(0, 0, 0, 0.16),
+    0 18px 48px -12px rgba(0, 0, 0, 0.18);
+  animation: zivo-notif-in 440ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Remove Mantine's default boxy colored left accent — Apple cards don't use one. */
+.mantine-Notification-root::before {
+  display: none !important;
+}
+
+/* When an icon IS provided, present it as a rounded "app icon" tile. */
+.mantine-Notification-icon {
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  border-radius: 11px;
+  margin-right: 12px;
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.4),
+    0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+.mantine-Notification-title {
+  font-weight: 600;
+  font-size: 0.875rem;
+  letter-spacing: -0.012em;
+  color: rgba(0, 0, 0, 0.9);
+}
+
+.mantine-Notification-description {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: rgba(0, 0, 0, 0.56);
+}
+
+.mantine-Notification-closeButton {
+  color: rgba(0, 0, 0, 0.4);
+  border-radius: 8px;
+}
+.mantine-Notification-closeButton:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: rgba(0, 0, 0, 0.65);
+}
+
+/* Slimmer, rounder progress/loader line under loading notifications. */
+.mantine-Notification-loader {
+  border-radius: 999px;
+}
+
+/* ---- Dark mode (vibrancy) ---- */
+[data-mantine-color-scheme="dark"] .mantine-Notification-root {
+  background: rgba(40, 40, 44, 0.7);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 1px 1px rgba(0, 0, 0, 0.3),
+    0 10px 30px -8px rgba(0, 0, 0, 0.55),
+    0 20px 56px -14px rgba(0, 0, 0, 0.6);
+}
+[data-mantine-color-scheme="dark"] .mantine-Notification-title {
+  color: rgba(255, 255, 255, 0.92);
+}
+[data-mantine-color-scheme="dark"] .mantine-Notification-description {
+  color: rgba(255, 255, 255, 0.62);
+}
+[data-mantine-color-scheme="dark"] .mantine-Notification-closeButton {
+  color: rgba(255, 255, 255, 0.45);
+}
+[data-mantine-color-scheme="dark"] .mantine-Notification-closeButton:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mantine-Notification-root {
+    animation: none !important;
+  }
+}

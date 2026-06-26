@@ -5,6 +5,7 @@ import { Figtree, EB_Garamond } from "next/font/google";
 import "@mantine/core/styles.css";
 import "@mantine/dropzone/styles.css";
 import "@mantine/notifications/styles.css";
+import "@/app/notifications-apple.css";
 import Providers from "@/app/providers";
 import {
   MANTINE_COLOR_SCHEME_COOKIE,

@@ -374,6 +374,10 @@ export default function WorkspaceArtifactPage({
   }, []);
 
   const queueStreamRef = useRef<EventSource | null>(null);
+  // Tracks whether the live SSE queue stream is connected. The fallback poll
+  // below runs ONLY while the stream is down — a healthy stream already pushes
+  // every queue update, so polling on top of it would just double-fetch.
+  const [streamConnected, setStreamConnected] = useState(false);
 
   useEffect(() => {
     if (invalidArtifactId || !studyRangeKey || artifact?.status === "indexing") return;
@@ -396,6 +400,9 @@ export default function WorkspaceArtifactPage({
       const url = apiUrl(`/api/artifacts/${artifactId}/learn-queue/stream`);
       const es = new EventSource(url, { withCredentials: true });
       queueStreamRef.current = es;
+      es.onopen = () => {
+        if (!cancelled) setStreamConnected(true);
+      };
       es.addEventListener("queue", (ev) => {
         if (cancelled) return;
         try {
@@ -416,6 +423,7 @@ export default function WorkspaceArtifactPage({
         }
         es.close();
         if (queueStreamRef.current === es) queueStreamRef.current = null;
+        setStreamConnected(false);
       });
       es.addEventListener(
         "error",
@@ -423,6 +431,7 @@ export default function WorkspaceArtifactPage({
           if (cancelled) return;
           es.close();
           if (queueStreamRef.current === es) queueStreamRef.current = null;
+          setStreamConnected(false);
           void (async () => {
             try {
               const data = await apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`);
@@ -443,14 +452,19 @@ export default function WorkspaceArtifactPage({
       cancelled = true;
       queueStreamRef.current?.close();
       queueStreamRef.current = null;
+      setStreamConnected(false);
     };
   }, [artifactId, invalidArtifactId, studyRangeKey, artifact?.status]);
 
   useEffect(() => {
     if (invalidArtifactId || !studyRangeKey || artifact?.status !== "ready") return;
+    // Fallback only: while the SSE stream is connected it already pushes every
+    // update, so polling would double-fetch. Poll only when the stream is down.
+    if (streamConnected) return;
     const needsPoll =
-      !queue?.current_assertion_id ||
-      (Boolean(queue.generation_pending) && (queue.pool_available ?? 0) === 0);
+      !queue?.document_complete &&
+      (!queue?.current_assertion_id ||
+        (Boolean(queue.generation_pending) && (queue.pool_available ?? 0) === 0));
     if (!needsPoll) return;
 
     const id = window.setInterval(() => {
@@ -464,9 +478,11 @@ export default function WorkspaceArtifactPage({
     invalidArtifactId,
     studyRangeKey,
     artifact?.status,
+    streamConnected,
     queue?.current_assertion_id,
     queue?.generation_pending,
     queue?.pool_available,
+    queue?.document_complete,
   ]);
 
   useEffect(() => {
@@ -953,6 +969,9 @@ export default function WorkspaceArtifactPage({
               generating={Boolean(queue?.generation_pending)}
             />
           ) : (
+          // Stable-height frame: the card no longer grows/shrinks with content
+          // (stem length, feedback, option lengths), so the page stops jumping.
+          <Box h="clamp(460px, 74vh, 640px)" style={{ maxHeight: "100%", overflow: "hidden" }}>
           <McqHeroPanel
             stem={stem}
             options={options}
@@ -972,6 +991,7 @@ export default function WorkspaceArtifactPage({
             onContinue={() => void advanceMcq()}
             onRetry={() => void refreshQueue()}
           />
+          </Box>
           )}
         </Box>
       </Box>
@@ -2522,34 +2542,118 @@ function McqHeroPanel({
     const budget = queue?.question_budget ?? 0;
     const hasDeterminate = budget > 0;
     const progressPct = hasDeterminate ? Math.min(100, Math.round((generated / budget) * 100)) : 0;
+    const RING = compact ? 124 : 140;
+    const R = RING / 2 - 12;
+    const CIRC = 2 * Math.PI * R;
+    const center = RING / 2;
     return (
-      <Center py={compact ? "lg" : "xl"}>
-        <Stack align="center" gap="sm" maw={320}>
-          <Progress
-            value={hasDeterminate ? progressPct : 100}
-            size="sm"
-            radius="xl"
-            w={180}
-            animated
-            color={progressPct >= 100 && hasDeterminate ? "sage" : "lavender"}
-          />
-          <Text
-            size="lg"
-            fw={500}
-            ta="center"
-            c="var(--mantine-color-text)"
-            style={{ letterSpacing: "-0.025em" }}
-          >
-            {waitStatus.title}
-          </Text>
-          <Text size="sm" c="dimmed" ta="center" lh={1.55} maw={280}>
-            {waitStatus.detail}
-          </Text>
-          {hasDeterminate && generated > 0 && (
-            <Text size="xs" c="dimmed" fw={500}>
-              {generated} of {budget} ready
+      <Center h="100%" py={compact ? "md" : "lg"}>
+        <style>{`
+          @keyframes zivo-ring-spin { to { transform: rotate(360deg); } }
+          @keyframes zivo-blob-a { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(9px,-11px) scale(1.16); } }
+          @keyframes zivo-blob-b { 0%,100% { transform: translate(0,0) scale(1.06); } 50% { transform: translate(-11px,9px) scale(0.9); } }
+          @keyframes zivo-blob-c { 0%,100% { transform: translate(0,0) scale(0.95); } 50% { transform: translate(7px,11px) scale(1.12); } }
+          @keyframes zivo-fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+          @keyframes zivo-bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+          .zivo-load-copy { animation: zivo-fade-up 380ms cubic-bezier(0.32,0.72,0,1) both; }
+          @media (prefers-reduced-motion: reduce) {
+            .zivo-blob, .zivo-ring-spin, .zivo-bob, .zivo-load-copy { animation: none !important; }
+          }
+        `}</style>
+        <Stack align="center" gap={compact ? "md" : "lg"} maw={340}>
+          <Box pos="relative" w={RING} h={RING} style={{ display: "grid", placeItems: "center" }}>
+            {/* Colorful aurora — three soft brand-tinted blobs drifting behind the ring */}
+            <Box className="zivo-blob" pos="absolute" style={{ inset: -6, borderRadius: "50%", filter: "blur(22px)", background: "radial-gradient(60% 60% at 30% 30%, var(--mantine-color-lavender-4), transparent 70%)", opacity: 0.55, animation: "zivo-blob-a 4.5s ease-in-out infinite" }} />
+            <Box className="zivo-blob" pos="absolute" style={{ inset: -6, borderRadius: "50%", filter: "blur(22px)", background: "radial-gradient(55% 55% at 72% 42%, var(--mantine-color-sage-4), transparent 70%)", opacity: 0.5, animation: "zivo-blob-b 5.4s ease-in-out infinite" }} />
+            <Box className="zivo-blob" pos="absolute" style={{ inset: -6, borderRadius: "50%", filter: "blur(22px)", background: "radial-gradient(55% 55% at 50% 76%, var(--mantine-color-terracotta-3), transparent 70%)", opacity: 0.45, animation: "zivo-blob-c 5s ease-in-out infinite" }} />
+            <svg width={RING} height={RING} viewBox={`0 0 ${RING} ${RING}`} style={{ position: "relative" }}>
+              <defs>
+                <linearGradient id="zivo-ring-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor="var(--mantine-color-lavender-5)" />
+                  <stop offset="50%" stopColor="var(--mantine-color-sage-5)" />
+                  <stop offset="100%" stopColor="var(--mantine-color-terracotta-5)" />
+                </linearGradient>
+              </defs>
+              <circle cx={center} cy={center} r={R} fill="none" stroke="var(--mantine-color-default-border)" strokeOpacity={0.5} strokeWidth={8} />
+              <g
+                className={hasDeterminate ? undefined : "zivo-ring-spin"}
+                style={hasDeterminate ? undefined : { transformOrigin: `${center}px ${center}px`, animation: "zivo-ring-spin 1.1s linear infinite" }}
+              >
+                <circle
+                  cx={center}
+                  cy={center}
+                  r={R}
+                  fill="none"
+                  stroke="url(#zivo-ring-grad)"
+                  strokeWidth={8}
+                  strokeLinecap="round"
+                  strokeDasharray={CIRC}
+                  strokeDashoffset={hasDeterminate ? CIRC * (1 - progressPct / 100) : CIRC * 0.72}
+                  transform={`rotate(-90 ${center} ${center})`}
+                  style={{ transition: "stroke-dashoffset 600ms cubic-bezier(0.32,0.72,0,1)" }}
+                />
+              </g>
+            </svg>
+            <Box pos="absolute" style={{ display: "grid", placeItems: "center" }}>
+              {hasDeterminate ? (
+                <Text
+                  fz={compact ? 22 : 26}
+                  fw={600}
+                  c="var(--mantine-color-text)"
+                  style={{ fontFamily: "var(--font-serif), Georgia, serif", letterSpacing: "-0.02em", lineHeight: 1 }}
+                >
+                  {progressPct}%
+                </Text>
+              ) : (
+                <Box className="zivo-bob" style={{ animation: "zivo-bob 2.2s ease-in-out infinite" }}>
+                  <BrandMark showWord={false} height={compact ? 26 : 30} />
+                </Box>
+              )}
+            </Box>
+          </Box>
+
+          <Stack key={waitStatus.rotateKey} className="zivo-load-copy" gap={4} align="center">
+            <Text
+              fz={compact ? "md" : "lg"}
+              fw={600}
+              ta="center"
+              c="var(--mantine-color-text)"
+              style={{ letterSpacing: "-0.02em", fontFamily: "var(--font-serif), Georgia, serif" }}
+            >
+              {waitStatus.title}
             </Text>
+            <Text size="sm" c="dimmed" ta="center" lh={1.55} maw={290}>
+              {waitStatus.detail}
+            </Text>
+          </Stack>
+
+          {hasDeterminate && generated > 0 && (
+            <Box
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "5px 12px",
+                borderRadius: 999,
+                background: isDark ? "var(--mantine-color-sage-1)" : "var(--mantine-color-sage-0)",
+                border: `1px solid var(--mantine-color-sage-${isDark ? 3 : 2})`,
+              }}
+            >
+              <Box
+                style={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: "50%",
+                  background: "var(--mantine-color-sage-6)",
+                  boxShadow: "0 0 0 3px var(--mantine-color-sage-1)",
+                }}
+              />
+              <Text size="xs" fw={600} c={isDark ? "var(--mantine-color-sage-8)" : "var(--mantine-color-sage-9)"}>
+                {generated} of {budget} ready
+              </Text>
+            </Box>
           )}
+
           {stuckSeconds >= 45 && onRetry ? (
             <Stack gap={6} align="center">
               <Text size="sm" c="dimmed" ta="center">
@@ -2566,7 +2670,7 @@ function McqHeroPanel({
   }
 
   return (
-    <Stack key={stem} gap={compact ? 14 : 20} align="stretch" mih={0} py={compact ? 4 : 8}>
+    <Stack key={stem} h="100%" gap={0} align="stretch" style={{ overflow: "hidden" }}>
       <style>{`
         @keyframes mcq-rise {
           from { opacity: 0; transform: translateY(14px) scale(0.99); filter: blur(4px); }
@@ -2587,6 +2691,40 @@ function McqHeroPanel({
         }
       `}</style>
 
+      {/* Centered, scrollable content region. The card height is fixed by the
+          parent (clamp), so showing feedback or a longer stem reflows WITHIN
+          this region instead of resizing the card — the footer below never
+          moves and the page no longer jumps. */}
+      <Box
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+      {/* margin:auto centers the group when there is spare height, but collapses
+          gracefully on overflow so the top never gets clipped (unlike
+          justify-content:center + overflow). */}
+      <Box
+        style={{
+          margin: "auto 0",
+          width: "100%",
+          display: "flex",
+          flexDirection: "column",
+          gap: compact ? 14 : 20,
+        }}
+      >
+      <Box
+        style={{
+          flexShrink: 0,
+          minHeight: compact ? 64 : 84,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
       <Title
         order={2}
         className="mcq-q"
@@ -2605,6 +2743,7 @@ function McqHeroPanel({
       >
         {stem}
       </Title>
+      </Box>
 
       <Stack gap={compact ? 8 : 10} mih={0} style={{ flexShrink: 0 }}>
         {safeOptions.map((opt, i) => {
@@ -2683,8 +2822,10 @@ function McqHeroPanel({
           isDark={isDark}
         />
       )}
+      </Box>
+      </Box>
 
-      <Stack align="center" gap={8} style={{ flexShrink: 0 }}>
+      <Stack align="center" gap={8} pt={compact ? "sm" : "md"} style={{ flexShrink: 0 }}>
         {showNextQuestion ? (
           <Button
             radius="xl"
@@ -3108,7 +3249,9 @@ function ChatMessage({
   const { hovered, ref } = useHover();
   const actionsEnabled =
     Boolean(message.content.trim()) && !streaming && !thinking;
-  const showActions = hovered && actionsEnabled;
+  // The last assistant reply keeps its actions visible (ChatGPT-style); others
+  // reveal on hover.
+  const showActions = (hovered || canRegenerate) && actionsEnabled;
 
   if (isUser) {
     return (
