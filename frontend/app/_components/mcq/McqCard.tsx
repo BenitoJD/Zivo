@@ -24,11 +24,8 @@ export type McqOptionVisualState = {
 /**
  * Option chrome shared by workspace McqHeroPanel and practice McqCard.
  *
- * The dark-theme accent scales (lavender/sage/terracotta) are built so HIGH
- * shades read as light TEXT and LOW shades as dark SURFACES. So a filled chip
- * must flip its content color with the scheme: in light mode the shade-6/7 fill
- * is dark → white text; in dark mode that same shade-6 fill is bright → ink text.
- * Using white content on a shade-6/7 fill in dark mode renders it invisible.
+ * Filled accent chips (selected / correct / wrong) use bright shade-6 fills;
+ * content stays paper-white in both schemes for readable contrast.
  */
 export function mcqOptionChrome(isDark: boolean, state: McqOptionVisualState) {
   const { isSelected, isCorrectOption, isWrongSelected } = state;
@@ -43,19 +40,19 @@ export function mcqOptionChrome(isDark: boolean, state: McqOptionVisualState) {
     border = isDark ? "var(--mantine-color-sage-4)" : "var(--mantine-color-sage-5)";
     background = isDark ? "var(--mantine-color-sage-1)" : "var(--mantine-color-sage-0)";
     chipBg = "var(--mantine-color-sage-6)";
-    chipColor = isDark ? "var(--mantine-color-black)" : "#FFFFFF";
+    chipColor = "var(--mantine-color-gray-9)";
     borderWidth = 2;
   } else if (isWrongSelected) {
     border = isDark ? "var(--mantine-color-terracotta-4)" : "var(--mantine-color-terracotta-5)";
     background = isDark ? "var(--mantine-color-terracotta-1)" : "var(--mantine-color-terracotta-0)";
     chipBg = "var(--mantine-color-terracotta-6)";
-    chipColor = isDark ? "var(--mantine-color-black)" : "#FFFFFF";
+    chipColor = "var(--mantine-color-gray-9)";
     borderWidth = 2;
   } else if (isSelected) {
     border = isDark ? "var(--mantine-color-lavender-4)" : "var(--mantine-color-lavender-5)";
     background = isDark ? "var(--mantine-color-lavender-1)" : "var(--mantine-color-lavender-0)";
     chipBg = "var(--mantine-color-lavender-6)";
-    chipColor = isDark ? "var(--mantine-color-black)" : "#FFFFFF";
+    chipColor = "var(--mantine-color-gray-9)";
     borderWidth = 2;
   }
 

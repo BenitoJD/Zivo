@@ -42,6 +42,8 @@ logger = logging.getLogger(__name__)
 # call — protects both reliability and token spend. LiteLLM handles the backoff.
 LLM_NUM_RETRIES = int(os.getenv("ZIVO_LLM_NUM_RETRIES", "2"))
 CHAT_DEFAULT_MAX_TOKENS = CHAT_OUTPUT_MAX_TOKENS
+CHAT_FAILOVER_MAX = int(os.getenv("ZIVO_CHAT_FAILOVER_MAX", "2"))
+CHAT_REQUEST_TIMEOUT = int(os.getenv("ZIVO_CHAT_REQUEST_TIMEOUT", "90"))
 
 # Structured JSON / extraction tasks — pin low temperature when model meta omits it.
 STRUCTURED_LOG_TAGS = frozenset(
@@ -146,7 +148,13 @@ def _apply_model(resolved: ResolvedLlmModel, *, log_tag: str = "complete") -> di
     kwargs = litellm_provider_kwargs(resolved)
     tag_cap = LOG_TAG_MAX_TOKENS.get(log_tag, CHAT_DEFAULT_MAX_TOKENS)
     meta_cap = kwargs.get("max_tokens")
-    if isinstance(meta_cap, int) and meta_cap > 0:
+    if log_tag in {"chat", "complete"}:
+        if isinstance(meta_cap, int) and meta_cap > 0:
+            kwargs["max_tokens"] = min(meta_cap, tag_cap)
+        else:
+            kwargs["max_tokens"] = tag_cap
+        kwargs.setdefault("timeout", CHAT_REQUEST_TIMEOUT)
+    elif isinstance(meta_cap, int) and meta_cap > 0:
         kwargs["max_tokens"] = max(meta_cap, tag_cap)
     else:
         kwargs["max_tokens"] = tag_cap
@@ -165,15 +173,20 @@ def _model_attempts(
     model_id: uuid.UUID | None,
     require_vision: bool,
     first: ResolvedLlmModel | None = None,
+    log_tag: str = "complete",
 ) -> list[ResolvedLlmModel]:
     if model_id is not None:
         return list(iter_chat_model_attempts(db, model_id=model_id, require_vision=require_vision))
     if not is_llm_pool_enabled():
         return list(iter_chat_model_attempts(db, require_vision=require_vision))
     if first is not None:
-        return list(iter_failover_attempts(db, start=first, require_vision=require_vision))
-    first_model = next(iter(iter_chat_model_attempts(db, require_vision=require_vision)))
-    return list(iter_failover_attempts(db, start=first_model, require_vision=require_vision))
+        attempts = list(iter_failover_attempts(db, start=first, require_vision=require_vision))
+    else:
+        first_model = next(iter(iter_chat_model_attempts(db, require_vision=require_vision)))
+        attempts = list(iter_failover_attempts(db, start=first_model, require_vision=require_vision))
+    if log_tag == "chat" and CHAT_FAILOVER_MAX > 0:
+        return attempts[:CHAT_FAILOVER_MAX]
+    return attempts
 
 
 async def _stream_chat_impl(
@@ -189,7 +202,9 @@ async def _stream_chat_impl(
     import litellm
 
     last_exc: BaseException | None = None
-    attempts = _model_attempts(db, model_id=model_id, require_vision=require_vision)
+    attempts = _model_attempts(
+        db, model_id=model_id, require_vision=require_vision, log_tag=log_tag
+    )
     for resolved in attempts:
         provider_kwargs = _apply_model(resolved, log_tag=log_tag)
         cached_messages = _prepare_messages(messages, resolved)
@@ -270,7 +285,9 @@ async def acomplete_chat(
     import litellm
 
     last_exc: BaseException | None = None
-    attempts = _model_attempts(db, model_id=model_id, require_vision=require_vision)
+    attempts = _model_attempts(
+        db, model_id=model_id, require_vision=require_vision, log_tag=log_tag
+    )
     for resolved in attempts:
         provider_kwargs = _apply_model(resolved, log_tag=log_tag)
         cached_messages = _prepare_messages(messages, resolved)

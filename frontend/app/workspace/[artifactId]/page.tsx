@@ -36,8 +36,9 @@ import {
   UnstyledButton,
   useMantineColorScheme,
 } from "@mantine/core";
-import { useDisclosure, useInterval, useLocalStorage, useMediaQuery, useMounted } from "@mantine/hooks";
+import { useDisclosure, useHover, useInterval, useLocalStorage, useMediaQuery, useMounted } from "@mantine/hooks";
 import {
+  IconArrowDown,
   IconArrowRight,
   IconArrowUp,
   IconArrowsMaximize,
@@ -65,7 +66,7 @@ import {
 import { ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import { BrandMark } from "@/app/_components/BrandMark";
 import { mcqOptionChrome } from "@/app/_components/mcq/McqCard";
-import { AssistantMarkdown } from "@/lib/chatMarkdown";
+import { AssistantMarkdown, MessageCopyAction } from "@/lib/chatMarkdown";
 import { indexingStage, isTransientChatAssistantMessage } from "@/lib/constants";
 import { learnWaitStatus } from "@/lib/learnStatus";
 import {
@@ -2420,9 +2421,7 @@ function McqFeedbackCard({
             alignItems: "center",
             justifyContent: "center",
             background: isCorrect ? "var(--mantine-color-sage-6)" : "var(--mantine-color-terracotta-6)",
-            // Accent scales are inverted in dark mode: shade 6 reads bright on
-            // ink, so white icon would vanish. Flip content with the scheme.
-            color: isDark ? "var(--mantine-color-black)" : "#FFFFFF",
+            color: "var(--mantine-color-gray-9)",
           }}
         >
           {isCorrect ? <IconCheck size={14} stroke={2.6} /> : <IconX size={14} stroke={2.6} />}
@@ -2836,82 +2835,86 @@ function TutorPanel({
 
   return (
     <Stack gap={0} h="100%" mih={0} bg={isDark ? "dark.8" : "white"}>
-      <Box
-        ref={scrollRef}
-        flex={1}
-        mih={0}
-        pos="relative"
-        onScroll={handleScroll}
-        style={{ overflow: "auto", overscrollBehavior: "contain" }}
-      >
-        {messages.length === 0 ? (
-          <Center mih="100%" px="sm" py="md">
-            <Stack gap="sm" align="center" maw={280} w="100%">
-              <AssistantLogo size={44} />
-              <Stack gap={4} align="center">
-                <Title order={5} fw={600} ta="center" style={{ letterSpacing: "-0.02em" }}>
-                  Ask {ZIVO_ASSISTANT_NAME}
-                </Title>
-                <Text size="xs" c="dimmed" ta="center" lh={1.5}>
-                  Questions about this page, the source, or how to think through the answer.
-                </Text>
+      <Box flex={1} mih={0} pos="relative">
+        <Box
+          ref={scrollRef}
+          h="100%"
+          onScroll={handleScroll}
+          style={{ overflow: "auto", overscrollBehavior: "contain" }}
+        >
+          {messages.length === 0 ? (
+            <Center mih="100%" px="sm" py="md">
+              <Stack gap="sm" align="center" maw={280} w="100%">
+                <AssistantLogo size={44} />
+                <Stack gap={4} align="center">
+                  <Title order={5} fw={600} ta="center" style={{ letterSpacing: "-0.02em" }}>
+                    Ask {ZIVO_ASSISTANT_NAME}
+                  </Title>
+                  <Text size="xs" c="dimmed" ta="center" lh={1.5}>
+                    Questions about this page, the source, or how to think through the answer.
+                  </Text>
+                </Stack>
+                <Stack gap={6} w="100%">
+                  {CHAT_SUGGESTIONS.map((suggestion) => (
+                    <Button
+                      key={suggestion}
+                      variant="light"
+                      color="gray"
+                      radius="xl"
+                      size="compact-xs"
+                      fullWidth
+                      styles={{ label: { whiteSpace: "normal", lineHeight: 1.35, fontSize: 12 } }}
+                      onClick={() => onInputChange(suggestion)}
+                    >
+                      {suggestion}
+                    </Button>
+                  ))}
+                </Stack>
               </Stack>
-              <Stack gap={6} w="100%">
-                {CHAT_SUGGESTIONS.map((suggestion) => (
-                  <Button
-                    key={suggestion}
-                    variant="light"
-                    color="gray"
-                    radius="xl"
-                    size="compact-xs"
-                    fullWidth
-                    styles={{ label: { whiteSpace: "normal", lineHeight: 1.35, fontSize: 12 } }}
-                    onClick={() => onInputChange(suggestion)}
-                  >
-                    {suggestion}
-                  </Button>
+            </Center>
+          ) : (
+            <Box
+              mih="100%"
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "flex-end",
+              }}
+            >
+              <Stack gap="md" py="sm" px="sm" pb="md">
+                {messages.map((m, i) => (
+                  <ChatMessage
+                    key={i}
+                    message={m}
+                    isUser={m.role === "user"}
+                    streaming={!busy ? false : m.role === "assistant" && i === messages.length - 1}
+                    thinking={
+                      thinking && m.role === "assistant" && i === messages.length - 1 && !m.content
+                    }
+                    isDark={isDark}
+                  />
                 ))}
               </Stack>
-            </Stack>
-          </Center>
-        ) : (
-          <Box
-            mih="100%"
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              justifyContent: "flex-end",
-            }}
-          >
-            <Stack gap="md" py="sm" px="sm" pb="md">
-              {messages.map((m, i) => (
-                <ChatMessage
-                  key={i}
-                  message={m}
-                  isUser={m.role === "user"}
-                  streaming={!busy ? false : m.role === "assistant" && i === messages.length - 1}
-                  thinking={
-                    thinking && m.role === "assistant" && i === messages.length - 1 && !m.content
-                  }
-                  isDark={isDark}
-                />
-              ))}
-            </Stack>
-          </Box>
-        )}
+            </Box>
+          )}
+        </Box>
         {showJumpLatest ? (
-          <Button
-            size="compact-xs"
-            variant="filled"
-            radius="xl"
-            pos="absolute"
-            bottom={12}
-            left="50%"
-            style={{ transform: "translateX(-50%)", zIndex: 2 }}
-            onClick={() => scrollToBottom(true)}
-          >
-            Jump to latest
-          </Button>
+          <Tooltip label="Jump to latest" position="top" withArrow>
+            <ActionIcon
+              pos="absolute"
+              bottom={12}
+              right={12}
+              size={36}
+              radius="xl"
+              variant="default"
+              aria-label="Jump to latest"
+              onClick={() => scrollToBottom(true)}
+              bg={isDark ? "dark.6" : "gray.0"}
+              style={{ zIndex: 5, boxShadow: "var(--mantine-shadow-paper)" }}
+            >
+              <IconArrowDown size={18} stroke={2.25} />
+            </ActionIcon>
+          </Tooltip>
         ) : null}
       </Box>
 
@@ -3043,6 +3046,48 @@ const CHAT_SUGGESTIONS = [
   "Give me a hint without the answer",
 ];
 
+function ThinkingIndicator({ isDark }: { isDark: boolean }) {
+  const dot = isDark ? "#AEAEB2" : "#8E8A7E";
+  const label = isDark ? "var(--mantine-color-gray-8)" : "var(--mantine-color-gray-7)";
+
+  return (
+    <>
+      <style>{`
+        @keyframes zivo-think-dot {
+          0%, 80%, 100% { opacity: 0.28; transform: translateY(0); }
+          40% { opacity: 1; transform: translateY(-1.5px); }
+        }
+        .zivo-think-dot { animation: zivo-think-dot 1.2s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
+        .zivo-think-dot:nth-child(2) { animation-delay: 0.15s; }
+        .zivo-think-dot:nth-child(3) { animation-delay: 0.3s; }
+        @media (prefers-reduced-motion: reduce) {
+          .zivo-think-dot { animation: none; opacity: 0.55; }
+        }
+      `}</style>
+      <Group gap={10} align="center" aria-live="polite" aria-label="Thinking">
+        <Group gap={5} align="center" aria-hidden>
+          {[0, 1, 2].map((i) => (
+            <Box
+              key={i}
+              className="zivo-think-dot"
+              w={5}
+              h={5}
+              style={{ borderRadius: 999, backgroundColor: dot }}
+            />
+          ))}
+        </Group>
+        <Text
+          size="sm"
+          fw={500}
+          style={{ color: label, letterSpacing: "-0.015em" }}
+        >
+          Thinking…
+        </Text>
+      </Group>
+    </>
+  );
+}
+
 function ChatMessage({
   message,
   isUser,
@@ -3056,9 +3101,16 @@ function ChatMessage({
   thinking?: boolean;
   isDark: boolean;
 }) {
+  const { hovered, ref } = useHover();
+  const showActions =
+    hovered && Boolean(message.content.trim()) && !streaming && !thinking;
+
   if (isUser) {
     return (
-      <Box style={{ display: "flex", justifyContent: "flex-end" }}>
+      <Box
+        ref={ref}
+        style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}
+      >
         <Paper
           px="md"
           py="sm"
@@ -3070,21 +3122,21 @@ function ChatMessage({
             {message.content}
           </Text>
         </Paper>
+        {showActions ? (
+          <Group gap={4} mt={4} justify="flex-end">
+            <MessageCopyAction value={message.content} label="Copy message" />
+          </Group>
+        ) : null}
       </Box>
     );
   }
 
   return (
-    <Group align="flex-start" gap="sm" wrap="nowrap" maw="100%">
+    <Group ref={ref} align="flex-start" gap="sm" wrap="nowrap" maw="100%">
       <AssistantLogo size={28} />
       <Box pt={4} style={{ flex: 1, minWidth: 0 }}>
         {thinking || (streaming && !message.content) ? (
-          <Group gap="xs" align="center">
-            <Loader type="dots" size="sm" />
-            <Text size="sm" c="dimmed">
-              Thinking…
-            </Text>
-          </Group>
+          <ThinkingIndicator isDark={isDark} />
         ) : (
           <AssistantMarkdown
             content={message.content}
@@ -3092,6 +3144,11 @@ function ChatMessage({
             streaming={streaming}
           />
         )}
+        {showActions ? (
+          <Group gap={4} mt={6}>
+            <MessageCopyAction value={message.content} label="Copy message" />
+          </Group>
+        ) : null}
       </Box>
     </Group>
   );
@@ -3361,6 +3418,7 @@ function PageSelectionDock({
   onConfirm: () => void;
 }) {
   const isCompact = useMediaQuery(STUDY_COMPACT_BP);
+  const dockStacked = useMediaQuery(STUDY_OVERLAY_BP, false, { getInitialValueInEffect: true });
   const hasSelection = selectedPages.length > 0;
   const panelBorder = isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-3)";
   const hairline = isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-3)";
@@ -3401,6 +3459,8 @@ function PageSelectionDock({
       backgroundColor: isDark ? "var(--mantine-color-dark-8)" : "var(--mantine-color-white)",
       color: isDark ? "var(--mantine-color-gray-2)" : undefined,
       fontWeight: 600,
+      flexShrink: 0,
+      whiteSpace: "nowrap" as const,
     },
   } as const;
 
@@ -3469,9 +3529,28 @@ function PageSelectionDock({
       onClick={onConfirm}
       loading={confirming}
       disabled={!hasSelection}
+      style={{ flexShrink: 0, whiteSpace: "nowrap" }}
     >
       {confirmLabel}
     </Button>
+  );
+
+  const selectionActions = (
+    <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
+      <Button variant="default" size="sm" radius="xl" onClick={onSelectAll} styles={secondaryButtonStyles}>
+        All
+      </Button>
+      <Button
+        variant="default"
+        size="sm"
+        radius="xl"
+        onClick={onClearAll}
+        disabled={!hasSelection}
+        styles={secondaryButtonStyles}
+      >
+        Clear
+      </Button>
+    </Group>
   );
 
   if (isCompact) {
@@ -3520,8 +3599,8 @@ function PageSelectionDock({
                 {summary}
               </Text>
             </Box>
-            <Group gap={4} wrap="nowrap" style={{ flexShrink: 0 }}>
-              <Button variant="subtle" size="compact-sm" radius="xl" onClick={onSelectAll} px="xs">
+            <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
+              <Button variant="subtle" size="compact-sm" radius="xl" onClick={onSelectAll} px="sm">
                 All
               </Button>
               <Button
@@ -3530,7 +3609,8 @@ function PageSelectionDock({
                 radius="xl"
                 onClick={onClearAll}
                 disabled={!hasSelection}
-                px="xs"
+                px="sm"
+                style={{ flexShrink: 0, whiteSpace: "nowrap" }}
               >
                 Clear
               </Button>
@@ -3553,7 +3633,7 @@ function PageSelectionDock({
       left={0}
       right={0}
       bottom={0}
-      w={SELECTION_DOCK_WIDTH}
+      w={dockStacked ? "92%" : SELECTION_DOCK_WIDTH}
       mx="auto"
       pb="md"
       pt="xs"
@@ -3698,9 +3778,49 @@ function PageSelectionDock({
                 </Group>
                 {confirmButton}
               </Stack>
+            ) : dockStacked ? (
+              <Stack gap="sm">
+                <Group align="flex-start" justify="space-between" gap="md" wrap="nowrap" w="100%">
+                  <Box miw={0} style={{ flex: 1 }}>
+                    {subtitle && (
+                      <Group gap="xs" wrap="nowrap" align="center">
+                        <Text
+                          size="xs"
+                          c="dimmed"
+                          lineClamp={2}
+                          tt="uppercase"
+                          fw={600}
+                          style={{ letterSpacing: "0.04em" }}
+                        >
+                          {subtitle}
+                        </Text>
+                        {pdfLoading && <Loader size="xs" />}
+                      </Group>
+                    )}
+                  </Box>
+                  <Stack gap={2} align="flex-end" miw={0} style={{ flex: 1.2 }}>
+                    <Text
+                      fw={600}
+                      size="sm"
+                      ta="right"
+                      lineClamp={2}
+                      c={hasSelection ? (isDark ? "gray.1" : "dark.8") : "dimmed"}
+                    >
+                      {summary}
+                    </Text>
+                    <Text size="xs" c="dimmed" ta="right" lineClamp={1}>
+                      Tap a page · Shift+tap to extend
+                    </Text>
+                  </Stack>
+                </Group>
+                <Group gap="xs" wrap="nowrap" justify="flex-end" w="100%">
+                  {selectionActions}
+                  {confirmButton}
+                </Group>
+              </Stack>
             ) : (
-              <Group align="center" wrap="nowrap" gap="lg" w="100%">
-                <Box style={{ flex: 1, minWidth: 0 }}>
+              <Group align="center" wrap="nowrap" gap="lg" w="100%" justify="space-between">
+                <Box miw={0} style={{ flex: 1, overflow: "hidden" }}>
                   {subtitle && (
                     <Group gap="xs" wrap="nowrap" align="center">
                       <Text
@@ -3718,7 +3838,7 @@ function PageSelectionDock({
                   )}
                 </Box>
 
-                <Stack gap={2} align="center" style={{ flex: 1.2, minWidth: 0 }}>
+                <Stack gap={2} align="center" miw={0} style={{ flex: 1.2, overflow: "hidden" }}>
                   <Text
                     fw={600}
                     size="sm"
@@ -3733,20 +3853,8 @@ function PageSelectionDock({
                   </Text>
                 </Stack>
 
-                <Group gap="xs" wrap="nowrap" justify="flex-end" style={{ flex: 1, minWidth: 0 }}>
-                  <Button variant="default" size="sm" radius="xl" onClick={onSelectAll} styles={secondaryButtonStyles}>
-                    All
-                  </Button>
-                  <Button
-                    variant="default"
-                    size="sm"
-                    radius="xl"
-                    onClick={onClearAll}
-                    disabled={!hasSelection}
-                    styles={secondaryButtonStyles}
-                  >
-                    Clear
-                  </Button>
+                <Group gap="xs" wrap="nowrap" justify="flex-end" style={{ flexShrink: 0 }}>
+                  {selectionActions}
                   {confirmButton}
                 </Group>
               </Group>

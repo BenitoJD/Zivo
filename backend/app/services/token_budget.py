@@ -10,7 +10,7 @@ _CHARS_PER_TOKEN = float(os.getenv("ZIVO_CHARS_PER_TOKEN", "3.5"))
 # Completion caps — generous floors so reasoning models finish with parseable content.
 OUTPUT_MAX_TOKENS_DEFAULT = int(os.getenv("ZIVO_LLM_OUTPUT_MAX_TOKENS", "8192"))
 OUTPUT_MAX_TOKENS_BATCH = int(os.getenv("ZIVO_LLM_OUTPUT_MAX_TOKENS_BATCH", "16384"))
-CHAT_OUTPUT_MAX_TOKENS = int(os.getenv("ZIVO_CHAT_MAX_TOKENS", "4096"))
+CHAT_OUTPUT_MAX_TOKENS = int(os.getenv("ZIVO_CHAT_MAX_TOKENS", "2048"))
 
 # Input context sent to models (page text, RAG excerpts, chat blocks).
 PAGE_INPUT_MAX_TOKENS = int(os.getenv("ZIVO_PAGE_INPUT_MAX_TOKENS", "32000"))

@@ -21,7 +21,7 @@ from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.services.chat_scope import normalize_chat_scope
 from app.services.learn_chat_context import build_learn_chat_context, learn_scope_fields
 from app.services.embed import embed_query
-from app.services.llm_router import stream_chat_completion
+from app.services.llm_router import is_failover_eligible, stream_chat_completion
 from app.services.prompts import get_prompt
 from app.services.guest import can_access_document
 from app.services.guest_session import guest_session_for_read, optional_guest_session
@@ -41,6 +41,16 @@ _HISTORY_LIMIT = 6
 _LIST_MESSAGES_LIMIT = 100
 _CHAT_BUSY_MESSAGE = "Tutor is busy. Try again."
 
+
+def _user_facing_chat_error(exc: BaseException) -> str:
+    if is_failover_eligible(exc):
+        message = str(exc).lower()
+        if "rate" in message or "429" in message or "too many requests" in message:
+            return "Too many requests — wait a moment and try again."
+        if "timeout" in message or "timed out" in message:
+            return "That took too long — try a shorter question."
+    return _CHAT_BUSY_MESSAGE
+
 # Matches messages that look like a quiz/test request. Only when this hits do
 # we inject the ~300-token mcq_format prompt — otherwise it's dead weight on
 # every turn and destabilizes the provider prefix cache.
@@ -53,6 +63,37 @@ _QUIZ_RE = re.compile(
 
 def _looks_like_quiz(message: str) -> bool:
     return bool(_QUIZ_RE.search(message or ""))
+
+
+_MCQ_ANSWER_REQUEST_RE = re.compile(
+    r"|".join(
+        [
+            r"\bwhat(?:'s| is) the (?:correct )?answer\b",
+            r"\bwhich (?:option|choice) (?:is )?(?:correct|right)\b",
+            r"\btell me (?:the )?answer\b",
+            r"\bgive me (?:the )?answer\b",
+            r"\bwhat should i (?:pick|choose|select)\b",
+            r"\b(?:is|was) (?:option )?[a-d] (?:correct|right)\b",
+            r"\bthe (?:correct|right) (?:option|choice|letter)\b",
+            r"\breveal the answer\b",
+        ]
+    ),
+    re.IGNORECASE,
+)
+
+_MCQ_ANSWER_GUARDRAIL = (
+    "Tutor guardrail (this turn): The learner has not asked for the quiz answer. "
+    "Explain the topic clearly. Do NOT state which option letter is correct, "
+    'do NOT say "the correct answer is …", and do NOT map your explanation to A/B/C/D.'
+)
+
+
+def _user_requests_mcq_answer(message: str) -> bool:
+    return bool(_MCQ_ANSWER_REQUEST_RE.search(message or ""))
+
+
+def _learn_context_has_active_question(learn_context: str | None) -> bool:
+    return bool(learn_context and "Current question stem:" in learn_context)
 
 
 def _stream_error_event(message: str) -> dict[str, str]:
@@ -341,15 +382,44 @@ async def chat_stream(
                         "context_block": "",
                         "context_note": "",
                     }
-                else:
-                    retrieved = await asyncio.to_thread(
-                        run_retrieve,
+                    learn_context = build_learn_chat_context(
                         stream_db,
-                        document_ids=doc_ids,
-                        query=request_message,
+                        doc.id,
+                        doc,
                         scope=scope,
-                        mentions=scope.get("mentions") or [],
-                        prior_messages=prior_messages,
+                    )
+                else:
+                    yield {"event": "status", "data": json.dumps({"phase": "retrieving"})}
+
+                    def _retrieve_for_chat() -> dict:
+                        with SessionLocal() as retrieve_db:
+                            retrieve_doc = retrieve_db.get(Document, document_id)
+                            if not retrieve_doc:
+                                raise HTTPException(status_code=404, detail="Document not found")
+                            return run_retrieve(
+                                retrieve_db,
+                                document_ids=doc_ids,
+                                query=request_message,
+                                scope=scope,
+                                mentions=scope.get("mentions") or [],
+                                prior_messages=prior_messages,
+                            )
+
+                    def _learn_context_for_chat() -> str | None:
+                        with SessionLocal() as learn_db:
+                            learn_doc = learn_db.get(Document, document_id)
+                            if not learn_doc:
+                                return None
+                            return build_learn_chat_context(
+                                learn_db,
+                                learn_doc.id,
+                                learn_doc,
+                                scope=scope,
+                            )
+
+                    retrieved, learn_context = await asyncio.gather(
+                        asyncio.to_thread(_retrieve_for_chat),
+                        asyncio.to_thread(_learn_context_for_chat),
                     )
                 citations = retrieved.get("citations", [])
                 system = get_prompt(stream_db, "tutor_system")
@@ -376,14 +446,14 @@ async def chat_stream(
                     db=stream_db,
                 )
                 trailer_parts: list[str] = []
-                learn_context = build_learn_chat_context(
-                    stream_db,
-                    doc.id,
-                    doc,
-                    scope=scope,
-                )
                 if learn_context:
                     trailer_parts.append(learn_context)
+                if (
+                    learn_context
+                    and _learn_context_has_active_question(learn_context)
+                    and not _user_requests_mcq_answer(request_message)
+                ):
+                    trailer_parts.append(_MCQ_ANSWER_GUARDRAIL)
                 if trailer_parts:
                     user_content = user_content + "\n\n" + "\n\n".join(trailer_parts)
                 messages.append({"role": "user", "content": user_content})
@@ -409,7 +479,7 @@ async def chat_stream(
                     )
             except Exception as exc:
                 logger.exception("chat setup failed: %s", exc)
-                yield _stream_error_event(_CHAT_BUSY_MESSAGE)
+                yield _stream_error_event(_user_facing_chat_error(exc))
                 return
 
             if cached:
@@ -471,7 +541,7 @@ async def chat_stream(
                 yield {"event": "done", "data": "{}"}
             except Exception as exc:
                 logger.exception("chat stream failed: %s", exc)
-                yield _stream_error_event(_CHAT_BUSY_MESSAGE)
+                yield _stream_error_event(_user_facing_chat_error(exc))
         finally:
             stream_db.close()
 

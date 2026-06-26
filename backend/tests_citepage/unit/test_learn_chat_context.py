@@ -47,6 +47,7 @@ def test_build_learn_chat_context_includes_position_and_stem() -> None:
     assert "Question 7 of 15 on page 25" in block
     assert "What role did printing play?" in block
     assert "A. Option A" in block
+    assert "Tutor policy" in block
     assert "primary focus" in block.lower()
     assert "supplementary" in block.lower()
     assert "authoritative" in block.lower()

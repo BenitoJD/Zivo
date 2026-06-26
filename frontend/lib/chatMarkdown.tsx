@@ -2,20 +2,98 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
+  ActionIcon,
   Anchor,
   Blockquote,
   Box,
   Code,
+  CopyButton,
   Divider,
+  Group,
   List,
   Paper,
   Stack,
   Table,
   Text,
   Title,
+  Tooltip,
 } from "@mantine/core";
+import { IconCheck, IconCopy } from "@tabler/icons-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+
+function CopyIconAction({
+  value,
+  label,
+  size = "sm",
+}: {
+  value: string;
+  label: string;
+  size?: "sm" | "md";
+}) {
+  const iconSize = size === "md" ? 16 : 14;
+  return (
+    <CopyButton value={value} timeout={2000}>
+      {({ copied, copy }) => (
+        <Tooltip label={copied ? "Copied" : label} withArrow position="top">
+          <ActionIcon
+            variant="subtle"
+            size={size}
+            color="gray"
+            onClick={copy}
+            aria-label={label}
+          >
+            {copied ? <IconCheck size={iconSize} /> : <IconCopy size={iconSize} />}
+          </ActionIcon>
+        </Tooltip>
+      )}
+    </CopyButton>
+  );
+}
+
+export function MessageCopyAction({
+  value,
+  label = "Copy",
+}: {
+  value: string;
+  label?: string;
+}) {
+  if (!value.trim()) return null;
+  return <CopyIconAction value={value} label={label} />;
+}
+
+function CodeBlock({
+  text,
+  lang,
+  isDark,
+}: {
+  text: string;
+  lang?: string;
+  isDark: boolean;
+}) {
+  const label = lang && lang !== "text" ? lang : "Code";
+  return (
+    <Paper withBorder radius="md" mb="sm" bg={isDark ? "dark.7" : "gray.0"}>
+      <Group
+        justify="space-between"
+        align="center"
+        gap="xs"
+        px="sm"
+        py={6}
+        wrap="nowrap"
+      >
+        <Text size="xs" c="dimmed" tt="lowercase" truncate>
+          {label}
+        </Text>
+        <CopyIconAction value={text} label="Copy code" />
+      </Group>
+      <Divider color={isDark ? "dark.4" : "gray.3"} />
+      <Code block fz="xs" p="sm" bg="transparent" style={{ whiteSpace: "pre-wrap" }}>
+        {text}
+      </Code>
+    </Paper>
+  );
+}
 
 function MermaidBlock({ chart }: { chart: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -145,13 +223,7 @@ function markdownComponents(isDark: boolean): Components {
           </Code>
         );
       }
-      return (
-        <Paper withBorder p="sm" radius="md" mb="sm" bg={isDark ? "dark.7" : "gray.0"}>
-          <Code block fz="xs" style={{ whiteSpace: "pre-wrap" }}>
-            {text}
-          </Code>
-        </Paper>
-      );
+      return <CodeBlock text={text} lang={lang} isDark={isDark} />;
     },
     pre: ({ children }) => <Box mb="sm">{children}</Box>,
     table: ({ children }) => (

@@ -144,6 +144,11 @@ def build_learn_chat_context(
             scope=scope,
             progress=progress,
         )
+        if mcq and mcq.get("options") and choice_index is None:
+            lines.append(
+                "- Tutor policy: explain concepts and give hints only; do not reveal "
+                "which option is correct unless the learner explicitly asks for the answer."
+            )
         if choice_index is not None and mcq and mcq.get("options"):
             letter = _choice_letter(choice_index)
             selected_text = (

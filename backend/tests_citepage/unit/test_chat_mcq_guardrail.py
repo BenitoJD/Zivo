@@ -1,0 +1,36 @@
+"""Tutor must not reveal MCQ answers unless the learner asks."""
+
+from __future__ import annotations
+
+from app.api.chat import (
+    _learn_context_has_active_question,
+    _user_requests_mcq_answer,
+)
+from app.services.prompts import DEFAULTS
+
+
+def test_tutor_system_prompt_forbids_unsolicited_mcq_answer() -> None:
+    prompt = DEFAULTS["tutor_system"]
+    assert "Active quiz" in prompt
+    assert "correct answer is" in prompt.lower()
+    assert "unless the learner explicitly asks" in prompt.lower()
+
+
+def test_user_requests_mcq_answer_detects_explicit_asks() -> None:
+    assert _user_requests_mcq_answer("What's the correct answer?")
+    assert _user_requests_mcq_answer("Which option is right?")
+    assert _user_requests_mcq_answer("What should I pick?")
+
+
+def test_user_requests_mcq_answer_false_for_concept_questions() -> None:
+    assert not _user_requests_mcq_answer(
+        "What is the difference between app router and page router?"
+    )
+    assert not _user_requests_mcq_answer("Explain server components simply")
+    assert not _user_requests_mcq_answer("Give me a hint without the answer")
+
+
+def test_learn_context_has_active_question() -> None:
+    block = 'Current question stem: "Which is true?"\n  A. One'
+    assert _learn_context_has_active_question(block)
+    assert not _learn_context_has_active_question("Document study complete")

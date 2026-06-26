@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     embed_model: str = "BAAI/bge-small-en-v1.5"
     embed_dimension: int = 384
     rerank_enabled: bool = True
+    # Tutor chat skips cross-encoder rerank by default — learn mode already pins the
+    # current page; reranking the full RAG window was adding seconds of CPU latency.
+    rerank_chat_enabled: bool = False
     # Smallest FastEmbed cross-encoder (0.08 GB ONNX); CPU-friendly MS MARCO reranker.
     rerank_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"
 

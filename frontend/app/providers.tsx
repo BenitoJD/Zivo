@@ -98,10 +98,15 @@ const variantColorResolver: VariantColorsResolver = (input) => {
   const surface = palette[getPrimaryShade(input.theme, resolveColorScheme())];
   if (!isLightColor(surface, input.theme.luminanceThreshold ?? 0.3)) return resolved;
 
+  const onLightSurface =
+    resolveColorScheme() === "dark"
+      ? "var(--mantine-color-gray-9)"
+      : "var(--mantine-color-black)";
+
   return {
     ...resolved,
-    color: "var(--mantine-color-black)",
-    hoverColor: "var(--mantine-color-black)",
+    color: onLightSurface,
+    hoverColor: onLightSurface,
   };
 };
 
@@ -191,6 +196,16 @@ const theme = mergeMantineTheme(
           radius: "xl",
         },
       },
+      Tooltip: {
+        styles: {
+          tooltip: {
+            backgroundColor: "var(--mantine-color-dark-8)",
+            color: "var(--mantine-color-text)",
+            border: "1px solid var(--mantine-color-default-border)",
+            boxShadow: "var(--mantine-shadow-paper)",
+          },
+        },
+      },
     },
   }),
 );
@@ -203,6 +218,7 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
     "--mantine-color-default-border": "#E7E2D6",  // Warm hairline border
     "--mantine-color-default-hover": "#F3EFE6",   // Hover over paper items
     "--mantine-color-placeholder": "#8E8A7E",     // Placeholder
+    "--mantine-color-dimmed": "#6B675E",          // Secondary labels
     "--mantine-skeleton-color": "#F3EFE6",
     "--mantine-skeleton-color-da": "#E7E2D6",
     "--zivo-header-bg": "#FFFFFF",
@@ -234,9 +250,12 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
   dark: {
     "--mantine-color-body": "#1A1917",            // Soft warm ink background
     "--mantine-color-text": "#FAF9F6",            // Warm paper text
+    "--mantine-color-black": "#FAF9F6",           // Never ink-black text on dark surfaces
+    "--mantine-color-white": "#FFFFFF",
     "--mantine-color-default-border": "#2E2C28",  // Soft charcoal border
     "--mantine-color-default-hover": "#262522",   // Hover over charcoal items
     "--mantine-color-placeholder": "#7A756B",     // Placeholder
+    "--mantine-color-dimmed": "#98989D",          // Apple-style secondary on ink
     "--mantine-skeleton-color": "#262522",
     "--mantine-skeleton-color-da": "#2E2C28",
     "--zivo-header-bg": "#22211F",
