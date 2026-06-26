@@ -260,7 +260,7 @@ export function SettingsModal({
           <Button variant="subtle" color="gray" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={saveSettings} style={{ background: "var(--mantine-color-lavender-7)" }}>
+          <Button onClick={saveSettings} color="lavender">
             Save settings
           </Button>
         </Group>

@@ -24,14 +24,19 @@ export function AuthSplitLayout({
   return (
     <Box bg="var(--mantine-color-body)" style={{ minHeight: "100dvh" }}>
       <Group align="stretch" wrap="nowrap" gap={0} style={{ minHeight: "100dvh" }}>
+        {/* Editorial brand panel — intentionally always dark (a fixed dark
+            surface, like a book endpaper), regardless of color scheme. We pin
+            literal values because the app's `gray` scale is inverted in dark
+            mode: `gray.9` would flip to white and the light text below would
+            become invisible. */}
         <Box
           visibleFrom="md"
-          bg="gray.9"
           style={{
             flex: "1 1 0",
             minHeight: "100dvh",
             position: "relative",
             overflow: "hidden",
+            background: "#1A1917",
           }}
           p="xl"
         >
@@ -52,14 +57,14 @@ export function AuthSplitLayout({
                 fw={600}
                 tt="uppercase"
                 lts={2}
-                c="gray.4"
+                style={{ color: "#A8A296" }}
               >
                 {eyebrow}
               </Text>
               <Title
                 order={2}
-                c="gray.0"
                 style={{
+                  color: "#FAF9F6",
                   fontFamily: "var(--font-sans), sans-serif",
                   fontWeight: 500,
                   lineHeight: 1.25,
@@ -68,7 +73,7 @@ export function AuthSplitLayout({
               >
                 {quote}
               </Title>
-              <Text size="sm" c="gray.4" fs="italic" style={{ fontFamily: "var(--font-serif)" }}>
+              <Text size="sm" fs="italic" style={{ color: "#A8A296", fontFamily: "var(--font-serif)" }}>
                 {attribution}
               </Text>
             </Stack>

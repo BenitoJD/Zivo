@@ -21,32 +21,41 @@ export type McqOptionVisualState = {
   isWrongSelected: boolean;
 };
 
-/** Option chrome shared by workspace McqHeroPanel and practice McqCard. */
+/**
+ * Option chrome shared by workspace McqHeroPanel and practice McqCard.
+ *
+ * The dark-theme accent scales (lavender/sage/terracotta) are built so HIGH
+ * shades read as light TEXT and LOW shades as dark SURFACES. So a filled chip
+ * must flip its content color with the scheme: in light mode the shade-6/7 fill
+ * is dark → white text; in dark mode that same shade-6 fill is bright → ink text.
+ * Using white content on a shade-6/7 fill in dark mode renders it invisible.
+ */
 export function mcqOptionChrome(isDark: boolean, state: McqOptionVisualState) {
   const { isSelected, isCorrectOption, isWrongSelected } = state;
   let border = isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-default-border)";
   let background = isDark ? "var(--mantine-color-dark-7)" : "var(--mantine-color-gray-0)";
+  // Idle chip: a quiet tinted square. Keep the letter readable on it in both schemes.
   let chipBg = isDark ? "var(--mantine-color-dark-5)" : "var(--mantine-color-gray-2)";
-  let chipColor = isDark ? "var(--mantine-color-gray-2)" : "var(--mantine-color-gray-7)";
+  let chipColor = isDark ? "var(--mantine-color-gray-5)" : "var(--mantine-color-gray-7)";
   let borderWidth = 1;
 
   if (isCorrectOption) {
     border = isDark ? "var(--mantine-color-sage-4)" : "var(--mantine-color-sage-5)";
     background = isDark ? "var(--mantine-color-sage-1)" : "var(--mantine-color-sage-0)";
     chipBg = "var(--mantine-color-sage-6)";
-    chipColor = "#FFFFFF";
+    chipColor = isDark ? "var(--mantine-color-black)" : "#FFFFFF";
     borderWidth = 2;
   } else if (isWrongSelected) {
     border = isDark ? "var(--mantine-color-terracotta-4)" : "var(--mantine-color-terracotta-5)";
     background = isDark ? "var(--mantine-color-terracotta-1)" : "var(--mantine-color-terracotta-0)";
     chipBg = "var(--mantine-color-terracotta-6)";
-    chipColor = "#FFFFFF";
+    chipColor = isDark ? "var(--mantine-color-black)" : "#FFFFFF";
     borderWidth = 2;
   } else if (isSelected) {
     border = isDark ? "var(--mantine-color-lavender-4)" : "var(--mantine-color-lavender-5)";
     background = isDark ? "var(--mantine-color-lavender-1)" : "var(--mantine-color-lavender-0)";
-    chipBg = "var(--mantine-color-lavender-7)";
-    chipColor = "#FFFFFF";
+    chipBg = "var(--mantine-color-lavender-6)";
+    chipColor = isDark ? "var(--mantine-color-black)" : "#FFFFFF";
     borderWidth = 2;
   }
 

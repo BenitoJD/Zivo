@@ -2179,9 +2179,14 @@ function StudySourcePanel({
                           lineHeight: 1,
                           fontFamily: "var(--font-sans), sans-serif",
                           color: "#FFFFFF",
-                          background: isActivePage
-                            ? "var(--mantine-color-lavender-7)"
-                            : "rgba(35,34,32,0.5)",
+                          // This badge overlays the PDF canvas, which is always
+                          // white in BOTH color schemes (pageSurface = "white").
+                          // The lavender scale is inverted for dark mode (high
+                          // shades go pale for text-on-ink), so no single
+                          // lavender token stays dark in both schemes. Pin a
+                          // fixed deep lavender so white label text stays legible
+                          // on the invariant white page.
+                          background: isActivePage ? "#644791" : "rgba(35,34,32,0.55)",
                           backdropFilter: "blur(4px)",
                           WebkitBackdropFilter: "blur(4px)",
                         }}
@@ -2403,7 +2408,9 @@ function McqFeedbackCard({
             alignItems: "center",
             justifyContent: "center",
             background: isCorrect ? "var(--mantine-color-sage-6)" : "var(--mantine-color-terracotta-6)",
-            color: "#FFFFFF",
+            // Accent scales are inverted in dark mode: shade 6 reads bright on
+            // ink, so white icon would vanish. Flip content with the scheme.
+            color: isDark ? "var(--mantine-color-black)" : "#FFFFFF",
           }}
         >
           {isCorrect ? <IconCheck size={14} stroke={2.6} /> : <IconX size={14} stroke={2.6} />}

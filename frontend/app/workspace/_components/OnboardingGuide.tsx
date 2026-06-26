@@ -155,8 +155,8 @@ export function OnboardingGuide({ opened, onClose }: OnboardingGuideProps) {
 
           <Button
             onClick={handleNext}
+            color="lavender"
             rightSection={activeStep === STEPS.length - 1 ? <IconCheck size={16} /> : <IconChevronRight size={16} />}
-            style={{ background: "var(--mantine-color-lavender-7)", borderRadius: "var(--mantine-radius-xl)" }}
           >
             {activeStep === STEPS.length - 1 ? "Finish guide" : "Next step"}
           </Button>

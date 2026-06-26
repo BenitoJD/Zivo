@@ -362,14 +362,11 @@ export default function WorkspaceIndexPage() {
                   <Button
                     fullWidth
                     size="md"
+                    color="lavender"
                     loading={isBusy}
                     disabled={!pasteContent.trim()}
                     rightSection={<IconSparkles size={16} />}
                     onClick={handlePasteSubmit}
-                    style={{
-                      background: "var(--mantine-color-lavender-7)",
-                      borderRadius: "var(--mantine-radius-md)",
-                    }}
                   >
                     Build from paste
                   </Button>
