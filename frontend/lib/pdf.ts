@@ -276,7 +276,7 @@ export async function renderPdfPageToCanvas(
   }
 }
 
-/** Thumbnail render — cover-fills frame with slight zoom so no dead space at edges. */
+/** Thumbnail render - cover-fills frame with slight zoom so no dead space at edges. */
 export async function renderPdfThumbToCanvas(
   pdf: PDFDocumentProxy,
   pageNumber: number,
