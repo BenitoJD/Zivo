@@ -51,8 +51,12 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   });
   const mounted = useMounted();
 
-  const sidebarWide = isMobile ? mobileOpened : sidebarExpanded;
-  const sidebarWidth = isMobile ? "100%" : sidebarWide ? SIDEBAR_EXPANDED_WIDTH : SIDEBAR_MINI_WIDTH;
+  const sidebarWide = mounted ? (isMobile ? mobileOpened : sidebarExpanded) : false;
+  const sidebarWidth = isMobile
+    ? "100%"
+    : mounted && sidebarWide
+      ? SIDEBAR_EXPANDED_WIDTH
+      : SIDEBAR_MINI_WIDTH;
 
   const [addOpen, setAddOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<SourceDocument | null>(null);

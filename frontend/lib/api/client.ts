@@ -82,11 +82,27 @@ function buildHeaders(extra?: HeadersInit): Headers {
   return headers;
 }
 
-/** Bootstrap anonymous guest session (sets httponly cookie + header). */
+/** Restore signed-in CSRF or bootstrap anonymous guest session. */
 export async function ensureGuestSession(): Promise<void> {
-  if (guestId) return;
+  if (csrfToken) return;
   if (guestSessionPromise) return guestSessionPromise;
   guestSessionPromise = (async () => {
+    const sessionRes = await fetch(`${API_BASE}/api/auth/session`, {
+      credentials: "include",
+      headers: buildHeaders(),
+    });
+    captureResponseMeta(sessionRes);
+    if (sessionRes.ok) {
+      const session = (await sessionRes.json()) as { csrf_token?: string };
+      if (session.csrf_token) {
+        setCsrfToken(session.csrf_token);
+        return;
+      }
+    }
+    handleAuthFailure(sessionRes);
+
+    if (guestId) return;
+
     const res = await fetch(`${API_BASE}/api/auth/guest`, {
       method: "POST",
       credentials: "include",

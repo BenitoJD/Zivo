@@ -124,7 +124,7 @@ OUTPUT — be economical; emitted tokens are the slow, costly part
 - Plain-text options (no "A)" / "1." prefixes — the UI adds labels).
 - explanation: ONE short sentence stating the key idea directly. No "the text says", no page numbers.
 - Include primary_concept_key matching the target aspect key.
-- tested_concepts: 1–3 Wikidata concepts the question tests, each {{"qid": "Q<n>", "label": "..."}}. Use real Wikidata QIDs (e.g. Q80001 photosynthesis). If you cannot confidently identify the QID, omit the field rather than guess.
+- tested_concepts: 1–3 Wikidata concepts the question tests, each {{"qid": "Q<n>", "label": "..."}}. Use real Wikidata QIDs (e.g. Q11982 photosynthesis). If you cannot confidently identify the QID, omit the field rather than guess.
 - Do not repeat or paraphrase any prior question listed in the user message.
 
 Example:

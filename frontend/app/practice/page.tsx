@@ -30,12 +30,12 @@ type SearchResponse = { query: string; results: ConceptSummary[] };
 
 // A few evergreen concepts for first-time gravity (SEO + discoverability).
 const CURATED: ConceptSummary[] = [
-  { qid: "Q41506", label: "Music", description: "The art of organized sound." },
-  { qid: "Q80001", label: "Photosynthesis", description: "How plants convert light into chemical energy." },
-  { qid: "Q385824", label: "Quadratic equation", description: "Solving second-degree polynomial equations." },
-  { qid: "Q11197", label: "Calculus", description: "The mathematics of continuous change." },
+  { qid: "Q638", label: "Music", description: "The art of organized sound." },
+  { qid: "Q11982", label: "Photosynthesis", description: "How plants convert light into chemical energy." },
+  { qid: "Q41299", label: "Quadratic equation", description: "Solving second-degree polynomial equations." },
+  { qid: "Q149972", label: "Calculus", description: "The mathematics of continuous change." },
   { qid: "Q336", label: "Science", description: "Systematic study of the natural world." },
-  { qid: "Q83363", label: "Newton's laws of motion", description: "The foundations of classical mechanics." },
+  { qid: "Q38433", label: "Newton's laws of motion", description: "The foundations of classical mechanics." },
 ];
 
 export default function PracticeHubPage() {
