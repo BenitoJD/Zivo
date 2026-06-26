@@ -6,6 +6,8 @@ Same deployment model as [citepage](https://github.com/BenitoJD/citepage): **K3s
 
 **Product direction:** measure and improve understanding through questions. Year 1 = best AI-powered question generator. Strategy: [docs/VISION.md](docs/VISION.md). **Data model (all tables):** [docs/DATA_MODEL.md](docs/DATA_MODEL.md).
 
+**How we build (read before shipping):** coding rules → [docs/CONVENTIONS.md](docs/CONVENTIONS.md) · design decisions → [docs/adr/](docs/adr/0000-index.md) · UI → [Frontend UI](#frontend-ui) below. These three are the single source of truth; anything under `.cursor/skills/` that contradicts them is stale.
+
 ## Readiness checklist
 
 | Area | Status | Notes |
@@ -105,7 +107,7 @@ DDL source files live in `backend/schema/`. **Alembic** applies them:
 
 Migrations: `backend/alembic/versions/` (`001_intel_foundation` → `002_qb_schema`). New schema changes: add a revision with `cd backend && alembic revision --autogenerate -m "message"`, then run `backend/scripts/test_alembic_migrations.sh`.
 
-Product tables: `intel.*` (unchanged DDL) + additive `qb.*`. See [docs/WORKSPACE.md](docs/WORKSPACE.md) and [docs/CITEPAGE_PORT.md](docs/CITEPAGE_PORT.md).
+Product tables: `intel.*` (unchanged DDL) + additive `qb.*` — see [docs/WORKSPACE.md](docs/WORKSPACE.md) and [ADR 0002](docs/adr/0002-intel-frozen-qb-additive.md).
 
 ## Production (VPS)
 
@@ -182,14 +184,24 @@ cd frontend && npm run build && npm run lint
 
 ## Conventions
 
+**Coding practices are documented once in [docs/CONVENTIONS.md](docs/CONVENTIONS.md)**
+(layering, raw-SQL repositories, the ETA worker pattern, the swappable-policy seam,
+error handling, typing, naming, Alembic, testing) — each rule with a `file:line` proof.
+Design decisions are in [docs/adr/](docs/adr/0000-index.md). Quick pointers:
+
 - Business copy: root `README.md` only.
-- Product strategy: `docs/VISION.md`.
-- Table reference: `docs/DATA_MODEL.md`.
+- Product strategy: `docs/VISION.md`. · Table reference: `docs/DATA_MODEL.md`.
 - Schema changes: `backend/alembic/versions/` (+ update `backend/schema/*.sql` when baselining raw SQL).
-- New routes: `backend/app/api/`.
-- Background jobs: `backend/app/eta/`.
+- New routes: `backend/app/api/`. · Background jobs: `backend/app/eta/`.
 - UI: **`frontend/app/` only** — see [Frontend UI](#frontend-ui) above.
 
 ## Skills
 
-Cursor skills live in `.cursor/skills/`. Start with **`zivo-dev`** for local workflow; use `fastapi`, `postgres`, `production-release-deploy`, `debug-kubernetes` as needed.
+Cursor skills live in `.cursor/skills/`. Start with **`zivo-dev`** for local workflow;
+use `fastapi`, `postgres`, `production-release-deploy`, `debug-kubernetes` as needed.
+
+**Skills do not fork the rules.** [docs/CONVENTIONS.md](docs/CONVENTIONS.md) and
+[docs/adr/](docs/adr/0000-index.md) are canonical; a skill links to them rather than
+restating a rule. Several skills were ported from another project and still reference
+`webapp/`, `pnpm`, `apiClient`, or "shoot" — those are wrong for this repo (`frontend/`,
+`npm`) and are being reconciled; do not trust a skill that contradicts the docs above.
