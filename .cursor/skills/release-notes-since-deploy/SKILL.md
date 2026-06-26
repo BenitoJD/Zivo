@@ -127,7 +127,7 @@ Functional examples:
 
 - new user workflows or screens
 - visible UI changes
-- behavior changes in shoots, bulk shoots, CRM project flows, auth, billing, or
+- behavior changes in question generation, the learn/test flow, auth, billing, or
   generation
 - user-visible bug fixes or timezone/display fixes
 - performance changes that users directly experience

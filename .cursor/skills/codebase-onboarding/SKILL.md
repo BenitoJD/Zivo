@@ -23,14 +23,18 @@ setting up an AI coding agent in an existing repo for the first time.
 
 ## Repo Note
 
-For this repo, a strong onboarding pass should explicitly cover:
+For this repo, the canonical onboarding doc already exists — start from
+[AGENTS.md](../../../AGENTS.md) and [docs/CONVENTIONS.md](../../../docs/CONVENTIONS.md)
+and enhance, don't regenerate. A strong pass covers:
 
-- `backend/` FastAPI app, SQLAlchemy models, and Alembic migrations
-- `webapp/` Next.js App Router frontend
-- `infra/` Terraform, Kubernetes, and Ansible layout
-- repo-standard commands like `./scripts/dev.sh app start`,
-  `cd backend && pytest`, and `cd webapp && pnpm run lint && pnpm run type-check`
-- repo terms like CRM project, `shoot`, and `bulk shoot`
+- `backend/` FastAPI app, SQLAlchemy models, Alembic migrations, and raw-SQL
+  repositories against the `intel.*` / `qb.*` schemas
+- `frontend/` Next.js App Router frontend (Mantine-only — see AGENTS.md → Frontend UI)
+- `infra/k8s/` Helm charts (K3s + Helm on one VPS)
+- repo-standard commands: `./scripts/dev.sh start`, `cd backend && python -m pytest`,
+  and `cd frontend && npm run build && npm run lint`
+- repo domain terms: a question is an `assertion`, a learner an `entity`/`account`,
+  an answer a `measurement` (see [docs/DATA_MODEL.md](../../../docs/DATA_MODEL.md))
 
 ## How It Works
 
@@ -146,7 +150,7 @@ Produce two outputs:
 | Framework | FastAPI + Next.js | detected |
 | Database | PostgreSQL | 16 |
 | ORM | SQLAlchemy | detected |
-| Testing | pytest + Playwright | detected |
+| Testing | pytest (DB-free unit + DB-gated integration) | — |
 
 ## Architecture
 [Diagram or description of how components connect]
@@ -154,9 +158,9 @@ Produce two outputs:
 ## Key Entry Points
 <!-- Example for a Next.js project — replace with detected paths -->
 - **Backend API**: `backend/app/api/` — FastAPI routers and handlers
-- **UI pages**: `webapp/app/` — Next.js app routes
+- **UI pages**: `frontend/app/` — Next.js app routes (Mantine-only)
 - **Database models**: `backend/app/models/` — SQLAlchemy models
-- **Config**: `backend/env.local.defaults`, optional `backend/.env.local`, and `webapp/next.config.*` — runtime and build config
+- **Config**: `backend/.env.example`, optional `backend/.env.local`, and `frontend/next.config.*` — runtime and build config
 
 ## Directory Map
 [Top-level directory → purpose mapping]
@@ -174,7 +178,7 @@ Produce two outputs:
 <!-- Example for a Node.js project — replace with detected commands -->
 - **Start local stack**: `./scripts/dev.sh app start`
 - **Run backend tests**: `cd backend && pytest`
-- **Run frontend checks**: `cd webapp && pnpm run lint && pnpm run type-check`
+- **Run frontend checks**: `cd frontend && npm run build && npm run lint`
 - **Database migrations**: `backend/scripts/test_alembic_migrations.sh`
 - **Terraform planning**: `cd infra/environments/non-prod && terraform plan`
 
@@ -183,10 +187,10 @@ Produce two outputs:
 | I want to... | Look at... |
 |--------------|-----------|
 | Add an API endpoint | `backend/app/api/` |
-| Add a UI page | `webapp/app/` |
+| Add a UI page | `frontend/app/` |
 | Add a database table | `backend/app/models/` and `backend/alembic/versions/` |
 | Add a test | `backend/tests/` or the frontend/e2e test location already used in the repo |
-| Change build config | `webapp/next.config.*` or relevant infra config |
+| Change build config | `frontend/next.config.*` or `infra/k8s/` Helm values |
 ```
 
 #### Output 2: Starter AGENTS.md

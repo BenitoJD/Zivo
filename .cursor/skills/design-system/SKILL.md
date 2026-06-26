@@ -15,18 +15,20 @@ description: "Generate or audit visual systems, design tokens, and UI consistenc
 
 ## Repo Note
 
-In this repo:
+**This repo already has a design system: "Calm Paper".** It is documented in
+[AGENTS.md → Frontend UI](../../../AGENTS.md#frontend-ui) and locked in by
+[ADR 0003](../../../docs/adr/0003-mantine-only-calm-paper.md). Use this skill to
+*audit against* that system, not to invent a new one.
 
-- preserve the current product language and interaction patterns unless
-  the task is explicitly a redesign
-- focus on `webapp/` and existing shared UI patterns before proposing a
-  new token system
-- if the route is auth-gated in `webapp/app/`, any structural page
-  redesign should still respect `AuthWrapper`
-- if generation UI changes, review both `shoot` and `bulk shoot`
-  surfaces for consistency
-- do not introduce a new design system or token layer unless the user
-  explicitly wants a redesign
+- The token source of truth is `frontend/app/providers.tsx` (Mantine `createTheme`):
+  serif/sans fonts, lavender accent, sage/terracotta feedback, `shadow="paper"`, pill
+  radii. Audit drift *from these tokens* (hardcoded hex, non-Mantine components).
+- UI lives in `frontend/app/`; auth is handled by the `/login` route
+  and `frontend/lib/auth.ts` (there is no `AuthWrapper`).
+- The product surfaces are the Learn/Test **workspace** and the MCQ study cards —
+  keep them consistent with each other.
+- **Do not introduce a new design system or token layer** (ADR 0003) unless the user
+  explicitly asks for a redesign.
 
 ## How It Works
 
@@ -83,9 +85,9 @@ Identifies generic AI-generated design patterns:
 
 ## Preferred use in this repo
 
-- Audit existing shared UI patterns before proposing new ones
-- Keep recommendations close to the current product language
-- Treat auth-gated routes, CRM pages, shoots, and bulk shoot flows as the
+- Audit existing Mantine/Calm-Paper UI for drift before proposing anything new
+- Keep recommendations expressed as Mantine theme tokens, never new CSS layers
+- Treat the workspace shell, the MCQ study card, and the landing page as the
   highest-value consistency surfaces
 
 ## Examples

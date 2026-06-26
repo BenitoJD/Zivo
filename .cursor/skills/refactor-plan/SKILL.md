@@ -16,7 +16,7 @@ Cover these areas in every plan:
 
 1. **Current system** — How it works today; key invariants and edge cases;
    targeted code citations only (entry points, core logic, persistence/external
-   IO). Use repo glossary terms (e.g. shoot vs bulk shoot vs CRM project).
+   IO). Use this repo's domain terms (assertion = question, entity/account = learner, measurement = answer).
 2. **Behavior contract** — What must stay the same: APIs, DB writes, errors,
    side effects, auth, timing, idempotency.
 3. **Scope** — Explicit non-goals so "cleanup" does not become a rewrite.

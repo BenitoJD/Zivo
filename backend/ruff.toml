@@ -1,0 +1,15 @@
+# Ruff config — the first machine-enforced Python rule for this repo.
+#
+# Conservative on purpose (see docs/adr/0005-enforcement-and-known-divergences.md):
+# we only enable rule sets the code already passes, so the gate is descriptive, not
+# aspirational. Expanding it (import sorting `I`, bugbear `B`, blind-except `BLE`,
+# `ruff format`) is tracked debt — each addition lands with its fixes in the same PR.
+#
+#   E9  — syntax / IndentationError (never want these)
+#   F   — pyflakes: unused imports, unused variables, undefined names (catches dead
+#         code and real bugs; this set is what first cleaned the tree)
+target-version = "py312"
+line-length = 100
+
+[lint]
+select = ["E9", "F"]

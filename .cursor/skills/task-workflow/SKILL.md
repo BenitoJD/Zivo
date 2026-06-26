@@ -51,8 +51,8 @@ cd ../<worktree-name>
    `agents/coding-guidelines.md`:
    - Python: PEP 8, snake_case modules.
    - TypeScript/React: Next.js patterns, PascalCase components, `useX` hooks.
-   - Use `pnpm`, never `npm`.
-   - Use `apiClient` for API calls.
+   - Use `npm` for the frontend.
+   - Frontend API calls use the helpers in `frontend/lib/`.
    - If generation screen is changed, mirror change on bulk generation screen.
 5. If the task changes agent instructions, make the change using
    `manage-agent-context` as the domain-specific instruction workflow
@@ -94,7 +94,7 @@ If a dev CLI command fails because Docker Desktop is not running, start Docker D
 
 Classify changed files first, then run the minimum relevant validations:
 
-1. UI-only changes (`webapp/**` only):
+1. UI-only changes (`frontend/**` only):
    - Run frontend checks and targeted Playwright core E2E flow only.
    - Skip backend `pytest` and curl checks.
 2. Backend-only changes (`backend/**` only, no frontend):
@@ -104,7 +104,7 @@ Classify changed files first, then run the minimum relevant validations:
    - Run dedicated service integration script first (minimum-cost smoke input), then backend checks.
 4. Migration-related changes:
    - Run alembic migration test command, plus relevant backend checks.
-5. Full-stack changes (`backend/**` + `webapp/**`):
+5. Full-stack changes (`backend/**` + `frontend/**`):
    - Run both frontend and backend validations, plus targeted curl and Playwright core E2E for changed flow.
 
 In final report, explicitly list:
@@ -133,18 +133,18 @@ cd backend && pytest
 1. Run lint and type checks:
 
 ```bash
-cd webapp && pnpm run lint && pnpm run type-check
+cd frontend && npm run build && npm run lint
 ```
 
 2. Validate changed flows with Playwright core E2E:
    - Read `agents/core-e2e-tests.md` for the flow catalog, role/screen matrix, and run commands.
    - Pick the **relevant** core spec for the changed user journey and run that spec (not an unrelated flow).
-   - If no spec covers the journey, **write a new one** under `webapp/tests/e2e/`, register it in `agents/core-e2e-tests.md`, and wire Playwright projects/package scripts as needed.
+   - This repo has no Playwright/E2E suite (see the `e2e-testing` skill); verify UI changes with `npm run build && npm run lint` plus a manual browser check.
    - If your change alters steps, selectors, RBAC, or responsive behavior for an existing journey, **update that spec** in the same task/PR.
    - Set `PLAYWRIGHT_BASE_URL` from `./scripts/dev.sh app status` (`frontend_port`).
-   - Video and screenshots are on by default in `webapp/playwright.config.ts`; no extra CLI flags. Always collect both for UI changes.
+   - Capture before/after screenshots manually for UI changes when useful.
    - Run the smallest relevant core spec; PR smoke default is `--project=user-desktop --workers=1`.
-   - Matrix projects: `{user|op|admin}-{desktop|mobile}` (`webapp/tests/e2e/e2e-config.ts`).
+   - There is no test matrix; the gates are backend `pytest` and frontend `npm run build && npm run lint`.
    - Expand role/screen coverage when RBAC or responsive layout changes.
    - Report exact commands, per-project pass/fail, and artifact paths (`.webm`, `.png` under `output/playwright/`).
    - Copy task-specific screenshots and E2E videos to `output/playwright/<task-slug>/` for PR upload.

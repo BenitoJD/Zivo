@@ -23,7 +23,7 @@ FastAPI backend, Next.js frontend, PostgreSQL data layer, and infra surface.
 Keep these repo-specific assumptions in mind during review:
 
 - Backend is FastAPI
-- Frontend is Next.js and should call APIs through `apiClient`
+- Frontend is Next.js; API calls go through the helpers in `frontend/lib/`
 - Admin access is controlled with Firebase custom claims
 - Secrets belong in local `.env` or AWS Secrets Manager, not in source
 - PostgreSQL access should go through SQLAlchemy or parameterized SQL
@@ -168,7 +168,7 @@ async def delete_user(user_id: str, _: User = Depends(require_admin)):
 
 #### Frontend Guarding
 
-- Protected pages in `webapp/app/` should use `AuthWrapper`
+- Protected routes live under `frontend/app/`; auth is the `/login` route + `frontend/lib/auth.ts`
 - Frontend checks do not replace backend authorization checks
 - Never grant admin from client code; Firebase custom claims must be set
   server-side only
@@ -249,7 +249,7 @@ async def generate_image(...):
 
 ```python
 logger.info("User login", extra={"user_id": user.id, "email": user.email})
-logger.info("Generation created", extra={"shoot_id": shoot.id, "user_id": user.id})
+logger.info("Generation created", extra={"assertion_id": assertion.id, "user_id": user.id})
 ```
 
 Do not log:
@@ -289,7 +289,7 @@ except ExternalServiceError:
 Use the package managers already in the repo:
 
 ```bash
-cd webapp && pnpm audit
+cd frontend && npm audit
 cd backend && pip-audit
 ```
 
@@ -343,7 +343,7 @@ def test_rejects_invalid_input(client, admin_token_headers):
 For frontend security-sensitive flows, verify:
 
 - auth-gated pages stay protected after refresh
-- `apiClient` calls do not leak tokens into logs or URLs
+- frontend API calls do not leak tokens into logs or URLs
 - dangerous HTML is not rendered unsanitized
 
 ## Pre-Deployment Security Checklist

@@ -552,7 +552,6 @@ async def chat_stream(
                 return
 
             full = ""
-            error_text: str | None = None
             try:
                 async for token in stream_chat_completion(
                     messages,
