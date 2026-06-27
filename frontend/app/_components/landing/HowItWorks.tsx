@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Container, Group, Paper, Stack, Text, Title } from "@mantine/core";
+import { Box, Container, Group, Paper, SimpleGrid, Stack, Text, Title } from "@mantine/core";
 import {
   IconUpload,
   IconListCheck,
@@ -51,8 +51,8 @@ export function HowItWorks() {
           </Title>
         </Reveal>
 
-        <Stagger style={{ display: "flex", flexWrap: "wrap", gap: "var(--mantine-spacing-lg)" }}>
-          <Group gap="lg" grow align="stretch" w="100%">
+        <Stagger>
+          <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="lg" w="100%">
             {STEPS.map((s) => (
               <Reveal key={s.num} as="div">
                 <Paper radius="lg" p="xl" shadow="paper" bg="gray.0" h="100%">
@@ -99,7 +99,7 @@ export function HowItWorks() {
                 </Paper>
               </Reveal>
             ))}
-          </Group>
+          </SimpleGrid>
         </Stagger>
       </Stack>
     </Container>
