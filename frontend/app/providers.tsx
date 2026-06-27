@@ -460,7 +460,7 @@ export default function Providers({
       >
         <ColorSchemeCookieSync />
         <LandingSchemeSync />
-        <Notifications position="bottom-center" />
+        <Notifications position="top-right" />
         {children}
       </MantineProvider>
     </QueryClientProvider>

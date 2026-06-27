@@ -248,7 +248,12 @@ def get_prompt(db: Session, key: str, **fmt: object) -> str:
 
         fmt = {**fmt, "max_budget": ABSOLUTE_MAX_QUESTIONS_PER_PAGE}
         return text.format(**fmt)
-    return text
+    # No str.format() pass requested: collapse any format-escaped braces so JSON
+    # examples in the template render as valid single-brace JSON. Otherwise a model
+    # that copies the example literally (e.g. GLM) emits `{{...}}`, which fails
+    # json.loads and silently yields zero questions. (Templates only ever double
+    # braces to survive .format(); when we skip format, the doubles are artifacts.)
+    return text.replace("{{", "{").replace("}}", "}")
 
 
 # Per-content-type framing for generation. The MCQ rubric (one best answer,
