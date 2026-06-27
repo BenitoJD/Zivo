@@ -43,11 +43,12 @@ export function PdfReader({
   const [width, setWidth] = useState(0);
   const [sel, setSel] = useState<{ text: string; x: number; y: number } | null>(null);
 
-  // Track the readable column width (capped for comfortable line length).
+  // PDFs fill the pane (the user wants the page to use the whole space); the readable
+  // column for extracted text stays narrower for line length.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const measure = () => setWidth(Math.min(el.clientWidth - 32, 820));
+    const measure = () => setWidth(Math.min(el.clientWidth - 24, 1100));
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -95,11 +96,11 @@ export function PdfReader({
         onMouseUp={onMouseUp}
         flex={1}
         mih={0}
-        px="md"
+        px="sm"
         py="md"
         style={{ overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain" }}
       >
-        <Box maw={width || 820} mx="auto">
+        <Box w={isPdf ? width || "100%" : undefined} maw={isPdf ? undefined : 760} mx="auto">
           {isPdf && pdfDoc ? (
             Array.from({ length: pageCount }).map((_, i) => (
               <PdfPage key={i + 1} pdfDoc={pdfDoc} pageNumber={i + 1} width={width} />
@@ -262,7 +263,10 @@ function TextReader({ artifactId }: { artifactId: string }) {
 
 const TEXT_LAYER_CSS = `
 .zv-textlayer { overflow: hidden; opacity: 1; line-height: 1; text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0; z-index: 2; }
-.zv-textlayer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0 0; }
+/* Force every glyph fully transparent so only the crisp canvas shows — selecting
+   then highlights cleanly instead of revealing a second, blurry copy of the text. */
+.zv-textlayer, .zv-textlayer * { color: transparent !important; }
+.zv-textlayer :is(span, br) { position: absolute; white-space: pre; cursor: text; transform-origin: 0 0; }
 .zv-textlayer span.markedContent { top: 0; height: 0; }
-.zv-textlayer ::selection { background: rgba(124, 109, 242, 0.35); }
+.zv-textlayer ::selection { background: rgba(124, 109, 242, 0.38); color: transparent; }
 `;

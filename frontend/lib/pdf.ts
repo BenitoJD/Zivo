@@ -294,6 +294,7 @@ export async function renderPdfTextLayer(
   const cssScale = base.width > 0 ? cssWidth / base.width : 1;
   const viewport = page.getViewport({ scale: cssScale });
   container.replaceChildren();
+  container.classList.add("textLayer"); // pdf.js selection helpers look for .textLayer
   container.style.setProperty("--scale-factor", String(cssScale));
   container.style.width = `${viewport.width}px`;
   container.style.height = `${viewport.height}px`;

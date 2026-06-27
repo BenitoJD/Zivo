@@ -953,17 +953,18 @@ export default function WorkspaceArtifactPage({
           // downward instead of re-centering the whole panel — no layout jump.
           overflow: "hidden",
           justifyContent: "flex-start",
-          paddingTop: "clamp(12px, 6vh, 56px)",
+          paddingTop: "clamp(8px, 2vh, 20px)",
           minHeight: 0,
         }}
       >
         <Box
-          maw={680}
+          maw={760}
           w="100%"
           mx="auto"
           mih={0}
           px={4}
           style={{
+            flex: 1,
             maxHeight: "100%",
             overflowY: "auto",
             overflowX: "hidden",
@@ -1010,9 +1011,9 @@ export default function WorkspaceArtifactPage({
               generating={Boolean(queue?.generation_pending)}
             />
           ) : (
-          // Stable-height frame: the card no longer grows/shrinks with content
-          // (stem length, feedback, option lengths), so the page stops jumping.
-          <Box h="clamp(460px, 74vh, 640px)" style={{ maxHeight: "100%", overflow: "hidden" }}>
+          // Fill the whole study area — the question is its own page: the stem stays
+          // sticky at the top while options + explanation scroll beneath it.
+          <Box style={{ height: "100%", minHeight: 0, width: "100%", overflow: "hidden" }}>
           <McqHeroPanel
             stem={stem}
             options={options}
@@ -2866,25 +2867,28 @@ function McqHeroPanel({
           flexDirection: "column",
         }}
       >
-      {/* margin:auto centers the group when there is spare height, but collapses
-          gracefully on overflow so the top never gets clipped (unlike
-          justify-content:center + overflow). */}
+      {/* Top-anchored so the question is its own scrollable page. */}
       <Box
         style={{
-          margin: "auto 0",
           width: "100%",
           display: "flex",
           flexDirection: "column",
           gap: compact ? 14 : 20,
         }}
       >
+      {/* The stem stays put (sticky) while the options + explanation scroll under it. */}
       <Box
         style={{
+          position: "sticky",
+          top: 0,
+          zIndex: 3,
           flexShrink: 0,
-          minHeight: compact ? 64 : 84,
+          minHeight: compact ? 56 : 72,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
+          paddingBottom: 6,
+          background: "var(--mantine-color-body)",
         }}
       >
       <Title
@@ -3330,35 +3334,51 @@ const READ_CHAT_SUGGESTIONS = [
   "Give me an example",
 ];
 
-function ThinkingIndicator({ isDark }: { isDark: boolean }) {
-  const dot = isDark ? "#AEAEB2" : "#8E8A7E";
-
+/**
+ * The brand heart, alive while the assistant thinks — a gentle beat with a soft glow
+ * ring breathing outward. Replaces the old "..." dots for a more premium wait state.
+ */
+function ThinkingHeart({ size = 28 }: { size?: number }) {
   return (
-    <>
+    <Box
+      pos="relative"
+      w={size}
+      h={size}
+      style={{ display: "grid", placeItems: "center", flexShrink: 0 }}
+      aria-live="polite"
+      aria-label="Thinking"
+    >
       <style>{`
-        @keyframes zivo-think-dot {
-          0%, 80%, 100% { opacity: 0.28; transform: translateY(0); }
-          40% { opacity: 1; transform: translateY(-1.5px); }
+        @keyframes zivo-heart-beat {
+          0%, 100% { transform: scale(1); }
+          30% { transform: scale(1.16); }
+          45% { transform: scale(1.02); }
+          60% { transform: scale(1.1); }
         }
-        .zivo-think-dot { animation: zivo-think-dot 1.2s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
-        .zivo-think-dot:nth-child(2) { animation-delay: 0.15s; }
-        .zivo-think-dot:nth-child(3) { animation-delay: 0.3s; }
+        @keyframes zivo-heart-ring {
+          0% { transform: scale(0.7); opacity: 0.55; }
+          100% { transform: scale(2.1); opacity: 0; }
+        }
+        .zivo-heart-beat { animation: zivo-heart-beat 1.5s cubic-bezier(0.4,0,0.2,1) infinite; transform-origin: center; }
+        .zivo-heart-ring { animation: zivo-heart-ring 1.8s cubic-bezier(0.32,0.72,0,1) infinite; transform-origin: center; }
         @media (prefers-reduced-motion: reduce) {
-          .zivo-think-dot { animation: none; opacity: 0.55; }
+          .zivo-heart-beat, .zivo-heart-ring { animation: none !important; }
+          .zivo-heart-ring { opacity: 0 !important; }
         }
       `}</style>
-      <Group gap={5} align="center" aria-live="polite" aria-label="Thinking">
-        {[0, 1, 2].map((i) => (
-          <Box
-            key={i}
-            className="zivo-think-dot"
-            w={5}
-            h={5}
-            style={{ borderRadius: 999, backgroundColor: dot }}
-          />
-        ))}
-      </Group>
-    </>
+      <Box
+        className="zivo-heart-ring"
+        pos="absolute"
+        style={{
+          inset: 0,
+          borderRadius: "50%",
+          background: "radial-gradient(circle, var(--mantine-color-lavender-4) 0%, transparent 68%)",
+        }}
+      />
+      <Box className="zivo-heart-beat" style={{ position: "relative", lineHeight: 0 }}>
+        <BrandMark showWord={false} height={size} />
+      </Box>
+    </Box>
   );
 }
 
@@ -3466,12 +3486,15 @@ function ChatMessage({
     );
   }
 
+  const isThinking = thinking || (streaming && !message.content);
   return (
     <Group ref={ref} className="chat-msg" align="flex-start" gap="sm" wrap="nowrap" maw="100%">
-      <AssistantLogo size={28} />
+      {isThinking ? <ThinkingHeart size={28} /> : <AssistantLogo size={28} />}
       <Box pt={4} style={{ flex: 1, minWidth: 0 }}>
-        {thinking || (streaming && !message.content) ? (
-          <ThinkingIndicator isDark={isDark} />
+        {isThinking ? (
+          <Text size="sm" c="dimmed" pt={5} style={{ fontStyle: "italic" }}>
+            Thinking…
+          </Text>
         ) : (
           <AssistantMarkdown
             content={message.content}
