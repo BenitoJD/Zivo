@@ -150,6 +150,37 @@ def _append_rating(
     )
 
 
+def seed_item_difficulty(db: Session, assertion_id: uuid.UUID, difficulty: float) -> bool:
+    """Seed an item's birth-time difficulty PRIOR (n=0), at generation time.
+
+    Gives selection a non-coin-flip starting point before any answer exists — the fix
+    for Zivo's answered-once items. Writes nothing if a difficulty projection already
+    exists for the item, so it can never clobber an outcome-corrected (moat) value.
+    Returns True if a prior was written. O(1); no LLM; off the answer path.
+    """
+    existing = db.execute(
+        text(
+            """
+            SELECT 1 FROM intel.projection
+            WHERE type_concept_id = :t AND subject_assertion_id = :a
+            LIMIT 1
+            """
+        ),
+        {"t": concept_id(db, DIFFICULTY_PROJECTION_URI), "a": assertion_id},
+    ).first()
+    if existing is not None:
+        return False
+    _append_rating(
+        db,
+        DIFFICULTY_PROJECTION_URI,
+        now=datetime.now(timezone.utc),
+        rating=difficulty,
+        n=0,
+        assertion_id=assertion_id,
+    )
+    return True
+
+
 def record_outcome(
     db: Session,
     *,

@@ -604,6 +604,26 @@ def _link_assertion_concepts(
             continue
 
 
+def _seed_birth_difficulty(db: Session, assertion_id: uuid.UUID, payload: dict[str, Any]) -> None:
+    """Seed an item's birth-time difficulty prior at generation (flag-gated).
+
+    Off the answer path; gives difficulty_edge a non-coin-flip starting point on
+    answered-once items. Best-effort: a prior is an optimization, so a failure here
+    must never roll back the assertion that was already created.
+    """
+    from app.config import get_settings
+
+    if not get_settings().difficulty_prior_enabled:
+        return
+    try:
+        from app.services.calibration import seed_item_difficulty
+        from app.services.item_difficulty import estimate_birth_difficulty
+
+        seed_item_difficulty(db, assertion_id, estimate_birth_difficulty(payload))
+    except Exception:
+        return
+
+
 def _persist_assertion(
     db: Session,
     document_id: uuid.UUID,
@@ -657,6 +677,7 @@ def _persist_assertion(
         payload=payload,
     )
     _link_assertion_concepts(db, assertion_id, payload)
+    _seed_birth_difficulty(db, assertion_id, payload)
 
 
 def _persist_assertions(
@@ -742,4 +763,5 @@ def _persist_assertions(
         assertion_id_str = payload.get("_assertion_id")
         if assertion_id_str:
             _link_assertion_concepts(db, uuid.UUID(assertion_id_str), payload, pinned_qid)
+            _seed_birth_difficulty(db, uuid.UUID(assertion_id_str), payload)
     return finalized

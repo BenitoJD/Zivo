@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     #    outcomes (online Elo → intel.projection). Off by default so the moat fills
     #    only when enabled; "difficulty_edge" selection needs this on to have data.
     calibration_enabled: bool = False
+    # 5. Seed a birth-time difficulty PRIOR per item at generation time (cold-start
+    #    fix for answered-once items, so difficulty_edge has a non-coin-flip starting
+    #    point). Off the answer path; outcomes correct it. Off by default until the
+    #    real-data prior gate holds.
+    difficulty_prior_enabled: bool = False
     embed_model: str = "BAAI/bge-small-en-v1.5"
     embed_dimension: int = 384
     rerank_enabled: bool = True
