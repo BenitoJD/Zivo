@@ -21,6 +21,7 @@ import {
 } from "@tabler/icons-react";
 import { useFlashcardsQuery } from "@/lib/api/queries";
 import { GenerateGate, markGenStarted, readGenStarted } from "./GenerateGate";
+import { WaitState } from "./WaitState";
 
 /**
  * Flashcards mode — Scribely-style active recall. A flip-card deck generated from the
@@ -229,32 +230,5 @@ function CardFace({
         </Text>
       ) : null}
     </Box>
-  );
-}
-
-function WaitState({
-  icon,
-  title,
-  body,
-  action,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  body: string;
-  action?: React.ReactNode;
-}) {
-  return (
-    <Center mih={280}>
-      <Stack align="center" gap="sm" ta="center" maw={440}>
-        <ThemeIcon variant="light" color="lavender" radius="xl" size={54}>
-          {icon ?? <IconCards size={26} />}
-        </ThemeIcon>
-        <Text ff="var(--font-serif)" fz={24} fw={500} c="var(--mantine-color-text)">
-          {title}
-        </Text>
-        <Text c="dimmed">{body}</Text>
-        {action}
-      </Stack>
-    </Center>
   );
 }

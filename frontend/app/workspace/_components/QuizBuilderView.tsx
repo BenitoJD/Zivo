@@ -19,7 +19,6 @@ import {
 } from "@mantine/core";
 import {
   IconAlertTriangle,
-  IconCheck,
   IconFileTypeDocx,
   IconFileTypePdf,
   IconListCheck,
@@ -29,6 +28,7 @@ import {
 } from "@tabler/icons-react";
 import { apiFetchBytes } from "@/lib/api/client";
 import { useQuizQuery, type QuizConfig, type QuizQuestion } from "@/lib/api/queries";
+import { WaitState } from "./WaitState";
 
 // MCQ-style variants — all single-best-answer, same payload as "mcq" (options +
 // answer_index), so they render with the MCQ branch of QuestionCard.
@@ -280,17 +280,4 @@ function triggerDownload(blob: Blob, filename: string) {
   a.download = filename;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
-}
-
-function WaitState({ icon, title, body, action }: { icon: React.ReactNode; title: string; body: string; action?: React.ReactNode }) {
-  return (
-    <Center mih={240}>
-      <Stack align="center" gap="sm" ta="center" maw={440}>
-        <ThemeIcon variant="light" color="lavender" radius="xl" size={54}>{icon ?? <IconCheck size={26} />}</ThemeIcon>
-        <Text ff="var(--font-serif)" fz={24} fw={500}>{title}</Text>
-        <Text c="dimmed">{body}</Text>
-        {action}
-      </Stack>
-    </Center>
-  );
 }

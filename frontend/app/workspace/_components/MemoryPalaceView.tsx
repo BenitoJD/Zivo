@@ -31,6 +31,7 @@ import {
 } from "@tabler/icons-react";
 import { useMemoryPalaceQuery, type PalaceStation } from "@/lib/api/queries";
 import { GenerateGate, markGenStarted, readGenStarted } from "./GenerateGate";
+import { WaitState } from "./WaitState";
 
 /**
  * Memory Palace mode — Anthony Metivier's Magnetic Memory Method.
@@ -451,31 +452,4 @@ function saveMastered(key: string, set: Set<string>) {
   } catch {
     /* ignore */
   }
-}
-
-function WaitState({
-  icon,
-  title,
-  body,
-  action,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  body: string;
-  action?: React.ReactNode;
-}) {
-  return (
-    <Center mih={280}>
-      <Stack align="center" gap="sm" ta="center" maw={440}>
-        <ThemeIcon variant="light" color="lavender" radius="xl" size={54}>
-          {icon ?? <IconBuildingCastle size={26} />}
-        </ThemeIcon>
-        <Text ff="var(--font-serif)" fz={24} fw={500} c="var(--mantine-color-text)">
-          {title}
-        </Text>
-        <Text c="dimmed">{body}</Text>
-        {action}
-      </Stack>
-    </Center>
-  );
 }

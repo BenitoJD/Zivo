@@ -85,7 +85,7 @@ import { MemoryPalaceView } from "@/app/workspace/_components/MemoryPalaceView";
 import { QuizBuilderView } from "@/app/workspace/_components/QuizBuilderView";
 import { PdfReader } from "@/app/workspace/_components/PdfReader";
 import { GenerationStages } from "@/app/workspace/_components/GenerationStages";
-import { useStudyNav } from "@/app/workspace/_components/studyNav";
+import { useStudyNav, type StudyMode } from "@/app/workspace/_components/studyNav";
 import { PetLoader } from "@/app/_components/PetLoader";
 import { mcqOptionChrome, McqFeedbackCard } from "@/app/_components/mcq/McqCard";
 import { AssistantMarkdown, MessageCopyAction } from "@/lib/chatMarkdown";
@@ -1849,8 +1849,8 @@ function StudyMetaBar({
 }: {
   questionIndex: number;
   questionTotal: number;
-  mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read" | "quiz";
-  onModeChange: (mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read" | "quiz") => void;
+  mode: StudyMode;
+  onModeChange: (mode: StudyMode) => void;
   showProgress?: boolean;
   compact?: boolean;
   studyMode?: "adaptive" | "classic";
@@ -2009,13 +2009,13 @@ function StudyModeSwitch({
   onChange,
   compact = false,
 }: {
-  mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read" | "quiz";
-  onChange: (mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read" | "quiz") => void;
+  mode: StudyMode;
+  onChange: (mode: StudyMode) => void;
   compact?: boolean;
 }) {
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
-  type Mode = "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read" | "quiz";
+  type Mode = StudyMode;
 
   // Two intuitive groups instead of one crowded row: work directly with the material
   // (read / learn / test) vs. the AI study aids it generates.

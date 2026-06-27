@@ -19,7 +19,6 @@ import {
   IconAlertTriangle,
   IconCheck,
   IconCopy,
-  IconFileText,
   IconFileTypePdf,
   IconPhoto,
 } from "@tabler/icons-react";
@@ -27,6 +26,7 @@ import { IconNotebook } from "@tabler/icons-react";
 import { AssistantMarkdown } from "@/lib/chatMarkdown";
 import { useNotesQuery, type NoteKind } from "@/lib/api/queries";
 import { GenerateGate, markGenStarted, readGenStarted } from "./GenerateGate";
+import { WaitState } from "./WaitState";
 
 /**
  * Notes mode — Scribely-style. Turns a source into one cohesive, beautifully structured
@@ -228,32 +228,5 @@ export function NotesView({
         <AssistantMarkdown content={content} isDark={isDark} />
       </Paper>
     </Stack>
-  );
-}
-
-function WaitState({
-  icon,
-  title,
-  body,
-  action,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  body: string;
-  action?: React.ReactNode;
-}) {
-  return (
-    <Center mih={260}>
-      <Stack align="center" gap="sm" ta="center" maw={440}>
-        <ThemeIcon variant="light" color="lavender" radius="xl" size={54}>
-          {icon ?? <IconFileText size={26} />}
-        </ThemeIcon>
-        <Text ff="var(--font-serif)" fz={24} fw={500} c="var(--mantine-color-text)">
-          {title}
-        </Text>
-        <Text c="dimmed">{body}</Text>
-        {action}
-      </Stack>
-    </Center>
   );
 }
