@@ -44,6 +44,7 @@ import {
   IconArrowRight,
   IconArrowUp,
   IconArrowsMaximize,
+  IconBulb,
   IconCheck,
   IconClipboardList,
   IconFileText,
@@ -970,6 +971,10 @@ export default function WorkspaceArtifactPage({
     Boolean(queue?.page_complete) && !queue?.current_assertion_id && !queue?.document_complete;
   const showDocumentComplete = Boolean(queue?.document_complete) && !reselectOpen;
   const showNoQuestions = Boolean(queue?.no_questions_reason) && !reselectOpen;
+  // Test mode is summative: hold all feedback until the set is finished, then show
+  // one score + a full review. (Learn keeps its encouraging per-page completion.)
+  const testCorrect = answeredHistory.filter((c) => c.gradeState.correct).length;
+  const showTestResults = mode === "test" && showDocumentComplete && answeredHistory.length > 0;
   const chatContextReady = queue?.rag_window_ready !== false;
   const completedRange = selectedRange;
   const nextRangeSuggestion = completedRange
@@ -1040,6 +1045,15 @@ export default function WorkspaceArtifactPage({
                 Choose pages
               </Button>
             </Stack>
+          ) : showTestResults ? (
+            <TestResultsScreen
+              correct={testCorrect}
+              total={answeredHistory.length}
+              compact={isCompact}
+              canChoosePages={Boolean(completedRange)}
+              onReview={() => setReviewIndex(0)}
+              onChoosePages={openReselectPages}
+            />
           ) : showDocumentComplete && completedRange ? (
             <DocumentCompleteScreen
               completedFrom={completedRange.from}
@@ -1479,6 +1493,91 @@ function suggestNextPageRange(
   };
 }
 
+/** Summative score screen shown at the end of a Test — the payoff Learn never shows. */
+function TestResultsScreen({
+  correct,
+  total,
+  compact,
+  canChoosePages,
+  onReview,
+  onChoosePages,
+}: {
+  correct: number;
+  total: number;
+  compact?: boolean;
+  canChoosePages?: boolean;
+  onReview: () => void;
+  onChoosePages: () => void;
+}) {
+  const pct = total > 0 ? Math.round((correct / total) * 100) : 0;
+  const tone = pct >= 80 ? "sage" : pct >= 50 ? "forest" : "terracotta";
+  const verdict = pct >= 80 ? "Excellent" : pct >= 50 ? "Solid work" : "Keep practicing";
+  const RING = compact ? 150 : 184;
+  const R = RING / 2 - 12;
+  const C = 2 * Math.PI * R;
+  const center = RING / 2;
+  return (
+    <Center h="100%" py={compact ? "md" : "lg"}>
+      <Stack align="center" gap={compact ? "md" : "lg"} maw={440} px="md">
+        <style>{`
+          @keyframes zv-score-in { from { opacity: 0; transform: translateY(10px) scale(0.96); } to { opacity: 1; transform: none; } }
+          @keyframes zv-ring-draw { from { stroke-dashoffset: ${C}; } }
+          .zv-score { animation: zv-score-in 520ms cubic-bezier(0.32,0.72,0,1) both; }
+          .zv-ring-fill { animation: zv-ring-draw 900ms cubic-bezier(0.32,0.72,0,1) 120ms both; }
+          @media (prefers-reduced-motion: reduce) { .zv-score, .zv-ring-fill { animation: none !important; } }
+        `}</style>
+        <Text fz="xs" fw={700} tt="uppercase" c="dimmed" style={{ letterSpacing: "0.12em" }}>
+          Test complete
+        </Text>
+        <Box className="zv-score" pos="relative" w={RING} h={RING} style={{ display: "grid", placeItems: "center" }}>
+          <svg width={RING} height={RING} viewBox={`0 0 ${RING} ${RING}`}>
+            <circle cx={center} cy={center} r={R} fill="none" stroke="var(--mantine-color-gray-3)" strokeWidth={10} />
+            <circle
+              className="zv-ring-fill"
+              cx={center}
+              cy={center}
+              r={R}
+              fill="none"
+              stroke={`var(--mantine-color-${tone}-6)`}
+              strokeWidth={10}
+              strokeLinecap="round"
+              strokeDasharray={C}
+              strokeDashoffset={C * (1 - pct / 100)}
+              transform={`rotate(-90 ${center} ${center})`}
+            />
+          </svg>
+          <Stack pos="absolute" gap={0} align="center">
+            <Text fz={compact ? 34 : 42} fw={600} c="var(--mantine-color-text)" style={{ fontFamily: "var(--font-serif), Georgia, serif", lineHeight: 1, letterSpacing: "-0.02em" }}>
+              {pct}%
+            </Text>
+            <Text fz="sm" c="dimmed" fw={600} mt={4} style={{ fontVariantNumeric: "tabular-nums" }}>
+              {correct} / {total} correct
+            </Text>
+          </Stack>
+        </Box>
+        <Stack gap={4} align="center">
+          <Text ff="var(--font-serif)" fz={compact ? 22 : 26} fw={500} c="var(--mantine-color-text)" style={{ letterSpacing: "-0.01em" }}>
+            {verdict}
+          </Text>
+          <Text c="dimmed" fz="sm" ta="center" maw={320} lh={1.55}>
+            Review every question to see the correct answers and the reasoning behind them.
+          </Text>
+        </Stack>
+        <Stack gap={8} w="100%" maw={300} mt="xs">
+          <Button radius="xl" size="md" color="forest" onClick={onReview} leftSection={<IconHistory size={16} stroke={2} />}>
+            Review answers
+          </Button>
+          {canChoosePages ? (
+            <Button radius="xl" size="sm" variant="subtle" color="gray" onClick={onChoosePages}>
+              Study new pages
+            </Button>
+          ) : null}
+        </Stack>
+      </Stack>
+    </Center>
+  );
+}
+
 function DocumentCompleteScreen({
   completedFrom,
   completedTo,
@@ -1715,6 +1814,21 @@ function StudyMetaBar({
   const showBar = showProgress && questionTotal > 0;
   const pct = showBar ? Math.min(100, Math.round((questionIndex / questionTotal) * 100)) : 0;
   const segmented = showBar && questionTotal <= 16;
+  const isTestMode = mode === "test";
+  // Test wears the brand's deep green; Learn keeps lavender — a constant, glanceable
+  // signal that the two are different study contexts.
+  const barAccent = isTestMode ? "forest" : "lavender";
+  const modeBadge =
+    mode === "learn" || mode === "test" ? (
+      <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
+        <ThemeIcon size={20} radius="xl" variant="light" color={barAccent}>
+          {isTestMode ? <IconClipboardList size={12} stroke={2} /> : <IconBulb size={12} stroke={2} />}
+        </ThemeIcon>
+        <Text fz="xs" fw={700} tt="uppercase" c={`var(--mantine-color-${barAccent}-${isTestMode ? 8 : 7})`} style={{ letterSpacing: "0.04em" }}>
+          {isTestMode ? "Test" : "Learn"}
+        </Text>
+      </Group>
+    ) : null;
 
   const progress = !showBar ? null : (
     <Group gap={compact ? 8 : 12} wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
@@ -1734,7 +1848,7 @@ function StudyMetaBar({
                 flex: 1,
                 height: 5,
                 borderRadius: 99,
-                background: i < questionIndex ? "var(--mantine-color-lavender-6)" : "var(--mantine-color-gray-3)",
+                background: i < questionIndex ? `var(--mantine-color-${barAccent}-6)` : "var(--mantine-color-gray-3)",
                 transition: "background 260ms ease",
               }}
             />
@@ -1742,7 +1856,7 @@ function StudyMetaBar({
         </Group>
       ) : (
         <Box style={{ flex: 1, maxWidth: 380, height: 5, borderRadius: 99, background: "var(--mantine-color-gray-3)", overflow: "hidden" }}>
-          <Box style={{ width: `${pct}%`, height: "100%", borderRadius: 99, background: "var(--mantine-color-lavender-6)", transition: "width 320ms cubic-bezier(0.32,0.72,0,1)" }} />
+          <Box style={{ width: `${pct}%`, height: "100%", borderRadius: 99, background: `var(--mantine-color-${barAccent}-6)`, transition: "width 320ms cubic-bezier(0.32,0.72,0,1)" }} />
         </Box>
       )}
     </Group>
@@ -1770,8 +1884,8 @@ function StudyMetaBar({
     );
   }
 
-  // Desktop/tablet: the vertical StudyModeRail owns mode switching, so the top bar
-  // carries only the question progress — and nothing at all when there's none
+  // Desktop/tablet: the sidebar owns mode switching, so the top bar carries the
+  // mode identity + question progress — and nothing at all when there's none
   // (e.g. Read mode), so the content starts cleanly at the top.
   if (!progress) return null;
   return (
@@ -1784,6 +1898,7 @@ function StudyMetaBar({
       gap="md"
       style={{ flexShrink: 0 }}
     >
+      {modeBadge}
       {progress}
     </Group>
   );
@@ -2769,6 +2884,13 @@ function McqHeroPanel({
   const graded = gradeState !== null;
   const showNextQuestion = graded;
   const optionsLocked = graded && (mode === "test" || gradeState.correct);
+  // Learn vs Test, the core distinction: Learn reveals the answer + explanation
+  // right away (and lets you retry); Test records your choice silently and grades
+  // everything at the very end — no peeking. `reveal` gates every "show the answer"
+  // affordance so the two modes genuinely feel different.
+  const isTest = mode === "test";
+  const reveal = graded && !isTest;
+  const accent = isTest ? "forest" : "lavender";
   // "Checking" = answer submitted, grade not back yet. We light up the chosen option
   // with a calm pulse so the wait never feels frozen.
   const checking = submitting && !graded;
@@ -3068,8 +3190,10 @@ function McqHeroPanel({
         {safeOptions.map((opt, i) => {
           const value = String(i);
           const isSelected = selected === value;
-          const isCorrectOption = graded && gradeState.correctIndex === i;
-          const isWrongSelected = graded && !gradeState.correct && isSelected;
+          // Test mode never reveals correctness per-question — the chosen option just
+          // shows as "answered" (its selected tint), graded silently for the end.
+          const isCorrectOption = reveal && gradeState.correctIndex === i;
+          const isWrongSelected = reveal && !gradeState.correct && isSelected;
           const { border, background, chipBg, chipColor, borderWidth } = mcqOptionChrome(isDark, {
             isSelected,
             isCorrectOption,
@@ -3134,15 +3258,48 @@ function McqHeroPanel({
         })}
       </Stack>
 
-      {feedback && (
+      {reveal && feedback ? (
         <McqFeedbackCard
           feedback={feedback}
           isCorrect={gradeState?.correct === true}
           compact={compact}
           isDark={isDark}
         />
-      )}
+      ) : graded && isTest ? (
+        <Group justify="center" gap={8} mt={compact ? 8 : 12} style={{ flexShrink: 0 }}>
+          <ThemeIcon size={22} radius="xl" variant="light" color="forest">
+            <IconCheck size={13} stroke={2.4} />
+          </ThemeIcon>
+          <Text fz="sm" c="dimmed" fw={500}>
+            Answer recorded — you&rsquo;ll see your score at the end
+          </Text>
+        </Group>
+      ) : null}
       </Box>
+
+      {/* Anchored to the bottom of the question area — turns the old dead space into a
+          calm, mode-defining strip (and the live test tally). */}
+      <Center style={{ marginTop: "auto", paddingTop: compact ? 14 : 22, flexShrink: 0 }}>
+        <Box
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 9,
+            maxWidth: "100%",
+            padding: compact ? "6px 12px" : "7px 16px",
+            borderRadius: 999,
+            background: isDark ? `var(--mantine-color-${accent}-1)` : `var(--mantine-color-${accent}-0)`,
+            border: `1px solid var(--mantine-color-${accent}-${isDark ? 3 : 2})`,
+          }}
+        >
+          {isTest ? <IconClipboardList size={14} stroke={2} style={{ flexShrink: 0, color: `var(--mantine-color-${accent}-${isDark ? 8 : 7})` }} /> : <IconBulb size={14} stroke={2} style={{ flexShrink: 0, color: `var(--mantine-color-${accent}-${isDark ? 8 : 7})` }} />}
+          <Text fz="xs" fw={600} c={`var(--mantine-color-${accent}-${isDark ? 9 : 8})`} style={{ letterSpacing: "-0.01em" }}>
+            {isTest
+              ? `Test · graded at the end${(queue?.question_budget ?? 0) > 0 ? ` · ${queue?.questions_answered ?? 0} of ${queue?.question_budget} answered` : ""}`
+              : "Learn · instant feedback after each answer, retry until it clicks"}
+          </Text>
+        </Box>
+      </Center>
       </Box>
 
       <Stack align="center" gap={8} pt={compact ? "sm" : "md"} style={{ flexShrink: 0 }}>
@@ -3150,27 +3307,27 @@ function McqHeroPanel({
           <Button
             radius="xl"
             size="md"
-            color="sage"
+            color={isTest ? "forest" : "sage"}
             maw={compact ? "100%" : 300}
             w="100%"
             loading={submitting}
             onClick={onContinue}
             rightSection={<IconArrowRight size={18} stroke={2} />}
           >
-            Next question
+            {isTest ? "Next" : "Next question"}
           </Button>
         ) : (
           <Button
             radius="xl"
             size="md"
-            color="lavender"
+            color={accent}
             maw={compact ? "100%" : 300}
             w="100%"
             onClick={onSubmit}
             loading={checking}
             disabled={selected === null}
           >
-            {checking ? "Checking…" : "Check answer"}
+            {checking ? "Checking…" : isTest ? "Submit answer" : "Check answer"}
           </Button>
         )}
         {onAdvance && (

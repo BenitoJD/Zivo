@@ -10,7 +10,8 @@
  * render a question, capture a selection, show graded feedback, and advance.
  */
 
-import { Box, Button, Group, Radio, Stack, Text, Title, useMantineColorScheme } from "@mantine/core";
+import { Box, Button, Group, Radio, Stack, Text, ThemeIcon, Title, useMantineColorScheme } from "@mantine/core";
+import { IconBulb, IconCheck } from "@tabler/icons-react";
 import { normalizeMcqOptions } from "@/lib/types";
 
 export type GradeState = { correct: boolean; correctIndex: number } | null;
@@ -77,49 +78,80 @@ export function McqFeedbackCard({
   compact?: boolean;
   isDark: boolean;
 }) {
-  // Readability first: the explanation is the payoff after answering, so it gets the
-  // body sans, full text colour, comfortable size + line-height, and left-aligned
-  // paragraphs (centred prose is hard to scan). A subtle tinted card sets it apart.
+  // The explanation is the payoff after answering. Premium treatment: a self-
+  // contained card with a tinted status header (icon + verdict) and a clean,
+  // readable body — left-aligned prose, generous line-height.
   const paragraphs = feedback
     .split("\n\n")
     .map((p) => p.trim())
     .filter(Boolean);
 
+  const tone = isCorrect ? "sage" : "lavender";
+  const verdict = isCorrect ? "Correct" : "Here's why";
+
   return (
     <Box
       className="mcq-feedback"
-      style={{
-        flexShrink: 0,
-        padding: compact ? "4px 4px 0" : "8px 4px 0",
-      }}
+      style={{ flexShrink: 0, padding: compact ? "6px 2px 0" : "10px 2px 0" }}
     >
       <style>{`
-        @keyframes mcq-fb { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-        .mcq-feedback { animation: mcq-fb 360ms cubic-bezier(0.32,0.72,0,1) both; }
+        @keyframes mcq-fb { from { opacity: 0; transform: translateY(6px) scale(0.995); } to { opacity: 1; transform: none; } }
+        .mcq-feedback { animation: mcq-fb 420ms cubic-bezier(0.32,0.72,0,1) both; }
         @media (prefers-reduced-motion: reduce) { .mcq-feedback { animation: none !important; } }
       `}</style>
       <Box
         style={{
-          maxWidth: 620,
+          maxWidth: 640,
           marginInline: "auto",
           textAlign: "left",
-          padding: compact ? "10px 14px" : "14px 18px",
-          borderRadius: 14,
-          background: isDark ? "var(--mantine-color-dark-6)" : "var(--mantine-color-gray-0)",
+          borderRadius: 18,
+          overflow: "hidden",
+          background: isDark ? "var(--mantine-color-dark-6)" : "var(--mantine-color-body)",
           border: `1px solid ${isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-2)"}`,
-          borderLeft: `3px solid ${isCorrect ? "var(--mantine-color-sage-5)" : "var(--mantine-color-lavender-5)"}`,
+          boxShadow: isDark ? "none" : "0 6px 24px -16px rgba(20,18,40,0.35)",
         }}
       >
-        {paragraphs.map((p, i) => (
-          <Text
-            key={i}
-            c="var(--mantine-color-text)"
-            mt={i === 0 ? 0 : "sm"}
-            style={{ lineHeight: 1.7, fontSize: compact ? "0.9rem" : "1rem" }}
+        <Group
+          gap={10}
+          wrap="nowrap"
+          align="center"
+          px={compact ? 14 : 18}
+          py={compact ? 9 : 11}
+          style={{
+            background: isDark ? `var(--mantine-color-${tone}-2)` : `var(--mantine-color-${tone}-0)`,
+            borderBottom: `1px solid var(--mantine-color-${tone}-${isDark ? 4 : 2})`,
+          }}
+        >
+          <ThemeIcon
+            radius="xl"
+            size={compact ? 24 : 28}
+            variant="filled"
+            color={tone}
+            style={{ flexShrink: 0 }}
           >
-            {p}
+            {isCorrect ? <IconCheck size={15} stroke={2.6} /> : <IconBulb size={15} stroke={2.2} />}
+          </ThemeIcon>
+          <Text
+            fw={700}
+            fz={compact ? "sm" : "md"}
+            c={isDark ? `var(--mantine-color-${tone}-9)` : `var(--mantine-color-${tone}-8)`}
+            style={{ letterSpacing: "-0.01em" }}
+          >
+            {verdict}
           </Text>
-        ))}
+        </Group>
+        <Box px={compact ? 14 : 18} py={compact ? 12 : 16}>
+          {paragraphs.map((p, i) => (
+            <Text
+              key={i}
+              c="var(--mantine-color-text)"
+              mt={i === 0 ? 0 : "sm"}
+              style={{ lineHeight: 1.7, fontSize: compact ? "0.92rem" : "1.02rem" }}
+            >
+              {p}
+            </Text>
+          ))}
+        </Box>
       </Box>
     </Box>
   );
