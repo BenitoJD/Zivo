@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Box, Button, Container, Group, Stack, Text } from "@mantine/core";
 import {
@@ -45,6 +46,20 @@ const VISUAL = 480;
 
 export function SourceOrbit() {
   const reduce = useReducedMotion();
+  // The orbit visual is laid out at a fixed 480px (icons sit at a fixed radius).
+  // On narrow screens that overflowed and got clipped — so scale the whole visual
+  // down proportionally to the space available, keeping every icon on-screen.
+  const orbitWrapRef = useRef<HTMLDivElement>(null);
+  const [orbitScale, setOrbitScale] = useState(1);
+  useEffect(() => {
+    const el = orbitWrapRef.current;
+    if (!el) return;
+    const measure = () => setOrbitScale(Math.min(1, el.clientWidth / VISUAL));
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   return (
     <Container size="lg" px={{ base: "md", md: "lg" }} py={{ base: 24, md: 48 }}>
@@ -123,15 +138,27 @@ export function SourceOrbit() {
             </Reveal>
           </Stack>
 
-          {/* Right — device + orbiting source icons */}
+          {/* Right — device + orbiting source icons, scaled to fit any width */}
           <Box
+            ref={orbitWrapRef}
             style={{
               position: "relative",
+              width: "100%",
+              maxWidth: VISUAL,
+              height: VISUAL * orbitScale,
+              flex: "1 1 340px",
+              margin: "0 auto",
+            }}
+          >
+          <Box
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
               width: VISUAL,
               height: VISUAL,
-              maxWidth: "100%",
-              flex: "1 1 380px",
-              margin: "0 auto",
+              transformOrigin: "top left",
+              transform: `scale(${orbitScale})`,
             }}
           >
             {/* faint orbit guide rings */}
@@ -261,6 +288,7 @@ export function SourceOrbit() {
                 </Stack>
               </Box>
             </Box>
+          </Box>
           </Box>
         </Group>
       </Box>

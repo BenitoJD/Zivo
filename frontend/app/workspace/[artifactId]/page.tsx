@@ -85,6 +85,7 @@ import { QuizBuilderView } from "@/app/workspace/_components/QuizBuilderView";
 import { PdfReader } from "@/app/workspace/_components/PdfReader";
 import { GenerationStages } from "@/app/workspace/_components/GenerationStages";
 import { useStudyNav } from "@/app/workspace/_components/studyNav";
+import { PetLoader } from "@/app/_components/PetLoader";
 import { mcqOptionChrome, McqFeedbackCard } from "@/app/_components/mcq/McqCard";
 import { AssistantMarkdown, MessageCopyAction } from "@/lib/chatMarkdown";
 import { indexingStage, isTransientChatAssistantMessage } from "@/lib/constants";
@@ -949,7 +950,7 @@ export default function WorkspaceArtifactPage({
         <Paper withBorder p={{ base: "lg", sm: "xl" }} maw={520} w="100%">
           <Stack gap="lg">
             <Stack gap="xs" align="center">
-              <Loader type="oval" size="sm" />
+              <PetLoader size={64} variant="lavender" />
               <Text size="lg" fw={500} ta="center" style={{ letterSpacing: "-0.02em", fontFamily: "var(--font-serif), Georgia, serif" }}>
                 {stage.title}
               </Text>
@@ -3111,9 +3112,7 @@ function McqHeroPanel({
                   {progressPct}%
                 </Text>
               ) : (
-                <Box className="zivo-bob" style={{ animation: "zivo-bob 2.2s ease-in-out infinite" }}>
-                  <BrandMark showWord={false} height={compact ? 26 : 30} />
-                </Box>
+                <PetLoader size={compact ? 50 : 58} variant="lavender" />
               )}
             </Box>
           </Box>

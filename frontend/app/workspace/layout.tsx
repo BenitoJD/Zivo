@@ -123,7 +123,19 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   return (
     <WorkspaceShellContext.Provider value={{ openAddSource: () => router.push("/workspace") }}>
       <StudyNavProvider>
+      {/* On phones Mantine forces the navbar to 100% width, which stretches the nav
+          rows into sparse empty space. Make it a proper drawer instead. */}
+      <style>{`
+        @media (max-width: 47.99em) {
+          .zv-mobile-drawer {
+            width: min(86vw, 332px) !important;
+            max-width: min(86vw, 332px) !important;
+            box-shadow: 8px 0 40px rgba(20, 18, 30, 0.18);
+          }
+        }
+      `}</style>
       <AppShell
+        zIndex={120}
         transitionDuration={reduceMotion ? 0 : SHELL_MS}
         transitionTimingFunction={SHELL_EASE}
         header={{ height: { base: MOBILE_HEADER_HEIGHT, sm: 0 } }}
@@ -182,7 +194,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
           </Group>
         </AppShell.Header>
 
-        <AppShell.Navbar p={{ base: "sm", sm: "md" }}>
+        <AppShell.Navbar className="zv-mobile-drawer" p={{ base: "sm", sm: "md" }}>
           <Sidebar
             documents={documents}
             artifactId={artifactId}
@@ -214,6 +226,13 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
 
         <AppShell.Main>{children}</AppShell.Main>
       </AppShell>
+      {isMobile && mobileOpened ? (
+        <Box
+          onClick={closeMobile}
+          aria-hidden
+          style={{ position: "fixed", inset: 0, zIndex: 110, background: "rgba(20, 18, 30, 0.42)" }}
+        />
+      ) : null}
       </StudyNavProvider>
 
       <DeleteSourceModal
