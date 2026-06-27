@@ -2,7 +2,7 @@ replicaCount: 2
 namespace: zivo
 image:
   repository: ghcr.io/benitojd/zivo-api
-  tag: Zivo_0.1.50
+  tag: Zivo_0.1.51
   pullPolicy: IfNotPresent
 imagePullSecrets:
   - name: ghcr-cred
