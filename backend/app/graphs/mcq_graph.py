@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import os
 import uuid
 from typing import Any, Literal, TypedDict
 
@@ -12,6 +15,13 @@ from app.services.llm_router import complete_chat
 from app.services.mcq_dedup import sanitize_mcq_explanation
 from app.services.prompts import get_prompt
 from app.services.token_budget import GRADE_CONTEXT_MAX_TOKENS, truncate_to_tokens
+
+logger = logging.getLogger(__name__)
+
+# Hard cap on the (optional) selection-aware coaching LLM call at grade time. Grading
+# must feel instant, so if the provider is slow we abandon the richer feedback and use
+# the question's pre-generated explanation instead.
+GRADE_FEEDBACK_TIMEOUT = int(os.getenv("ZIVO_GRADE_FEEDBACK_TIMEOUT", "12"))
 
 
 def _sanitize_feedback(text: str) -> str:
@@ -189,21 +199,33 @@ async def grade_mcq_answer(
 ) -> dict[str, Any]:
     is_correct = int(selected_index) == int(correct_index)
 
-    graph = get_mcq_grade_graph()
-    state: McqGradeState = {
-        "question": question,
-        "options": options,
-        "correct_index": correct_index,
-        "selected_index": selected_index,
-        "explanation": explanation,
-        "aspect_label": aspect_label,
-        "document_context": document_context,
-        "is_correct": is_correct,
-    }
-    result = await graph.ainvoke(state, config={"configurable": {"db": db}})
-    feedback = (result.get("feedback") or "").strip()
+    # Correctness is known instantly from correct_index — the LLM only writes the
+    # selection-aware coaching. Bound that call tightly and NEVER let a slow/erroring
+    # provider make grading hang or 500: on timeout/failure fall back to the question's
+    # own pre-generated explanation (or a generic line). Grading always returns fast.
+    feedback = ""
+    try:
+        graph = get_mcq_grade_graph()
+        state: McqGradeState = {
+            "question": question,
+            "options": options,
+            "correct_index": correct_index,
+            "selected_index": selected_index,
+            "explanation": explanation,
+            "aspect_label": aspect_label,
+            "document_context": document_context,
+            "is_correct": is_correct,
+        }
+        result = await asyncio.wait_for(
+            graph.ainvoke(state, config={"configurable": {"db": db}}),
+            timeout=GRADE_FEEDBACK_TIMEOUT,
+        )
+        feedback = (result.get("feedback") or "").strip()
+    except Exception:
+        logger.warning("grade feedback generation failed/timed out; using fallback", exc_info=True)
+
     if not feedback:
-        feedback = _fallback_feedback(
+        feedback = (explanation or "").strip() or _fallback_feedback(
             is_correct=is_correct,
             correct=options[correct_index] if correct_index < len(options) else "",
             chosen=options[selected_index] if selected_index < len(options) else "",
