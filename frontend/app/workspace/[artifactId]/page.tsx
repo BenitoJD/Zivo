@@ -21,6 +21,7 @@ import {
   Drawer,
   Group,
   Loader,
+  Menu,
   NumberInput,
   Paper,
   Progress,
@@ -43,9 +44,11 @@ import {
   IconArrowLeft,
   IconArrowRight,
   IconArrowUp,
+  IconAdjustmentsHorizontal,
   IconArrowsMaximize,
   IconBulb,
   IconCheck,
+  IconChevronDown,
   IconClipboardList,
   IconFileText,
   IconGripVertical,
@@ -571,6 +574,17 @@ export default function WorkspaceArtifactPage({
     setQueue(data);
   }
 
+  async function setStudyMode(nextMode: "adaptive" | "classic") {
+    if (queue?.study_mode === nextMode) return;
+    // Optimistic — the change applies to the next question, no regeneration.
+    setQueue((q) => (q ? { ...q, study_mode: nextMode } : q));
+    try {
+      await apiPost(`/api/artifacts/${artifactId}/study-mode`, { mode: nextMode });
+    } catch {
+      void refreshQueue();
+    }
+  }
+
   function handleMcqSelect(value: string) {
     if (gradeState && !gradeState.correct && mode === "learn") {
       setGradeState(null);
@@ -991,6 +1005,8 @@ export default function WorkspaceArtifactPage({
         onModeChange={setMode}
         showProgress={(mode === "learn" || mode === "test") && !mcqLoading && Boolean(queue?.current_assertion_id) && !showPageComplete && !showDocumentComplete}
         compact={isCompact}
+        studyMode={queue?.study_mode}
+        onStudyModeChange={(m) => void setStudyMode(m)}
       />
       <Box
         flex={1}
@@ -1804,6 +1820,8 @@ function StudyMetaBar({
   onModeChange,
   showProgress = true,
   compact = false,
+  studyMode,
+  onStudyModeChange,
 }: {
   questionIndex: number;
   questionTotal: number;
@@ -1811,6 +1829,8 @@ function StudyMetaBar({
   onModeChange: (mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read" | "quiz") => void;
   showProgress?: boolean;
   compact?: boolean;
+  studyMode?: "adaptive" | "classic";
+  onStudyModeChange?: (mode: "adaptive" | "classic") => void;
 }) {
   const showBar = showProgress && questionTotal > 0;
   const pct = showBar ? Math.min(100, Math.round((questionIndex / questionTotal) * 100)) : 0;
@@ -1829,6 +1849,53 @@ function StudyMetaBar({
           {isTestMode ? "Test" : "Learn"}
         </Text>
       </Group>
+    ) : null;
+
+  // Adaptive vs Classic, switchable per document. Adaptive picks each next
+  // question at the learner's edge; Classic walks a fixed set in order.
+  const currentStudyMode = studyMode ?? "adaptive";
+  const studyModeControl =
+    (mode === "learn" || mode === "test") && onStudyModeChange ? (
+      <Menu shadow="md" width={244} position="bottom-end" radius="md" withinPortal>
+        <Menu.Target>
+          <UnstyledButton
+            aria-label="Change how questions are chosen"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              flexShrink: 0,
+              padding: "5px 10px",
+              borderRadius: 999,
+              border: "1px solid var(--mantine-color-default-border)",
+              background: "var(--mantine-color-body)",
+            }}
+          >
+            <IconAdjustmentsHorizontal size={14} stroke={1.8} style={{ color: "var(--mantine-color-dimmed)" }} />
+            <Text fz="xs" fw={600} c="var(--mantine-color-text)">
+              {currentStudyMode === "classic" ? "Classic" : "Adaptive"}
+            </Text>
+            <IconChevronDown size={12} stroke={2} style={{ color: "var(--mantine-color-dimmed)" }} />
+          </UnstyledButton>
+        </Menu.Target>
+        <Menu.Dropdown>
+          <Menu.Label>How questions are chosen</Menu.Label>
+          <Menu.Item
+            onClick={() => onStudyModeChange("adaptive")}
+            rightSection={currentStudyMode !== "classic" ? <IconCheck size={15} stroke={2.4} color="var(--mantine-color-lavender-6)" /> : null}
+          >
+            <Text fz="sm" fw={500}>Adaptive tutor</Text>
+            <Text fz="xs" c="dimmed">Questions adjust to your answers</Text>
+          </Menu.Item>
+          <Menu.Item
+            onClick={() => onStudyModeChange("classic")}
+            rightSection={currentStudyMode === "classic" ? <IconCheck size={15} stroke={2.4} color="var(--mantine-color-lavender-6)" /> : null}
+          >
+            <Text fz="sm" fw={500}>Classic</Text>
+            <Text fz="xs" c="dimmed">A fixed set, in order</Text>
+          </Menu.Item>
+        </Menu.Dropdown>
+      </Menu>
     ) : null;
 
   const progress = !showBar ? null : (
@@ -1880,27 +1947,35 @@ function StudyMetaBar({
       <Stack px="sm" py={6} gap={6} style={{ flexShrink: 0 }}>
         <style>{`.zv-modeswitch-scroll::-webkit-scrollbar { display: none; }`}</style>
         {modeSwitch}
-        {progress}
+        {progress || studyModeControl ? (
+          <Group justify="space-between" wrap="nowrap" align="center" gap="sm">
+            <Box style={{ flex: 1, minWidth: 0 }}>{progress}</Box>
+            {studyModeControl}
+          </Group>
+        ) : null}
       </Stack>
     );
   }
 
   // Desktop/tablet: the sidebar owns mode switching, so the top bar carries the
-  // mode identity + question progress — and nothing at all when there's none
-  // (e.g. Read mode), so the content starts cleanly at the top.
-  if (!progress) return null;
+  // mode identity + question progress + the Adaptive/Classic chooser — and nothing
+  // at all in modes that have none (e.g. Read), so the content starts cleanly.
+  if (!progress && !modeBadge && !studyModeControl) return null;
   return (
     <Group
       px={{ base: "sm", sm: "md", lg: "lg" }}
       py={8}
-      justify="flex-start"
+      justify="space-between"
       align="center"
       wrap="nowrap"
       gap="md"
       style={{ flexShrink: 0 }}
     >
-      {modeBadge}
-      {progress}
+      <Group gap="md" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
+        {modeBadge}
+        {progress}
+      </Group>
+      {studyModeControl}
     </Group>
   );
 }

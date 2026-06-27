@@ -119,6 +119,26 @@ def save_progress(db: Session, doc: Document, progress: dict[str, Any]) -> None:
         )
 
 
+def get_study_mode(doc: Document) -> str:
+    """The learner's per-document choice: 'adaptive' (difficulty_edge) or 'classic'
+    (sequence). Falls back to the global default policy when unset."""
+    from app.config import get_settings
+
+    policy = (
+        str(get_progress(doc).get("selection_policy") or "").strip().lower()
+        or (get_settings().selection_policy or "sequence").lower()
+    )
+    return "classic" if policy == "sequence" else "adaptive"
+
+
+def set_study_mode(db: Session, doc: Document, mode: str) -> str:
+    """Persist the learner's Adaptive/Classic choice for this document and return it.
+    Both policies run over the same question pool, so no regeneration is needed."""
+    policy = "sequence" if str(mode).strip().lower() == "classic" else "difficulty_edge"
+    save_progress(db, doc, {"selection_policy": policy})
+    return "classic" if policy == "sequence" else "adaptive"
+
+
 def _page_key(page: int) -> str:
     return str(page)
 
@@ -348,7 +368,12 @@ def select_next_assertion(
 
     from app.config import get_settings
 
-    policy = (get_settings().selection_policy or "sequence").lower()
+    # Per-document override (the learner's Adaptive/Classic choice) wins; otherwise
+    # fall back to the global default policy.
+    policy = (
+        str(progress.get("selection_policy") or "").strip().lower()
+        or (get_settings().selection_policy or "sequence").lower()
+    )
     if policy == "sequence" or len(candidates) == 1:
         return candidates[0]
 
@@ -513,6 +538,7 @@ def build_learn_queue_state(
         "max_per_page": budget,
         "rag_window_pages": rag_pages,
         "rag_window_ready": rag_ready,
+        "study_mode": get_study_mode(doc),
     }
 
 

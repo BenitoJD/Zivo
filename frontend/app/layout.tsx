@@ -86,21 +86,30 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
                 background: var(--mantine-color-lavender-1);
                 color: var(--mantine-color-lavender-9);
               }
-              /* Custom scrollbars */
+              /* Custom scrollbars — slim, calm, and inset so the thumb floats as a
+                 soft pill instead of a hard edge-to-edge bar (Calm Paper). */
+              * {
+                scrollbar-width: thin;
+                scrollbar-color: var(--mantine-color-gray-4) transparent;
+              }
               ::-webkit-scrollbar {
-                width: 6px;
-                height: 6px;
+                width: 11px;
+                height: 11px;
               }
               ::-webkit-scrollbar-track {
                 background: transparent;
               }
               ::-webkit-scrollbar-thumb {
-                background: var(--mantine-color-gray-3);
-                border-radius: 4px;
+                background: var(--mantine-color-gray-4);
+                border-radius: 999px;
+                border: 3px solid transparent;
+                background-clip: padding-box;
+                transition: background 160ms ease;
               }
               ::-webkit-scrollbar-thumb:hover {
-                background: var(--mantine-color-gray-4);
+                background: var(--mantine-color-gray-5);
               }
+              ::-webkit-scrollbar-corner { background: transparent; }
               /* Ambient background light glows */
               .spotlight-glow {
                 position: absolute;

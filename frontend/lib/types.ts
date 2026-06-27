@@ -48,6 +48,8 @@ export type McqState = {
   pool_available?: number;
   rag_window_pages?: number[];
   rag_window_ready?: boolean;
+  /** Per-document selection mode: "adaptive" (difficulty_edge) or "classic" (sequence). */
+  study_mode?: "adaptive" | "classic";
 };
 
 export type McqGradeResponse = {

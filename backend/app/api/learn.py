@@ -8,6 +8,7 @@ import time
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -23,8 +24,10 @@ from app.services.question_pool import (
     build_learn_queue_state,
     ensure_question_pool,
     get_progress,
+    get_study_mode,
     is_page_complete,
     page_range_bounds,
+    set_study_mode,
 )
 from app.services.learn_notify import wait_learn_notify
 
@@ -241,3 +244,39 @@ def advance_page(
         )
         db.commit()
     return {"unlocked_through_page": page, "page_ready": True}
+
+
+class StudyModeBody(BaseModel):
+    mode: str  # "adaptive" | "classic"
+
+
+@router.post("/{artifact_id}/study-mode", dependencies=[Depends(require_csrf_or_guest)])
+def set_study_mode_endpoint(
+    artifact_id: uuid.UUID,
+    body: StudyModeBody,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """Switch this document between the Adaptive tutor and Classic (fixed) order.
+    Both run over the same question pool, so the change takes effect on the next
+    question with no regeneration."""
+    doc = db.get(Document, artifact_id)
+    if not doc or not can_access_document(doc, user, guest_id):
+        raise HTTPException(status_code=404, detail="Not found")
+    mode = set_study_mode(db, doc, body.mode)
+    db.commit()
+    return {"study_mode": mode}
+
+
+@router.get("/{artifact_id}/study-mode")
+def get_study_mode_endpoint(
+    artifact_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    doc = db.get(Document, artifact_id)
+    if not doc or not can_access_document(doc, user, guest_id):
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"study_mode": get_study_mode(doc)}
