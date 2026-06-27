@@ -46,7 +46,10 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
     key: "zivo-sidebar-expanded",
     defaultValue: false,
   });
-  const isMobile = useMediaQuery("(max-width: 48em)", false, { getInitialValueInEffect: true });
+  // Strictly below 48em so it never overlaps AppShell's `sm` navbar breakpoint
+  // (which shows the desktop navbar at exactly 768px = iPad portrait); the overlap
+  // gave the navbar width:"100%" while rendered inline, pushing content off-screen.
+  const isMobile = useMediaQuery("(max-width: 47.99em)", false, { getInitialValueInEffect: true });
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)", false, {
     getInitialValueInEffect: true,
   });
