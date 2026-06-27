@@ -40,13 +40,21 @@ import {
 import { useDisclosure, useHover, useInterval, useLocalStorage, useMediaQuery, useMounted } from "@mantine/hooks";
 import {
   IconArrowDown,
+  IconArrowLeft,
   IconArrowRight,
   IconArrowUp,
   IconArrowsMaximize,
+  IconBook2,
+  IconBuildingCastle,
+  IconBulb,
+  IconCards,
   IconCheck,
   IconClipboardList,
   IconFileText,
   IconGripVertical,
+  IconHistory,
+  IconListCheck,
+  IconMessage2,
   IconMessageCircle,
   IconNotebook,
   IconPencil,
@@ -159,6 +167,17 @@ function computeGridLayout(
   return { cols, thumbWidth };
 }
 
+/** A question the learner has already answered — kept client-side so they can step
+ *  back and review any prior answer (with the choice they made + the explanation). */
+type AnsweredCard = {
+  assertionId: string;
+  stem: string;
+  options: string[];
+  selectedIndex: number;
+  gradeState: { correct: boolean; correctIndex: number };
+  feedback: string | null;
+};
+
 export default function WorkspaceArtifactPage({
   params,
 }: {
@@ -196,6 +215,9 @@ export default function WorkspaceArtifactPage({
   const [submitting, setSubmitting] = useState(false);
   const [questionSequence, setQuestionSequence] = useState<number | null>(null);
   const [mcqLoading, setMcqLoading] = useState(true);
+  // Answered-question history + a "review" cursor (null = on the live question).
+  const [answeredHistory, setAnsweredHistory] = useState<AnsweredCard[]>([]);
+  const [reviewIndex, setReviewIndex] = useState<number | null>(null);
 
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<{ role: string; content: string }[]>([]);
@@ -579,8 +601,24 @@ export default function WorkspaceArtifactPage({
       });
       const correct = Boolean(res.correct);
       const correctIndex = res.correct_index ?? Number(selected);
-      setFeedback(res.feedback ?? (correct ? "Correct!" : "Try again."));
+      const gradedFeedback = res.feedback ?? (correct ? "Correct!" : "Try again.");
+      setFeedback(gradedFeedback);
       setGradeState({ correct, correctIndex });
+      // Record this answer so the learner can step back to review it later. Keep the
+      // latest grade per question (learn-mode retries re-grade the same assertion).
+      const answeredId = queue.current_assertion_id;
+      const answeredSelection = Number(selected);
+      setAnsweredHistory((h) => [
+        ...h.filter((c) => c.assertionId !== answeredId),
+        {
+          assertionId: answeredId,
+          stem,
+          options: [...options],
+          selectedIndex: answeredSelection,
+          gradeState: { correct, correctIndex },
+          feedback: gradedFeedback,
+        },
+      ]);
     } catch {
       setFeedback("Could not grade answer — try again.");
     } finally {
@@ -613,6 +651,8 @@ export default function WorkspaceArtifactPage({
       setSelected(null);
       setGradeState(null);
       setFeedback(null);
+      setAnsweredHistory([]);
+      setReviewIndex(null);
       setArtifact(await apiGet<ArtifactMeta>(`/api/artifacts/${artifactId}`));
     } catch (e) {
       setSetupError(e instanceof Error ? e.message : "Could not start indexing");
@@ -1016,6 +1056,22 @@ export default function WorkspaceArtifactPage({
               compact={isCompact}
               generating={Boolean(queue?.generation_pending)}
             />
+          ) : reviewIndex !== null && answeredHistory[reviewIndex] ? (
+          // Reviewing a previously-answered question — read-only, with the learner's
+          // choice + the correct answer + explanation, and step controls.
+          <Box style={{ height: "100%", minHeight: 0, width: "100%", overflow: "hidden" }}>
+          <McqReviewView
+            card={answeredHistory[reviewIndex]}
+            index={reviewIndex}
+            total={answeredHistory.length}
+            compact={isCompact}
+            onPrev={reviewIndex > 0 ? () => setReviewIndex(reviewIndex - 1) : undefined}
+            onNext={() =>
+              setReviewIndex(reviewIndex + 1 < answeredHistory.length ? reviewIndex + 1 : null)
+            }
+            onExit={() => setReviewIndex(null)}
+          />
+          </Box>
           ) : (
           // Fill the whole study area — the question is its own page: the stem stays
           // sticky at the top while options + explanation scroll beneath it.
@@ -1035,6 +1091,10 @@ export default function WorkspaceArtifactPage({
             gradeState={gradeState}
             submitting={submitting}
             compact={isCompact}
+            canReview={gradeState ? answeredHistory.length >= 2 : answeredHistory.length >= 1}
+            onReviewPrevious={() =>
+              setReviewIndex(gradeState ? answeredHistory.length - 2 : answeredHistory.length - 1)
+            }
             onSubmit={() => void submitMcq()}
             onContinue={() => void advanceMcq()}
             onRetry={() => void refreshQueue()}
@@ -1058,8 +1118,15 @@ export default function WorkspaceArtifactPage({
         h="100%"
         mx={{ base: "calc(-1 * var(--mantine-spacing-xs))", sm: "calc(-1 * var(--mantine-spacing-md))" }}
         my={{ base: "calc(-1 * var(--mantine-spacing-xs))", sm: "calc(-1 * var(--mantine-spacing-md))" }}
-        style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}
+        style={{ display: "flex", flexDirection: "row", overflow: "hidden" }}
       >
+        {!isCompact && <StudyModeRail mode={mode} onChange={setMode} />}
+        <Box
+          flex={1}
+          mih={0}
+          h="100%"
+          style={{ display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}
+        >
         <StudyMetaBar
           questionIndex={0}
           questionTotal={0}
@@ -1068,7 +1135,7 @@ export default function WorkspaceArtifactPage({
           showProgress={false}
           compact={isCompact}
         />
-        <Group justify="flex-end" px={{ base: "sm", sm: "md" }} pb={6} style={{ flexShrink: 0 }}>
+        <Group justify="flex-end" px={{ base: "sm", sm: "md" }} pt={{ base: 8, sm: 12 }} pb={6} style={{ flexShrink: 0 }}>
           <Button
             size="xs"
             variant={readerNotesOpen ? "light" : "subtle"}
@@ -1173,6 +1240,7 @@ export default function WorkspaceArtifactPage({
             </Stack>
           )}
         </Drawer>
+        </Box>
       </Box>
     );
   }
@@ -1184,8 +1252,15 @@ export default function WorkspaceArtifactPage({
       h="100%"
       mx={{ base: "calc(-1 * var(--mantine-spacing-xs))", sm: "calc(-1 * var(--mantine-spacing-md))" }}
       my={{ base: "calc(-1 * var(--mantine-spacing-xs))", sm: "calc(-1 * var(--mantine-spacing-md))" }}
-      style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}
+      style={{ display: "flex", flexDirection: "row", overflow: "hidden" }}
     >
+      {!isCompact && <StudyModeRail mode={mode} onChange={setMode} />}
+      <Box
+        flex={1}
+        mih={0}
+        h="100%"
+        style={{ display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}
+      >
       {isLg ? (
         <>
           <Box
@@ -1362,6 +1437,7 @@ export default function WorkspaceArtifactPage({
           onConfirm={() => void confirmRange()}
         />
       )}
+      </Box>
     </Box>
   );
 }
@@ -1667,28 +1743,155 @@ function StudyMetaBar({
   );
 
   if (compact) {
+    // Phones can't fit a left mode rail, so the switch lives here above the progress.
     return (
       <Stack px="sm" py={6} gap={6} style={{ flexShrink: 0 }}>
         <style>{`.zv-modeswitch-scroll::-webkit-scrollbar { display: none; }`}</style>
-        {progress}
         {modeSwitch}
+        {progress}
       </Stack>
     );
   }
 
+  // Desktop/tablet: the vertical StudyModeRail owns mode switching, so the top bar
+  // carries only the question progress — and nothing at all when there's none
+  // (e.g. Read mode), so the content starts cleanly at the top.
+  if (!progress) return null;
   return (
     <Group
       px={{ base: "sm", sm: "md", lg: "lg" }}
       py={8}
-      justify="space-between"
+      justify="flex-start"
       align="center"
       wrap="nowrap"
       gap="md"
       style={{ flexShrink: 0 }}
     >
-      {progress ?? <Box style={{ flex: 1 }} />}
-      {modeSwitch}
+      {progress}
     </Group>
+  );
+}
+
+type StudyMode =
+  | "learn"
+  | "test"
+  | "explain"
+  | "notes"
+  | "cards"
+  | "palace"
+  | "read"
+  | "quiz";
+
+/**
+ * The vertical study-mode navigator that lives at the left edge of the study view
+ * (desktop + tablet). Moving mode selection off the top bar and onto a calm, always-
+ * visible rail is the "right place": glanceable, roomy, and it frees the top for the
+ * content. Two quiet groups — work directly with the material vs. the AI study aids.
+ */
+function StudyModeRail({
+  mode,
+  onChange,
+}: {
+  mode: StudyMode;
+  onChange: (mode: StudyMode) => void;
+}) {
+  const groups: { heading: string; items: { value: StudyMode; label: string; icon: typeof IconBook2 }[] }[] = [
+    {
+      heading: "Study",
+      items: [
+        { value: "read", label: "Read", icon: IconBook2 },
+        { value: "learn", label: "Learn", icon: IconBulb },
+        { value: "test", label: "Test", icon: IconClipboardList },
+      ],
+    },
+    {
+      heading: "Tools",
+      items: [
+        { value: "explain", label: "Explain", icon: IconMessage2 },
+        { value: "notes", label: "Notes", icon: IconNotebook },
+        { value: "cards", label: "Cards", icon: IconCards },
+        { value: "palace", label: "Palace", icon: IconBuildingCastle },
+        { value: "quiz", label: "Quiz", icon: IconListCheck },
+      ],
+    },
+  ];
+
+  return (
+    <Box
+      component="nav"
+      aria-label="Study modes"
+      style={{
+        width: 118,
+        flexShrink: 0,
+        height: "100%",
+        overflowY: "auto",
+        overflowX: "hidden",
+        borderRight: "1px solid var(--mantine-color-default-border)",
+        background: "var(--mantine-color-body)",
+        padding: "12px 8px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 16,
+      }}
+    >
+      <style>{`
+        .zv-mode-item {
+          display: flex;
+          align-items: center;
+          gap: 9px;
+          width: 100%;
+          padding: 8px 9px;
+          border-radius: 11px;
+          color: var(--mantine-color-dimmed);
+          transition: background 150ms ease, color 150ms ease, transform 150ms ease;
+        }
+        .zv-mode-item:hover { background: var(--mantine-color-default-hover); color: var(--mantine-color-text); }
+        .zv-mode-item:active { transform: scale(0.97); }
+        .zv-mode-item[data-active="true"] {
+          background: var(--mantine-color-lavender-0);
+          color: var(--mantine-color-lavender-7);
+          font-weight: 600;
+        }
+        [data-mantine-color-scheme="dark"] .zv-mode-item[data-active="true"] {
+          background: var(--mantine-color-lavender-2);
+          color: var(--mantine-color-lavender-9);
+        }
+        .zv-mode-item[data-active="true"] .zv-mode-glyph { color: inherit; }
+        @media (prefers-reduced-motion: reduce) { .zv-mode-item { transition: none !important; } }
+      `}</style>
+      {groups.map((g) => (
+        <Stack key={g.heading} gap={3}>
+          <Text
+            tt="uppercase"
+            fw={700}
+            c="dimmed"
+            px={9}
+            mb={2}
+            style={{ fontSize: 9.5, letterSpacing: "0.08em", opacity: 0.7 }}
+          >
+            {g.heading}
+          </Text>
+          {g.items.map((it) => {
+            const Icon = it.icon;
+            const active = mode === it.value;
+            return (
+              <UnstyledButton
+                key={it.value}
+                className="zv-mode-item"
+                data-active={active}
+                onClick={() => onChange(it.value)}
+                aria-current={active ? "page" : undefined}
+              >
+                <Icon className="zv-mode-glyph" size={18} stroke={active ? 2 : 1.7} style={{ flexShrink: 0 }} />
+                <Text fz={13} lh={1.1} style={{ fontWeight: "inherit" }}>
+                  {it.label}
+                </Text>
+              </UnstyledButton>
+            );
+          })}
+        </Stack>
+      ))}
+    </Box>
   );
 }
 
@@ -2638,6 +2841,8 @@ function McqHeroPanel({
   gradeState,
   submitting,
   compact = false,
+  canReview = false,
+  onReviewPrevious,
   onSubmit,
   onContinue,
   onAdvance,
@@ -2657,6 +2862,8 @@ function McqHeroPanel({
   gradeState: { correct: boolean; correctIndex: number } | null;
   submitting: boolean;
   compact?: boolean;
+  canReview?: boolean;
+  onReviewPrevious?: () => void;
   onSubmit: () => void;
   onContinue: () => void;
   onAdvance?: () => void;
@@ -2668,6 +2875,9 @@ function McqHeroPanel({
   const graded = gradeState !== null;
   const showNextQuestion = graded;
   const optionsLocked = graded && (mode === "test" || gradeState.correct);
+  // "Checking" = answer submitted, grade not back yet. We light up the chosen option
+  // with a calm pulse so the wait never feels frozen.
+  const checking = submitting && !graded;
   const waiting =
     mcqLoading ||
     artifactStatus === "indexing" ||
@@ -2890,8 +3100,16 @@ function McqHeroPanel({
         }
         .mcq-opt:not(:disabled):hover { transform: translateY(-2px); box-shadow: var(--mantine-shadow-paper); border-color: var(--mantine-color-lavender-4) !important; }
         .mcq-opt:not(:disabled):active { transform: translateY(0); }
+        /* Checking: the chosen option breathes while the grade comes back. */
+        @keyframes mcq-check-pulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(124, 109, 242, 0.0); }
+          50% { box-shadow: 0 0 0 4px rgba(124, 109, 242, 0.22); }
+        }
+        .mcq-opt-checking { animation: mcq-check-pulse 1.05s ease-in-out infinite !important; }
+        @keyframes mcq-check-dots { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+        .mcq-check-dot { animation: mcq-check-dots 1.2s ease-in-out infinite; }
         @media (prefers-reduced-motion: reduce) {
-          .mcq-q, .mcq-opt { animation: none !important; }
+          .mcq-q, .mcq-opt, .mcq-opt-checking, .mcq-check-dot { animation: none !important; }
         }
       `}</style>
 
@@ -2964,12 +3182,13 @@ function McqHeroPanel({
             isWrongSelected,
           });
           const dim = optionsLocked && !isCorrectOption && !isWrongSelected;
+          const isChecking = checking && isSelected;
           return (
             <UnstyledButton
               key={value}
-              className="mcq-opt"
-              disabled={optionsLocked}
-              onClick={() => { if (!optionsLocked) onSelect(value); }}
+              className={isChecking ? "mcq-opt mcq-opt-checking" : "mcq-opt"}
+              disabled={optionsLocked || checking}
+              onClick={() => { if (!optionsLocked && !checking) onSelect(value); }}
               style={{
                 animationDelay: `${90 + i * 60}ms`,
                 width: "100%",
@@ -3054,10 +3273,10 @@ function McqHeroPanel({
             maw={compact ? "100%" : 300}
             w="100%"
             onClick={onSubmit}
-            loading={submitting}
+            loading={checking}
             disabled={selected === null}
           >
-            Check answer
+            {checking ? "Checking…" : "Check answer"}
           </Button>
         )}
         {onAdvance && (
@@ -3065,14 +3284,204 @@ function McqHeroPanel({
             Next page
           </Button>
         )}
-        {!compact && (
+        {checking ? (
+          <Text size="xs" c="dimmed" ta="center" style={{ opacity: 0.9 }}>
+            Checking your answer
+            <Text component="span" inherit className="mcq-check-dot">…</Text>
+          </Text>
+        ) : canReview && onReviewPrevious ? (
+          <Button
+            variant="subtle"
+            color="gray"
+            size="compact-sm"
+            radius="xl"
+            leftSection={<IconHistory size={15} stroke={1.7} />}
+            onClick={onReviewPrevious}
+          >
+            Review previous
+          </Button>
+        ) : !compact ? (
           <Text size="xs" c="dimmed" ta="center" style={{ opacity: 0.85 }}>
             {showNextQuestion
               ? "Press Enter for the next question"
               : "Press A–D to choose · Enter to check"}
           </Text>
-        )}
+        ) : null}
       </Stack>
+    </Stack>
+  );
+}
+
+/**
+ * Read-only review of a previously-answered question. Mirrors McqHeroPanel's calm
+ * layout (serif stem, the same option chrome + feedback card) but locks everything
+ * and adds step controls so the learner can flip back through what they answered.
+ */
+function McqReviewView({
+  card,
+  index,
+  total,
+  compact = false,
+  onPrev,
+  onNext,
+  onExit,
+}: {
+  card: AnsweredCard;
+  index: number;
+  total: number;
+  compact?: boolean;
+  onPrev?: () => void;
+  onNext: () => void;
+  onExit: () => void;
+}) {
+  const { colorScheme } = useMantineColorScheme();
+  const isDark = colorScheme === "dark";
+  const safeOptions = normalizeMcqOptions(card.options);
+  const { correct, correctIndex } = card.gradeState;
+
+  return (
+    <Stack key={card.assertionId} h="100%" gap={0} align="stretch" style={{ overflow: "hidden" }}>
+      <Group
+        justify="space-between"
+        align="center"
+        wrap="nowrap"
+        px={4}
+        pb={8}
+        style={{ flexShrink: 0 }}
+      >
+        <Group gap={8} wrap="nowrap" align="center" style={{ minWidth: 0 }}>
+          <ThemeIcon variant="light" color="lavender" radius="xl" size={26}>
+            <IconHistory size={15} stroke={1.8} />
+          </ThemeIcon>
+          <Text fz="sm" fw={600} c="var(--mantine-color-text)" style={{ whiteSpace: "nowrap" }}>
+            Reviewing
+            <Text component="span" inherit c="dimmed" fw={500}>
+              {"  "}
+              {index + 1} of {total}
+            </Text>
+          </Text>
+        </Group>
+        <Button
+          variant="light"
+          color="lavender"
+          size="compact-sm"
+          radius="xl"
+          onClick={onExit}
+          rightSection={<IconArrowRight size={15} stroke={2} />}
+        >
+          Back to question
+        </Button>
+      </Group>
+
+      <Box style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+        <Box style={{ width: "100%", display: "flex", flexDirection: "column", gap: compact ? 14 : 18 }}>
+          <Title
+            order={2}
+            fw={500}
+            lh={1.3}
+            ta="center"
+            c="var(--mantine-color-text)"
+            style={{
+              fontFamily: "var(--font-serif), Georgia, serif",
+              fontSize: compact ? "clamp(1rem, 4.4vw, 1.3rem)" : "clamp(1.2rem, 2.2vw, 1.9rem)",
+              letterSpacing: "-0.01em",
+              maxWidth: "min(640px, 100%)",
+              marginInline: "auto",
+              overflowWrap: "anywhere",
+            }}
+          >
+            {card.stem}
+          </Title>
+
+          <Stack gap={compact ? 8 : 10} mih={0} style={{ flexShrink: 0 }}>
+            {safeOptions.map((opt, i) => {
+              const isCorrectOption = correctIndex === i;
+              const isWrongSelected = !correct && card.selectedIndex === i;
+              const { border, background, chipBg, chipColor, borderWidth } = mcqOptionChrome(isDark, {
+                isSelected: card.selectedIndex === i,
+                isCorrectOption,
+                isWrongSelected,
+              });
+              const dim = !isCorrectOption && !isWrongSelected;
+              return (
+                <Box
+                  key={i}
+                  style={{
+                    width: "100%",
+                    borderRadius: 14,
+                    padding: compact ? "12px 12px" : "14px 16px",
+                    minHeight: 48,
+                    border: `${borderWidth}px solid ${border}`,
+                    background,
+                    opacity: dim ? 0.6 : 1,
+                  }}
+                >
+                  <Group wrap="nowrap" align="center" gap={compact ? "sm" : "md"}>
+                    <Box
+                      style={{
+                        flexShrink: 0,
+                        width: 26,
+                        height: 26,
+                        borderRadius: 8,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        background: chipBg,
+                        color: chipColor,
+                        fontFamily: "var(--font-sans), sans-serif",
+                        fontWeight: 700,
+                        fontSize: 13,
+                      }}
+                    >
+                      {isCorrectOption ? (
+                        <IconCheck size={15} stroke={2.4} />
+                      ) : isWrongSelected ? (
+                        <IconX size={15} stroke={2.4} />
+                      ) : (
+                        String.fromCharCode(65 + i)
+                      )}
+                    </Box>
+                    <Text
+                      size={compact ? "sm" : "md"}
+                      lh={1.45}
+                      ta="left"
+                      style={{ flex: 1, fontSize: compact ? undefined : "1.0625rem", color: "var(--mantine-color-text)" }}
+                    >
+                      {opt}
+                    </Text>
+                  </Group>
+                </Box>
+              );
+            })}
+          </Stack>
+
+          {card.feedback ? (
+            <McqFeedbackCard feedback={card.feedback} isCorrect={correct} compact={compact} isDark={isDark} />
+          ) : null}
+        </Box>
+      </Box>
+
+      <Group justify="center" gap={8} pt={compact ? "sm" : "md"} style={{ flexShrink: 0 }}>
+        <Button
+          variant="default"
+          radius="xl"
+          size="sm"
+          leftSection={<IconArrowLeft size={16} stroke={2} />}
+          onClick={onPrev}
+          disabled={!onPrev}
+        >
+          Previous
+        </Button>
+        <Button
+          variant="default"
+          radius="xl"
+          size="sm"
+          rightSection={<IconArrowRight size={16} stroke={2} />}
+          onClick={onNext}
+        >
+          {index + 1 < total ? "Next" : "Back to question"}
+        </Button>
+      </Group>
     </Stack>
   );
 }
