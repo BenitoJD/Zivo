@@ -167,25 +167,23 @@ export function ProductMock() {
           })}
         </Stack>
 
-        <AnimatePresence>
-          {phase === "reveal" && (
-            <motion.div
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.4, ease: EASE }}
-            >
-              <Text
-                size="xs"
-                c="gray.5"
-                fs="italic"
-                style={{ fontFamily: "var(--font-serif)" }}
-              >
-                {q.explanation}
-              </Text>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {/* The explanation's space is reserved at all times so revealing it fades the
+            text in WITHOUT growing the card — no page jump. */}
+        <Box style={{ minHeight: "2.8em", display: "flex", alignItems: "flex-start" }}>
+          <Text
+            size="xs"
+            c="gray.5"
+            fs="italic"
+            style={{
+              fontFamily: "var(--font-serif)",
+              opacity: phase === "reveal" ? 1 : 0,
+              transform: phase === "reveal" ? "none" : "translateY(6px)",
+              transition: "opacity 420ms cubic-bezier(0.32,0.72,0,1), transform 420ms cubic-bezier(0.32,0.72,0,1)",
+            }}
+          >
+            {q.explanation}
+          </Text>
+        </Box>
       </Stack>
     </Paper>
   );
