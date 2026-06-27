@@ -23,6 +23,7 @@ import { DeleteSourceModal } from "@/app/workspace/_components/DeleteSourceModal
 import { sourceLabel } from "@/app/workspace/_components/Sidebar";
 import { SettingsModal } from "@/app/workspace/_components/SettingsModal";
 import { OnboardingGuide } from "@/app/workspace/_components/OnboardingGuide";
+import { StudyNavProvider } from "@/app/workspace/_components/studyNav";
 
 const MOBILE_HEADER_HEIGHT = 52;
 
@@ -121,6 +122,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
 
   return (
     <WorkspaceShellContext.Provider value={{ openAddSource: () => router.push("/workspace") }}>
+      <StudyNavProvider>
       <AppShell
         transitionDuration={reduceMotion ? 0 : SHELL_MS}
         transitionTimingFunction={SHELL_EASE}
@@ -212,6 +214,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
 
         <AppShell.Main>{children}</AppShell.Main>
       </AppShell>
+      </StudyNavProvider>
 
       <DeleteSourceModal
         target={deleteTarget}

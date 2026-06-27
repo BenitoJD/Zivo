@@ -44,17 +44,11 @@ import {
   IconArrowRight,
   IconArrowUp,
   IconArrowsMaximize,
-  IconBook2,
-  IconBuildingCastle,
-  IconBulb,
-  IconCards,
   IconCheck,
   IconClipboardList,
   IconFileText,
   IconGripVertical,
   IconHistory,
-  IconListCheck,
-  IconMessage2,
   IconMessageCircle,
   IconNotebook,
   IconPencil,
@@ -85,6 +79,7 @@ import { FlashcardsView } from "@/app/workspace/_components/FlashcardsView";
 import { MemoryPalaceView } from "@/app/workspace/_components/MemoryPalaceView";
 import { QuizBuilderView } from "@/app/workspace/_components/QuizBuilderView";
 import { PdfReader } from "@/app/workspace/_components/PdfReader";
+import { useStudyNav } from "@/app/workspace/_components/studyNav";
 import { mcqOptionChrome, McqFeedbackCard } from "@/app/_components/mcq/McqCard";
 import { AssistantMarkdown, MessageCopyAction } from "@/lib/chatMarkdown";
 import { indexingStage, isTransientChatAssistantMessage } from "@/lib/constants";
@@ -193,7 +188,13 @@ export default function WorkspaceArtifactPage({
   const mounted = useMounted();
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
-  const [mode, setMode] = useState<"learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read" | "quiz">("learn");
+  // Mode selection lives in the workspace layout so the global left sidebar can
+  // host the mode navigator (below the source list) instead of a second rail.
+  const { mode, setMode, setActive: setStudyNavActive } = useStudyNav();
+  useEffect(() => {
+    setStudyNavActive(true);
+    return () => setStudyNavActive(false);
+  }, [setStudyNavActive]);
 
   const [artifact, setArtifact] = useState<ArtifactMeta | null>(null);
   const [pages, setPages] = useState<PagesInfo | null>(null);
@@ -1116,11 +1117,26 @@ export default function WorkspaceArtifactPage({
         flex={1}
         mih={0}
         h="100%"
+        pos="relative"
         mx={{ base: "calc(-1 * var(--mantine-spacing-xs))", sm: "calc(-1 * var(--mantine-spacing-md))" }}
         my={{ base: "calc(-1 * var(--mantine-spacing-xs))", sm: "calc(-1 * var(--mantine-spacing-md))" }}
-        style={{ display: "flex", flexDirection: "row", overflow: "hidden" }}
+        style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}
       >
-        {!isCompact && <StudyModeRail mode={mode} onChange={setMode} />}
+        {/* Desktop 3-pane: the top was empty wasted space — float "Saved notes" into
+            the corner so the reader + buddy use the full height. */}
+        {!stacked && (
+          <Button
+            size="xs"
+            variant={readerNotesOpen ? "light" : "default"}
+            color="lavender"
+            radius="xl"
+            leftSection={<IconNotebook size={14} />}
+            onClick={() => setReaderNotesOpen((o) => !o)}
+            style={{ position: "absolute", top: 10, right: 16, zIndex: 20, boxShadow: "var(--mantine-shadow-sm)" }}
+          >
+            Saved notes{notes.length ? ` (${notes.length})` : ""}
+          </Button>
+        )}
         <Box
           flex={1}
           mih={0}
@@ -1135,18 +1151,20 @@ export default function WorkspaceArtifactPage({
           showProgress={false}
           compact={isCompact}
         />
-        <Group justify="flex-end" px={{ base: "sm", sm: "md" }} pt={{ base: 8, sm: 12 }} pb={6} style={{ flexShrink: 0 }}>
-          <Button
-            size="xs"
-            variant={readerNotesOpen ? "light" : "subtle"}
-            color="lavender"
-            radius="xl"
-            leftSection={<IconNotebook size={14} />}
-            onClick={() => setReaderNotesOpen((o) => !o)}
-          >
-            Saved notes{notes.length ? ` (${notes.length})` : ""}
-          </Button>
-        </Group>
+        {stacked ? (
+          <Group justify="flex-end" px={{ base: "sm", sm: "md" }} pt={6} pb={6} style={{ flexShrink: 0 }}>
+            <Button
+              size="xs"
+              variant={readerNotesOpen ? "light" : "subtle"}
+              color="lavender"
+              radius="xl"
+              leftSection={<IconNotebook size={14} />}
+              onClick={() => setReaderNotesOpen((o) => !o)}
+            >
+              Saved notes{notes.length ? ` (${notes.length})` : ""}
+            </Button>
+          </Group>
+        ) : null}
         {stacked ? (
           <SegmentedControl
             fullWidth
@@ -1252,9 +1270,8 @@ export default function WorkspaceArtifactPage({
       h="100%"
       mx={{ base: "calc(-1 * var(--mantine-spacing-xs))", sm: "calc(-1 * var(--mantine-spacing-md))" }}
       my={{ base: "calc(-1 * var(--mantine-spacing-xs))", sm: "calc(-1 * var(--mantine-spacing-md))" }}
-      style={{ display: "flex", flexDirection: "row", overflow: "hidden" }}
+      style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}
     >
-      {!isCompact && <StudyModeRail mode={mode} onChange={setMode} />}
       <Box
         flex={1}
         mih={0}
@@ -1769,129 +1786,6 @@ function StudyMetaBar({
     >
       {progress}
     </Group>
-  );
-}
-
-type StudyMode =
-  | "learn"
-  | "test"
-  | "explain"
-  | "notes"
-  | "cards"
-  | "palace"
-  | "read"
-  | "quiz";
-
-/**
- * The vertical study-mode navigator that lives at the left edge of the study view
- * (desktop + tablet). Moving mode selection off the top bar and onto a calm, always-
- * visible rail is the "right place": glanceable, roomy, and it frees the top for the
- * content. Two quiet groups — work directly with the material vs. the AI study aids.
- */
-function StudyModeRail({
-  mode,
-  onChange,
-}: {
-  mode: StudyMode;
-  onChange: (mode: StudyMode) => void;
-}) {
-  const groups: { heading: string; items: { value: StudyMode; label: string; icon: typeof IconBook2 }[] }[] = [
-    {
-      heading: "Study",
-      items: [
-        { value: "read", label: "Read", icon: IconBook2 },
-        { value: "learn", label: "Learn", icon: IconBulb },
-        { value: "test", label: "Test", icon: IconClipboardList },
-      ],
-    },
-    {
-      heading: "Tools",
-      items: [
-        { value: "explain", label: "Explain", icon: IconMessage2 },
-        { value: "notes", label: "Notes", icon: IconNotebook },
-        { value: "cards", label: "Cards", icon: IconCards },
-        { value: "palace", label: "Palace", icon: IconBuildingCastle },
-        { value: "quiz", label: "Quiz", icon: IconListCheck },
-      ],
-    },
-  ];
-
-  return (
-    <Box
-      component="nav"
-      aria-label="Study modes"
-      style={{
-        width: 118,
-        flexShrink: 0,
-        height: "100%",
-        overflowY: "auto",
-        overflowX: "hidden",
-        borderRight: "1px solid var(--mantine-color-default-border)",
-        background: "var(--mantine-color-body)",
-        padding: "12px 8px",
-        display: "flex",
-        flexDirection: "column",
-        gap: 16,
-      }}
-    >
-      <style>{`
-        .zv-mode-item {
-          display: flex;
-          align-items: center;
-          gap: 9px;
-          width: 100%;
-          padding: 8px 9px;
-          border-radius: 11px;
-          color: var(--mantine-color-dimmed);
-          transition: background 150ms ease, color 150ms ease, transform 150ms ease;
-        }
-        .zv-mode-item:hover { background: var(--mantine-color-default-hover); color: var(--mantine-color-text); }
-        .zv-mode-item:active { transform: scale(0.97); }
-        .zv-mode-item[data-active="true"] {
-          background: var(--mantine-color-lavender-0);
-          color: var(--mantine-color-lavender-7);
-          font-weight: 600;
-        }
-        [data-mantine-color-scheme="dark"] .zv-mode-item[data-active="true"] {
-          background: var(--mantine-color-lavender-2);
-          color: var(--mantine-color-lavender-9);
-        }
-        .zv-mode-item[data-active="true"] .zv-mode-glyph { color: inherit; }
-        @media (prefers-reduced-motion: reduce) { .zv-mode-item { transition: none !important; } }
-      `}</style>
-      {groups.map((g) => (
-        <Stack key={g.heading} gap={3}>
-          <Text
-            tt="uppercase"
-            fw={700}
-            c="dimmed"
-            px={9}
-            mb={2}
-            style={{ fontSize: 9.5, letterSpacing: "0.08em", opacity: 0.7 }}
-          >
-            {g.heading}
-          </Text>
-          {g.items.map((it) => {
-            const Icon = it.icon;
-            const active = mode === it.value;
-            return (
-              <UnstyledButton
-                key={it.value}
-                className="zv-mode-item"
-                data-active={active}
-                onClick={() => onChange(it.value)}
-                aria-current={active ? "page" : undefined}
-              >
-                <Icon className="zv-mode-glyph" size={18} stroke={active ? 2 : 1.7} style={{ flexShrink: 0 }} />
-                <Text fz={13} lh={1.1} style={{ fontWeight: "inherit" }}>
-                  {it.label}
-                </Text>
-              </UnstyledButton>
-            );
-          })}
-        </Stack>
-      ))}
-    </Box>
   );
 }
 

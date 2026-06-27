@@ -17,11 +17,19 @@ import {
   useMantineColorScheme,
 } from "@mantine/core";
 import {
+  IconBook2,
+  IconBuildingCastle,
+  IconBulb,
+  IconCards,
+  IconClipboardList,
   IconCpu,
   IconFileText,
   IconLayoutSidebarLeftCollapse,
+  IconListCheck,
   IconLogin,
+  IconMessage2,
   IconMoon,
+  IconNotebook,
   IconSettings,
   IconSun,
   IconTrash,
@@ -29,6 +37,29 @@ import {
 } from "@tabler/icons-react";
 import { BrandMark } from "@/app/_components/BrandMark";
 import type { SourceDocument } from "@/lib/types";
+import { useStudyNav, type StudyMode } from "@/app/workspace/_components/studyNav";
+
+/** Mode navigator content shared by the mini + expanded sidebar (below the sources). */
+const MODE_GROUPS: { heading: string; items: { value: StudyMode; label: string; icon: typeof IconBook2 }[] }[] = [
+  {
+    heading: "Study",
+    items: [
+      { value: "read", label: "Read", icon: IconBook2 },
+      { value: "learn", label: "Learn", icon: IconBulb },
+      { value: "test", label: "Test", icon: IconClipboardList },
+    ],
+  },
+  {
+    heading: "Tools",
+    items: [
+      { value: "explain", label: "Explain", icon: IconMessage2 },
+      { value: "notes", label: "Notes", icon: IconNotebook },
+      { value: "cards", label: "Cards", icon: IconCards },
+      { value: "palace", label: "Palace", icon: IconBuildingCastle },
+      { value: "quiz", label: "Quiz", icon: IconListCheck },
+    ],
+  },
+];
 
 export const SIDEBAR_MINI_WIDTH = 64;
 export const SIDEBAR_EXPANDED_WIDTH = 280;
@@ -124,6 +155,62 @@ function MiniRailButton({
     <Tooltip label={label} position="right" withArrow>
       {button}
     </Tooltip>
+  );
+}
+
+/** Mini (collapsed) mode navigator — a column of mode icons under the source icons. */
+function MiniModeNav({ mode, onChange }: { mode: StudyMode; onChange: (m: StudyMode) => void }) {
+  return (
+    <Stack gap={6} align="center" w="100%" pt={6} mt={2} style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}>
+      {MODE_GROUPS.flatMap((g) => g.items).map((it) => (
+        <MiniRailButton key={it.value} label={it.label} active={mode === it.value} onClick={() => onChange(it.value)}>
+          <it.icon size={18} stroke={1.6} />
+        </MiniRailButton>
+      ))}
+    </Stack>
+  );
+}
+
+/** Expanded mode navigator — grouped, labelled rows, placed below the source list. */
+function ExpandedModeNav({ mode, onChange }: { mode: StudyMode; onChange: (m: StudyMode) => void }) {
+  return (
+    <Box mt="sm" pt="sm" style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}>
+      <style>{`
+        .zv-mode-row {
+          display: flex; align-items: center; gap: 10px; width: 100%;
+          padding: 8px 10px; border-radius: 11px; color: var(--mantine-color-dimmed);
+          transition: background 150ms ease, color 150ms ease;
+        }
+        .zv-mode-row:hover { background: var(--mantine-color-default-hover); color: var(--mantine-color-text); }
+        .zv-mode-row[data-active="true"] { background: var(--mantine-color-lavender-0); color: var(--mantine-color-lavender-7); font-weight: 600; }
+        [data-mantine-color-scheme="dark"] .zv-mode-row[data-active="true"] { background: var(--mantine-color-lavender-2); color: var(--mantine-color-lavender-9); }
+        @media (prefers-reduced-motion: reduce) { .zv-mode-row { transition: none !important; } }
+      `}</style>
+      <Stack gap="sm">
+        {MODE_GROUPS.map((g) => (
+          <Stack key={g.heading} gap={3}>
+            <Text size="xs" tt="uppercase" fw={700} c="dimmed" lts={1.4} px="sm" mb={2} style={{ fontSize: 11 }}>
+              {g.heading}
+            </Text>
+            {g.items.map((it) => {
+              const active = mode === it.value;
+              return (
+                <UnstyledButton
+                  key={it.value}
+                  className="zv-mode-row"
+                  data-active={active}
+                  onClick={() => onChange(it.value)}
+                  aria-current={active ? "page" : undefined}
+                >
+                  <it.icon size={18} stroke={active ? 2 : 1.7} style={{ flexShrink: 0 }} />
+                  <Text size="sm" style={{ fontWeight: "inherit" }}>{it.label}</Text>
+                </UnstyledButton>
+              );
+            })}
+          </Stack>
+        ))}
+      </Stack>
+    </Box>
   );
 }
 
@@ -252,6 +339,9 @@ export function Sidebar({
 }: SidebarProps) {
   const { colorScheme, toggleColorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
+  // When an artifact study view is mounted, host its mode navigator here (below
+  // the sources) rather than as a separate rail.
+  const { active: studyActive, mode: studyMode, setMode: setStudyMode } = useStudyNav();
 
   return (
     <>
@@ -394,6 +484,7 @@ export function Sidebar({
                 })
               )}
             </Stack>
+            {studyActive && <MiniModeNav mode={studyMode} onChange={setStudyMode} />}
           </Box>
         </SidebarAnimatedLayer>
 
@@ -449,6 +540,7 @@ export function Sidebar({
                 ))}
               </Stack>
             )}
+            {studyActive && <ExpandedModeNav mode={studyMode} onChange={setStudyMode} />}
           </ScrollArea>
         </SidebarAnimatedLayer>
       </Box>
