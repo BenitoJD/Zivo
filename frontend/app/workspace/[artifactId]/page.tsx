@@ -18,6 +18,7 @@ import {
   Box,
   Button,
   Center,
+  Drawer,
   Group,
   Loader,
   NumberInput,
@@ -47,6 +48,7 @@ import {
   IconFileText,
   IconGripVertical,
   IconMessageCircle,
+  IconNotebook,
   IconPencil,
   IconPlayerStop,
   IconPoint,
@@ -64,6 +66,8 @@ import {
   useArtifactQuery,
   useAssertionQuery,
   useChatMessagesQuery,
+  useSavedNotesQuery,
+  useSavedNotesActions,
 } from "@/lib/api/queries";
 import { ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import { BrandMark } from "@/app/_components/BrandMark";
@@ -71,6 +75,7 @@ import { ExplainView } from "@/app/workspace/_components/ExplainView";
 import { NotesView } from "@/app/workspace/_components/NotesView";
 import { FlashcardsView } from "@/app/workspace/_components/FlashcardsView";
 import { MemoryPalaceView } from "@/app/workspace/_components/MemoryPalaceView";
+import { PdfReader } from "@/app/workspace/_components/PdfReader";
 import { mcqOptionChrome, McqFeedbackCard } from "@/app/_components/mcq/McqCard";
 import { AssistantMarkdown, MessageCopyAction } from "@/lib/chatMarkdown";
 import { indexingStage, isTransientChatAssistantMessage } from "@/lib/constants";
@@ -166,7 +171,7 @@ export default function WorkspaceArtifactPage({
   const mounted = useMounted();
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
-  const [mode, setMode] = useState<"learn" | "test" | "explain" | "notes" | "cards" | "palace">("learn");
+  const [mode, setMode] = useState<"learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read">("learn");
 
   const [artifact, setArtifact] = useState<ArtifactMeta | null>(null);
   const [pages, setPages] = useState<PagesInfo | null>(null);
@@ -193,6 +198,9 @@ export default function WorkspaceArtifactPage({
   const [chatMessages, setChatMessages] = useState<{ role: string; content: string }[]>([]);
   const [chatBusy, setChatBusy] = useState(false);
   const chatAbortRef = useRef<AbortController | null>(null);
+  const savedNotesQuery = useSavedNotesQuery(artifactId);
+  const savedNotesActions = useSavedNotesActions(artifactId);
+  const [readerNotesOpen, setReaderNotesOpen] = useState(false);
   const [sourceOpen, { open: openSource, close: closeSource }] = useDisclosure(false);
   const [tutorOpen, { open: openTutor, close: closeTutor }] = useDisclosure(false);
   const studyRowRef = useRef<HTMLDivElement>(null);
@@ -730,6 +738,27 @@ export default function WorkspaceArtifactPage({
     void runAssistant(userMsg);
   }
 
+  // Read-mode (Study Buddy) helpers — quote a selection into the composer, ask the
+  // buddy directly about a passage, and save answers/passages as notes linked to the doc.
+  function quoteToComposer(text: string) {
+    const t = text.trim().replace(/\s+/g, " ");
+    if (!t) return;
+    setChatInput(`About this passage:\n"${t}"\n\nMy question: `);
+  }
+  function askBuddy(message: string) {
+    if (chatBusy || !chatContextReady) return;
+    const msg = message.trim();
+    if (!msg) return;
+    setChatMessages((m) => [...m, { role: "user", content: msg }, { role: "assistant", content: "" }]);
+    void runAssistant(msg);
+  }
+  function saveNote(content: string, quote?: string | null) {
+    const c = content.trim();
+    if (!c) return;
+    void savedNotesActions.save(c, quote ?? null);
+    setReaderNotesOpen(true);
+  }
+
   // Regenerate the most recent answer: drop the trailing assistant turn and re-ask
   // the last user message.
   function regenerateChat() {
@@ -1009,6 +1038,104 @@ export default function WorkspaceArtifactPage({
       </Box>
     </Box>
   );
+
+  if (mode === "read") {
+    const notes = savedNotesQuery.data?.notes ?? [];
+    return (
+      <Box
+        flex={1}
+        mih={0}
+        h="100%"
+        mx={{ base: "calc(-1 * var(--mantine-spacing-xs))", sm: "calc(-1 * var(--mantine-spacing-md))" }}
+        my={{ base: "calc(-1 * var(--mantine-spacing-xs))", sm: "calc(-1 * var(--mantine-spacing-md))" }}
+        style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}
+      >
+        <StudyMetaBar
+          questionIndex={0}
+          questionTotal={0}
+          mode={mode}
+          onModeChange={setMode}
+          showProgress={false}
+          compact={isCompact}
+        />
+        <Group justify="flex-end" px={{ base: "sm", sm: "md" }} pb={6} style={{ flexShrink: 0 }}>
+          <Button
+            size="xs"
+            variant={readerNotesOpen ? "light" : "subtle"}
+            color="lavender"
+            radius="xl"
+            leftSection={<IconNotebook size={14} />}
+            onClick={() => setReaderNotesOpen((o) => !o)}
+          >
+            Saved notes{notes.length ? ` (${notes.length})` : ""}
+          </Button>
+        </Group>
+        <Box flex={1} mih={0} style={{ display: "flex", overflow: "hidden" }}>
+          <Box flex={3} mih={0} style={{ overflow: "hidden" }}>
+            <PdfReader
+              artifactId={artifact.id}
+              pdfDoc={pdfDoc}
+              isPdf={isPdf}
+              pageCount={pageCount}
+              onQuote={quoteToComposer}
+              onAsk={askBuddy}
+              onSaveQuote={(t) => saveNote(t, t)}
+            />
+          </Box>
+          <Box
+            flex={1}
+            mih={0}
+            miw={300}
+            style={{ borderLeft: "1px solid var(--app-border, var(--mantine-color-gray-2))", display: "flex", flexDirection: "column", maxWidth: 460 }}
+          >
+            <TutorPanel
+              messages={chatMessages}
+              input={chatInput}
+              busy={chatBusy}
+              contextReady={chatContextReady}
+              onInputChange={setChatInput}
+              onSend={() => void sendChat()}
+              onStop={stopChat}
+              onRegenerate={regenerateChat}
+              onEditUser={editChatFromUser}
+              onSaveNote={(c) => saveNote(c)}
+            />
+          </Box>
+        </Box>
+        <Drawer
+          opened={readerNotesOpen}
+          onClose={() => setReaderNotesOpen(false)}
+          position="right"
+          size="md"
+          title={<Text ff="var(--font-serif)" fw={500} fz="lg">Saved notes</Text>}
+        >
+          {notes.length === 0 ? (
+            <Text c="dimmed" fz="sm" ta="center" py="xl">
+              Nothing saved yet. Select a passage or use “Save” on an answer to keep it here.
+            </Text>
+          ) : (
+            <Stack gap="sm">
+              {notes.map((n) => (
+                <Paper key={n.id} withBorder radius="md" p="sm">
+                  {n.quote ? (
+                    <Text fz="xs" c="dimmed" fs="italic" mb={6} lineClamp={4} style={{ borderLeft: "2px solid var(--mantine-color-lavender-4)", paddingLeft: 8 }}>
+                      {n.quote}
+                    </Text>
+                  ) : null}
+                  <Text fz="sm" lh={1.55} style={{ whiteSpace: "pre-wrap" }}>{n.content}</Text>
+                  <Group justify="flex-end" mt={6}>
+                    <Button size="compact-xs" variant="subtle" color="gray" onClick={() => void savedNotesActions.remove(n.id)}>
+                      Delete
+                    </Button>
+                  </Group>
+                </Paper>
+              ))}
+            </Stack>
+          )}
+        </Drawer>
+      </Box>
+    );
+  }
 
   return (
     <Box
@@ -1447,8 +1574,8 @@ function StudyMetaBar({
 }: {
   questionIndex: number;
   questionTotal: number;
-  mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace";
-  onModeChange: (mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace") => void;
+  mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read";
+  onModeChange: (mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read") => void;
   showProgress?: boolean;
   compact?: boolean;
 }) {
@@ -1527,8 +1654,8 @@ function StudyModeSwitch({
   onChange,
   compact = false,
 }: {
-  mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace";
-  onChange: (mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace") => void;
+  mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read";
+  onChange: (mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read") => void;
   compact?: boolean;
 }) {
   const { colorScheme } = useMantineColorScheme();
@@ -1539,7 +1666,7 @@ function StudyModeSwitch({
       size="xs"
       radius="xl"
       value={mode}
-      onChange={(v) => onChange(v as "learn" | "test" | "explain" | "notes" | "cards" | "palace")}
+      onChange={(v) => onChange(v as "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read")}
       data={[
         { label: "Learn", value: "learn" },
         { label: "Test", value: "test" },
@@ -1547,6 +1674,7 @@ function StudyModeSwitch({
         { label: "Notes", value: "notes" },
         { label: "Cards", value: "cards" },
         { label: "Palace", value: "palace" },
+        { label: "Read", value: "read" },
       ]}
       styles={{
         root: {
@@ -2900,6 +3028,7 @@ function TutorPanel({
   onStop,
   onRegenerate,
   onEditUser,
+  onSaveNote,
 }: {
   messages: { role: string; content: string }[];
   input: string;
@@ -2910,6 +3039,7 @@ function TutorPanel({
   onStop?: () => void;
   onRegenerate?: () => void;
   onEditUser?: (index: number) => void;
+  onSaveNote?: (content: string) => void;
 }) {
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
@@ -3011,6 +3141,11 @@ function TutorPanel({
                     }
                     onRegenerate={onRegenerate}
                     onEdit={onEditUser && !busy ? () => onEditUser(i) : undefined}
+                    onSaveNote={
+                      onSaveNote && m.role === "assistant" && Boolean(m.content.trim())
+                        ? () => onSaveNote(m.content)
+                        : undefined
+                    }
                   />
                 ))}
               </Stack>
@@ -3252,6 +3387,7 @@ function ChatMessage({
   canRegenerate = false,
   onRegenerate,
   onEdit,
+  onSaveNote,
 }: {
   message: { role: string; content: string };
   isUser: boolean;
@@ -3261,6 +3397,7 @@ function ChatMessage({
   canRegenerate?: boolean;
   onRegenerate?: () => void;
   onEdit?: () => void;
+  onSaveNote?: () => void;
 }) {
   const { hovered, ref } = useHover();
   const actionsEnabled =
@@ -3314,6 +3451,11 @@ function ChatMessage({
         )}
         <MessageActionRail visible={showActions} enabled={actionsEnabled}>
           <MessageCopyAction value={message.content} label="Copy message" />
+          {onSaveNote && (
+            <ChatIconAction label="Save to notes" onClick={onSaveNote}>
+              <IconNotebook size={15} stroke={1.8} />
+            </ChatIconAction>
+          )}
           {canRegenerate && onRegenerate && (
             <ChatIconAction label="Regenerate" onClick={onRegenerate}>
               <IconRefresh size={15} stroke={1.8} />
