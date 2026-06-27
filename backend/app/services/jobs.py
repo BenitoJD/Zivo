@@ -224,3 +224,15 @@ def enqueue_memory_palace(db: Session, document_id: uuid.UUID, setting: str = ""
         workload=JobWorkload.io,
         payload={"document_id": str(document_id), "setting": setting},
     )
+
+
+def enqueue_quiz(
+    db: Session, document_id: uuid.UUID, *, types: list[str], count: int, difficulty: str
+) -> Job:
+    """Background generation of a quiz/worksheet (Question Generator, off the answer path)."""
+    return enqueue_job(
+        db,
+        name="quiz.generate",
+        workload=JobWorkload.io,
+        payload={"document_id": str(document_id), "types": types, "count": count, "difficulty": difficulty},
+    )

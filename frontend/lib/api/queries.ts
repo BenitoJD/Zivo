@@ -23,6 +23,7 @@ export const queryKeys = {
   flashcards: (id: string) => ["flashcards", id] as const,
   memoryPalace: (id: string, setting: string) => ["memory-palace", id, setting] as const,
   savedNotes: (id: string) => ["saved-notes", id] as const,
+  quiz: (id: string, config: string) => ["quiz", id, config] as const,
 };
 
 export type Topic = { key: string; title: string; summary: string };
@@ -139,6 +140,34 @@ export function useSavedNotesActions(artifactId: string) {
       void invalidate();
     },
   };
+}
+
+export type QuizQuestion = {
+  type: "mcq" | "multi" | "truefalse" | "fill_blank" | "short" | "essay" | "matching";
+  prompt: string;
+  explanation?: string;
+  options?: string[];
+  answer_index?: number;
+  answer_indices?: number[];
+  answer?: string | boolean;
+  pairs?: { left: string; right: string }[];
+};
+export type QuizConfig = { types: string[]; count: number; difficulty: string };
+export type QuizResponse = {
+  status: "indexing" | "generating" | "ready" | "failed" | "missing";
+  config: string;
+  questions: QuizQuestion[];
+};
+
+export function useQuizQuery(artifactId: string, cfg: QuizConfig, enabled = true) {
+  const qs = `types=${cfg.types.join(",")}&count=${cfg.count}&difficulty=${cfg.difficulty}`;
+  return useQuery({
+    queryKey: queryKeys.quiz(artifactId, qs),
+    queryFn: () => apiGet<QuizResponse>(`/api/artifacts/${artifactId}/quiz?${qs}`),
+    enabled: enabled && Boolean(artifactId) && cfg.types.length > 0,
+    refetchInterval: (query) =>
+      stillBuilding(query.state.data?.status) && document.visibilityState === "visible" ? 3000 : false,
+  });
 }
 
 export function useTopicExplanationQuery(artifactId: string, topicKey: string | null) {

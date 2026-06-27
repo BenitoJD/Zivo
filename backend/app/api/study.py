@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -15,6 +16,7 @@ from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.services.guest import can_access_document
 from app.services.guest_session import guest_session_for_read
 from app.services.memory_palace import ensure_palace
+from app.services.quiz import ensure_quiz, load_quiz
 from app.services.study_artifacts import NOTE_KINDS, ensure_flashcards, ensure_notes
 
 router = APIRouter()
@@ -130,6 +132,60 @@ def create_saved_note(
     """Save an answer (and the passage it came from) as a note linked to this source."""
     _require_doc(db, artifact_id, user, guest_id)
     return saved_notes_service.add_note(db, artifact_id, content=body.content, quote=body.quote)
+
+
+def _parse_types(types: str) -> list[str]:
+    return [t.strip() for t in (types or "").split(",") if t.strip()]
+
+
+@router.get("/{artifact_id}/quiz")
+def get_quiz(
+    artifact_id: uuid.UUID,
+    types: str = Query("mcq"),
+    count: int = Query(10),
+    difficulty: str = Query("mixed"),
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """Generate a quiz/worksheet of the chosen question types (Question Generator).
+
+    Regenerates in the background when the config (types/count/difficulty) changes.
+    Returns {status: indexing|generating|ready|failed, config, questions:[…]} with the
+    answer key included (the client hides answers for the student view).
+    """
+    doc = _require_ready_doc(db, artifact_id, user, guest_id)
+    if doc is None:
+        return {"status": "indexing", "config": "", "questions": []}
+    state = ensure_quiz(db, artifact_id, types=_parse_types(types), count=count, difficulty=difficulty)
+    return {"status": state["status"], "config": state["config"], "questions": state["questions"]}
+
+
+@router.get("/{artifact_id}/quiz/export.docx")
+def export_quiz_docx(
+    artifact_id: uuid.UUID,
+    answers: int = Query(0),
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+):
+    """Download the generated quiz as a .docx worksheet (answers=1 → teacher answer key)."""
+    doc = _require_doc(db, artifact_id, user, guest_id)
+    state = load_quiz(db, artifact_id)
+    if state["status"] != "ready" or not state["questions"]:
+        raise HTTPException(status_code=409, detail="Quiz not ready")
+
+    from app.services.quiz_export import build_quiz_docx
+
+    title = (doc.filename or "Quiz").rsplit(".", 1)[0]
+    data = build_quiz_docx(title=title, questions=state["questions"], with_answers=bool(answers))
+    suffix = "answer-key" if answers else "worksheet"
+    fname = f"{title[:60]}-{suffix}.docx".replace('"', "")
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 @router.delete(
