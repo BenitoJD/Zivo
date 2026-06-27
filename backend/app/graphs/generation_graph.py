@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import uuid
 from typing import Any
 
@@ -28,6 +29,8 @@ from app.services.question_pool import (
 from app.services.embed import embed_texts
 from app.services.retrieval import fetch_chunks_for_page_range, search_chunks
 from app.services.token_budget import PAGE_INPUT_MAX_TOKENS, truncate_to_tokens
+
+logger = logging.getLogger(__name__)
 
 # Stable full-page prefix for provider prompt caching; aspect hints live in the tail message.
 _PAGE_CONTEXT_MAX_TOKENS = PAGE_INPUT_MAX_TOKENS
@@ -584,6 +587,7 @@ def _link_assertion_concepts(
             link_assertion_concept,
         )
     except Exception:
+        logger.debug("concept-linking unavailable; skipping tagging", exc_info=True)
         return
 
     candidates: list[dict[str, str]] = []
@@ -627,6 +631,11 @@ def _seed_birth_difficulty(db: Session, assertion_id: uuid.UUID, payload: dict[s
 
         seed_item_difficulty(db, assertion_id, estimate_birth_difficulty(payload))
     except Exception:
+        # Birth-difficulty prior is an optimization; never block the assertion.
+        # Log at debug so a silent, persistent failure is still discoverable.
+        logger.debug(
+            "birth-difficulty seeding failed for assertion %s", assertion_id, exc_info=True
+        )
         return
 
 

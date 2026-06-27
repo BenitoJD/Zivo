@@ -2538,6 +2538,9 @@ function StudySourcePanel({
   useEffect(() => {
     if (!pdfDoc || !isPdf || !open || pageDisplayWidth < 1) return;
     let cancelled = false;
+    // Snapshot the (stable) canvas registry so the cleanup cancels exactly the
+    // renders this effect kicked off, without reading the ref at teardown time.
+    const canvases = canvasRefs.current;
 
     void (async () => {
       await new Promise<void>((resolve) => {
@@ -2546,7 +2549,7 @@ function StudySourcePanel({
       if (cancelled) return;
       for (const p of displayPages) {
         if (cancelled) return;
-        const canvas = canvasRefs.current[p];
+        const canvas = canvases[p];
         if (!canvas) continue;
         try {
           const fitScale = await pdfPageFitScale(pdfDoc, p, viewerWidth);
@@ -2564,7 +2567,7 @@ function StudySourcePanel({
 
     return () => {
       cancelled = true;
-      cancelAllPdfRenders(Object.values(canvasRefs.current));
+      cancelAllPdfRenders(Object.values(canvases));
     };
   }, [pdfDoc, displayPages, isPdf, open, viewerWidth, zoom, pageDisplayWidth]);
 
@@ -3003,17 +3006,22 @@ function McqHeroPanel({
   const [statusTick, setStatusTick] = useState(0);
   const stagnant =
     waiting && Boolean(queue?.generation_pending) && (queue?.questions_generated ?? 0) === 0;
-  const stuckStartRef = useRef<number | null>(null);
-  if (stagnant) {
-    if (!stuckStartRef.current) stuckStartRef.current = Date.now();
-  } else {
-    stuckStartRef.current = null;
-  }
-  const stuckSeconds =
-    stagnant && stuckStartRef.current
-      ? Math.floor((Date.now() - stuckStartRef.current) / 1000)
-      : 0;
-  void statusTick;
+  // How long generation has been stuck with 0 questions produced, so we can offer a
+  // retry after ~45s. Driven by an interval (not a ref read during render, which can
+  // produce stale UI and is a React anti-pattern).
+  const [stuckSeconds, setStuckSeconds] = useState(0);
+  useEffect(() => {
+    if (!stagnant) {
+      setStuckSeconds(0);
+      return;
+    }
+    const start = Date.now();
+    setStuckSeconds(0);
+    const id = window.setInterval(() => {
+      setStuckSeconds(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [stagnant]);
   const waitStatus = learnWaitStatus(
     {
       artifactStatus,

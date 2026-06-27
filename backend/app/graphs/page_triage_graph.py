@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import uuid
 from collections import OrderedDict
@@ -24,6 +25,8 @@ from app.services.question_pool import (
 )
 from app.services.retrieval import fetch_chunks_for_page_range
 from app.services.token_budget import PAGE_INPUT_MAX_TOKENS, truncate_to_tokens
+
+logger = logging.getLogger(__name__)
 
 _TRIAGE_PAGE_MAX_TOKENS = PAGE_INPUT_MAX_TOKENS
 
@@ -349,7 +352,13 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
                 _triage_cache.put(page_text, page_number, result)
                 return result
         except Exception:
-            pass
+            # LLM triage failed — degrade to heuristic budgeting. Log it: if this
+            # fires for every page, the moat's first stage is silently down.
+            logger.warning(
+                "page triage LLM failed for page %s; using heuristic fallback",
+                page_number,
+                exc_info=True,
+            )
     result = _fallback_triage(page_text, page_number)
     _triage_cache.put(page_text, page_number, result)
     return result
