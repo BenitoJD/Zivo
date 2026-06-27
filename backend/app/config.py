@@ -65,16 +65,16 @@ class Settings(BaseSettings):
     # 3. How the next question is chosen: "sequence" (legacy, by generation order),
     #    "concept_reinforce" (adaptive — reacts to the last answer), or
     #    "difficulty_edge" (targets the productive-struggle band from calibration).
-    selection_policy: str = "sequence"
+    selection_policy: str = "difficulty_edge"
     # 4. Calibrate per-item difficulty + per-learner ability from real answer
     #    outcomes (online Elo → intel.projection). Off by default so the moat fills
     #    only when enabled; "difficulty_edge" selection needs this on to have data.
-    calibration_enabled: bool = False
+    calibration_enabled: bool = True
     # 5. Seed a birth-time difficulty PRIOR per item at generation time (cold-start
     #    fix for answered-once items, so difficulty_edge has a non-coin-flip starting
     #    point). Off the answer path; outcomes correct it. Off by default until the
     #    real-data prior gate holds.
-    difficulty_prior_enabled: bool = False
+    difficulty_prior_enabled: bool = True
     embed_model: str = "BAAI/bge-small-en-v1.5"
     embed_dimension: int = 384
     rerank_enabled: bool = True

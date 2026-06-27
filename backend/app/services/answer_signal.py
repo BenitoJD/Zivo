@@ -11,6 +11,7 @@ answer can never be counted twice. The first answer per (learner, item) is the s
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from dataclasses import dataclass
 
@@ -19,6 +20,8 @@ from sqlalchemy.orm import Session
 
 from app.repositories.intel import concept_id
 from app.services.calibration import record_outcome
+
+logger = logging.getLogger(__name__)
 
 # One row per answer carries the verdict (value_numeric) plus choice/latency/confidence
 # in value_json, under this metric.
@@ -98,13 +101,21 @@ def record_answer_signal(
     ability: float | None = None
     difficulty: float | None = None
     if inserted and calibrate:
-        update = record_outcome(
-            db,
-            subject_entity_id=subject_entity_id,
-            assertion_id=assertion_id,
-            correct=correct,
-        )
-        ability, difficulty = update.ability, update.difficulty
+        # Best-effort: the immutable measurement row is already written, so a
+        # calibration failure must never break grading — degrade to "no estimate
+        # this turn" (selection falls back gracefully) rather than 500 the answer.
+        try:
+            update = record_outcome(
+                db,
+                subject_entity_id=subject_entity_id,
+                assertion_id=assertion_id,
+                correct=correct,
+            )
+            ability, difficulty = update.ability, update.difficulty
+        except Exception:
+            logger.warning(
+                "calibration failed for assertion %s; measurement kept", assertion_id, exc_info=True
+            )
 
     return AnswerSignal(
         inserted=inserted, concept_key=concept_key, ability=ability, difficulty=difficulty
