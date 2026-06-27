@@ -1099,6 +1099,8 @@ export default function WorkspaceArtifactPage({
               onRegenerate={regenerateChat}
               onEditUser={editChatFromUser}
               onSaveNote={(c) => saveNote(c)}
+              suggestions={READ_CHAT_SUGGESTIONS}
+              emptyHint="Read on the left. Highlight anything to ask about it, or start here:"
             />
           </Box>
         </Box>
@@ -1660,38 +1662,54 @@ function StudyModeSwitch({
 }) {
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
+  type Mode = "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read";
+
+  // Two intuitive groups instead of one crowded row: work directly with the material
+  // (read / learn / test) vs. the AI study aids it generates.
+  const core = ["read", "learn", "test"];
+  const tools = ["explain", "notes", "cards", "palace"];
+  const styles = {
+    root: {
+      background: isDark ? "var(--mantine-color-dark-6)" : "var(--mantine-color-gray-1)",
+      border: `1px solid ${isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-3)"}`,
+    },
+    label: {
+      fontWeight: 600,
+      paddingInline: compact ? 10 : 13,
+      fontSize: compact ? 11 : 12,
+      letterSpacing: "-0.01em",
+    },
+    indicator: { boxShadow: "none" },
+  };
 
   return (
-    <SegmentedControl
-      size="xs"
-      radius="xl"
-      value={mode}
-      onChange={(v) => onChange(v as "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read")}
-      data={[
-        { label: "Learn", value: "learn" },
-        { label: "Test", value: "test" },
-        { label: "Explain", value: "explain" },
-        { label: "Notes", value: "notes" },
-        { label: "Cards", value: "cards" },
-        { label: "Palace", value: "palace" },
-        { label: "Read", value: "read" },
-      ]}
-      styles={{
-        root: {
-          background: isDark ? "var(--mantine-color-dark-6)" : "var(--mantine-color-gray-1)",
-          border: `1px solid ${isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-3)"}`,
-        },
-        label: {
-          fontWeight: 600,
-          paddingInline: compact ? 12 : 16,
-          fontSize: compact ? 11 : 12,
-          letterSpacing: "-0.01em",
-        },
-        indicator: {
-          boxShadow: "none",
-        },
-      }}
-    />
+    <Group gap={compact ? 6 : 8} wrap="nowrap">
+      <SegmentedControl
+        size="xs"
+        radius="xl"
+        value={core.includes(mode) ? mode : ""}
+        onChange={(v) => v && onChange(v as Mode)}
+        data={[
+          { label: "Read", value: "read" },
+          { label: "Learn", value: "learn" },
+          { label: "Test", value: "test" },
+        ]}
+        styles={styles}
+      />
+      <SegmentedControl
+        size="xs"
+        radius="xl"
+        value={tools.includes(mode) ? mode : ""}
+        onChange={(v) => v && onChange(v as Mode)}
+        data={[
+          { label: "Explain", value: "explain" },
+          { label: "Notes", value: "notes" },
+          { label: "Cards", value: "cards" },
+          { label: "Palace", value: "palace" },
+        ]}
+        styles={styles}
+      />
+    </Group>
   );
 }
 
@@ -3029,6 +3047,8 @@ function TutorPanel({
   onRegenerate,
   onEditUser,
   onSaveNote,
+  suggestions = CHAT_SUGGESTIONS,
+  emptyHint = "Questions about this page, the source, or how to think through the answer.",
 }: {
   messages: { role: string; content: string }[];
   input: string;
@@ -3040,6 +3060,8 @@ function TutorPanel({
   onRegenerate?: () => void;
   onEditUser?: (index: number) => void;
   onSaveNote?: (content: string) => void;
+  suggestions?: string[];
+  emptyHint?: string;
 }) {
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
@@ -3098,11 +3120,11 @@ function TutorPanel({
                     Ask {ZIVO_ASSISTANT_NAME}
                   </Title>
                   <Text size="xs" c="dimmed" ta="center" lh={1.5}>
-                    Questions about this page, the source, or how to think through the answer.
+                    {emptyHint}
                   </Text>
                 </Stack>
                 <Stack gap={6} w="100%">
-                  {CHAT_SUGGESTIONS.map((suggestion) => (
+                  {suggestions.map((suggestion) => (
                     <Button
                       key={suggestion}
                       variant="light"
@@ -3298,6 +3320,14 @@ const CHAT_SUGGESTIONS = [
   "Explain this question in simple terms",
   "What concept is being tested here?",
   "Give me a hint without the answer",
+];
+
+// Reading-oriented prompts for Read / Study-Buddy mode (no question on screen).
+const READ_CHAT_SUGGESTIONS = [
+  "Summarize this page",
+  "Explain the part I highlighted",
+  "What are the key takeaways?",
+  "Give me an example",
 ];
 
 function ThinkingIndicator({ isDark }: { isDark: boolean }) {
