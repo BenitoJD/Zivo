@@ -61,6 +61,9 @@ _GENERATION_LOG_TAGS = frozenset(
         "topics_extract",
         "topics_rollup",
         "topic_explain",
+        "notes_generate",
+        "notes_rollup",
+        "flashcards_generate",
     }
 )
 # Hard backstop around a single LLM attempt. Some OpenAI-compatible providers ignore

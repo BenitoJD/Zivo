@@ -13,11 +13,10 @@ from app.services.auth import get_optional_user
 from app.services.guest import can_access_document
 from app.services.guest_session import guest_session_for_read
 from app.services.topics import (
+    ensure_explanation,
     ensure_topics,
     find_topic,
-    load_explanation,
     load_outline,
-    save_explanation,
 )
 
 router = APIRouter()
@@ -43,21 +42,22 @@ def get_topics(
 
 
 @router.get("/{artifact_id}/topics/{topic_key}/explain")
-async def explain_topic_endpoint(
+def explain_topic_endpoint(
     artifact_id: uuid.UUID,
     topic_key: str,
     db: Session = Depends(get_db),
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> dict:
-    """High-level, plain-language explanation of one topic. Cached after first build."""
+    """High-level, plain-language explanation of one topic.
+
+    Generation runs in a background worker (off the answer path), so this returns
+    immediately with status 'generating' the first time and the client polls — no
+    synchronous LLM call that could exceed the ingress timeout. Cached after first build.
+    """
     doc = db.get(Document, artifact_id)
     if not doc or not can_access_document(doc, user, guest_id):
         raise HTTPException(status_code=404, detail="Not found")
-
-    cached = load_explanation(db, artifact_id, topic_key)
-    if cached:
-        return {"status": "ready", "topic_key": topic_key, "explanation": cached}
 
     outline = load_outline(db, artifact_id)
     if outline["status"] != "ready":
@@ -67,13 +67,7 @@ async def explain_topic_endpoint(
     if not topic:
         raise HTTPException(status_code=404, detail="Unknown topic")
 
-    from app.graphs.topics_graph import explain_topic
-
-    explanation = await explain_topic(
-        db, artifact_id, title=topic["title"], summary=topic.get("summary", "")
+    state = ensure_explanation(
+        db, artifact_id, topic_key, title=topic["title"], summary=topic.get("summary", "")
     )
-    if not explanation:
-        return {"status": "failed", "topic_key": topic_key, "explanation": None}
-    save_explanation(db, artifact_id, topic_key, explanation)
-    db.commit()
-    return {"status": "ready", "topic_key": topic_key, "explanation": explanation}
+    return {"status": state["status"], "topic_key": topic_key, "explanation": state["explanation"]}

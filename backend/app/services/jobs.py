@@ -177,3 +177,40 @@ def enqueue_topics(db: Session, document_id: uuid.UUID) -> Job:
         workload=JobWorkload.io,
         payload={"document_id": str(document_id)},
     )
+
+
+def enqueue_explanation(
+    db: Session, document_id: uuid.UUID, topic_key: str, *, title: str, summary: str
+) -> Job:
+    """Background generation of one plain-language topic explanation (off the answer path)."""
+    return enqueue_job(
+        db,
+        name="explain.generate",
+        workload=JobWorkload.io,
+        payload={
+            "document_id": str(document_id),
+            "topic_key": topic_key,
+            "title": title,
+            "summary": summary,
+        },
+    )
+
+
+def enqueue_notes(db: Session, document_id: uuid.UUID, kind: str) -> Job:
+    """Background generation of structured study notes / a cheat sheet."""
+    return enqueue_job(
+        db,
+        name="notes.generate",
+        workload=JobWorkload.io,
+        payload={"document_id": str(document_id), "kind": kind},
+    )
+
+
+def enqueue_flashcards(db: Session, document_id: uuid.UUID) -> Job:
+    """Background generation of the active-recall flashcard deck."""
+    return enqueue_job(
+        db,
+        name="flashcards.generate",
+        workload=JobWorkload.io,
+        payload={"document_id": str(document_id)},
+    )
