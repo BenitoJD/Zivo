@@ -18,6 +18,7 @@ CONCEPTS = [
     ("/vocab/activity/generate_practice", "activity_type", "Generate practice questions"),
     ("/vocab/link/variant", "link_type", "Question variant"),
     ("/vocab/link/follow_up_after_miss", "link_type", "Remediation after miss"),
+    ("/vocab/link/harder_than", "link_type", "Harder successor"),
     ("/vocab/link/prerequisite", "link_type", "Prerequisite link"),
     ("/vocab/metric/answer.correct", "metric_type", "Answer correct"),
     ("/vocab/metric/answer.choice_index", "metric_type", "Choice index"),

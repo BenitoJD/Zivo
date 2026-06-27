@@ -356,15 +356,48 @@ def select_next_assertion(
 
     state = build_learner_state(progress)
     # Load only the signal the active policy needs (default path stays query-free).
-    concept_by_id = (
-        _concept_keys_for_ids(db, candidates) if policy == "concept_reinforce" else {}
-    )
-    difficulty_by_id = (
-        _difficulty_for_ids(db, candidates) if policy == "difficulty_edge" else {}
-    )
+    difficulty_by_id: dict[str, float] = {}
+    lineage_by_id: dict[str, str] = {}
+    if policy == "concept_reinforce":
+        concept_by_id = _concept_keys_for_ids(db, candidates)
+    elif policy == "difficulty_edge":
+        difficulty_by_id = _difficulty_for_ids(db, candidates)
+        concept_by_id = _concept_keys_for_ids(db, candidates)  # for per-concept ability
+        if state.last_assertion_id:
+            lineage_by_id = _lineage_successors(db, state.last_assertion_id, candidates)
+    else:
+        concept_by_id = {}
     return choose_next_assertion(
-        policy, candidates, concept_by_id, state, difficulty_by_id
+        policy, candidates, concept_by_id, state, difficulty_by_id, lineage_by_id
     )
+
+
+def _lineage_successors(
+    db: Session, from_assertion_id: str, candidate_ids: list[str]
+) -> dict[str, str]:
+    """Map candidate id -> lineage link kind from the last answered assertion.
+
+    Returns only ``follow_up_after_miss`` / ``harder_than`` edges that land on a
+    current candidate, so the selector can re-approach a missed idea or advance after
+    a hit. Empty (degrade to band/sequence) when no such edge exists.
+    """
+    if not candidate_ids:
+        return {}
+    rows = db.execute(
+        text(
+            """
+            SELECT al.to_assertion_id::text AS id,
+                   split_part(c.uri, '/', 4) AS kind
+            FROM intel.assertion_lineage al
+            JOIN intel.concept c ON c.id = al.link_type_concept_id
+            WHERE al.from_assertion_id::text = :from_id
+              AND al.to_assertion_id::text = ANY(:ids)
+              AND c.uri IN ('/vocab/link/follow_up_after_miss', '/vocab/link/harder_than')
+            """
+        ),
+        {"from_id": str(from_assertion_id), "ids": candidate_ids},
+    ).mappings().all()
+    return {r["id"]: r["kind"] for r in rows}
 
 
 def next_assertion_id(
@@ -1254,13 +1287,17 @@ def save_confirmed_answer(
     choice_index: int,
     correct: bool,
     learner_ability: float | None = None,
+    item_difficulty: float | None = None,
 ) -> None:
     """Persist the learner's latest confirmed MCQ choice for tutor chat context.
 
-    Also records the question's concept key so the selection loop can react to
-    the last answer (reinforce a missed concept, advance past a mastered one), and
-    mirrors the learner's freshly calibrated ability into progress so the
-    difficulty_edge policy can target their edge without an extra read.
+    Also records the question's concept key so the selection loop can react to the
+    last answer, and mirrors the learner's freshly calibrated ability into progress so
+    the difficulty_edge policy can target their edge without an extra read. When the
+    item's calibrated difficulty is supplied, advances the learner's *per-concept*
+    ability with one Elo step, so a learner strong in one concept and weak in another
+    is met in the right band on each. ``learner_ability``/``item_difficulty`` are only
+    passed for a genuinely new (non-replayed) answer, so this never double-counts.
     """
     doc = db.get(Document, document_id)
     if not doc:
@@ -1279,6 +1316,16 @@ def save_confirmed_answer(
     }
     if learner_ability is not None:
         patch["learner_ability"] = float(learner_ability)
+    if concept_key and item_difficulty is not None:
+        from app.services.calibration import DEFAULT_RATING, elo_update
+
+        progress = get_progress(doc)
+        concept_ability = dict(progress.get("concept_ability") or {})
+        prior = float(concept_ability.get(concept_key, DEFAULT_RATING))
+        concept_ability[concept_key] = elo_update(
+            prior, float(item_difficulty), bool(correct)
+        ).ability
+        patch["concept_ability"] = concept_ability
     save_progress(db, doc, patch)
     db.commit()
 

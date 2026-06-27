@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.repositories.intel import concept_id, get_or_create_concept_entity
+from app.services.answer_signal import record_answer_signal
 from app.services.calibration import (
     ABILITY_PROJECTION_URI,
     DEFAULT_RATING,
@@ -26,7 +27,7 @@ from app.services.calibration import (
     _latest_rating,
     record_outcome,
 )
-from app.services.question_pool import _difficulty_for_ids
+from app.services.question_pool import _difficulty_for_ids, _lineage_successors
 
 
 def _db_reachable() -> bool:
@@ -126,6 +127,84 @@ def test_difficulty_for_ids_reads_latest_per_item_by_text_id() -> None:
 
         # An uncalibrated id is simply absent (selection treats it as neutral).
         assert _difficulty_for_ids(db, [str(uuid.uuid4())]) == {}
+    finally:
+        db.rollback()
+        db.close()
+
+
+def _link(db: Session, from_id: uuid.UUID, to_id: uuid.UUID, link_uri: str) -> None:
+    db.execute(
+        text(
+            """
+            INSERT INTO intel.assertion_lineage
+              (from_assertion_id, to_assertion_id, link_type_concept_id)
+            VALUES (:f, :t, :lt)
+            """
+        ),
+        {"f": from_id, "t": to_id, "lt": concept_id(db, link_uri)},
+    )
+
+
+def test_answer_signal_is_idempotent_and_calibrates_once() -> None:
+    db = SessionLocal()
+    try:
+        learner = _learner(db)
+        item = _make_assertion(db, page=1, sequence=0, concept_key="k")
+
+        first = record_answer_signal(
+            db, subject_entity_id=learner, assertion_id=item,
+            correct=True, choice_index=0, calibrate=True,
+        )
+        assert first.inserted is True
+        assert first.ability is not None  # calibrated on the new event
+
+        # Replay / double-grade the same answer → no-op, no calibration.
+        second = record_answer_signal(
+            db, subject_entity_id=learner, assertion_id=item,
+            correct=True, choice_index=0, calibrate=True,
+        )
+        assert second.inserted is False
+        assert second.ability is None
+
+        # Exactly one measurement row and one ability projection — never double-counted.
+        n_rows = db.execute(
+            text(
+                "SELECT count(*) FROM intel.measurement "
+                "WHERE subject_entity_id = :e AND source_assertion_id = :a"
+            ),
+            {"e": learner, "a": item},
+        ).scalar()
+        assert n_rows == 1
+        n_ability = db.execute(
+            text(
+                "SELECT count(*) FROM intel.projection "
+                "WHERE subject_entity_id = :e AND type_concept_id = :t"
+            ),
+            {"e": learner, "t": concept_id(db, ABILITY_PROJECTION_URI)},
+        ).scalar()
+        assert n_ability == 1
+    finally:
+        db.rollback()
+        db.close()
+
+
+def test_lineage_successors_reads_followup_and_harder_edges() -> None:
+    db = SessionLocal()
+    try:
+        asked = _make_assertion(db, page=1, sequence=0, concept_key="k")
+        remedial = _make_assertion(db, page=1, sequence=1, concept_key="k")
+        harder = _make_assertion(db, page=1, sequence=2, concept_key="k")
+        unrelated = _make_assertion(db, page=1, sequence=3, concept_key="k")
+        _link(db, asked, remedial, "/vocab/link/follow_up_after_miss")
+        _link(db, asked, harder, "/vocab/link/harder_than")
+
+        out = _lineage_successors(
+            db, str(asked), [str(remedial), str(harder), str(unrelated)]
+        )
+        assert out == {
+            str(remedial): "follow_up_after_miss",
+            str(harder): "harder_than",
+        }
     finally:
         db.rollback()
         db.close()

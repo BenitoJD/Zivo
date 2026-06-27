@@ -102,3 +102,76 @@ def test_build_learner_state_without_calibration_has_no_ability() -> None:
     state = build_learner_state({})
     assert state.ability is None
     assert state.last_correct is None
+
+
+# ---- lineage routing (react to the last answer) -----------------------------
+
+
+def test_lineage_routes_a_miss_to_follow_up_after_miss() -> None:
+    state = LearnerState(ability=0.0, last_correct=False, last_assertion_id="Q1")
+    lineage = {"b": "follow_up_after_miss"}
+    out = choose_next_assertion(
+        "difficulty_edge", ["a", "b"], {}, state, {"a": 0.0, "b": 0.0}, lineage
+    )
+    assert out == "b"  # re-approach the missed idea
+
+
+def test_lineage_routes_a_hit_to_harder_than() -> None:
+    state = LearnerState(ability=0.0, last_correct=True, last_assertion_id="Q1")
+    lineage = {"a": "harder_than"}
+    out = choose_next_assertion(
+        "difficulty_edge", ["a", "b"], {}, state, {"a": 0.0, "b": 0.0}, lineage
+    )
+    assert out == "a"  # advance to the harder successor
+
+
+def test_lineage_ignored_when_kind_does_not_match_outcome() -> None:
+    # After a hit, a miss-remediation edge is irrelevant → fall back to the band.
+    state = LearnerState(ability=1.0, last_correct=True, last_assertion_id="Q1")
+    target = _target_difficulty(1.0)
+    difficulties = {"band": target, "remedial": target + 5.0}
+    lineage = {"remedial": "follow_up_after_miss"}
+    out = choose_next_assertion(
+        "difficulty_edge", ["band", "remedial"], {}, state, difficulties, lineage
+    )
+    assert out == "band"
+
+
+# ---- per-concept ability ----------------------------------------------------
+
+
+def test_per_concept_ability_overrides_global_for_the_band() -> None:
+    # Strong in concept A (3.0) though global ability is 0.0; both candidates are A.
+    state = LearnerState(ability=0.0, concept_ability={"A": 3.0})
+    concept_by_id = {"x": "A", "y": "A"}
+    difficulties = {"x": _target_difficulty(3.0), "y": _target_difficulty(0.0)}
+    out = choose_next_assertion(
+        "difficulty_edge", ["x", "y"], concept_by_id, state, difficulties
+    )
+    assert out == "x"  # used per-concept ability (3.0), not global (0.0)
+
+
+def test_global_ability_used_when_concept_has_no_per_concept_rating() -> None:
+    state = LearnerState(ability=0.0, concept_ability={"A": 3.0})
+    concept_by_id = {"x": "B", "y": "B"}  # concept B uncalibrated → global ability
+    difficulties = {"x": _target_difficulty(3.0), "y": _target_difficulty(0.0)}
+    out = choose_next_assertion(
+        "difficulty_edge", ["x", "y"], concept_by_id, state, difficulties
+    )
+    assert out == "y"
+
+
+def test_build_learner_state_reads_last_assertion_and_concept_ability() -> None:
+    progress = {
+        "learner_ability": 0.5,
+        "concept_ability": {"algebra": 1.5},
+        "last_confirmed_answer": {
+            "assertion_id": "Q9",
+            "correct": True,
+            "concept_key": "algebra",
+        },
+    }
+    state = build_learner_state(progress)
+    assert state.last_assertion_id == "Q9"
+    assert state.concept_ability == {"algebra": 1.5}
+    assert state.last_correct is True
