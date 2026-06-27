@@ -77,22 +77,20 @@ export function McqFeedbackCard({
   compact?: boolean;
   isDark: boolean;
 }) {
-  // The selected/correct option chips already signal right vs wrong in colour, so
-  // the explanation reads as a calm, serif-italic footnote — premium and small, so
-  // revealing it barely changes the card height (no jarring jump).
-  const text = feedback
+  // Readability first: the explanation is the payoff after answering, so it gets the
+  // body sans, full text colour, comfortable size + line-height, and left-aligned
+  // paragraphs (centred prose is hard to scan). A subtle tinted card sets it apart.
+  const paragraphs = feedback
     .split("\n\n")
     .map((p) => p.trim())
-    .filter(Boolean)
-    .join("  ");
+    .filter(Boolean);
 
   return (
     <Box
       className="mcq-feedback"
       style={{
         flexShrink: 0,
-        textAlign: "center",
-        padding: compact ? "2px 12px 0" : "6px 28px 0",
+        padding: compact ? "4px 4px 0" : "8px 4px 0",
       }}
     >
       <style>{`
@@ -100,19 +98,29 @@ export function McqFeedbackCard({
         .mcq-feedback { animation: mcq-fb 360ms cubic-bezier(0.32,0.72,0,1) both; }
         @media (prefers-reduced-motion: reduce) { .mcq-feedback { animation: none !important; } }
       `}</style>
-      <Text
-        c="dimmed"
+      <Box
         style={{
-          fontFamily: "var(--font-serif), Georgia, serif",
-          fontStyle: "italic",
-          lineHeight: 1.6,
-          fontSize: compact ? "0.8rem" : "0.95rem",
-          maxWidth: 560,
+          maxWidth: 620,
           marginInline: "auto",
+          textAlign: "left",
+          padding: compact ? "10px 14px" : "14px 18px",
+          borderRadius: 14,
+          background: isDark ? "var(--mantine-color-dark-6)" : "var(--mantine-color-gray-0)",
+          border: `1px solid ${isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-2)"}`,
+          borderLeft: `3px solid ${isCorrect ? "var(--mantine-color-sage-5)" : "var(--mantine-color-lavender-5)"}`,
         }}
       >
-        {text}
-      </Text>
+        {paragraphs.map((p, i) => (
+          <Text
+            key={i}
+            c="var(--mantine-color-text)"
+            mt={i === 0 ? 0 : "sm"}
+            style={{ lineHeight: 1.7, fontSize: compact ? "0.9rem" : "1rem" }}
+          >
+            {p}
+          </Text>
+        ))}
+      </Box>
     </Box>
   );
 }
