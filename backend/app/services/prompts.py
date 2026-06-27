@@ -240,7 +240,7 @@ De-duplicate overlapping topics, keep reading order, merge near-duplicates. Retu
 Rules:
 - Plain, everyday language. No jargon; if a term is unavoidable, define it in one short clause.
 - High-level understanding, not nitty-gritty: the big idea, why it matters, and how the pieces fit — not exhaustive detail.
-- Step by step. Use short paragraphs and, where it helps, a short bullet list.
+- Step by step. Use short paragraphs and, where it helps, a short bullet list. When you use a bullet list, put each item on its own line starting with "- " (never inline several bullets in one line).
 - Ground everything in the provided source excerpts; do not invent facts. If the source barely covers the topic, say what it does cover briefly.
 - Start directly with the explanation — no "Sure!", no restating the question, no meta commentary.""",
 }

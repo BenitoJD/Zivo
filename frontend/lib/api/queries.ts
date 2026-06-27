@@ -17,7 +17,50 @@ export const queryKeys = {
   artifactPages: (id: string) => ["artifact", id, "pages"] as const,
   assertion: (id: string) => ["assertion", id] as const,
   chatMessages: (artifactId: string) => ["chat", artifactId, "messages"] as const,
+  topics: (id: string) => ["topics", id] as const,
+  topicExplain: (id: string, key: string) => ["topics", id, "explain", key] as const,
 };
+
+export type Topic = { key: string; title: string; summary: string };
+export type TopicsResponse = {
+  status: "indexing" | "generating" | "ready" | "failed" | "missing";
+  topics: Topic[];
+};
+export type ExplainResponse = {
+  status: string;
+  topic_key: string;
+  explanation: string | null;
+};
+
+export function useTopicsQuery(artifactId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.topics(artifactId),
+    queryFn: () => apiGet<TopicsResponse>(`/api/artifacts/${artifactId}/topics`),
+    enabled: enabled && Boolean(artifactId),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      if (status === "ready" || status === "failed") return false;
+      return document.visibilityState === "visible" ? 3000 : false;
+    },
+  });
+}
+
+export function useTopicExplanationQuery(artifactId: string, topicKey: string | null) {
+  return useQuery({
+    queryKey: topicKey
+      ? queryKeys.topicExplain(artifactId, topicKey)
+      : (["topics", "explain", "none"] as const),
+    queryFn: () =>
+      apiGet<ExplainResponse>(`/api/artifacts/${artifactId}/topics/${topicKey}/explain`),
+    enabled: Boolean(artifactId && topicKey),
+    staleTime: Infinity, // explanations are cached server-side
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      if (!status || status === "ready" || status === "failed") return false;
+      return 3000; // outline still building — keep trying
+    },
+  });
+}
 
 export function useSourcesQuery(enabled = true) {
   return useQuery({
