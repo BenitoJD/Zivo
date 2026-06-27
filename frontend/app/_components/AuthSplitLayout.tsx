@@ -50,7 +50,9 @@ export function AuthSplitLayout({
             }}
           />
           <Stack justify="space-between" style={{ minHeight: "100dvh", position: "relative", zIndex: 1 }} gap={0}>
-            <BrandMark height={28} />
+            {/* The brand panel is always dark, so pin the lockup to cream — otherwise
+                it inherits the (dark) theme text color and vanishes in light mode. */}
+            <BrandMark height={28} color="#FAF9F6" />
             <Stack gap={20} maw={480}>
               <Text
                 size="xs"

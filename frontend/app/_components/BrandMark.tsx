@@ -12,9 +12,12 @@ import { BRAND_LOGO_SRC, BRAND_LOGO_HEIGHT, BRAND_LOGO_WIDTH, BRAND_NAME } from 
 export function BrandMark({
   height = 32,
   showWord = true,
+  color = "var(--mantine-color-text)",
 }: {
   height?: number;
   showWord?: boolean;
+  /** Lockup color (glyph fill + wordmark). Override on dark/fixed surfaces. */
+  color?: string;
 }) {
   const width = Math.round((height * BRAND_LOGO_WIDTH) / BRAND_LOGO_HEIGHT);
   return (
@@ -23,7 +26,7 @@ export function BrandMark({
         display: "inline-flex",
         alignItems: "center",
         gap: 10,
-        color: "var(--mantine-color-text)",
+        color,
       }}
     >
       <Box
