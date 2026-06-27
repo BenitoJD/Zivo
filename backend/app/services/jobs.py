@@ -214,3 +214,13 @@ def enqueue_flashcards(db: Session, document_id: uuid.UUID) -> Job:
         workload=JobWorkload.io,
         payload={"document_id": str(document_id)},
     )
+
+
+def enqueue_memory_palace(db: Session, document_id: uuid.UUID, setting: str = "") -> Job:
+    """Background generation of the memory-palace journey (off the answer path)."""
+    return enqueue_job(
+        db,
+        name="memory_palace.generate",
+        workload=JobWorkload.io,
+        payload={"document_id": str(document_id), "setting": setting},
+    )

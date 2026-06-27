@@ -21,6 +21,7 @@ export const queryKeys = {
   topicExplain: (id: string, key: string) => ["topics", id, "explain", key] as const,
   notes: (id: string, kind: string) => ["notes", id, kind] as const,
   flashcards: (id: string) => ["flashcards", id] as const,
+  memoryPalace: (id: string, setting: string) => ["memory-palace", id, setting] as const,
 };
 
 export type Topic = { key: string; title: string; summary: string };
@@ -76,6 +77,32 @@ export function useFlashcardsQuery(artifactId: string, enabled = true) {
   return useQuery({
     queryKey: queryKeys.flashcards(artifactId),
     queryFn: () => apiGet<FlashcardsResponse>(`/api/artifacts/${artifactId}/flashcards`),
+    enabled: enabled && Boolean(artifactId),
+    refetchInterval: (query) =>
+      stillBuilding(query.state.data?.status) && document.visibilityState === "visible" ? 3000 : false,
+  });
+}
+
+export type PalaceStation = {
+  key: string;
+  locus: string;
+  term: string;
+  fact: string;
+  image: string;
+  cue: string;
+};
+export type MemoryPalace = { setting: string; intro: string; stations: PalaceStation[] };
+export type MemoryPalaceResponse = {
+  status: "indexing" | "generating" | "ready" | "failed" | "missing";
+  setting: string;
+  palace: MemoryPalace | null;
+};
+
+export function useMemoryPalaceQuery(artifactId: string, setting = "", enabled = true) {
+  const qs = setting ? `?setting=${encodeURIComponent(setting)}` : "";
+  return useQuery({
+    queryKey: queryKeys.memoryPalace(artifactId, setting),
+    queryFn: () => apiGet<MemoryPalaceResponse>(`/api/artifacts/${artifactId}/memory-palace${qs}`),
     enabled: enabled && Boolean(artifactId),
     refetchInterval: (query) =>
       stillBuilding(query.state.data?.status) && document.visibilityState === "visible" ? 3000 : false,

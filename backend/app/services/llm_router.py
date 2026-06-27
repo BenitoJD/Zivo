@@ -60,10 +60,19 @@ _GENERATION_LOG_TAGS = frozenset(
         "rewrite_mcq",
         "topics_extract",
         "topics_rollup",
+    }
+)
+# Long-form generations (study notes, explanations, flashcard decks, memory palaces)
+# legitimately produce large outputs that can run well past the tight failover budget.
+# They get the longer chat budget instead — failing over would just re-incur the long
+# generation, and a 35s cap was truncating/timing them out on slower providers.
+_LONGFORM_GENERATION_LOG_TAGS = frozenset(
+    {
         "topic_explain",
         "notes_generate",
         "notes_rollup",
         "flashcards_generate",
+        "memory_palace_generate",
     }
 )
 # Hard backstop around a single LLM attempt. Some OpenAI-compatible providers ignore
@@ -74,7 +83,13 @@ LLM_HARD_TIMEOUT = int(os.getenv("ZIVO_LLM_HARD_TIMEOUT", str(CHAT_REQUEST_TIMEO
 
 
 def _request_timeout_for(log_tag: str) -> int:
-    return GENERATION_REQUEST_TIMEOUT if log_tag in _GENERATION_LOG_TAGS else CHAT_REQUEST_TIMEOUT
+    if log_tag in _GENERATION_LOG_TAGS:
+        return GENERATION_REQUEST_TIMEOUT  # short structured gen — fast failover
+    # Long-form generation (notes/explain/cards/palace) and interactive chat both
+    # legitimately run longer, so they get the longer budget.
+    if log_tag in _LONGFORM_GENERATION_LOG_TAGS:
+        return CHAT_REQUEST_TIMEOUT
+    return CHAT_REQUEST_TIMEOUT
 
 # Structured JSON / extraction tasks — pin low temperature when model meta omits it.
 STRUCTURED_LOG_TAGS = frozenset(
