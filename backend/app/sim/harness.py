@@ -10,14 +10,20 @@ It exists to make "the tutor adapts" falsifiable:
   • Gate 1 — parameter recovery: does online Elo recover planted item difficulty?
   • Gate 2 — adaptation efficacy: does ``difficulty_edge`` beat ``sequence`` on
     mastery gained per question while holding the productive-struggle band?
+  • Gate 3 — robustness: does the layer survive adversarial event streams and
+    degenerate pools without crashing, and abstain when there is nothing to ask?
+  • Gate 4 — seamless: does selection stay well under the latency budget with many
+    concurrent simulated learners, and is per-event calibration cost flat (O(1))?
 
 All randomness is seeded, so every number here is reproducible.
 """
 
 from __future__ import annotations
 
+import concurrent.futures
 import math
 import random
+import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
@@ -295,3 +301,86 @@ def adaptation_efficacy(
         "edge_mean_success": sum(edge_success) / n,
         "n_learners": n,
     }
+
+
+# ---------------------------------------------------------------------------
+# Gate 4 — seamless under load: selection latency + O(1) calibration
+# ---------------------------------------------------------------------------
+
+
+def percentile(values: Sequence[float], q: float) -> float:
+    """Linear-interpolated percentile (q in [0, 1]); used for p95 latency."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    k = (len(ordered) - 1) * q
+    lo = math.floor(k)
+    hi = math.ceil(k)
+    if lo == hi:
+        return ordered[int(k)]
+    return ordered[lo] * (hi - k) + ordered[hi] * (k - lo)
+
+
+def _warm_pool(pool_size: int) -> dict[str, float]:
+    """A realistic warm pool of calibrated items spanning roughly [-2, 2] logits."""
+    if pool_size == 1:
+        return {"I0": 0.0}
+    return {f"I{i}": (i / (pool_size - 1)) * 4.0 - 2.0 for i in range(pool_size)}
+
+
+def selection_latencies(
+    *,
+    n_workers: int = 16,
+    calls_per_worker: int = 500,
+    pool_size: int = 12,
+    seed: int = 0,
+) -> list[float]:
+    """Wall-clock seconds per ``choose_next_assertion`` call across concurrent workers.
+
+    Each worker is a simulated learner hammering the real selector over a warm pool;
+    running them on a thread pool exercises the answer-path under concurrency. The
+    selector is pure arithmetic, so this measures the real read-path cost.
+    """
+    pool = _warm_pool(pool_size)
+    candidates = list(pool)
+
+    def work(worker_id: int) -> list[float]:
+        rng = random.Random(seed * 7919 + worker_id)
+        out: list[float] = []
+        for _ in range(calls_per_worker):
+            state = LearnerState(ability=rng.gauss(0.0, 1.2))
+            start = time.perf_counter()
+            choose_next_assertion("difficulty_edge", candidates, {}, state, pool)
+            out.append(time.perf_counter() - start)
+        return out
+
+    latencies: list[float] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as pool_exec:
+        for chunk in pool_exec.map(work, range(n_workers)):
+            latencies.extend(chunk)
+    return latencies
+
+
+def calibration_per_event_seconds(n_events: int, *, seed: int = 0) -> float:
+    """Mean wall-clock seconds per online-Elo update over a stream of `n_events`.
+
+    Online Elo reads/writes two dict entries plus fixed arithmetic, so per-event
+    cost must not grow with stream length. Comparing this across sizes shows O(1).
+    """
+    rng = random.Random(seed)
+    abilities: dict[str, float] = {}
+    difficulties: dict[str, float] = {}
+    learners = [f"L{i}" for i in range(max(1, n_events // 50))]
+    items = [f"I{i}" for i in range(max(1, n_events // 50))]
+    start = time.perf_counter()
+    for _ in range(n_events):
+        learner = rng.choice(learners)
+        item = rng.choice(items)
+        a = abilities.get(learner, DEFAULT_RATING)
+        d = difficulties.get(item, DEFAULT_RATING)
+        update = elo_update(a, d, rng.random() < expected_correct(a, d))
+        abilities[learner] = update.ability
+        difficulties[item] = update.difficulty
+    return (time.perf_counter() - start) / n_events
