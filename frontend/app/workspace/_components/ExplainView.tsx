@@ -84,7 +84,7 @@ export function ExplainView({
   if (!status || status === "indexing" || status === "generating" || topics.length === 0) {
     return (
       <WaitState
-        icon={<Loader color="lavender" size="sm" />}
+        pet
         title="Mapping the topics"
         body="Reading the whole document and laying out what’s worth understanding…"
       />

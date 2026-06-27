@@ -8,7 +8,6 @@ import {
   Button,
   Center,
   Group,
-  Loader,
   Paper,
   Progress,
   SegmentedControl,
@@ -109,7 +108,7 @@ export function MemoryPalaceView({
   if (!ready) {
     return (
       <WaitState
-        icon={<Loader color="lavender" size="sm" />}
+        pet
         title={setting ? `Building your palace in “${setting}”` : "Building your memory palace"}
         body="Placing each key idea along a journey you can walk in your mind…"
       />

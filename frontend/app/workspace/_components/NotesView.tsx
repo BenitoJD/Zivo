@@ -7,7 +7,6 @@ import {
   Center,
   CopyButton,
   Group,
-  Loader,
   Paper,
   SegmentedControl,
   Stack,
@@ -168,7 +167,7 @@ export function NotesView({
       <Stack gap="lg" pb="xl">
         <Group justify="space-between">{toggle}</Group>
         <WaitState
-          icon={<Loader color="lavender" size="sm" />}
+          pet
           title={kind === "cheatsheet" ? "Building your cheat sheet" : "Writing your study notes"}
           body="Reading the whole source and laying it out clearly — this takes a few moments…"
         />

@@ -3,31 +3,42 @@
 import type { ReactNode } from "react";
 import { Center, Stack, Text, ThemeIcon } from "@mantine/core";
 import { IconSparkles } from "@tabler/icons-react";
+import { PetLoader } from "@/app/_components/PetLoader";
 
 /**
  * Shared loading / empty / error placeholder for the study-mode views
- * (Explain, Notes, Flashcards, Memory Palace, Quiz Builder). Centered icon +
- * serif title + dimmed body + optional action, in Calm Paper styling. Each view
- * passes its own `icon` (a Loader while generating, an alert on error); the
- * sparkles fallback only shows if a caller omits one.
+ * (Explain, Notes, Flashcards, Memory Palace, Quiz Builder). Centered visual +
+ * serif title + dimmed body + optional action, in Calm Paper styling.
+ *
+ * For a *generating* state pass `pet` — it shows the bobbing sprout character so
+ * the wait feels alive (the zero-perceived-wait north star). For errors/empty,
+ * pass `icon` (e.g. an alert); the sparkles fallback shows if both are omitted.
  */
 export function WaitState({
   icon,
   title,
   body,
   action,
+  pet = false,
+  petVariant = "lavender",
 }: {
   icon?: ReactNode;
   title: string;
   body: string;
   action?: ReactNode;
+  pet?: boolean;
+  petVariant?: "lavender" | "sage" | "terracotta";
 }) {
   return (
     <Center mih={280}>
       <Stack align="center" gap="sm" ta="center" maw={440}>
-        <ThemeIcon variant="light" color="lavender" radius="xl" size={54}>
-          {icon ?? <IconSparkles size={26} />}
-        </ThemeIcon>
+        {pet ? (
+          <PetLoader size={78} variant={petVariant} />
+        ) : (
+          <ThemeIcon variant="light" color="lavender" radius="xl" size={54}>
+            {icon ?? <IconSparkles size={26} />}
+          </ThemeIcon>
+        )}
         <Text ff="var(--font-serif)" fz={24} fw={500} c="var(--mantine-color-text)">
           {title}
         </Text>

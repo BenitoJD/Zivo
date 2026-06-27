@@ -7,7 +7,6 @@ import {
   Button,
   Center,
   Group,
-  Loader,
   Stack,
   Text,
   ThemeIcon,
@@ -82,7 +81,7 @@ export function FlashcardsView({
   if (!ready) {
     return (
       <WaitState
-        icon={<Loader color="lavender" size="sm" />}
+        pet
         title="Making your flashcards"
         body="Pulling the key facts into active-recall cards — this takes a few moments…"
       />

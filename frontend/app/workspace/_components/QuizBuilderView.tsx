@@ -8,7 +8,6 @@ import {
   Center,
   Checkbox,
   Group,
-  Loader,
   NumberInput,
   Paper,
   SegmentedControl,
@@ -151,7 +150,7 @@ export function QuizBuilderView({ artifactId, compact = false }: { artifactId: s
         <WaitState icon={<IconAlertTriangle size={26} />} title="Couldn’t build the quiz" body="Something went wrong. Try again in a moment."
           action={<Button variant="light" color="lavender" radius="xl" onClick={() => void refetch()}>Try again</Button>} />
       ) : building ? (
-        <WaitState icon={<Loader color="lavender" size="sm" />} title="Writing your questions" body="Reading the source and drafting an exam-quality question set…" />
+        <WaitState pet title="Writing your questions" body="Reading the source and drafting an exam-quality question set…" />
       ) : ready ? (
         <>
           <Group justify="space-between" wrap="wrap" gap="sm">
