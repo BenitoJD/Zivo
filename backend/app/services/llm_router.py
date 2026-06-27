@@ -10,6 +10,7 @@ across all configured chat models and fail over on transient provider errors.
 """
 
 from collections.abc import AsyncIterator
+import asyncio
 import logging
 import os
 import time
@@ -44,6 +45,11 @@ LLM_NUM_RETRIES = int(os.getenv("ZIVO_LLM_NUM_RETRIES", "2"))
 CHAT_DEFAULT_MAX_TOKENS = CHAT_OUTPUT_MAX_TOKENS
 CHAT_FAILOVER_MAX = int(os.getenv("ZIVO_CHAT_FAILOVER_MAX", "2"))
 CHAT_REQUEST_TIMEOUT = int(os.getenv("ZIVO_CHAT_REQUEST_TIMEOUT", "90"))
+# Hard backstop around a single LLM attempt. Some OpenAI-compatible providers ignore
+# the request `timeout` and stall on large/streamed prompts, which hung generation
+# workers forever (questions never appeared). A bit above the request timeout so
+# litellm's own fires first when it works; this guarantees the attempt always returns.
+LLM_HARD_TIMEOUT = int(os.getenv("ZIVO_LLM_HARD_TIMEOUT", str(CHAT_REQUEST_TIMEOUT + 15)))
 
 # Structured JSON / extraction tasks — pin low temperature when model meta omits it.
 STRUCTURED_LOG_TAGS = frozenset(
@@ -153,13 +159,16 @@ def _apply_model(resolved: ResolvedLlmModel, *, log_tag: str = "complete") -> di
             kwargs["max_tokens"] = min(meta_cap, tag_cap)
         else:
             kwargs["max_tokens"] = tag_cap
-        kwargs.setdefault("timeout", CHAT_REQUEST_TIMEOUT)
     elif isinstance(meta_cap, int) and meta_cap > 0:
         kwargs["max_tokens"] = max(meta_cap, tag_cap)
     else:
         kwargs["max_tokens"] = tag_cap
     if log_tag in STRUCTURED_LOG_TAGS and "temperature" not in kwargs:
         kwargs["temperature"] = 0.0
+    # Every tag gets a request timeout. Previously only chat/complete did, so
+    # page_triage / generate_mcq / critic_mcq calls had none and a stalled provider
+    # hung the generation worker indefinitely.
+    kwargs.setdefault("timeout", CHAT_REQUEST_TIMEOUT)
     return kwargs
 
 
@@ -201,6 +210,7 @@ async def _stream_chat_impl(
 ) -> AsyncIterator[str]:
     import litellm
 
+    litellm.drop_params = True  # drop provider-unsupported params (e.g. 'thinking') instead of erroring
     last_exc: BaseException | None = None
     attempts = _model_attempts(
         db, model_id=model_id, require_vision=require_vision, log_tag=log_tag
@@ -284,6 +294,7 @@ async def acomplete_chat(
     """LiteLLM completion without acquiring the process-wide slot (caller owns it)."""
     import litellm
 
+    litellm.drop_params = True  # drop provider-unsupported params (e.g. 'thinking') instead of erroring
     last_exc: BaseException | None = None
     attempts = _model_attempts(
         db, model_id=model_id, require_vision=require_vision, log_tag=log_tag
@@ -293,12 +304,15 @@ async def acomplete_chat(
         cached_messages = _prepare_messages(messages, resolved)
         started = time.perf_counter()
         try:
-            response = await litellm.acompletion(
-                model=resolved.litellm_model,
-                messages=cached_messages,
-                stream=False,
-                num_retries=LLM_NUM_RETRIES,
-                **provider_kwargs,
+            response = await asyncio.wait_for(
+                litellm.acompletion(
+                    model=resolved.litellm_model,
+                    messages=cached_messages,
+                    stream=False,
+                    num_retries=LLM_NUM_RETRIES,
+                    **provider_kwargs,
+                ),
+                timeout=LLM_HARD_TIMEOUT,
             )
             _log_usage(
                 log_tag,
@@ -312,7 +326,10 @@ async def acomplete_chat(
             return response.choices[0].message.content or ""
         except Exception as exc:
             last_exc = exc
-            if model_id is not None or not is_failover_eligible(exc):
+            # A hard-timeout (stalled provider) is failover-eligible: try the next
+            # model rather than raising, so one wedged provider can't kill generation.
+            timed_out = isinstance(exc, (asyncio.TimeoutError, TimeoutError))
+            if model_id is not None or (not timed_out and not is_failover_eligible(exc)):
                 raise
             log_failover(resolved, exc, log_tag=log_tag)
     if last_exc is not None:

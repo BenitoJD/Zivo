@@ -108,9 +108,18 @@ def run_page_triage(
 def _complete_chat_sync(
     db: Session, messages: list[dict], *, model_id: uuid.UUID | None = None
 ) -> str:
-    return run_coro_in_worker(
-        acomplete_chat(messages, db, log_tag="page_triage", model_id=model_id)
-    )
+    try:
+        return run_coro_in_worker(
+            acomplete_chat(messages, db, log_tag="page_triage", model_id=model_id)
+        )
+    except Exception:
+        # Fall back to the pool if a pinned model stalls/errors, so triage (and thus
+        # generation) recovers instead of failing the whole job.
+        if model_id is None:
+            raise
+        return run_coro_in_worker(
+            acomplete_chat(messages, db, log_tag="page_triage", model_id=None)
+        )
 
 
 def _parse_triage_json(raw: str) -> dict[str, Any] | None:

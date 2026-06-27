@@ -212,9 +212,19 @@ def has_fatal_heuristic_flaws(flaws: list[dict[str, str]]) -> bool:
 def _complete_chat_sync(
     db: Session, messages: list[dict], *, log_tag: str, model_id: uuid.UUID | None = None
 ) -> str:
-    return run_coro_in_worker(
-        acomplete_chat(messages, db, log_tag=log_tag, model_id=model_id)
-    )
+    try:
+        return run_coro_in_worker(
+            acomplete_chat(messages, db, log_tag=log_tag, model_id=model_id)
+        )
+    except Exception:
+        # Generation pins one model for batch speed; if that model stalls or errors,
+        # fall back to the pool (failover) so a single wedged provider can't block
+        # question generation entirely.
+        if model_id is None:
+            raise
+        return run_coro_in_worker(
+            acomplete_chat(messages, db, log_tag=log_tag, model_id=None)
+        )
 
 
 def _content_style_line(content_type: str | None) -> str:

@@ -574,21 +574,23 @@ def sync_default_chat_model_from_env(db: Session, settings: Settings | None = No
     if not litellm_model or "/" not in litellm_model:
         return False
 
-    target_slug = _provider_slug_for_litellm_model(litellm_model)
-    provider = db.query(LlmProvider).filter(LlmProvider.slug == target_slug).first()
-    if not provider:
-        return False
-
+    # Match by the full litellm_model string across ALL providers. The litellm prefix
+    # cannot identify the provider here: zai, stepfun and openrouter all use the
+    # "openai" prefix, so resolving by prefix could never select e.g. openai/glm-4.7
+    # (a zai model) and the env default silently fell back to another provider's model.
     model = (
         db.query(LlmModel)
-        .filter(LlmModel.provider_id == provider.id, LlmModel.litellm_model == litellm_model)
+        .filter(
+            LlmModel.kind == LlmModelKind.chat,
+            LlmModel.litellm_model == litellm_model,
+        )
         .first()
     )
     if not model:
         slug = litellm_model.split("/", 1)[-1].replace("/", "-")
         model = (
             db.query(LlmModel)
-            .filter(LlmModel.provider_id == provider.id, LlmModel.slug == slug)
+            .filter(LlmModel.kind == LlmModelKind.chat, LlmModel.slug == slug)
             .first()
         )
     if not model or not model.is_enabled:
