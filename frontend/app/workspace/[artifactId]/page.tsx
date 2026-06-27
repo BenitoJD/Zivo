@@ -114,7 +114,9 @@ const TUTOR_PANEL_MAX = 560;
 const STUDY_CENTER_MIN = 380;
 const PANEL_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
 const PANEL_MS = 280;
-const STUDY_DESKTOP_BP = "(min-width: 48em)";
+// Desktop 3-pane only ≥992px (62em); below that the clean single-column mobile
+// shell is used — the cramped 3-pane didn't fit small tablets / large phones.
+const STUDY_DESKTOP_BP = "(min-width: 62em)";
 const STUDY_COMPACT_BP = "(max-width: 47.99em)";
 /** Tablet range (768–991px): desktop study shell, but Source/Tutor ride as floating slide-over panels. */
 const STUDY_OVERLAY_BP = "(max-width: 61.99em)";
@@ -201,6 +203,7 @@ export default function WorkspaceArtifactPage({
   const savedNotesQuery = useSavedNotesQuery(artifactId);
   const savedNotesActions = useSavedNotesActions(artifactId);
   const [readerNotesOpen, setReaderNotesOpen] = useState(false);
+  const [readerMobileTab, setReaderMobileTab] = useState<"reader" | "buddy">("reader");
   const [sourceOpen, { open: openSource, close: closeSource }] = useDisclosure(false);
   const [tutorOpen, { open: openTutor, close: closeTutor }] = useDisclosure(false);
   const studyRowRef = useRef<HTMLDivElement>(null);
@@ -1042,6 +1045,9 @@ export default function WorkspaceArtifactPage({
 
   if (mode === "read") {
     const notes = savedNotesQuery.data?.notes ?? [];
+    // Stack reader/buddy into tabs whenever we're not in the desktop 3-pane (< 992),
+    // matching how the rest of the study view drops to the single-column shell.
+    const stacked = !isLg;
     return (
       <Box
         flex={1}
@@ -1071,23 +1077,51 @@ export default function WorkspaceArtifactPage({
             Saved notes{notes.length ? ` (${notes.length})` : ""}
           </Button>
         </Group>
+        {stacked ? (
+          <SegmentedControl
+            fullWidth
+            size="xs"
+            radius="md"
+            mx="sm"
+            mb={6}
+            value={readerMobileTab}
+            onChange={(v) => setReaderMobileTab(v as "reader" | "buddy")}
+            data={[
+              { label: "Reader", value: "reader" },
+              { label: "Study buddy", value: "buddy" },
+            ]}
+            style={{ flexShrink: 0 }}
+          />
+        ) : null}
         <Box flex={1} mih={0} style={{ display: "flex", overflow: "hidden" }}>
-          <Box flex={3} mih={0} style={{ overflow: "hidden" }}>
+          {/* Reader: 75% column on desktop; full width with a tab toggle below 992. */}
+          <Box
+            flex={stacked ? undefined : 3}
+            mih={0}
+            w={stacked ? "100%" : undefined}
+            style={{ overflow: "hidden", display: !stacked || readerMobileTab === "reader" ? "block" : "none" }}
+          >
             <PdfReader
               artifactId={artifact.id}
               pdfDoc={pdfDoc}
               isPdf={isPdf}
               pageCount={pageCount}
-              onQuote={quoteToComposer}
-              onAsk={askBuddy}
+              onQuote={(t) => { quoteToComposer(t); if (stacked) setReaderMobileTab("buddy"); }}
+              onAsk={(m) => { askBuddy(m); if (stacked) setReaderMobileTab("buddy"); }}
               onSaveQuote={(t) => saveNote(t, t)}
             />
           </Box>
           <Box
-            flex={1}
+            flex={stacked ? undefined : 1}
             mih={0}
-            miw={300}
-            style={{ borderLeft: "1px solid var(--app-border, var(--mantine-color-gray-2))", display: "flex", flexDirection: "column", maxWidth: 460 }}
+            miw={stacked ? undefined : 300}
+            w={stacked ? "100%" : undefined}
+            style={{
+              borderLeft: stacked ? undefined : "1px solid var(--app-border, var(--mantine-color-gray-2))",
+              display: !stacked || readerMobileTab === "buddy" ? "flex" : "none",
+              flexDirection: "column",
+              maxWidth: stacked ? undefined : 460,
+            }}
           >
             <TutorPanel
               messages={chatMessages}
@@ -1586,68 +1620,71 @@ function StudyMetaBar({
   const pct = showBar ? Math.min(100, Math.round((questionIndex / questionTotal) * 100)) : 0;
   const segmented = showBar && questionTotal <= 16;
 
+  const progress = !showBar ? null : (
+    <Group gap={compact ? 8 : 12} wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
+      <Text size="xs" c="dimmed" fw={600} ff="monospace" style={{ flexShrink: 0, letterSpacing: "0.02em" }}>
+        {String(questionIndex).padStart(2, "0")}
+        <Text component="span" inherit style={{ opacity: 0.45 }}>
+          {" / "}
+          {String(questionTotal).padStart(2, "0")}
+        </Text>
+      </Text>
+      {segmented ? (
+        <Group gap={4} wrap="nowrap" style={{ flex: 1, minWidth: 0, maxWidth: 380 }}>
+          {Array.from({ length: questionTotal }).map((_, i) => (
+            <Box
+              key={i}
+              style={{
+                flex: 1,
+                height: 5,
+                borderRadius: 99,
+                background: i < questionIndex ? "var(--mantine-color-lavender-6)" : "var(--mantine-color-gray-3)",
+                transition: "background 260ms ease",
+              }}
+            />
+          ))}
+        </Group>
+      ) : (
+        <Box style={{ flex: 1, maxWidth: 380, height: 5, borderRadius: 99, background: "var(--mantine-color-gray-3)", overflow: "hidden" }}>
+          <Box style={{ width: `${pct}%`, height: "100%", borderRadius: 99, background: "var(--mantine-color-lavender-6)", transition: "width 320ms cubic-bezier(0.32,0.72,0,1)" }} />
+        </Box>
+      )}
+    </Group>
+  );
+
+  // The 7-mode switch can't fit a phone row, so on compact it gets its own
+  // full-width, horizontally-scrollable row beneath the progress.
+  const modeSwitch = (
+    <Box
+      className="zv-modeswitch-scroll"
+      style={{ minWidth: 0, maxWidth: "100%", overflowX: "auto", overflowY: "hidden", scrollbarWidth: "none" }}
+    >
+      <StudyModeSwitch mode={mode} onChange={onModeChange} compact={compact} />
+    </Box>
+  );
+
+  if (compact) {
+    return (
+      <Stack px="sm" py={6} gap={6} style={{ flexShrink: 0 }}>
+        <style>{`.zv-modeswitch-scroll::-webkit-scrollbar { display: none; }`}</style>
+        {progress}
+        {modeSwitch}
+      </Stack>
+    );
+  }
+
   return (
     <Group
-      px={compact ? "sm" : { base: "sm", sm: "md", lg: "lg" }}
-      py={compact ? 6 : 8}
+      px={{ base: "sm", sm: "md", lg: "lg" }}
+      py={8}
       justify="space-between"
       align="center"
       wrap="nowrap"
       gap="md"
       style={{ flexShrink: 0 }}
     >
-      <Group gap={compact ? 8 : 12} wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
-        {showBar && (
-          <Text size="xs" c="dimmed" fw={600} ff="monospace" style={{ flexShrink: 0, letterSpacing: "0.02em" }}>
-            {String(questionIndex).padStart(2, "0")}
-            <Text component="span" inherit style={{ opacity: 0.45 }}>
-              {" / "}
-              {String(questionTotal).padStart(2, "0")}
-            </Text>
-          </Text>
-        )}
-        {segmented ? (
-          <Group gap={4} wrap="nowrap" style={{ flex: 1, minWidth: 0, maxWidth: 380 }}>
-            {Array.from({ length: questionTotal }).map((_, i) => (
-              <Box
-                key={i}
-                style={{
-                  flex: 1,
-                  height: 5,
-                  borderRadius: 99,
-                  background:
-                    i < questionIndex
-                      ? "var(--mantine-color-lavender-6)"
-                      : "var(--mantine-color-gray-3)",
-                  transition: "background 260ms ease",
-                }}
-              />
-            ))}
-          </Group>
-        ) : showBar ? (
-          <Box
-            style={{
-              flex: 1,
-              maxWidth: 380,
-              height: 5,
-              borderRadius: 99,
-              background: "var(--mantine-color-gray-3)",
-              overflow: "hidden",
-            }}
-          >
-            <Box
-              style={{
-                width: `${pct}%`,
-                height: "100%",
-                borderRadius: 99,
-                background: "var(--mantine-color-lavender-6)",
-                transition: "width 320ms cubic-bezier(0.32,0.72,0,1)",
-              }}
-            />
-          </Box>
-        ) : null}
-      </Group>
-      <StudyModeSwitch mode={mode} onChange={onModeChange} compact={compact} />
+      {progress ?? <Box style={{ flex: 1 }} />}
+      {modeSwitch}
     </Group>
   );
 }
