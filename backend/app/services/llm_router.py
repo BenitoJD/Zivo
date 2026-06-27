@@ -45,11 +45,24 @@ LLM_NUM_RETRIES = int(os.getenv("ZIVO_LLM_NUM_RETRIES", "2"))
 CHAT_DEFAULT_MAX_TOKENS = CHAT_OUTPUT_MAX_TOKENS
 CHAT_FAILOVER_MAX = int(os.getenv("ZIVO_CHAT_FAILOVER_MAX", "2"))
 CHAT_REQUEST_TIMEOUT = int(os.getenv("ZIVO_CHAT_REQUEST_TIMEOUT", "90"))
+# Background generation (triage/MCQ/critic/rewrite) is non-streaming and normally
+# completes in ~10-25s. A tight timeout means an intermittently-stalling provider
+# fails over to the next model (e.g. step-3.5-flash → step-3.7-flash) in seconds
+# instead of stalling the learner's first question. Interactive chat keeps the longer
+# budget since it streams and can legitimately run longer.
+GENERATION_REQUEST_TIMEOUT = int(os.getenv("ZIVO_GENERATION_REQUEST_TIMEOUT", "35"))
+_GENERATION_LOG_TAGS = frozenset(
+    {"page_triage", "generate_mcq", "generate_mcq_batch", "critic_mcq", "rewrite_mcq"}
+)
 # Hard backstop around a single LLM attempt. Some OpenAI-compatible providers ignore
 # the request `timeout` and stall on large/streamed prompts, which hung generation
 # workers forever (questions never appeared). A bit above the request timeout so
 # litellm's own fires first when it works; this guarantees the attempt always returns.
 LLM_HARD_TIMEOUT = int(os.getenv("ZIVO_LLM_HARD_TIMEOUT", str(CHAT_REQUEST_TIMEOUT + 15)))
+
+
+def _request_timeout_for(log_tag: str) -> int:
+    return GENERATION_REQUEST_TIMEOUT if log_tag in _GENERATION_LOG_TAGS else CHAT_REQUEST_TIMEOUT
 
 # Structured JSON / extraction tasks — pin low temperature when model meta omits it.
 STRUCTURED_LOG_TAGS = frozenset(
@@ -167,8 +180,9 @@ def _apply_model(resolved: ResolvedLlmModel, *, log_tag: str = "complete") -> di
         kwargs["temperature"] = 0.0
     # Every tag gets a request timeout. Previously only chat/complete did, so
     # page_triage / generate_mcq / critic_mcq calls had none and a stalled provider
-    # hung the generation worker indefinitely.
-    kwargs.setdefault("timeout", CHAT_REQUEST_TIMEOUT)
+    # hung the generation worker indefinitely. Generation uses a tighter budget so a
+    # stalled provider fails over fast.
+    kwargs.setdefault("timeout", _request_timeout_for(log_tag))
     return kwargs
 
 
@@ -312,7 +326,9 @@ async def acomplete_chat(
                     num_retries=LLM_NUM_RETRIES,
                     **provider_kwargs,
                 ),
-                timeout=LLM_HARD_TIMEOUT,
+                # Hard backstop tracks the per-tag request timeout so a stalled
+                # generation attempt aborts fast and fails over to the next model.
+                timeout=_request_timeout_for(log_tag) + 15,
             )
             _log_usage(
                 log_tag,

@@ -387,6 +387,27 @@ def ensure_registry_providers(db: Session, settings: Settings | None = None) -> 
     )
     if before == 0:
         dirty = True
+    # step-3.7-flash — newer Step Fun flash model; kept as the first failover after the
+    # primary (step-3.5-flash). Comparable quality, typically a touch faster.
+    before_37 = (
+        db.query(LlmModel)
+        .filter(LlmModel.provider_id == stepfun.id, LlmModel.slug == "step-3.7-flash")
+        .count()
+    )
+    _upsert_model(
+        db,
+        provider=stepfun,
+        slug="step-3.7-flash",
+        litellm_model="openai/step-3.7-flash",
+        display_name="Step 3.7 Flash",
+        kind=LlmModelKind.chat,
+        sort_order=6,
+        max_input_tokens=128_000,
+        max_output_tokens=8_192,
+        update_fields=True,
+    )
+    if before_37 == 0:
+        dirty = True
     stepfun_model = (
         db.query(LlmModel)
         .filter(LlmModel.provider_id == stepfun.id, LlmModel.slug == "step-3.5-flash")
@@ -728,6 +749,20 @@ def bootstrap_llm_registry_from_env(db: Session, settings: Settings | None = Non
             kind=LlmModelKind.chat,
             is_default=stepfun_is_default,
             sort_order=5,
+            max_input_tokens=128_000,
+            max_output_tokens=8_192,
+        )
+        # step-3.7-flash — newer Step Fun flash model; first failover after the
+        # primary (step-3.5-flash). Never the default (primary stays 3.5).
+        _upsert_model(
+            db,
+            provider=stepfun,
+            slug="step-3.7-flash",
+            litellm_model="openai/step-3.7-flash",
+            display_name="Step 3.7 Flash",
+            kind=LlmModelKind.chat,
+            is_default=False,
+            sort_order=6,
             max_input_tokens=128_000,
             max_output_tokens=8_192,
         )
