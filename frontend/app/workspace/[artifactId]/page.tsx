@@ -80,6 +80,7 @@ import { FlashcardsView } from "@/app/workspace/_components/FlashcardsView";
 import { MemoryPalaceView } from "@/app/workspace/_components/MemoryPalaceView";
 import { QuizBuilderView } from "@/app/workspace/_components/QuizBuilderView";
 import { PdfReader } from "@/app/workspace/_components/PdfReader";
+import { GenerationStages } from "@/app/workspace/_components/GenerationStages";
 import { useStudyNav } from "@/app/workspace/_components/studyNav";
 import { mcqOptionChrome, McqFeedbackCard } from "@/app/_components/mcq/McqCard";
 import { AssistantMarkdown, MessageCopyAction } from "@/lib/chatMarkdown";
@@ -3057,32 +3058,17 @@ function McqHeroPanel({
             </Text>
           </Stack>
 
-          {hasDeterminate && generated > 0 && (
-            <Box
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "5px 12px",
-                borderRadius: 999,
-                background: isDark ? "var(--mantine-color-sage-1)" : "var(--mantine-color-sage-0)",
-                border: `1px solid var(--mantine-color-sage-${isDark ? 3 : 2})`,
-              }}
-            >
-              <Box
-                style={{
-                  width: 7,
-                  height: 7,
-                  borderRadius: "50%",
-                  background: "var(--mantine-color-sage-6)",
-                  boxShadow: "0 0 0 3px var(--mantine-color-sage-1)",
-                }}
-              />
-              <Text size="xs" fw={600} c={isDark ? "var(--mantine-color-sage-8)" : "var(--mantine-color-sage-9)"}>
-                {generated} of {budget} ready
-              </Text>
-            </Box>
-          )}
+          <GenerationStages
+            artifactStatus={artifactStatus}
+            indexProgress={indexProgress}
+            ragWindowReady={queue?.rag_window_ready}
+            pageTriageComplete={queue?.page_triage_complete}
+            generationPending={queue?.generation_pending}
+            questionsGenerated={generated}
+            questionBudget={budget}
+            compact={compact}
+            isDark={isDark}
+          />
 
           {stuckSeconds >= 45 && onRetry ? (
             <Stack gap={6} align="center">
