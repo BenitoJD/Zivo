@@ -6,10 +6,14 @@ import io
 
 _LETTERS = "ABCDEFGH"
 
+# Single-best-answer MCQ variants share the plain "mcq" payload (options +
+# answer_index), so they render and export through the same branch.
+_SINGLE_ANSWER_MCQ = ("mcq", "mcq_negative", "assertion_reason", "scenario", "cloze")
+
 
 def _answer_text(q: dict) -> str:
     t = q.get("type")
-    if t == "mcq":
+    if t in _SINGLE_ANSWER_MCQ:
         i = q.get("answer_index", 0)
         opts = q.get("options", [])
         return f"{_LETTERS[i]}. {opts[i]}" if i < len(opts) else _LETTERS[i]
@@ -43,7 +47,7 @@ def build_quiz_docx(*, title: str, questions: list[dict], with_answers: bool) ->
         run.font.size = Pt(11)
 
         t = q.get("type")
-        if t in ("mcq", "multi"):
+        if t in _SINGLE_ANSWER_MCQ or t == "multi":
             for i, opt in enumerate(q.get("options", [])):
                 doc.add_paragraph(f"{_LETTERS[i]}. {opt}", style="List Bullet")
         elif t == "truefalse":

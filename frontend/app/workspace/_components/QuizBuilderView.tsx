@@ -30,8 +30,16 @@ import {
 import { apiFetchBytes } from "@/lib/api/client";
 import { useQuizQuery, type QuizConfig, type QuizQuestion } from "@/lib/api/queries";
 
-const TYPES: { value: string; label: string }[] = [
+// MCQ-style variants — all single-best-answer, same payload as "mcq" (options +
+// answer_index), so they render with the MCQ branch of QuestionCard.
+const MCQ_STYLE_TYPES: { value: string; label: string }[] = [
   { value: "mcq", label: "Multiple choice" },
+  { value: "mcq_negative", label: "Negative (EXCEPT)" },
+  { value: "assertion_reason", label: "Assertion–Reason" },
+  { value: "scenario", label: "Scenario" },
+  { value: "cloze", label: "Fill-in (cloze)" },
+];
+const OTHER_TYPES: { value: string; label: string }[] = [
   { value: "multi", label: "Multiple answer" },
   { value: "truefalse", label: "True / False" },
   { value: "fill_blank", label: "Fill in the blank" },
@@ -39,6 +47,9 @@ const TYPES: { value: string; label: string }[] = [
   { value: "essay", label: "Essay" },
   { value: "matching", label: "Matching" },
 ];
+const TYPES: { value: string; label: string }[] = [...MCQ_STYLE_TYPES, ...OTHER_TYPES];
+// Single-best-answer MCQ variants share the "mcq" payload + rendering.
+const SINGLE_ANSWER_MCQ = new Set(["mcq", "mcq_negative", "assertion_reason", "scenario", "cloze"]);
 const LETTERS = "ABCDEFGH";
 
 /**
@@ -105,8 +116,19 @@ export function QuizBuilderView({ artifactId, compact = false }: { artifactId: s
         <Text c="dimmed" fz="sm" mb="md">Pick the question types, then generate a quiz from this source — with an answer key, ready to export.</Text>
 
         <Checkbox.Group value={draftTypes} onChange={setDraftTypes} label="Question types">
-          <Group gap="sm" mt="xs" wrap="wrap">
-            {TYPES.map((t) => (
+          <Text fz="xs" fw={600} c="lavender.6" tt="uppercase" mt="xs" mb={6} style={{ letterSpacing: 0.4 }}>
+            MCQ styles
+          </Text>
+          <Group gap="sm" wrap="wrap">
+            {MCQ_STYLE_TYPES.map((t) => (
+              <Checkbox key={t.value} value={t.value} label={t.label} radius="sm" color="lavender" />
+            ))}
+          </Group>
+          <Text fz="xs" fw={600} c="dimmed" tt="uppercase" mt="md" mb={6} style={{ letterSpacing: 0.4 }}>
+            Other types
+          </Text>
+          <Group gap="sm" wrap="wrap">
+            {OTHER_TYPES.map((t) => (
               <Checkbox key={t.value} value={t.value} label={t.label} radius="sm" color="lavender" />
             ))}
           </Group>
@@ -165,10 +187,10 @@ function QuestionCard({ n, q, showAnswers, compact }: { n: number; q: QuizQuesti
       </Group>
       <Text fz={compact ? "sm" : "md"} fw={500} lh={1.5} mb="xs">{q.prompt}</Text>
 
-      {(q.type === "mcq" || q.type === "multi") && q.options ? (
+      {(SINGLE_ANSWER_MCQ.has(q.type) || q.type === "multi") && q.options ? (
         <Stack gap={4} pl={4}>
           {q.options.map((opt, oi) => {
-            const correct = q.type === "mcq" ? q.answer_index === oi : (q.answer_indices ?? []).includes(oi);
+            const correct = q.type === "multi" ? (q.answer_indices ?? []).includes(oi) : q.answer_index === oi;
             return (
               <Group key={oi} gap={8} wrap="nowrap">
                 <Text fz="sm" fw={600} c={showAnswers && correct ? "sage.7" : "dimmed"} w={18}>{LETTERS[oi]}</Text>
@@ -204,7 +226,7 @@ function QuestionCard({ n, q, showAnswers, compact }: { n: number; q: QuizQuesti
 }
 
 function answerLine(q: QuizQuestion): string {
-  if (q.type === "mcq") return `${LETTERS[q.answer_index ?? 0]}`;
+  if (SINGLE_ANSWER_MCQ.has(q.type)) return `${LETTERS[q.answer_index ?? 0]}`;
   if (q.type === "multi") return (q.answer_indices ?? []).map((i) => LETTERS[i]).join(", ");
   if (q.type === "truefalse") return q.answer ? "True" : "False";
   if (q.type === "matching") return (q.pairs ?? []).map((p, i) => `${i + 1}→${LETTERS[i]}`).join("  ");

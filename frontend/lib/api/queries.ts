@@ -143,7 +143,20 @@ export function useSavedNotesActions(artifactId: string) {
 }
 
 export type QuizQuestion = {
-  type: "mcq" | "multi" | "truefalse" | "fill_blank" | "short" | "essay" | "matching";
+  // mcq_negative / assertion_reason / scenario / cloze are single-best-answer MCQ
+  // variants — same payload shape as "mcq" (options + answer_index).
+  type:
+    | "mcq"
+    | "multi"
+    | "mcq_negative"
+    | "assertion_reason"
+    | "scenario"
+    | "cloze"
+    | "truefalse"
+    | "fill_blank"
+    | "short"
+    | "essay"
+    | "matching";
   prompt: string;
   explanation?: string;
   options?: string[];

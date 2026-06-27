@@ -40,6 +40,28 @@ def test_finalize_validates_each_type():
     assert out[2]["answer"] is True  # "true" → bool
 
 
+def test_finalize_validates_mcq_variant_types():
+    """The new MCQ-style variants are single-best-answer: same payload as mcq."""
+    items = [
+        {"type": "mcq_negative", "prompt": "Which is NOT a primary color?", "options": ["Red", "Blue", "Green", "Yellow"], "answer_index": 2, "explanation": "x"},
+        {"type": "assertion_reason", "prompt": "A: water boils at 100C. R: at sea level pressure.", "options": ["both true, R explains A", "both true, R does not explain A", "A true R false", "A false R true"], "answer_index": 0},
+        {"type": "scenario", "prompt": "A car skids on ice. Why?", "options": ["low friction", "high friction", "more mass", "downhill"], "answer_index": 0},
+        {"type": "cloze", "prompt": "The powerhouse of the cell is the ___.", "options": ["nucleus", "mitochondrion", "ribosome", "vacuole"], "answer_index": 1},
+        # malformed: out-of-range answer_index → drop
+        {"type": "scenario", "prompt": "bad idx", "options": ["a", "b"], "answer_index": 9},
+        # malformed: too few options → drop
+        {"type": "cloze", "prompt": "only one ___", "options": ["x"], "answer_index": 0},
+        # malformed: missing answer_index → drop
+        {"type": "assertion_reason", "prompt": "no answer", "options": ["a", "b", "c", "d"]},
+    ]
+    all_types = list(__import__("app.graphs.quiz_graph", fromlist=["QUESTION_TYPES"]).QUESTION_TYPES)
+    out = _finalize(items, all_types, 40)
+    types = [q["type"] for q in out]
+    assert types == ["mcq_negative", "assertion_reason", "scenario", "cloze"]
+    assert all("options" in q and "answer_index" in q for q in out)
+    assert out[0]["answer_index"] == 2  # negative/EXCEPT pick preserved
+
+
 def test_finalize_respects_requested_types_and_cap():
     items = [{"type": "mcq", "prompt": f"Q{i}", "options": ["a", "b"], "answer_index": 0} for i in range(50)]
     items.append({"type": "essay", "prompt": "essay", "answer": "x"})
