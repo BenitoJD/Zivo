@@ -116,9 +116,13 @@ function releaseRenderSlot(): void {
   next?.();
 }
 
+// pdf.js VerbosityLevel.ERRORS — silences benign console noise like "Optional content
+// group not found" and text-layer "Node cannot be found" warnings on real-world PDFs.
+const PDF_VERBOSITY_ERRORS = 0;
+
 async function loadPdfDocument(data: ArrayBuffer): Promise<PDFDocumentProxy> {
   const { getDocument } = await loadPdfjs();
-  return getDocument({ data }).promise;
+  return getDocument({ data, verbosity: PDF_VERBOSITY_ERRORS }).promise;
 }
 
 export async function loadPdfForArtifact(
@@ -139,6 +143,7 @@ export async function loadPdfForArtifact(
         withCredentials: true,
         disableRange: false,
         disableStream: false,
+        verbosity: PDF_VERBOSITY_ERRORS,
       }).promise;
       rememberPdfDocument(artifactId, doc);
       return doc;
