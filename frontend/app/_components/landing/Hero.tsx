@@ -10,6 +10,7 @@ import {
   IconBrandAndroid,
 } from "@tabler/icons-react";
 import { useReducedMotion } from "framer-motion";
+import { useMediaQuery } from "@mantine/hooks";
 import { GradientBackdrop } from "./GradientBackdrop";
 import { ProductMock } from "./ProductMock";
 
@@ -32,7 +33,10 @@ const QUESTION_STREAM_TEXT = Array(40)
 
 function WavyTextAnimation() {
   const reduce = useReducedMotion();
-  if (reduce) return null;
+  // Decorative flowing ribbon intentionally bleeds past its box; on phones that
+  // overflow looks cramped, so hide it there (it's purely ornamental).
+  const isMobile = useMediaQuery("(max-width: 47.99em)");
+  if (reduce || isMobile) return null;
 
   return (
     <Box

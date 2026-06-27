@@ -1,0 +1,24 @@
+/*
+ * Large-screen (TV / 4K / ultra-wide) scaling.
+ *
+ * Mantine sizes, spacing, radii, font sizes, container widths and numeric style
+ * props are all `rem * var(--mantine-scale)`. On very large displays the fixed
+ * rem layout becomes a tiny island (e.g. a 1140px container centered in 3840px),
+ * so we scale the whole UI up proportionally instead of leaving it postage-stamp
+ * sized. Normal laptop/desktop (<=1920px) is left untouched.
+ */
+@media (min-width: 2000px) {
+  :root {
+    --mantine-scale: 1.1;
+  }
+}
+@media (min-width: 2600px) {
+  :root {
+    --mantine-scale: 1.25;
+  }
+}
+@media (min-width: 3400px) {
+  :root {
+    --mantine-scale: 1.5;
+  }
+}

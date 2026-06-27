@@ -6,6 +6,7 @@ import "@mantine/core/styles.css";
 import "@mantine/dropzone/styles.css";
 import "@mantine/notifications/styles.css";
 import "@/app/notifications-apple.css";
+import "@/app/responsive-scale.css";
 import Providers from "@/app/providers";
 import {
   MANTINE_COLOR_SCHEME_COOKIE,
