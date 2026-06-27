@@ -12,6 +12,7 @@ from app.models import Account, Document
 from app.services.auth import get_optional_user
 from app.services.guest import can_access_document
 from app.services.guest_session import guest_session_for_read
+from app.services.memory_palace import ensure_palace
 from app.services.study_artifacts import NOTE_KINDS, ensure_flashcards, ensure_notes
 
 router = APIRouter()
@@ -65,3 +66,24 @@ def get_flashcards(
         return {"status": "indexing", "cards": []}
     state = ensure_flashcards(db, artifact_id)
     return {"status": state["status"], "cards": state["cards"]}
+
+
+@router.get("/{artifact_id}/memory-palace")
+def get_memory_palace(
+    artifact_id: uuid.UUID,
+    setting: str = Query(""),
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """A memory-palace journey for the source (Magnetic Memory Method).
+
+    Generates in the background on first request; passing a `setting` (a place the learner
+    knows well) regenerates the journey there. Returns
+    {status: indexing|generating|ready|failed, setting, palace: {setting,intro,stations:[…]}}.
+    """
+    doc = _require_ready_doc(db, artifact_id, user, guest_id)
+    if doc is None:
+        return {"status": "indexing", "setting": "", "palace": None}
+    state = ensure_palace(db, artifact_id, setting=setting or None)
+    return {"status": state["status"], "setting": state["setting"], "palace": state["palace"]}

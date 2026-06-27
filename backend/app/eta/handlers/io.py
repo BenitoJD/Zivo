@@ -133,3 +133,15 @@ def flashcards_generate(payload: dict) -> dict:
     with SessionLocal() as db:
         cards = run_flashcards_generation(db, document_id)
     return {"document_id": str(document_id), "card_count": len(cards)}
+
+
+@eta(name="memory_palace.generate", workload=JobWorkload.io)
+def memory_palace_generate(payload: dict) -> dict:
+    """Build the memory-palace journey for a document (off the answer path)."""
+    from app.services.memory_palace import run_palace_generation
+
+    document_id = UUID(payload["document_id"])
+    setting = payload.get("setting", "")
+    with SessionLocal() as db:
+        palace = run_palace_generation(db, document_id, setting)
+    return {"document_id": str(document_id), "stations": len((palace or {}).get("stations", []))}
