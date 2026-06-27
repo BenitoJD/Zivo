@@ -19,6 +19,8 @@ export const queryKeys = {
   chatMessages: (artifactId: string) => ["chat", artifactId, "messages"] as const,
   topics: (id: string) => ["topics", id] as const,
   topicExplain: (id: string, key: string) => ["topics", id, "explain", key] as const,
+  notes: (id: string, kind: string) => ["notes", id, kind] as const,
+  flashcards: (id: string) => ["flashcards", id] as const,
 };
 
 export type Topic = { key: string; title: string; summary: string };
@@ -42,6 +44,41 @@ export function useTopicsQuery(artifactId: string, enabled = true) {
       if (status === "ready" || status === "failed") return false;
       return document.visibilityState === "visible" ? 3000 : false;
     },
+  });
+}
+
+export type NoteKind = "notes" | "cheatsheet";
+export type NotesResponse = {
+  status: "indexing" | "generating" | "ready" | "failed" | "missing";
+  kind: string;
+  content: string;
+};
+export type Flashcard = { front: string; back: string; kind: "qa" | "cloze" };
+export type FlashcardsResponse = {
+  status: "indexing" | "generating" | "ready" | "failed" | "missing";
+  cards: Flashcard[];
+};
+
+const stillBuilding = (status?: string) =>
+  status === "indexing" || status === "generating" || status === "missing" || !status;
+
+export function useNotesQuery(artifactId: string, kind: NoteKind = "notes", enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.notes(artifactId, kind),
+    queryFn: () => apiGet<NotesResponse>(`/api/artifacts/${artifactId}/notes?kind=${kind}`),
+    enabled: enabled && Boolean(artifactId),
+    refetchInterval: (query) =>
+      stillBuilding(query.state.data?.status) && document.visibilityState === "visible" ? 3000 : false,
+  });
+}
+
+export function useFlashcardsQuery(artifactId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.flashcards(artifactId),
+    queryFn: () => apiGet<FlashcardsResponse>(`/api/artifacts/${artifactId}/flashcards`),
+    enabled: enabled && Boolean(artifactId),
+    refetchInterval: (query) =>
+      stillBuilding(query.state.data?.status) && document.visibilityState === "visible" ? 3000 : false,
   });
 }
 

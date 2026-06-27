@@ -25,6 +25,7 @@ from app.services.web_import import (
     fetch_and_extract,
     paginate_reader_text,
 )
+from app.services.youtube import fetch_youtube_transcript, is_youtube_url
 
 from app.config import get_settings
 from app.services.rate_limit import rate_limit_dependency
@@ -239,14 +240,19 @@ async def import_document_from_url(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(optional_guest_session),
 ) -> Document:
+    is_youtube = is_youtube_url(body.url)
     try:
-        article = await fetch_and_extract(body.url)
+        if is_youtube:
+            # Scribely-style: paste a YouTube link → study its transcript.
+            article = await asyncio.to_thread(fetch_youtube_transcript, body.url)
+        else:
+            article = await fetch_and_extract(body.url)
     except WebImportError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     pages = paginate_reader_text(article.text)
     data = encode_article_pages(pages)
-    meta = build_document_meta(article, source_type="url")
+    meta = build_document_meta(article, source_type="youtube" if is_youtube else "url")
     meta["page_count"] = len(pages)
     filename = article_filename(article.title, article.source_domain)
     return await asyncio.to_thread(

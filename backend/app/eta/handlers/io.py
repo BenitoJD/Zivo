@@ -92,3 +92,44 @@ def topics_generate(payload: dict) -> dict:
     with SessionLocal() as db:
         topics = run_topics_generation(db, document_id)
     return {"document_id": str(document_id), "topic_count": len(topics)}
+
+
+@eta(name="explain.generate", workload=JobWorkload.io)
+def explain_generate(payload: dict) -> dict:
+    """Build one plain-language topic explanation (off the answer path)."""
+    from app.services.topics import run_explanation
+
+    document_id = UUID(payload["document_id"])
+    topic_key = payload["topic_key"]
+    with SessionLocal() as db:
+        explanation = run_explanation(
+            db,
+            document_id,
+            topic_key,
+            title=payload.get("title", ""),
+            summary=payload.get("summary", ""),
+        )
+    return {"document_id": str(document_id), "topic_key": topic_key, "chars": len(explanation)}
+
+
+@eta(name="notes.generate", workload=JobWorkload.io)
+def notes_generate(payload: dict) -> dict:
+    """Build structured study notes (or a cheat sheet) for a document."""
+    from app.services.study_artifacts import run_notes_generation
+
+    document_id = UUID(payload["document_id"])
+    kind = payload.get("kind", "notes")
+    with SessionLocal() as db:
+        content = run_notes_generation(db, document_id, kind)
+    return {"document_id": str(document_id), "kind": kind, "chars": len(content)}
+
+
+@eta(name="flashcards.generate", workload=JobWorkload.io)
+def flashcards_generate(payload: dict) -> dict:
+    """Build the active-recall flashcard deck for a document."""
+    from app.services.study_artifacts import run_flashcards_generation
+
+    document_id = UUID(payload["document_id"])
+    with SessionLocal() as db:
+        cards = run_flashcards_generation(db, document_id)
+    return {"document_id": str(document_id), "card_count": len(cards)}

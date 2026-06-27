@@ -414,7 +414,7 @@ export default function WorkspaceIndexPage() {
             ) : activeTab === "link" ? (
                 <Stack gap="md">
                   <TextInput
-                    placeholder="https://… article or web page"
+                    placeholder="Paste a YouTube link, article, or web page…"
                     value={importUrl}
                     onChange={(e) => setImportUrl(e.currentTarget.value)}
                     disabled={isBusy}
@@ -422,6 +422,9 @@ export default function WorkspaceIndexPage() {
                     radius="md"
                     styles={{ input: { background: "var(--mantine-color-default-hover)", border: "1px solid var(--mantine-color-default-border)" } }}
                   />
+                  <Text size="xs" c="dimmed" ta="center">
+                    Paste a YouTube video link and we&rsquo;ll study its transcript.
+                  </Text>
                   <Button
                     fullWidth
                     size="md"

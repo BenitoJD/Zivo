@@ -68,6 +68,8 @@ import {
 import { ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import { BrandMark } from "@/app/_components/BrandMark";
 import { ExplainView } from "@/app/workspace/_components/ExplainView";
+import { NotesView } from "@/app/workspace/_components/NotesView";
+import { FlashcardsView } from "@/app/workspace/_components/FlashcardsView";
 import { mcqOptionChrome, McqFeedbackCard } from "@/app/_components/mcq/McqCard";
 import { AssistantMarkdown, MessageCopyAction } from "@/lib/chatMarkdown";
 import { indexingStage, isTransientChatAssistantMessage } from "@/lib/constants";
@@ -163,7 +165,7 @@ export default function WorkspaceArtifactPage({
   const mounted = useMounted();
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
-  const [mode, setMode] = useState<"learn" | "test" | "explain">("learn");
+  const [mode, setMode] = useState<"learn" | "test" | "explain" | "notes" | "cards">("learn");
 
   const [artifact, setArtifact] = useState<ArtifactMeta | null>(null);
   const [pages, setPages] = useState<PagesInfo | null>(null);
@@ -906,7 +908,7 @@ export default function WorkspaceArtifactPage({
         questionTotal={questionTotal}
         mode={mode}
         onModeChange={setMode}
-        showProgress={mode !== "explain" && !mcqLoading && Boolean(queue?.current_assertion_id) && !showPageComplete && !showDocumentComplete}
+        showProgress={(mode === "learn" || mode === "test") && !mcqLoading && Boolean(queue?.current_assertion_id) && !showPageComplete && !showDocumentComplete}
         compact={isCompact}
       />
       <Box
@@ -941,6 +943,10 @@ export default function WorkspaceArtifactPage({
         >
           {mode === "explain" ? (
             <ExplainView artifactId={artifact.id} compact={isCompact} />
+          ) : mode === "notes" ? (
+            <NotesView artifactId={artifact.id} compact={isCompact} />
+          ) : mode === "cards" ? (
+            <FlashcardsView artifactId={artifact.id} compact={isCompact} />
           ) : showNoQuestions ? (
             <Stack align="center" gap="sm" py="xl" ta="center">
               <Text ff="var(--font-serif)" fz={isCompact ? 22 : 28} fw={500} c="var(--mantine-color-text)">
@@ -1438,8 +1444,8 @@ function StudyMetaBar({
 }: {
   questionIndex: number;
   questionTotal: number;
-  mode: "learn" | "test" | "explain";
-  onModeChange: (mode: "learn" | "test" | "explain") => void;
+  mode: "learn" | "test" | "explain" | "notes" | "cards";
+  onModeChange: (mode: "learn" | "test" | "explain" | "notes" | "cards") => void;
   showProgress?: boolean;
   compact?: boolean;
 }) {
@@ -1518,8 +1524,8 @@ function StudyModeSwitch({
   onChange,
   compact = false,
 }: {
-  mode: "learn" | "test" | "explain";
-  onChange: (mode: "learn" | "test" | "explain") => void;
+  mode: "learn" | "test" | "explain" | "notes" | "cards";
+  onChange: (mode: "learn" | "test" | "explain" | "notes" | "cards") => void;
   compact?: boolean;
 }) {
   const { colorScheme } = useMantineColorScheme();
@@ -1530,11 +1536,13 @@ function StudyModeSwitch({
       size="xs"
       radius="xl"
       value={mode}
-      onChange={(v) => onChange(v as "learn" | "test" | "explain")}
+      onChange={(v) => onChange(v as "learn" | "test" | "explain" | "notes" | "cards")}
       data={[
         { label: "Learn", value: "learn" },
         { label: "Test", value: "test" },
         { label: "Explain", value: "explain" },
+        { label: "Notes", value: "notes" },
+        { label: "Cards", value: "cards" },
       ]}
       styles={{
         root: {

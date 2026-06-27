@@ -14,6 +14,7 @@ from app.api import (
     models,
     practice,
     sources,
+    study,
     topics,
 )
 
@@ -30,6 +31,7 @@ api_router.include_router(activities.router, prefix="/activities", tags=["activi
 api_router.include_router(assertions.router, prefix="/assertions", tags=["assertions"])
 api_router.include_router(learn.router, prefix="/artifacts", tags=["learn"])
 api_router.include_router(topics.router, prefix="/artifacts", tags=["topics"])
+api_router.include_router(study.router, prefix="/artifacts", tags=["study"])
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
 api_router.include_router(mcq.router, prefix="/mcq", tags=["mcq"])
 api_router.include_router(models.router, prefix="/models", tags=["models"])

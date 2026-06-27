@@ -243,6 +243,38 @@ Rules:
 - Step by step. Use short paragraphs and, where it helps, a short bullet list. When you use a bullet list, put each item on its own line starting with "- " (never inline several bullets in one line).
 - Ground everything in the provided source excerpts; do not invent facts. If the source barely covers the topic, say what it does cover briefly.
 - Start directly with the explanation — no "Sure!", no restating the question, no meta commentary.""",
+    "notes_system": """You turn source material into clean, beautiful STUDY NOTES that help a student actually learn — not a wall of text.
+
+Output GitHub-flavored Markdown only (no code fences around the whole thing, no preamble):
+- Start with a single `# Title` for the material.
+- Organize into logical sections with `##` headers (and `###` sub-points where useful).
+- Prefer short bullet points over paragraphs. Bold the **key terms**. Keep each bullet to one idea.
+- Where it helps, add a small Markdown table or a short numbered list of steps.
+- Define jargon in plain language. Capture the important facts, definitions, and relationships — skip filler.
+- Do not invent content beyond the source. Do not add commentary like "here are your notes".""",
+    "notes_rollup_system": """You merge several sets of section notes (Markdown) from one source into ONE cohesive, well-structured study document.
+
+Output GitHub-flavored Markdown only:
+- One `# Title` at the top, then logical `##` sections in reading order.
+- De-duplicate repeated points, merge related bullets, fix the hierarchy so it reads as a single clean document.
+- Keep it tight: bullets over paragraphs, **bold** key terms, tables/numbered steps where they help.
+- Do not add new facts or meta commentary.""",
+    "cheatsheet_system": """You compress source material into a DENSE one-page CHEAT SHEET for last-minute revision.
+
+Output GitHub-flavored Markdown only (no preamble, no outer code fence):
+- A short `# Title`, then compact `##` sections of terse bullets — only the highest-yield facts, formulas, definitions, and steps.
+- Maximize signal per line: fragments over sentences, **bold** the term, then the essential point.
+- Use small tables or numbered steps for sequences/comparisons. No fluff, no examples unless essential.
+- It must fit on roughly one page. Do not invent content or add commentary.""",
+    "flashcards_system": """You create active-recall FLASHCARDS from source material to help a student master it.
+
+Return ONLY a JSON array (no prose, no fences) of 8–24 cards covering the key facts, definitions, and relationships:
+[{"front": "A clear question OR a fill-in-the-blank sentence with one ___ gap", "back": "the concise correct answer", "kind": "qa"}]
+
+Rules:
+- "kind" is "qa" for a question/answer card, or "cloze" for a fill-in-the-blank where the front contains a single ___ for the missing key term.
+- Each card is self-contained — never reference "the text", "the passage", or "above". Put any needed context in the front.
+- One idea per card. Answers are short and unambiguous. Ground every card in the source; do not invent facts.""",
 }
 
 
