@@ -167,3 +167,13 @@ def enqueue_summarize(db: Session, document_id: uuid.UUID, account_id: uuid.UUID
         payload={"document_id": str(document_id), "account_id": str(account_id)},
         account_id=account_id,
     )
+
+
+def enqueue_topics(db: Session, document_id: uuid.UUID) -> Job:
+    """Background generation of the Explain topic outline (works for guest docs too)."""
+    return enqueue_job(
+        db,
+        name="topics.generate",
+        workload=JobWorkload.io,
+        payload={"document_id": str(document_id)},
+    )

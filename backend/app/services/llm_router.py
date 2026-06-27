@@ -52,7 +52,16 @@ CHAT_REQUEST_TIMEOUT = int(os.getenv("ZIVO_CHAT_REQUEST_TIMEOUT", "90"))
 # budget since it streams and can legitimately run longer.
 GENERATION_REQUEST_TIMEOUT = int(os.getenv("ZIVO_GENERATION_REQUEST_TIMEOUT", "35"))
 _GENERATION_LOG_TAGS = frozenset(
-    {"page_triage", "generate_mcq", "generate_mcq_batch", "critic_mcq", "rewrite_mcq"}
+    {
+        "page_triage",
+        "generate_mcq",
+        "generate_mcq_batch",
+        "critic_mcq",
+        "rewrite_mcq",
+        "topics_extract",
+        "topics_rollup",
+        "topic_explain",
+    }
 )
 # Hard backstop around a single LLM attempt. Some OpenAI-compatible providers ignore
 # the request `timeout` and stall on large/streamed prompts, which hung generation

@@ -223,6 +223,26 @@ Write like a formal exam: standalone question with no book, page number, chapter
 Options must be plain text with no A)/B) prefixes.
 Do not paraphrase or retest facts from prior questions already used.
 Return only one ```zv-mcq``` JSON block with question, options, correct_index, explanation, primary_concept_key.""",
+    "topics_extract_system": """You map a document into the topics a learner should understand, in reading order.
+
+A topic is a self-contained idea worth understanding on its own — not a single sentence, not the whole document. Merge trivia into the topic it belongs to. Cover the whole material; do not invent topics that are not present.
+
+Return ONLY a JSON array (no prose, no fences) of 4–15 topics in the order they appear:
+[{"title": "Plain, specific topic name (<=7 words)", "summary": "one sentence on what this topic covers"}]
+
+Titles are plain language a beginner would recognize. No numbering, no "Chapter/Section", no markdown.""",
+    "topics_rollup_system": """You merge several partial topic lists from different parts of one document into a single clean outline.
+
+De-duplicate overlapping topics, keep reading order, merge near-duplicates. Return ONLY a JSON array (no prose, no fences) of 4–15 topics:
+[{"title": "Plain topic name (<=7 words)", "summary": "one sentence"}]""",
+    "topic_explain_system": """You are a patient teacher giving a HIGH-LEVEL explanation of one topic to a curious beginner.
+
+Rules:
+- Plain, everyday language. No jargon; if a term is unavoidable, define it in one short clause.
+- High-level understanding, not nitty-gritty: the big idea, why it matters, and how the pieces fit — not exhaustive detail.
+- Step by step. Use short paragraphs and, where it helps, a short bullet list.
+- Ground everything in the provided source excerpts; do not invent facts. If the source barely covers the topic, say what it does cover briefly.
+- Start directly with the explanation — no "Sure!", no restating the question, no meta commentary.""",
 }
 
 

@@ -81,3 +81,14 @@ def summarize_generate(payload: dict) -> dict:
             doc.meta = meta
             db.commit()
     return {"document_id": str(document_id), "summary": summary}
+
+
+@eta(name="topics.generate", workload=JobWorkload.io)
+def topics_generate(payload: dict) -> dict:
+    """Build the Explain topic outline for a document (off the answer path)."""
+    from app.services.topics import run_topics_generation
+
+    document_id = UUID(payload["document_id"])
+    with SessionLocal() as db:
+        topics = run_topics_generation(db, document_id)
+    return {"document_id": str(document_id), "topic_count": len(topics)}
