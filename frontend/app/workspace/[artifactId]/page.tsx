@@ -2922,7 +2922,7 @@ function McqHeroPanel({
           flexShrink: 0,
           minHeight: compact ? 56 : 72,
           display: "flex",
-          alignItems: "center",
+          flexDirection: "column",
           justifyContent: "center",
           paddingBottom: 6,
           background: "var(--mantine-color-body)",
@@ -2936,12 +2936,12 @@ function McqHeroPanel({
         ta="center"
         c="var(--mantine-color-text)"
         style={{
-          flexShrink: 0,
           fontFamily: "var(--font-serif), Georgia, serif",
           fontSize: compact ? "clamp(1rem, 4.4vw, 1.3rem)" : "clamp(1.2rem, 2.2vw, 1.9rem)",
           letterSpacing: "-0.01em",
-          maxWidth: 640,
+          maxWidth: "min(640px, 100%)",
           marginInline: "auto",
+          overflowWrap: "anywhere",
         }}
       >
         {stem}
