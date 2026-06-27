@@ -742,6 +742,11 @@ export default function WorkspaceArtifactPage({
         if (queue?.current_assertion_id) {
           scope.current_assertion_id = queue.current_assertion_id;
         }
+        // The option the learner is on right now — even before checking — so the tutor
+        // always knows which question and which choice they're considering.
+        if (selected !== null) {
+          scope.selected_choice_index = Number(selected);
+        }
         if (gradeState !== null && selected !== null) {
           scope.confirmed_choice_index = Number(selected);
           scope.answer_correct = gradeState.correct;
@@ -3666,9 +3671,15 @@ function TutorPanel({
     });
   }, []);
 
+  const prevBusyRef = useRef(false);
   useEffect(() => {
     if (messages.length === 0) return;
-    scrollToBottom();
+    // When a send starts (busy goes false→true) force the view down so the user
+    // immediately sees their question + the thinking indicator; during streaming
+    // just follow if they're already near the bottom.
+    const justStarted = busy && !prevBusyRef.current;
+    prevBusyRef.current = busy;
+    scrollToBottom(justStarted);
   }, [messages, busy, scrollToBottom]);
 
   function handleScroll() {

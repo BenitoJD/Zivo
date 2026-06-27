@@ -7,7 +7,7 @@ import os
 import random
 import re
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
@@ -860,8 +860,14 @@ def generate_quality_mcq_batch(
     model_id: uuid.UUID | None = None,
     aspect_hints: str = "",
     content_type: str | None = None,
+    on_accept: Callable[[dict[str, Any], dict[str, Any]], bool] | None = None,
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     """Generate N MCQs in ONE LLM call, then run quality gates on each.
+
+    ``on_accept(target, draft)`` (if given) is called the moment a draft passes the
+    gate — so the caller can persist it immediately and the learner sees the first
+    question while the rest are still being critiqued. Returning False stops the
+    loop early (e.g. the page budget is full). Dedup is unchanged (still sequential).
 
     Returns (target_aspect, payload) pairs for MCQs that pass heuristics,
     embedding similarity, and sampled LLM critic checks.
@@ -987,5 +993,7 @@ def generate_quality_mcq_batch(
         accepted.append((target, draft))
         accepted_payloads.append(draft)
         prior_embeddings.append(embed_signature_cached(mcq_signature(draft)))
+        if on_accept is not None and on_accept(target, draft) is False:
+            break
 
     return accepted

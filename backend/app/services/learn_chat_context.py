@@ -132,7 +132,9 @@ def build_learn_chat_context(
         return "\n".join(lines)
 
     if state.get("current_assertion_id"):
-        assertion_id = str(state["current_assertion_id"])
+        # Prefer the question the learner is actually looking at (sent in scope) so
+        # the tutor is never confused about "the current question".
+        assertion_id = str((scope or {}).get("current_assertion_id") or state["current_assertion_id"])
         lines.append(f"- Question {qnum} of {budget} on page {page}")
         lines.append(f"- Answered on this page so far: {answered}")
         lines.append(f"- Questions generated on this page: {generated}")
@@ -148,6 +150,16 @@ def build_learn_chat_context(
             progress=progress,
         )
         if mcq and mcq.get("options") and choice_index is None:
+            # The learner may have picked an option but not checked it yet — tell the
+            # tutor so it's fully aware of where they are.
+            selected_raw = (scope or {}).get("selected_choice_index")
+            options = mcq.get("options") or []
+            if selected_raw is not None and 0 <= int(selected_raw) < len(options):
+                sel = int(selected_raw)
+                lines.append(
+                    f'- Learner is currently leaning toward option {_choice_letter(sel)} '
+                    f'("{options[sel]}") but has NOT checked it yet.'
+                )
             lines.append(
                 "- Tutor policy: explain concepts and give hints only; do not reveal "
                 "which option is correct unless the learner explicitly asks for the answer."

@@ -24,7 +24,10 @@ _PAGE_REF_RE = re.compile(
 # keeping the top N after cross-encoder rerank both cuts context tokens and
 # improves relevance. MCQ grading already slices [:4] so it benefits for free.
 _FETCH_LIMIT = 20
-_TOP_N = 4
+# Keep more context for the tutor — 4 was thin for broad / cross-section questions
+# across disciplines; 6 stays well within the 16k-token chat budget. (Over-fetch is
+# 20, reranked down when chat rerank is on.)
+_TOP_N = 6
 
 
 def _chat_rerank_enabled() -> bool:

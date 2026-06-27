@@ -443,7 +443,38 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
     stable_context = get_cacheable_page_context(db, document_id, page_number, page_text)
     aspect_hints = _aspect_retrieval_hints(db, document_id, page_number, targets, page_text)
     content_type = get_page_coverage(doc, page_number).get("content_type")
-    kept = generate_quality_mcq_batch(
+    # Persist each question the moment it passes the gate (not in bulk at the end), so
+    # the learner gets the first question after ~one critique instead of waiting for the
+    # whole batch — the rest stream in while they answer. Same critic, same dedup.
+    state = {"saved": 0, "sequence": start_sequence, "hit_budget": False}
+    asked_keys: list[str] = []
+    pinned_qid = options.get("practice_qid")
+
+    def _on_accept(target: dict[str, Any], payload: dict[str, Any]) -> bool:
+        state["sequence"] += 1
+        seq = state["sequence"]
+        if seq > budget:
+            state["hit_budget"] = True
+            return False
+        if _assertion_sequence_exists(db, document_id, page_number, seq):
+            return True  # sequence taken — skip but keep generating
+        p = dict(payload)
+        p["page_content_hash"] = page_hash
+        _persist_assertions(
+            db,
+            document_id,
+            [(p, seq)],
+            page_number=page_number,
+            facet_rows=[],
+            pinned_qid=pinned_qid,
+        )
+        db.commit()  # make this question immediately available to the learner
+        if target and target.get("key"):
+            asked_keys.append(str(target["key"]))
+        state["saved"] += 1
+        return True
+
+    generate_quality_mcq_batch(
         db,
         page_text=stable_context,
         page_number=page_number,
@@ -451,37 +482,12 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
         prior_mcqs=prior_mcqs,
         aspect_hints=aspect_hints,
         content_type=content_type,
+        on_accept=_on_accept,
     )
 
-    saved = 0
-    sequence = start_sequence
-    facet_rows: list[dict[str, Any]] = []
-    asked_keys: list[str] = []
-    payloads_to_persist: list[tuple[dict[str, Any], int]] = []
-    hit_budget = False
-    for target, payload in kept:
-        sequence += 1
-        if sequence > budget:
-            hit_budget = True
-            break
-        if _assertion_sequence_exists(db, document_id, page_number, sequence):
-            continue
-        payload = dict(payload)
-        payload["page_content_hash"] = page_hash
-        payloads_to_persist.append((payload, sequence))
-        if target and target.get("key"):
-            asked_keys.append(str(target["key"]))
-        saved += 1
-
-    if payloads_to_persist:
-        _persist_assertions(
-            db,
-            document_id,
-            payloads_to_persist,
-            page_number=page_number,
-            facet_rows=facet_rows,
-            pinned_qid=options.get("practice_qid"),
-        )
+    saved = state["saved"]
+    sequence = state["sequence"]
+    hit_budget = state["hit_budget"]
     if asked_keys:
         mark_aspects_asked(db, document_id, page_number, asked_keys)
     if saved:
