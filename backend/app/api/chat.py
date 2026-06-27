@@ -145,6 +145,9 @@ class ChatScope(BaseModel):
     confirmed_choice_index: int | None = Field(default=None, ge=0, le=25)
     answer_correct: bool | None = None
     mentions: list[str] = Field(default_factory=list, max_length=20)
+    # Which study surface the chat is on. "read" → the buddy is about the document
+    # being read, so Learn-mode page/question context must NOT be injected.
+    mode: str | None = Field(default=None, max_length=16)
 
     @field_validator("mentions")
     @classmethod
@@ -392,14 +395,19 @@ async def chat_stream(
                     yield _stream_error_event("Document not found.")
                     return
                 scope = normalize_chat_scope(request_scope, doc)
-                scope.update(
-                    learn_scope_fields(
-                        stream_db,
-                        doc.id,
-                        doc,
-                        request_scope=request_scope,
+                read_mode = str(request_scope.get("mode") or "").lower() == "read"
+                scope["mode"] = "read" if read_mode else (request_scope.get("mode") or None)
+                # Read-mode chat is about the document, not the Learn loop — keep its
+                # page/question signal out of the scope entirely.
+                if not read_mode:
+                    scope.update(
+                        learn_scope_fields(
+                            stream_db,
+                            doc.id,
+                            doc,
+                            request_scope=request_scope,
+                        )
                     )
-                )
                 doc_ids = _resolve_document_ids(
                     stream_db,
                     doc.id,
@@ -591,7 +599,15 @@ async def chat_stream(
         finally:
             stream_db.close()
 
-    return EventSourceResponse(event_generator())
+    # Explicit anti-buffering headers so tokens stream through reverse proxies
+    # (nginx/ingress) instead of arriving all at once.
+    return EventSourceResponse(
+        event_generator(),
+        headers={
+            "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache, no-transform",
+        },
+    )
 
 
 @router.post("/mcq/grade", response_model=McqGradeResponse, dependencies=[Depends(rate_limit_dependency)])

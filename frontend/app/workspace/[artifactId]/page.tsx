@@ -721,15 +721,21 @@ export default function WorkspaceArtifactPage({
     chatAbortRef.current = abort;
     try {
       await ensureGuestSession();
-      const currentPage = queue?.current_page;
-      const scope: Record<string, unknown> =
-        currentPage && currentPage > 0 ? { current_page: currentPage } : {};
-      if (queue?.current_assertion_id) {
-        scope.current_assertion_id = queue.current_assertion_id;
-      }
-      if (gradeState !== null && selected !== null) {
-        scope.confirmed_choice_index = Number(selected);
-        scope.answer_correct = gradeState.correct;
+      // Scope the chat to the CURRENT mode. In Read mode the buddy is about the
+      // document the user is reading — never the Learn queue's current page — so
+      // it must not pin the learn page/question (that caused Read's "summarize"
+      // to summarize the Learn page instead).
+      const scope: Record<string, unknown> = { mode };
+      if (mode !== "read") {
+        const currentPage = queue?.current_page;
+        if (currentPage && currentPage > 0) scope.current_page = currentPage;
+        if (queue?.current_assertion_id) {
+          scope.current_assertion_id = queue.current_assertion_id;
+        }
+        if (gradeState !== null && selected !== null) {
+          scope.confirmed_choice_index = Number(selected);
+          scope.answer_correct = gradeState.correct;
+        }
       }
       let assistant = "";
       let gotToken = false;
@@ -1256,6 +1262,7 @@ export default function WorkspaceArtifactPage({
               onSaveNote={(c) => saveNote(c)}
               suggestions={READ_CHAT_SUGGESTIONS}
               emptyHint="Read on the left. Highlight anything to ask about it, or start here:"
+              showHeader
             />
           </Box>
         </Box>
@@ -1451,6 +1458,7 @@ export default function WorkspaceArtifactPage({
               onStop={stopChat}
               onRegenerate={regenerateChat}
               onEditUser={editChatFromUser}
+              showHeader
             />
           )}
         />
@@ -3614,6 +3622,7 @@ function TutorPanel({
   onSaveNote,
   suggestions = CHAT_SUGGESTIONS,
   emptyHint = "Questions about this page, the source, or how to think through the answer.",
+  showHeader = false,
 }: {
   messages: { role: string; content: string }[];
   input: string;
@@ -3627,6 +3636,8 @@ function TutorPanel({
   onSaveNote?: (content: string) => void;
   suggestions?: string[];
   emptyHint?: string;
+  /** Show a branded top bar — for surfaces (Read, mobile) that have no rail header. */
+  showHeader?: boolean;
 }) {
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
@@ -3669,6 +3680,21 @@ function TutorPanel({
         .chat-msg { animation: chat-msg-in 320ms cubic-bezier(0.32,0.72,0,1) both; }
         @media (prefers-reduced-motion: reduce) { .chat-msg { animation: none; } }
       `}</style>
+      {showHeader ? (
+        <Group
+          gap={8}
+          wrap="nowrap"
+          align="center"
+          px="md"
+          py="xs"
+          style={{ flexShrink: 0, borderBottom: "1px solid var(--app-border, var(--mantine-color-default-border))", background: isDark ? "var(--mantine-color-dark-8)" : "var(--mantine-color-body)" }}
+        >
+          <BrandMark showWord={false} height={18} />
+          <Text fz="sm" fw={600} c="var(--mantine-color-text)" style={{ letterSpacing: "-0.01em" }}>
+            {ZIVO_ASSISTANT_NAME}
+          </Text>
+        </Group>
+      ) : null}
       <Box flex={1} mih={0} pos="relative">
         <Box
           ref={scrollRef}

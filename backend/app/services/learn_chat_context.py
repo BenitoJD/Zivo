@@ -83,6 +83,9 @@ def build_learn_chat_context(
     scope: dict[str, Any] | None = None,
 ) -> str | None:
     """Return a short authoritative block for the tutor when Learn mode is active."""
+    # Read-mode chat is about the document being read, not the Learn loop.
+    if scope and str(scope.get("mode") or "").lower() == "read":
+        return None
     meta = doc.meta or {}
     if not meta.get("question_pool_initialized"):
         return None
