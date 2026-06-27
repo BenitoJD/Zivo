@@ -146,6 +146,7 @@ class ChatThread(Base):
             "account_id",
             "artifact_id",
             "artifact_captured_at",
+            "surface",
             "version",
             name="uq_chat_thread_version",
         ),
@@ -155,6 +156,8 @@ class ChatThread(Base):
     account_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("account.id"), index=True)
     artifact_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
     artifact_captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Study surface the conversation belongs to: "read" / "learn" / "test" / "general".
+    surface: Mapped[str] = mapped_column(String, nullable=False, server_default="general")
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

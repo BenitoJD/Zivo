@@ -17,7 +17,7 @@ export const queryKeys = {
   artifact: (id: string) => ["artifact", id] as const,
   artifactPages: (id: string) => ["artifact", id, "pages"] as const,
   assertion: (id: string) => ["assertion", id] as const,
-  chatMessages: (artifactId: string) => ["chat", artifactId, "messages"] as const,
+  chatMessages: (artifactId: string, surface: string) => ["chat", artifactId, "messages", surface] as const,
   topics: (id: string) => ["topics", id] as const,
   topicExplain: (id: string, key: string) => ["topics", id, "explain", key] as const,
   notes: (id: string, kind: string) => ["notes", id, kind] as const,
@@ -258,12 +258,24 @@ export function useAssertionQuery(assertionId: string | null | undefined) {
   });
 }
 
-export function useChatMessagesQuery(artifactId: string, enabled = true) {
+/** Read / Learn / Test each get their own conversation; other modes share "general". */
+export function chatSurfaceForMode(mode: string): string {
+  return mode === "read" || mode === "learn" || mode === "test" ? mode : "general";
+}
+
+export function useChatMessagesQuery(artifactId: string, mode: string, enabled = true) {
+  const surface = chatSurfaceForMode(mode);
   return useQuery({
-    queryKey: queryKeys.chatMessages(artifactId),
-    queryFn: () => apiGet<{ role: string; content: string }[]>(`/api/chat/threads/${artifactId}/messages`),
+    queryKey: queryKeys.chatMessages(artifactId, surface),
+    queryFn: () =>
+      apiGet<{ role: string; content: string }[]>(
+        `/api/chat/threads/${artifactId}/messages?surface=${surface}`,
+      ),
     enabled: enabled && Boolean(artifactId),
     retry: false,
+    // Drop a surface's cache when you leave it, so returning re-fetches fresh
+    // (picks up messages sent in another surface meanwhile).
+    gcTime: 0,
   });
 }
 

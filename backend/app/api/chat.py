@@ -210,7 +210,19 @@ def _artifact_ref(doc: Document) -> tuple[uuid.UUID, datetime]:
     return doc.artifact_id or doc.id, doc.artifact_captured_at or doc.created_at
 
 
-def _get_or_create_thread(db: Session, account_id: uuid.UUID | None, doc: Document) -> ChatThread:
+_CHAT_SURFACES = {"read", "learn", "test"}
+
+
+def _chat_surface(mode: str | None) -> str:
+    """The conversation surface for a study mode — keeps Read / Learn / Test chats
+    fully separate; anything else shares a neutral 'general' thread."""
+    m = (mode or "").strip().lower()
+    return m if m in _CHAT_SURFACES else "general"
+
+
+def _get_or_create_thread(
+    db: Session, account_id: uuid.UUID | None, doc: Document, surface: str = "general"
+) -> ChatThread:
     artifact_id, captured_at = _artifact_ref(doc)
     thread = (
         db.query(ChatThread)
@@ -218,6 +230,7 @@ def _get_or_create_thread(db: Session, account_id: uuid.UUID | None, doc: Docume
             ChatThread.artifact_id == artifact_id,
             ChatThread.artifact_captured_at == captured_at,
             ChatThread.account_id == account_id,
+            ChatThread.surface == surface,
         )
         .order_by(ChatThread.version.desc())
         .first()
@@ -228,6 +241,7 @@ def _get_or_create_thread(db: Session, account_id: uuid.UUID | None, doc: Docume
         account_id=account_id,
         artifact_id=artifact_id,
         artifact_captured_at=captured_at,
+        surface=surface,
         version=1,
     )
     try:
@@ -243,6 +257,7 @@ def _get_or_create_thread(db: Session, account_id: uuid.UUID | None, doc: Docume
                 ChatThread.artifact_id == artifact_id,
                 ChatThread.artifact_captured_at == captured_at,
                 ChatThread.account_id == account_id,
+                ChatThread.surface == surface,
                 ChatThread.version == 1,
             )
             .first()
@@ -256,6 +271,7 @@ def _get_or_create_thread(db: Session, account_id: uuid.UUID | None, doc: Docume
 def list_messages(
     document_id: uuid.UUID,
     offset: int = 0,
+    surface: str | None = None,
     db: Session = Depends(get_db),
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
@@ -265,7 +281,7 @@ def list_messages(
     doc = db.get(Document, document_id)
     if not doc or not can_access_document(doc, user, guest_id):
         raise HTTPException(status_code=404, detail="Document not found")
-    thread = _get_or_create_thread(db, user.id if user else None, doc)
+    thread = _get_or_create_thread(db, user.id if user else None, doc, _chat_surface(surface))
     return (
         db.query(ChatMessage)
         .filter(ChatMessage.thread_id == thread.id)
@@ -279,6 +295,7 @@ def list_messages(
 @router.post("/threads/{document_id}/clear", dependencies=[Depends(require_csrf_or_guest)])
 def clear_thread(
     document_id: uuid.UUID,
+    surface: str | None = None,
     db: Session = Depends(get_db),
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
@@ -286,13 +303,15 @@ def clear_thread(
     doc = db.get(Document, document_id)
     if not doc or not can_access_document(doc, user, guest_id):
         raise HTTPException(status_code=404, detail="Document not found")
-    current = _get_or_create_thread(db, user.id if user else None, doc)
+    resolved_surface = _chat_surface(surface)
+    current = _get_or_create_thread(db, user.id if user else None, doc, resolved_surface)
     new_version = current.version + 1
     artifact_id, captured_at = _artifact_ref(doc)
     thread = ChatThread(
         account_id=user.id if user else None,
         artifact_id=artifact_id,
         artifact_captured_at=captured_at,
+        surface=resolved_surface,
         version=new_version,
     )
     db.add(thread)
@@ -336,7 +355,8 @@ def _prepare_chat_stream(
 
         reserve_message_slot(db, user=user, request=request, demo_cookie=guest_id)
 
-        thread = _get_or_create_thread(db, user.id if user else None, doc)
+        surface = _chat_surface(scope_preview.get("mode"))
+        thread = _get_or_create_thread(db, user.id if user else None, doc, surface)
         history = (
             db.query(ChatMessage)
             .filter(ChatMessage.thread_id == thread.id)

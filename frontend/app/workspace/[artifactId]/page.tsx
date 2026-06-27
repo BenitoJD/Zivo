@@ -67,6 +67,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { apiFetchBytes, apiGet, apiPost, apiPostSSE, apiUrl, ensureGuestSession, humanizeApiFailure, isArtifactId } from "@/lib/api/client";
 import {
+  chatSurfaceForMode,
   queryKeys,
   useArtifactPagesQuery,
   useArtifactQuery,
@@ -281,7 +282,9 @@ export default function WorkspaceArtifactPage({
   const artifactQuery = useArtifactQuery(artifactId, !invalidArtifactId);
   const pagesQuery = useArtifactPagesQuery(artifactId, !invalidArtifactId);
   const assertionQuery = useAssertionQuery(queue?.current_assertion_id);
-  const chatMessagesQuery = useChatMessagesQuery(artifactId, !invalidArtifactId);
+  // Each mode (Read / Learn / Test) is its own conversation surface.
+  const chatSurface = chatSurfaceForMode(mode);
+  const chatMessagesQuery = useChatMessagesQuery(artifactId, mode, !invalidArtifactId);
   const chatHydratedRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -306,17 +309,24 @@ export default function WorkspaceArtifactPage({
   const queueRef = useRef(queue);
   queueRef.current = queue;
 
+  // Switching conversation surface (mode) clears the view until the new thread loads.
+  useEffect(() => {
+    chatHydratedRef.current = null;
+    setChatMessages([]);
+  }, [artifactId, chatSurface]);
+
   useEffect(() => {
     if (!chatMessagesQuery.data || chatBusy) return;
-    if (chatHydratedRef.current === artifactId) return;
-    chatHydratedRef.current = artifactId;
+    const key = `${artifactId}:${chatSurface}`;
+    if (chatHydratedRef.current === key) return;
+    chatHydratedRef.current = key;
     setChatMessages(
       chatMessagesQuery.data
         .filter((m) => (m.content || "").trim())
         .filter((m) => !(m.role === "assistant" && isTransientChatAssistantMessage(m.content)))
         .map((m) => ({ role: m.role, content: m.content })),
     );
-  }, [artifactId, chatBusy, chatMessagesQuery.data]);
+  }, [artifactId, chatSurface, chatBusy, chatMessagesQuery.data]);
 
   const isPdf = artifact?.content_type === "application/pdf";
 
