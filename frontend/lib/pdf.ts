@@ -116,8 +116,8 @@ function releaseRenderSlot(): void {
   next?.();
 }
 
-// pdf.js VerbosityLevel.ERRORS — silences benign console noise like "Optional content
-// group not found" and text-layer "Node cannot be found" warnings on real-world PDFs.
+// pdf.js VerbosityLevel.ERRORS — silences benign warn()s like "Optional content group
+// not found: NNNR" that real-world PDFs emit during rendering.
 const PDF_VERBOSITY_ERRORS = 0;
 
 async function loadPdfDocument(data: ArrayBuffer): Promise<PDFDocumentProxy> {

@@ -5,8 +5,9 @@ import { apiDelete, apiGet, apiPost, setCsrfToken } from "@/lib/api/client";
 import type { ArtifactMeta, PagesInfo, SourceDocument } from "@/lib/types";
 
 export type AuthSession = {
-  username: string;
-  csrf_token: string;
+  authenticated?: boolean;
+  username: string | null;
+  csrf_token: string | null;
   is_admin?: boolean;
 };
 
@@ -218,7 +219,9 @@ export function useSessionQuery(enabled = true) {
     queryKey: queryKeys.session,
     queryFn: async () => {
       const session = await apiGet<AuthSession>("/api/auth/session");
-      setCsrfToken(session.csrf_token);
+      // Only adopt a real token — never overwrite the guest CSRF with null when the
+      // visitor is anonymous (the endpoint now returns 200 with a null token).
+      if (session.csrf_token) setCsrfToken(session.csrf_token);
       return session;
     },
     enabled,

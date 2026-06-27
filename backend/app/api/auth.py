@@ -10,6 +10,7 @@ from app.services.auth import (
     create_session_token,
     csrf_from_session_token,
     get_current_user,
+    get_optional_user,
     hash_password,
     require_csrf,
     set_session_cookie,
@@ -39,6 +40,16 @@ class LoginRequest(BaseModel):
 class AuthResponse(BaseModel):
     username: str
     csrf_token: str
+    is_admin: bool = False
+
+
+class SessionResponse(BaseModel):
+    """Session probe result. Anonymous/guest visitors get a 200 with
+    `authenticated: false` (not a 401), so the browser console stays clean."""
+
+    authenticated: bool = False
+    username: str | None = None
+    csrf_token: str | None = None
     is_admin: bool = False
 
 
@@ -108,14 +119,21 @@ def login(
     return AuthResponse(username=user.username, csrf_token=csrf, is_admin=user.is_admin)
 
 
-@router.get("/session", response_model=AuthResponse)
+@router.get("/session", response_model=SessionResponse)
 def get_session(
-    user: User = Depends(get_current_user),
+    user: User | None = Depends(get_optional_user),
     zivo_session: str | None = Cookie(default=None),
-) -> AuthResponse:
-    if not zivo_session:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    return AuthResponse(username=user.username, csrf_token=csrf_from_session_token(zivo_session), is_admin=user.is_admin)
+) -> SessionResponse:
+    # Not being signed in is the normal case (guests), not an error — return an
+    # empty 200 session instead of a 401 so the browser doesn't log a failed request.
+    if not zivo_session or user is None:
+        return SessionResponse(authenticated=False)
+    return SessionResponse(
+        authenticated=True,
+        username=user.username,
+        csrf_token=csrf_from_session_token(zivo_session),
+        is_admin=user.is_admin,
+    )
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
