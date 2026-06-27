@@ -276,6 +276,36 @@ export async function renderPdfPageToCanvas(
   }
 }
 
+/**
+ * Render a page's selectable text layer into `container`, sized to `cssWidth`.
+ * pdfjs positions spans via `--scale-factor` × unscaled px, so the container's
+ * scale-factor must match the viewport scale (cssWidth / unscaled page width).
+ * Returns the rendered CSS height so callers can size the page frame.
+ */
+export async function renderPdfTextLayer(
+  pdf: PDFDocumentProxy,
+  pageNumber: number,
+  container: HTMLElement,
+  cssWidth: number,
+): Promise<number> {
+  const pdfjs = await loadPdfjs();
+  const page = await pdf.getPage(pageNumber);
+  const base = page.getViewport({ scale: 1 });
+  const cssScale = base.width > 0 ? cssWidth / base.width : 1;
+  const viewport = page.getViewport({ scale: cssScale });
+  container.replaceChildren();
+  container.style.setProperty("--scale-factor", String(cssScale));
+  container.style.width = `${viewport.width}px`;
+  container.style.height = `${viewport.height}px`;
+  const textContent = await page.getTextContent();
+  const TextLayerCtor = (pdfjs as unknown as { TextLayer?: new (o: object) => { render: () => Promise<void> } }).TextLayer;
+  if (TextLayerCtor) {
+    const layer = new TextLayerCtor({ textContentSource: textContent, container, viewport });
+    await layer.render();
+  }
+  return viewport.height;
+}
+
 /** Thumbnail render - fit entire page inside frame (no edge cropping). */
 export async function renderPdfThumbToCanvas(
   pdf: PDFDocumentProxy,

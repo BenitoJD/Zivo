@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiGet, setCsrfToken } from "@/lib/api/client";
+import { apiDelete, apiGet, apiPost, setCsrfToken } from "@/lib/api/client";
 import type { ArtifactMeta, PagesInfo, SourceDocument } from "@/lib/types";
 
 export type AuthSession = {
@@ -22,6 +22,7 @@ export const queryKeys = {
   notes: (id: string, kind: string) => ["notes", id, kind] as const,
   flashcards: (id: string) => ["flashcards", id] as const,
   memoryPalace: (id: string, setting: string) => ["memory-palace", id, setting] as const,
+  savedNotes: (id: string) => ["saved-notes", id] as const,
 };
 
 export type Topic = { key: string; title: string; summary: string };
@@ -107,6 +108,37 @@ export function useMemoryPalaceQuery(artifactId: string, setting = "", enabled =
     refetchInterval: (query) =>
       stillBuilding(query.state.data?.status) && document.visibilityState === "visible" ? 3000 : false,
   });
+}
+
+export type SavedNote = { id: string; content: string; quote: string | null; created_at: string | null };
+
+export function useSavedNotesQuery(artifactId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.savedNotes(artifactId),
+    queryFn: () => apiGet<{ notes: SavedNote[] }>(`/api/artifacts/${artifactId}/saved-notes`),
+    enabled: enabled && Boolean(artifactId),
+    staleTime: 10_000,
+  });
+}
+
+/** Saved-notes mutations (save / delete) with cache invalidation. */
+export function useSavedNotesActions(artifactId: string) {
+  const qc = useQueryClient();
+  const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.savedNotes(artifactId) });
+  return {
+    save: async (content: string, quote?: string | null) => {
+      const note = await apiPost<SavedNote>(`/api/artifacts/${artifactId}/saved-notes`, {
+        content,
+        quote: quote ?? null,
+      });
+      void invalidate();
+      return note;
+    },
+    remove: async (noteId: string) => {
+      await apiDelete(`/api/artifacts/${artifactId}/saved-notes/${noteId}`);
+      void invalidate();
+    },
+  };
 }
 
 export function useTopicExplanationQuery(artifactId: string, topicKey: string | null) {
