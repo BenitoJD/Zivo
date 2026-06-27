@@ -27,12 +27,20 @@ from app.services.token_budget import (
 QUESTION_TYPES = {
     "mcq": "Multiple choice (one correct answer)",
     "multi": "Multiple choice (one or more correct answers)",
+    "mcq_negative": "Negative / EXCEPT multiple choice (one correct answer)",
+    "assertion_reason": "Assertion–Reason multiple choice (one correct answer)",
+    "scenario": "Scenario / case-based multiple choice (one correct answer)",
+    "cloze": "Cloze / fill-in-the-blank multiple choice (one correct answer)",
     "truefalse": "True / False",
     "fill_blank": "Fill in the blank",
     "short": "Short answer",
     "essay": "Long answer / essay",
     "matching": "Matching",
 }
+# MCQ-variant styles that share the plain `mcq` payload schema
+# (prompt, options, answer_index, explanation) — so they validate, render,
+# and export through the same single-best-answer code path.
+SINGLE_ANSWER_MCQ_TYPES = ("mcq", "mcq_negative", "assertion_reason", "scenario", "cloze")
 MAX_QUESTIONS = 40
 
 
@@ -85,12 +93,14 @@ def _finalize(raw_items: list, requested_types: list[str], cap: int) -> list[dic
         expl = str(item.get("explanation") or "").strip()[:600]
         q: dict = {"type": qtype, "prompt": prompt[:600], "explanation": expl}
 
-        if qtype in ("mcq", "multi"):
+        if qtype in SINGLE_ANSWER_MCQ_TYPES or qtype == "multi":
             opts = _norm_options(item)
             if len(opts) < 2:
                 continue
             q["options"] = opts
-            if qtype == "mcq":
+            if qtype in SINGLE_ANSWER_MCQ_TYPES:
+                # All MCQ-variant styles (standard, negative/EXCEPT, assertion–reason,
+                # scenario, cloze) are single-best-answer: same payload as plain mcq.
                 idx = item.get("answer_index")
                 if not isinstance(idx, int) or not (0 <= idx < len(opts)):
                     continue

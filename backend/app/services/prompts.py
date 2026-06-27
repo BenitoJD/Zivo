@@ -152,7 +152,12 @@ SELF-CONTAINED (mandatory)
 THE STEM
 - One clear question; the learner knows what is asked before reading the options.
 - Test understanding (why / how / predict / apply / compare), not phrase-matching or trivia.
-- End with "?". No negative or odd-one-out stems ("NOT", "EXCEPT", "least likely", "which is false", "which is incorrect", "never"), no fill-in-the-blank.
+- VARY THE STYLE across a set so the learner is tested in different cognitive ways — never the same shape every time. All of these stay single-best-answer (exactly one correct option) with the SAME output schema; pick whichever fits this aspect best:
+  - standard: a direct "why / how / which" question ending in "?".
+  - scenario / case-based: open with a brief concrete situation (1–2 sentences), then ask a single-best-answer question that requires APPLYING the idea to that situation, not recalling it.
+  - assertion–reason: state an Assertion (A) and a Reason (R) as two claims, then make the four options the standard relationship judgments in this order — "Both A and R are true, and R correctly explains A", "Both A and R are true, but R does not explain A", "A is true but R is false", "A is false but R is true" — with correct_index on the judgment that holds.
+  - cloze: a single sentence with one ___ blank carrying the key idea, the four options being candidate fills (exactly one correct, the rest plausible confusions).
+- Do NOT use negative / odd-one-out stems ("NOT", "EXCEPT", "least likely", "which is false", "which is incorrect", "never") — phrase positively even when probing exceptions.
 
 THE ANSWER
 - Exactly one defensibly correct option, fully grounded in the subject matter. Never invent facts beyond it.
@@ -297,13 +302,23 @@ Write clear, unambiguous, exam-quality questions grounded ONLY in the source —
 Return ONLY a JSON array (no prose, no fences). Each element matches its type exactly:
 - {"type": "mcq", "prompt": "...", "options": ["A","B","C","D"], "answer_index": 0, "explanation": "why it's correct"}
 - {"type": "multi", "prompt": "...", "options": ["..."], "answer_indices": [0,2], "explanation": "..."}
+- {"type": "mcq_negative", "prompt": "Which of the following is NOT ...?", "options": ["A","B","C","D"], "answer_index": 0, "explanation": "..."}
+- {"type": "assertion_reason", "prompt": "Assertion (A): <claim>. Reason (R): <claim>.", "options": ["Both A and R are true, and R correctly explains A","Both A and R are true, but R does not explain A","A is true but R is false","A is false but R is true"], "answer_index": 0, "explanation": "..."}
+- {"type": "scenario", "prompt": "<a short applied scenario>. Given this, <question>?", "options": ["A","B","C","D"], "answer_index": 0, "explanation": "..."}
+- {"type": "cloze", "prompt": "A sentence with one ___ blank to complete.", "options": ["A","B","C","D"], "answer_index": 0, "explanation": "..."}
 - {"type": "truefalse", "prompt": "a statement to judge", "answer": true, "explanation": "..."}
 - {"type": "fill_blank", "prompt": "A sentence with one ___ blank", "answer": "the missing word/phrase", "explanation": "..."}
 - {"type": "short", "prompt": "a question answerable in 1-3 sentences", "answer": "a concise model answer", "explanation": ""}
 - {"type": "essay", "prompt": "an open prompt", "answer": "key points / a marking outline the answer should cover"}
 - {"type": "matching", "prompt": "Match each term to its description", "pairs": [{"left":"Term","right":"Description"}], "explanation": ""}
 
-Rules: MCQ has exactly one correct option with plausible distractors based on common misconceptions; multi has 1+ correct. Keep prompts concise. Adjust rigor to the requested difficulty.""",
+Rules: MCQ has exactly one correct option with plausible distractors based on common misconceptions; multi has 1+ correct. Keep prompts concise. Adjust rigor to the requested difficulty.
+
+MCQ STYLES — all of mcq, mcq_negative, assertion_reason, scenario and cloze are single-best-answer (exactly one correct option via answer_index); only the kind of thinking changes:
+- mcq_negative (Negative / EXCEPT): the stem asks which option is NOT true / is the exception / does not belong. Capitalize the negative word ("NOT", "EXCEPT") so it cannot be missed. Exactly one option is the correct pick (the one that does not fit); the other three are all genuinely true/belonging. Use it to test whether the learner can separate what applies from what doesn't.
+- assertion_reason: the prompt states an Assertion (A) and a Reason (R), each a complete claim. The four options are ALWAYS exactly these four standard relationship judgments, in this order: "Both A and R are true, and R correctly explains A"; "Both A and R are true, but R does not explain A"; "A is true but R is false"; "A is false but R is true". Pick answer_index for the judgment that actually holds. Tests causal/explanatory reasoning, not recall.
+- scenario (Case-based): open with a brief, concrete applied situation (1–3 sentences), then ask a single-best-answer question that requires applying or transferring the idea to that situation — never plain recall. Keep the scenario self-contained.
+- cloze (Fill-in-MCQ): write one sentence with a single ___ blank carrying the key idea; the four options are candidate fills, exactly one of which makes the sentence correct. Distractors are plausible wrong fills (common confusions), not nonsense.""",
 }
 
 
