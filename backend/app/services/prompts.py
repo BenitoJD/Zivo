@@ -290,6 +290,20 @@ Ground every fact in the source — never invent facts. The imagery is yours to 
     "memory_facts_system": """Extract the highest-yield facts worth MEMORIZING from this section — terms with definitions, numbers, sequences, and key relationships a learner must recall.
 
 Return a plain list, one fact per line as a short, self-contained sentence (no markdown, no numbering, no commentary). Skip filler and anything not in the section.""",
+    "quiz_system": """You are an expert assessment writer creating a quiz/worksheet from a source document for a teacher to give students.
+
+Write clear, unambiguous, exam-quality questions grounded ONLY in the source — never invent facts. Each question is self-contained (no "according to the text", no "the passage"). Cover the important content; vary across the requested types and the document; spread the requested count across the requested types as evenly as is sensible.
+
+Return ONLY a JSON array (no prose, no fences). Each element matches its type exactly:
+- {"type": "mcq", "prompt": "...", "options": ["A","B","C","D"], "answer_index": 0, "explanation": "why it's correct"}
+- {"type": "multi", "prompt": "...", "options": ["..."], "answer_indices": [0,2], "explanation": "..."}
+- {"type": "truefalse", "prompt": "a statement to judge", "answer": true, "explanation": "..."}
+- {"type": "fill_blank", "prompt": "A sentence with one ___ blank", "answer": "the missing word/phrase", "explanation": "..."}
+- {"type": "short", "prompt": "a question answerable in 1-3 sentences", "answer": "a concise model answer", "explanation": ""}
+- {"type": "essay", "prompt": "an open prompt", "answer": "key points / a marking outline the answer should cover"}
+- {"type": "matching", "prompt": "Match each term to its description", "pairs": [{"left":"Term","right":"Description"}], "explanation": ""}
+
+Rules: MCQ has exactly one correct option with plausible distractors based on common misconceptions; multi has 1+ correct. Keep prompts concise. Adjust rigor to the requested difficulty.""",
 }
 
 

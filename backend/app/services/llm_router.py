@@ -73,6 +73,7 @@ _LONGFORM_GENERATION_LOG_TAGS = frozenset(
         "notes_rollup",
         "flashcards_generate",
         "memory_palace_generate",
+        "quiz_generate",
     }
 )
 # Hard backstop around a single LLM attempt. Some OpenAI-compatible providers ignore

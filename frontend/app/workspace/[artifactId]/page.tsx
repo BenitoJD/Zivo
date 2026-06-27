@@ -75,6 +75,7 @@ import { ExplainView } from "@/app/workspace/_components/ExplainView";
 import { NotesView } from "@/app/workspace/_components/NotesView";
 import { FlashcardsView } from "@/app/workspace/_components/FlashcardsView";
 import { MemoryPalaceView } from "@/app/workspace/_components/MemoryPalaceView";
+import { QuizBuilderView } from "@/app/workspace/_components/QuizBuilderView";
 import { PdfReader } from "@/app/workspace/_components/PdfReader";
 import { mcqOptionChrome, McqFeedbackCard } from "@/app/_components/mcq/McqCard";
 import { AssistantMarkdown, MessageCopyAction } from "@/lib/chatMarkdown";
@@ -173,7 +174,7 @@ export default function WorkspaceArtifactPage({
   const mounted = useMounted();
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
-  const [mode, setMode] = useState<"learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read">("learn");
+  const [mode, setMode] = useState<"learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read" | "quiz">("learn");
 
   const [artifact, setArtifact] = useState<ArtifactMeta | null>(null);
   const [pages, setPages] = useState<PagesInfo | null>(null);
@@ -983,6 +984,8 @@ export default function WorkspaceArtifactPage({
             <FlashcardsView artifactId={artifact.id} compact={isCompact} />
           ) : mode === "palace" ? (
             <MemoryPalaceView artifactId={artifact.id} compact={isCompact} />
+          ) : mode === "quiz" ? (
+            <QuizBuilderView artifactId={artifact.id} compact={isCompact} />
           ) : showNoQuestions ? (
             <Stack align="center" gap="sm" py="xl" ta="center">
               <Text ff="var(--font-serif)" fz={isCompact ? 22 : 28} fw={500} c="var(--mantine-color-text)">
@@ -1611,8 +1614,8 @@ function StudyMetaBar({
 }: {
   questionIndex: number;
   questionTotal: number;
-  mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read";
-  onModeChange: (mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read") => void;
+  mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read" | "quiz";
+  onModeChange: (mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read" | "quiz") => void;
   showProgress?: boolean;
   compact?: boolean;
 }) {
@@ -1694,18 +1697,18 @@ function StudyModeSwitch({
   onChange,
   compact = false,
 }: {
-  mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read";
-  onChange: (mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read") => void;
+  mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read" | "quiz";
+  onChange: (mode: "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read" | "quiz") => void;
   compact?: boolean;
 }) {
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
-  type Mode = "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read";
+  type Mode = "learn" | "test" | "explain" | "notes" | "cards" | "palace" | "read" | "quiz";
 
   // Two intuitive groups instead of one crowded row: work directly with the material
   // (read / learn / test) vs. the AI study aids it generates.
   const core = ["read", "learn", "test"];
-  const tools = ["explain", "notes", "cards", "palace"];
+  const tools = ["explain", "notes", "cards", "palace", "quiz"];
   const styles = {
     root: {
       background: isDark ? "var(--mantine-color-dark-6)" : "var(--mantine-color-gray-1)",
@@ -1744,6 +1747,7 @@ function StudyModeSwitch({
           { label: "Notes", value: "notes" },
           { label: "Cards", value: "cards" },
           { label: "Palace", value: "palace" },
+          { label: "Quiz", value: "quiz" },
         ]}
         styles={styles}
       />

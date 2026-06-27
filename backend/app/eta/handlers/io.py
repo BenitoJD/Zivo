@@ -145,3 +145,20 @@ def memory_palace_generate(payload: dict) -> dict:
     with SessionLocal() as db:
         palace = run_palace_generation(db, document_id, setting)
     return {"document_id": str(document_id), "stations": len((palace or {}).get("stations", []))}
+
+
+@eta(name="quiz.generate", workload=JobWorkload.io)
+def quiz_generate(payload: dict) -> dict:
+    """Build a quiz/worksheet for a document (Question Generator, off the answer path)."""
+    from app.services.quiz import run_quiz_generation
+
+    document_id = UUID(payload["document_id"])
+    with SessionLocal() as db:
+        questions = run_quiz_generation(
+            db,
+            document_id,
+            types=payload.get("types", ["mcq"]),
+            count=payload.get("count", 10),
+            difficulty=payload.get("difficulty", "mixed"),
+        )
+    return {"document_id": str(document_id), "questions": len(questions)}
