@@ -24,6 +24,21 @@ def test_extract_video_id(url, expected):
     assert extract_video_id(url) == expected
 
 
+def test_transcript_kwargs_env_hook(monkeypatch):
+    from app.services import youtube as yt
+
+    monkeypatch.delenv("ZIVO_YOUTUBE_PROXY", raising=False)
+    monkeypatch.delenv("ZIVO_YOUTUBE_COOKIES_FILE", raising=False)
+    assert yt._transcript_kwargs() == {}  # zero-default: unchanged behavior
+
+    monkeypatch.setenv("ZIVO_YOUTUBE_PROXY", "http://user:pw@host:8080")
+    monkeypatch.setenv("ZIVO_YOUTUBE_COOKIES_FILE", "/tmp/cookies.txt")
+    assert yt._transcript_kwargs() == {
+        "proxies": {"http": "http://user:pw@host:8080", "https": "http://user:pw@host:8080"},
+        "cookies": "/tmp/cookies.txt",
+    }
+
+
 @pytest.mark.parametrize(
     "url,expected",
     [

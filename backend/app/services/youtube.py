@@ -6,10 +6,18 @@ sources, so it then works with Learn/Test/Explain/Notes/Cards.
 
 Transcript fetching can be blocked by YouTube from datacenter IPs; failures raise a
 WebImportError with a clear message so the caller can tell the user to paste the text.
+
+Reliability note: YouTube hard-blocks the transcript ("timedtext") content fetch from
+non-residential IPs (HTTP 429) — verified across youtube-transcript-api, yt-dlp (all
+InnerTube clients), and raw fetches. There is no free way around this from a server.
+The only reliable route is a residential proxy, so we expose an optional, zero-default
+``ZIVO_YOUTUBE_PROXY`` (and ``ZIVO_YOUTUBE_COOKIES_FILE``): set either and transcript
+fetching routes through it and starts working — with no behavior change when unset.
 """
 
 from __future__ import annotations
 
+import os
 import re
 from urllib.parse import parse_qs, urlparse
 
@@ -28,6 +36,19 @@ _YT_HOSTS = {
 _OEMBED_URL = "https://www.youtube.com/oembed"
 _FETCH_TIMEOUT_S = 15.0
 _TRANSCRIPT_LANGS = ["en", "en-US", "en-GB"]
+
+
+def _transcript_kwargs() -> dict:
+    """Optional proxy/cookies for the transcript fetch — the only thing that makes it
+    reliable from a server. Empty (no-op) unless ZIVO_YOUTUBE_PROXY / _COOKIES_FILE set."""
+    kwargs: dict = {}
+    proxy = os.getenv("ZIVO_YOUTUBE_PROXY", "").strip()
+    if proxy:
+        kwargs["proxies"] = {"http": proxy, "https": proxy}
+    cookies = os.getenv("ZIVO_YOUTUBE_COOKIES_FILE", "").strip()
+    if cookies:
+        kwargs["cookies"] = cookies
+    return kwargs
 
 
 def is_youtube_url(url: str) -> bool:
@@ -105,15 +126,16 @@ def _fetch_transcript_text(video_id: str) -> str:
             "YouTube import is not available right now.", code="fetch_failed"
         ) from exc
 
+    extra = _transcript_kwargs()
     segments = None
     last_exc: Exception | None = None
     try:
-        segments = YouTubeTranscriptApi.get_transcript(video_id, languages=_TRANSCRIPT_LANGS)
+        segments = YouTubeTranscriptApi.get_transcript(video_id, languages=_TRANSCRIPT_LANGS, **extra)
     except Exception as exc:
         last_exc = exc
         # Fall back to any available transcript (manual or auto-generated, any language).
         try:
-            listing = YouTubeTranscriptApi.list_transcripts(video_id)
+            listing = YouTubeTranscriptApi.list_transcripts(video_id, **extra)
             for transcript in listing:
                 try:
                     segments = transcript.fetch()
