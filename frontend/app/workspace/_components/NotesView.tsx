@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Box,
   Button,
@@ -23,8 +23,10 @@ import {
   IconFileTypePdf,
   IconPhoto,
 } from "@tabler/icons-react";
+import { IconNotebook } from "@tabler/icons-react";
 import { AssistantMarkdown } from "@/lib/chatMarkdown";
 import { useNotesQuery, type NoteKind } from "@/lib/api/queries";
+import { GenerateGate, markGenStarted, readGenStarted } from "./GenerateGate";
 
 /**
  * Notes mode — Scribely-style. Turns a source into one cohesive, beautifully structured
@@ -44,10 +46,25 @@ export function NotesView({
   const sheetRef = useRef<HTMLDivElement>(null);
   const [exporting, setExporting] = useState<null | "pdf" | "png">(null);
 
-  const { data, isError, refetch } = useNotesQuery(artifactId, kind);
+  // Each kind (notes / cheatsheet) is gated and remembered independently.
+  const mode = kind === "cheatsheet" ? "cheatsheet" : "notes";
+  const [startedKinds, setStartedKinds] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    if (!startedKinds[mode] && readGenStarted(artifactId, mode)) {
+      setStartedKinds((prev) => ({ ...prev, [mode]: true }));
+    }
+  }, [artifactId, mode, startedKinds]);
+  const started = Boolean(startedKinds[mode]);
+
+  const { data, isError, refetch } = useNotesQuery(artifactId, kind, started);
   const status = data?.status;
   const content = data?.content ?? "";
   const ready = status === "ready" && content.trim().length > 0;
+
+  function start() {
+    markGenStarted(artifactId, mode);
+    setStartedKinds((prev) => ({ ...prev, [mode]: true }));
+  }
 
   async function exportPng() {
     if (!sheetRef.current) return;
@@ -108,6 +125,25 @@ export function NotesView({
       ]}
     />
   );
+
+  if (!started && !ready) {
+    return (
+      <Stack gap="lg" pb="xl">
+        <Group justify="space-between">{toggle}</Group>
+        <GenerateGate
+          icon={<IconNotebook size={28} />}
+          title={kind === "cheatsheet" ? "Build a cheat sheet" : "Generate study notes"}
+          description={
+            kind === "cheatsheet"
+              ? "Condense this source into a one-page cheat sheet of the essentials."
+              : "Generate clean, structured study notes from this source."
+          }
+          onStart={start}
+          compact={compact}
+        />
+      </Stack>
+    );
+  }
 
   if (isError || status === "failed") {
     return (

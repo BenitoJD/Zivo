@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Accordion,
   Box,
@@ -24,6 +24,7 @@ import {
   useTopicsQuery,
   type Topic,
 } from "@/lib/api/queries";
+import { GenerateGate, markGenStarted, readGenStarted } from "./GenerateGate";
 
 /**
  * Explain mode — a plain-language tour of a document's topics. Additive to MCQ:
@@ -37,11 +38,33 @@ export function ExplainView({
   artifactId: string;
   compact?: boolean;
 }) {
-  const { data, isError, refetch } = useTopicsQuery(artifactId);
+  const [started, setStarted] = useState(false);
+  useEffect(() => {
+    if (readGenStarted(artifactId, "explain")) setStarted(true);
+  }, [artifactId]);
+
+  const { data, isError, refetch } = useTopicsQuery(artifactId, started);
   const [open, setOpen] = useState<string | null>(null);
 
   const status = data?.status;
   const topics = data?.topics ?? [];
+
+  function start() {
+    markGenStarted(artifactId, "explain");
+    setStarted(true);
+  }
+
+  if (!started && topics.length === 0) {
+    return (
+      <GenerateGate
+        icon={<IconBulb size={28} />}
+        title="Explain this source"
+        description="Turn this source into a clear topic-by-topic explanation in plain language."
+        onStart={start}
+        compact={compact}
+      />
+    );
+  }
 
   if (isError || status === "failed") {
     return (

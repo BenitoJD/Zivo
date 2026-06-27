@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActionIcon,
   Badge,
@@ -30,6 +30,7 @@ import {
   IconSparkles,
 } from "@tabler/icons-react";
 import { useMemoryPalaceQuery, type PalaceStation } from "@/lib/api/queries";
+import { GenerateGate, markGenStarted, readGenStarted } from "./GenerateGate";
 
 /**
  * Memory Palace mode — Anthony Metivier's Magnetic Memory Method.
@@ -46,12 +47,35 @@ export function MemoryPalaceView({
 }) {
   // Empty string = let the AI pick a familiar place; a value regenerates there.
   const [setting, setSetting] = useState("");
-  const { data, isError, refetch } = useMemoryPalaceQuery(artifactId, setting);
+  const [started, setStarted] = useState(false);
+  useEffect(() => {
+    if (readGenStarted(artifactId, "palace")) setStarted(true);
+  }, [artifactId]);
+
+  const { data, isError, refetch } = useMemoryPalaceQuery(artifactId, setting, started);
   const [phase, setPhase] = useState<"walk" | "rehearse">("walk");
 
   const status = data?.status;
   const palace = data?.palace ?? null;
   const ready = status === "ready" && palace && palace.stations.length > 0;
+
+  function start() {
+    markGenStarted(artifactId, "palace");
+    setStarted(true);
+  }
+
+  if (!started && !palace) {
+    return (
+      <GenerateGate
+        icon={<IconBuildingCastle size={28} />}
+        title="Build a memory palace"
+        description="Build a memory palace — a vivid journey of mnemonic stations."
+        actionLabel="Build palace"
+        onStart={start}
+        compact={compact}
+      />
+    );
+  }
 
   const phaseSwitch = (
     <SegmentedControl

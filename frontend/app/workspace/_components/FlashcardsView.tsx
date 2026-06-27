@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Badge,
   Box,
@@ -20,6 +20,7 @@ import {
   IconRotateClockwise,
 } from "@tabler/icons-react";
 import { useFlashcardsQuery } from "@/lib/api/queries";
+import { GenerateGate, markGenStarted, readGenStarted } from "./GenerateGate";
 
 /**
  * Flashcards mode — Scribely-style active recall. A flip-card deck generated from the
@@ -32,13 +33,35 @@ export function FlashcardsView({
   artifactId: string;
   compact?: boolean;
 }) {
-  const { data, isError, refetch } = useFlashcardsQuery(artifactId);
+  const [started, setStarted] = useState(false);
+  useEffect(() => {
+    if (readGenStarted(artifactId, "cards")) setStarted(true);
+  }, [artifactId]);
+
+  const { data, isError, refetch } = useFlashcardsQuery(artifactId, started);
   const status = data?.status;
   const cards = data?.cards ?? [];
   const ready = status === "ready" && cards.length > 0;
 
   const [i, setI] = useState(0);
   const [flipped, setFlipped] = useState(false);
+
+  function start() {
+    markGenStarted(artifactId, "cards");
+    setStarted(true);
+  }
+
+  if (!started && cards.length === 0) {
+    return (
+      <GenerateGate
+        icon={<IconCards size={28} />}
+        title="Make flashcards"
+        description="Create flashcards to drill the key facts."
+        onStart={start}
+        compact={compact}
+      />
+    );
+  }
 
   if (isError || status === "failed") {
     return (
