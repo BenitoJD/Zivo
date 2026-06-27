@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Container, Group, Paper, Stack, Text, Title } from "@mantine/core";
+import { Box, Container, Group, Paper, SimpleGrid, Stack, Text, Title } from "@mantine/core";
 import {
   IconUpload,
   IconBulb,
@@ -48,10 +48,8 @@ export function Capabilities() {
           </Title>
         </Reveal>
 
-        <Stagger
-          style={{ display: "flex", flexWrap: "wrap", gap: "var(--mantine-spacing-lg)" }}
-        >
-          <Group gap="lg" grow align="stretch" w="100%">
+        <Stagger>
+          <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="lg" w="100%">
             {FEATURES.map((f) => (
               <Reveal key={f.title} as="div">
                 <Paper
@@ -98,7 +96,7 @@ export function Capabilities() {
                 </Paper>
               </Reveal>
             ))}
-          </Group>
+          </SimpleGrid>
         </Stagger>
       </Stack>
       <style>{`

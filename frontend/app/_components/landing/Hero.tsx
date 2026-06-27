@@ -316,14 +316,15 @@ export function Hero() {
             understanding, one question at a time.
           </Text>
 
-          <Stack gap={18} align="center">
-            <Group gap="md" wrap="nowrap" justify="center">
+          <Stack gap={18} align="center" w="100%">
+            <Group gap="md" wrap="wrap" justify="center" w="100%">
               <Button
                 size="lg"
                 component={Link}
                 href="/workspace"
                 rightSection={<IconArrowRight size={18} stroke={2} />}
                 className="hero-cta-primary"
+                w={{ base: "100%", xs: "auto" }}
               >
                 Start studying — it&apos;s free
               </Button>
@@ -333,6 +334,7 @@ export function Hero() {
                 component={Link}
                 href="/signup"
                 className="hero-cta-secondary"
+                w={{ base: "100%", xs: "auto" }}
               >
                 Create an account
               </Button>
