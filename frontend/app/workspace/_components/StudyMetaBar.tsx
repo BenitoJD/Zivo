@@ -1,30 +1,63 @@
 "use client";
 
+import { Fragment } from "react";
 import {
   Box,
   Group,
   Menu,
-  SegmentedControl,
   Stack,
   Text,
   ThemeIcon,
   Tooltip,
   UnstyledButton,
-  useMantineColorScheme,
 } from "@mantine/core";
 import {
   IconAdjustmentsHorizontal,
+  IconBook,
+  IconBuildingMonument,
   IconBulb,
+  IconCards,
   IconCheck,
   IconChevronDown,
   IconClipboardList,
+  IconNotes,
+  IconPencilQuestion,
+  IconSparkles,
+  type Icon,
 } from "@tabler/icons-react";
 import { type StudyMode } from "@/app/workspace/_components/studyNav";
 
 /**
+ * The study modes, grouped the same two ways as the desktop switcher: work
+ * directly with the material vs. the AI-generated study aids. Drives the compact
+ * (mobile) mode dropdown.
+ */
+const MODE_GROUPS: { label: string; modes: { value: StudyMode; label: string; icon: Icon }[] }[] = [
+  {
+    label: "Work with the material",
+    modes: [
+      { value: "read", label: "Read", icon: IconBook },
+      { value: "learn", label: "Learn", icon: IconBulb },
+      { value: "test", label: "Test", icon: IconClipboardList },
+    ],
+  },
+  {
+    label: "AI study aids",
+    modes: [
+      { value: "explain", label: "Explain", icon: IconSparkles },
+      { value: "notes", label: "Notes", icon: IconNotes },
+      { value: "cards", label: "Cards", icon: IconCards },
+      { value: "palace", label: "Memory Palace", icon: IconBuildingMonument },
+      { value: "quiz", label: "Quiz", icon: IconPencilQuestion },
+    ],
+  },
+];
+const ALL_MODES = MODE_GROUPS.flatMap((g) => g.modes);
+
+/**
  * Study meta bar (extracted from the workspace page monolith): the top strip with
- * the mode badge + progress, the Learn/Test/aids mode switcher (StudyModeSwitch),
- * and the Adaptive/Classic chooser menu.
+ * the mode badge + progress, the compact (mobile) mode dropdown
+ * (CompactModeSelect), and the Adaptive/Classic chooser menu.
  */
 export function StudyMetaBar({
   questionIndex,
@@ -180,23 +213,12 @@ export function StudyMetaBar({
     </Group>
   );
 
-  // The 7-mode switch can't fit a phone row, so on compact it gets its own
-  // full-width, horizontally-scrollable row beneath the progress.
-  const modeSwitch = (
-    <Box
-      className="zv-modeswitch-scroll"
-      style={{ minWidth: 0, maxWidth: "100%", overflowX: "auto", overflowY: "hidden", scrollbarWidth: "none" }}
-    >
-      <StudyModeSwitch mode={mode} onChange={onModeChange} compact={compact} />
-    </Box>
-  );
-
   if (compact) {
-    // Phones can't fit a left mode rail, so the switch lives here above the progress.
+    // Phones can't fit a left mode rail (or 8 segments in a row), so the switch
+    // becomes a single full-width dropdown above the progress.
     return (
       <Stack px="sm" py={6} gap={6} style={{ flexShrink: 0 }}>
-        <style>{`.zv-modeswitch-scroll::-webkit-scrollbar { display: none; }`}</style>
-        {modeSwitch}
+        <CompactModeSelect mode={mode} onChange={onModeChange} />
         {progress || studyModeControl ? (
           <Group justify="space-between" wrap="nowrap" align="center" gap="sm">
             <Box style={{ flex: 1, minWidth: 0 }}>{progress}</Box>
@@ -230,65 +252,83 @@ export function StudyMetaBar({
   );
 }
 
-function StudyModeSwitch({
+/**
+ * Compact (mobile) mode switcher: a single full-width dropdown showing the
+ * current mode, opening the full grouped list. Replaces the two segmented
+ * controls, which overflowed into a cramped horizontal-scroll strip on phones.
+ */
+function CompactModeSelect({
   mode,
   onChange,
-  compact = false,
 }: {
   mode: StudyMode;
   onChange: (mode: StudyMode) => void;
-  compact?: boolean;
 }) {
-  const { colorScheme } = useMantineColorScheme();
-  const isDark = colorScheme === "dark";
-  type Mode = StudyMode;
-
-  // Two intuitive groups instead of one crowded row: work directly with the material
-  // (read / learn / test) vs. the AI study aids it generates.
-  const core = ["read", "learn", "test"];
-  const tools = ["explain", "notes", "cards", "palace", "quiz"];
-  const styles = {
-    root: {
-      background: isDark ? "var(--mantine-color-dark-6)" : "var(--mantine-color-gray-1)",
-      border: `1px solid ${isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-3)"}`,
-    },
-    label: {
-      fontWeight: 600,
-      paddingInline: compact ? 10 : 13,
-      fontSize: compact ? 11 : 12,
-      letterSpacing: "-0.01em",
-    },
-    indicator: { boxShadow: "none" },
-  };
-
+  const current = ALL_MODES.find((m) => m.value === mode) ?? ALL_MODES[0];
+  const CurrentIcon = current.icon;
   return (
-    <Group gap={compact ? 6 : 8} wrap="nowrap">
-      <SegmentedControl
-        size="xs"
-        radius="xl"
-        value={core.includes(mode) ? mode : ""}
-        onChange={(v) => v && onChange(v as Mode)}
-        data={[
-          { label: "Read", value: "read" },
-          { label: "Learn", value: "learn" },
-          { label: "Test", value: "test" },
-        ]}
-        styles={styles}
-      />
-      <SegmentedControl
-        size="xs"
-        radius="xl"
-        value={tools.includes(mode) ? mode : ""}
-        onChange={(v) => v && onChange(v as Mode)}
-        data={[
-          { label: "Explain", value: "explain" },
-          { label: "Notes", value: "notes" },
-          { label: "Cards", value: "cards" },
-          { label: "Palace", value: "palace" },
-          { label: "Quiz", value: "quiz" },
-        ]}
-        styles={styles}
-      />
-    </Group>
+    <Menu shadow="md" width="target" position="bottom-start" radius="md" withinPortal>
+      <Menu.Target>
+        <UnstyledButton
+          aria-label={`Study mode: ${current.label}. Tap to switch.`}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            width: "100%",
+            padding: "9px 12px",
+            borderRadius: 12,
+            border: "1px solid var(--mantine-color-default-border)",
+            background: "var(--mantine-color-body)",
+          }}
+        >
+          <ThemeIcon
+            size={24}
+            radius="md"
+            variant="light"
+            color="lavender"
+            style={{ color: "light-dark(var(--mantine-color-lavender-7), var(--mantine-color-lavender-3))" }}
+          >
+            <CurrentIcon size={15} stroke={2} />
+          </ThemeIcon>
+          <Text fz="sm" fw={600} c="var(--mantine-color-text)" style={{ flex: 1, textAlign: "left" }}>
+            {current.label}
+          </Text>
+          <IconChevronDown size={16} stroke={2} style={{ color: "var(--mantine-color-dimmed)" }} />
+        </UnstyledButton>
+      </Menu.Target>
+      <Menu.Dropdown>
+        {MODE_GROUPS.map((group, gi) => (
+          <Fragment key={group.label}>
+            {gi > 0 ? <Menu.Divider /> : null}
+            <Menu.Label>{group.label}</Menu.Label>
+            {group.modes.map((m) => {
+              const Icon = m.icon;
+              const active = m.value === mode;
+              return (
+                <Menu.Item
+                  key={m.value}
+                  onClick={() => onChange(m.value)}
+                  leftSection={
+                    <Icon
+                      size={17}
+                      stroke={1.9}
+                      color={active ? "var(--mantine-color-lavender-6)" : "var(--mantine-color-dimmed)"}
+                    />
+                  }
+                  rightSection={
+                    active ? <IconCheck size={15} stroke={2.4} color="var(--mantine-color-lavender-6)" /> : null
+                  }
+                >
+                  <Text fz="sm" fw={active ? 600 : 500}>
+                    {m.label}
+                  </Text>
+                </Menu.Item>
+              );
+            })}
+          </Fragment>
+        ))}
+      </Menu.Dropdown>
+    </Menu>
   );
 }
