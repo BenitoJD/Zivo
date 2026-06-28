@@ -8,11 +8,11 @@ import {
   Group,
   Loader,
   NumberInput,
-  Paper,
   RangeSlider,
   Stack,
   Text,
   ThemeIcon,
+  Title,
   UnstyledButton,
 } from "@mantine/core";
 import { useMediaQuery } from "@mantine/hooks";
@@ -24,9 +24,6 @@ import {
   SELECTION_PAD_Y,
   SELECTION_PAD_X_COMPACT,
   SELECTION_PAD_Y_COMPACT,
-  SELECTION_DOCK_WIDTH,
-  SELECTION_DOCK_RESERVE,
-  SELECTION_DOCK_RESERVE_COMPACT,
   THUMB_GAP,
   THUMB_GAP_COMPACT,
   THUMB_MIN_WIDTH,
@@ -36,7 +33,6 @@ import {
   THUMB_FRAME_ASPECT,
   THUMB_FRAME_ASPECT_COMPACT,
   STUDY_COMPACT_BP,
-  STUDY_OVERLAY_BP,
   computeGridLayout,
   shellBleedPx,
   formatSelectionSummary,
@@ -44,9 +40,12 @@ import {
 
 /**
  * Page-selection screen (extracted from the workspace page monolith): the
- * pre-study picker where the learner chooses which pages to study — thumbnail
- * grid, range slider, and the floating action dock. Also reused (PageSelectionBody)
- * by the in-session "change study range" overlay.
+ * pre-study picker where the learner chooses which pages to study. The redesign
+ * is a clean three-band layout — header, scrollable thumbnail grid, and a solid
+ * in-flow action bar — that adapts from phones to desktops via flex-wrap and
+ * container-measured columns (no fragile breakpoint math). Shared as
+ * PageSelectionBody by the in-session "change study range" overlay, which
+ * supplies its own header.
  */
 export function PageSelectionScreen({
   subtitle,
@@ -94,6 +93,7 @@ export function PageSelectionScreen({
   onConfirm: () => void;
 }) {
   const bleed = shellBleedPx(isCompact);
+  const padX = isCompact ? SELECTION_PAD_X_COMPACT : SELECTION_PAD_X;
 
   return (
     <Box
@@ -117,22 +117,28 @@ export function PageSelectionScreen({
         boxSizing: "border-box",
       }}
     >
+      <SelectionHeader
+        subtitle={subtitle}
+        pageCount={pageCount}
+        pdfLoading={pdfLoading}
+        isCompact={isCompact}
+        padX={padX}
+      />
+
       {pdfError && (
-        <Text c="terracotta.7" size="sm" px="md" pt="xs">
+        <Text c="terracotta.7" size="sm" px={padX} pt={4}>
           {pdfError}
         </Text>
       )}
       {!isPdf && !pdfLoading && (
-        <Text c="dimmed" size="sm" px="md" pt="xs">
+        <Text c="dimmed" size="sm" px={padX} pt={4}>
           PDF thumbnails load automatically. Use the slider below ({pageCount} pages).
         </Text>
       )}
 
       <Box flex={1} mih={0} style={{ minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
         <PageSelectionBody
-          padX={isCompact ? SELECTION_PAD_X_COMPACT : SELECTION_PAD_X}
-          subtitle={subtitle}
-          pdfLoading={pdfLoading}
+          padX={padX}
           pageCount={pageCount}
           sliderFrom={sliderFrom}
           sliderTo={sliderTo}
@@ -156,10 +162,49 @@ export function PageSelectionScreen({
   );
 }
 
+/** Title band for the full-screen picker (the overlay brings its own header). */
+function SelectionHeader({
+  subtitle,
+  pageCount,
+  pdfLoading,
+  isCompact,
+  padX,
+}: {
+  subtitle: string;
+  pageCount: number;
+  pdfLoading?: boolean;
+  isCompact: boolean;
+  padX: number;
+}) {
+  return (
+    <Box px={padX} pt={isCompact ? "sm" : "lg"} pb={isCompact ? 4 : "xs"} style={{ flexShrink: 0 }}>
+      {(subtitle || pdfLoading) && (
+        <Group gap={8} wrap="nowrap" mb={4}>
+          {subtitle && (
+            <Text size="xs" tt="uppercase" fw={700} c="dimmed" lineClamp={1} style={{ letterSpacing: "0.08em" }}>
+              {subtitle}
+            </Text>
+          )}
+          {pdfLoading && <Loader size="xs" color="lavender" />}
+        </Group>
+      )}
+      <Title
+        order={2}
+        fz={isCompact ? 22 : 28}
+        fw={500}
+        style={{ fontFamily: "var(--font-serif), Georgia, serif", letterSpacing: "-0.02em", lineHeight: 1.15 }}
+      >
+        Choose pages to study
+      </Title>
+      <Text size="sm" c="dimmed" mt={2} lh={1.5}>
+        Tap a page or drag the range — {pageCount} {pageCount === 1 ? "page" : "pages"} in this source.
+      </Text>
+    </Box>
+  );
+}
+
 export function PageSelectionBody({
   padX,
-  subtitle,
-  pdfLoading,
   pageCount,
   sliderFrom,
   sliderTo,
@@ -179,8 +224,6 @@ export function PageSelectionBody({
   onConfirm,
 }: {
   padX: number;
-  subtitle?: string;
-  pdfLoading?: boolean;
   pageCount: number;
   sliderFrom: number;
   sliderTo: number;
@@ -200,8 +243,6 @@ export function PageSelectionBody({
   onConfirm: () => void;
 }) {
   const isCompact = useMediaQuery(STUDY_COMPACT_BP);
-  const sliderColor = isDark ? "blue.4" : "blue.6";
-  const trackBg = isDark ? "var(--mantine-color-dark-3)" : "var(--mantine-color-gray-3)";
 
   return (
     <Box
@@ -211,6 +252,16 @@ export function PageSelectionBody({
       h="100%"
       style={{ minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}
     >
+      <QuickPresets
+        pageCount={pageCount}
+        selectedPages={selectedPages}
+        padX={padX}
+        isCompact={Boolean(isCompact)}
+        onSelectAll={onSelectAll}
+        onClearAll={onClearAll}
+        onRangeChange={onRangeChange}
+      />
+
       <Box
         flex={1}
         mih={0}
@@ -224,88 +275,123 @@ export function PageSelectionBody({
           isPdf={isPdf}
           pdfDoc={pdfDoc}
           thumbCanvasRefs={thumbCanvasRefs}
-          dockReserve={isCompact ? SELECTION_DOCK_RESERVE_COMPACT : SELECTION_DOCK_RESERVE}
           onPageToggle={onPageToggle}
         />
       </Box>
-      <PageSelectionDock
-        subtitle={subtitle}
-        pdfLoading={pdfLoading}
+
+      <SelectionActionBar
+        padX={padX}
+        isCompact={Boolean(isCompact)}
         sliderFrom={sliderFrom}
         sliderTo={sliderTo}
         pageCount={pageCount}
         sliderMarks={sliderMarks}
         selectedPages={selectedPages}
         isDark={isDark}
-        sliderColor={sliderColor}
-        trackBg={trackBg}
         confirming={confirming}
         setupError={setupError}
         confirmLabel={confirmLabel}
         onRangeChange={onRangeChange}
-        onSelectAll={onSelectAll}
-        onClearAll={onClearAll}
         onConfirm={onConfirm}
       />
     </Box>
   );
 }
 
-function PageSelectionDock({
-  subtitle,
-  pdfLoading,
+/** Fast common selections — far quicker than nudging the slider, especially on phones. */
+function QuickPresets({
+  pageCount,
+  selectedPages,
+  padX,
+  isCompact,
+  onSelectAll,
+  onClearAll,
+  onRangeChange,
+}: {
+  pageCount: number;
+  selectedPages: number[];
+  padX: number;
+  isCompact: boolean;
+  onSelectAll: () => void;
+  onClearAll: () => void;
+  onRangeChange: (from: number, to: number) => void;
+}) {
+  const hasSelection = selectedPages.length > 0;
+  const allSelected = selectedPages.length === pageCount && pageCount > 0;
+  const isRange = (from: number, to: number) =>
+    selectedPages.length === to - from + 1 && selectedPages[0] === from && selectedPages[selectedPages.length - 1] === to;
+
+  const chip = (label: string, onClick: () => void, active: boolean, disabled = false) => (
+    <Button
+      variant={active ? "light" : "default"}
+      color="lavender"
+      size="compact-sm"
+      radius="xl"
+      onClick={onClick}
+      disabled={disabled}
+      styles={{ root: { fontWeight: 600, flexShrink: 0 } }}
+    >
+      {label}
+    </Button>
+  );
+
+  return (
+    <Group gap={8} px={padX} pt={isCompact ? 6 : 10} pb={isCompact ? 2 : 4} wrap="wrap" style={{ flexShrink: 0 }}>
+      {chip("All pages", onSelectAll, allSelected)}
+      {pageCount > 10 && chip("First 10", () => onRangeChange(1, Math.min(10, pageCount)), isRange(1, Math.min(10, pageCount)))}
+      {pageCount > 10 &&
+        chip(
+          "Last 10",
+          () => onRangeChange(Math.max(1, pageCount - 9), pageCount),
+          isRange(Math.max(1, pageCount - 9), pageCount),
+        )}
+      {chip("Clear", onClearAll, false, !hasSelection)}
+    </Group>
+  );
+}
+
+/** Solid, always-reachable footer: range controls + selection summary + the primary CTA. */
+function SelectionActionBar({
+  padX,
+  isCompact,
   sliderFrom,
   sliderTo,
   pageCount,
   sliderMarks,
   selectedPages,
   isDark,
-  sliderColor,
-  trackBg,
   confirming,
   setupError,
   confirmLabel,
   onRangeChange,
-  onSelectAll,
-  onClearAll,
   onConfirm,
 }: {
-  subtitle?: string;
-  pdfLoading?: boolean;
+  padX: number;
+  isCompact: boolean;
   sliderFrom: number;
   sliderTo: number;
   pageCount: number;
   sliderMarks: { value: number; label?: ReactNode }[];
   selectedPages: number[];
   isDark: boolean;
-  sliderColor: string;
-  trackBg: string;
   confirming: boolean;
   setupError: string | null;
   confirmLabel: string;
   onRangeChange: (from: number, to: number) => void;
-  onSelectAll: () => void;
-  onClearAll: () => void;
   onConfirm: () => void;
 }) {
-  const isCompact = useMediaQuery(STUDY_COMPACT_BP);
-  const dockStacked = useMediaQuery(STUDY_OVERLAY_BP, false, { getInitialValueInEffect: true });
   const hasSelection = selectedPages.length > 0;
-  const panelBorder = isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-3)";
+  const summary = formatSelectionSummary(selectedPages, pageCount);
   const hairline = isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-3)";
-  const secondaryBorder = isDark ? "var(--mantine-color-dark-3)" : "var(--mantine-color-gray-4)";
+  const barBg = isDark ? "var(--mantine-color-dark-7)" : "var(--mantine-color-gray-0)";
   const inputBorder = isDark ? "var(--mantine-color-dark-3)" : "var(--mantine-color-gray-4)";
   const inputBg = isDark ? "var(--mantine-color-dark-8)" : "var(--mantine-color-white)";
-  const markColor = isDark ? "var(--mantine-color-gray-5)" : "var(--mantine-color-gray-5)";
-  const markLabelColor = isDark ? "var(--mantine-color-gray-5)" : "var(--mantine-color-gray-6)";
-  const summary = formatSelectionSummary(selectedPages, pageCount);
+  const trackBg = isDark ? "var(--mantine-color-dark-3)" : "var(--mantine-color-gray-3)";
+
   const dockMarks = useMemo(
     () =>
       isCompact
-        ? [
-            { value: 1, label: "1" },
-            ...(pageCount > 1 ? [{ value: pageCount, label: String(pageCount) }] : []),
-          ]
+        ? [{ value: 1, label: "1" }, ...(pageCount > 1 ? [{ value: pageCount, label: String(pageCount) }] : [])]
         : sliderMarks,
     [isCompact, sliderMarks, pageCount],
   );
@@ -315,430 +401,128 @@ function PageSelectionDock({
       border: `1px solid ${inputBorder}`,
       backgroundColor: inputBg,
       color: isDark ? "var(--mantine-color-gray-1)" : undefined,
-      minHeight: 28,
-      height: 28,
+      minHeight: 30,
+      height: 30,
+      width: 52,
       fontSize: 13,
-      fontWeight: 500,
-      paddingInline: 8,
+      fontWeight: 600,
+      paddingInline: 6,
       textAlign: "center" as const,
     },
   } as const;
 
-  const secondaryButtonStyles = {
-    root: {
-      border: `1px solid ${secondaryBorder}`,
-      backgroundColor: isDark ? "var(--mantine-color-dark-8)" : "var(--mantine-color-white)",
-      color: isDark ? "var(--mantine-color-gray-2)" : undefined,
-      fontWeight: 600,
-      flexShrink: 0,
-      whiteSpace: "nowrap" as const,
-    },
-  } as const;
-
   const sliderStyles = {
-    root: { paddingTop: 0, paddingBottom: isCompact ? 2 : 16, overflow: "visible" },
-    track: { backgroundColor: trackBg, height: isCompact ? 3 : 4, borderRadius: 4 },
+    root: { paddingTop: 0, paddingBottom: isCompact ? 16 : 20, overflow: "visible" },
+    track: { backgroundColor: trackBg, height: 4, borderRadius: 4 },
     bar: {
-      backgroundColor: isDark ? "var(--mantine-color-blue-5)" : "var(--mantine-color-blue-6)",
+      backgroundColor: isDark ? "var(--mantine-color-lavender-5)" : "var(--mantine-color-lavender-6)",
       borderRadius: 4,
     },
     thumb: {
       backgroundColor: isDark ? "var(--mantine-color-gray-0)" : "var(--mantine-color-white)",
-      borderColor: isDark ? "var(--mantine-color-blue-4)" : "var(--mantine-color-blue-6)",
+      borderColor: isDark ? "var(--mantine-color-lavender-4)" : "var(--mantine-color-lavender-6)",
       borderWidth: 2,
       boxShadow: isDark
-        ? "0 1px 4px rgba(0, 0, 0, 0.45), 0 0 0 0.5px rgba(255, 255, 255, 0.08)"
-        : "0 1px 4px rgba(0, 0, 0, 0.18), 0 0 0 0.5px rgba(0, 0, 0, 0.04)",
+        ? "0 1px 4px rgba(0, 0, 0, 0.45)"
+        : "0 1px 4px rgba(0, 0, 0, 0.18)",
     },
-    mark: {
-      width: 3,
-      height: 3,
-      borderWidth: 0,
-      backgroundColor: markColor,
-      opacity: 0.7,
-    },
+    mark: { width: 3, height: 3, borderWidth: 0, backgroundColor: isDark ? "var(--mantine-color-gray-5)" : "var(--mantine-color-gray-4)", opacity: 0.7 },
     markLabel: {
-      color: markLabelColor,
+      color: isDark ? "var(--mantine-color-gray-5)" : "var(--mantine-color-gray-6)",
       marginTop: 4,
       fontSize: isCompact ? 9 : 10,
       fontWeight: 500,
-      letterSpacing: "-0.01em",
     },
   } as const;
 
-  const rangeSlider = (
-    <RangeSlider
-      color={sliderColor}
-      min={1}
-      max={pageCount}
-      minRange={1}
-      step={1}
-      value={[sliderFrom, sliderTo]}
-      onChange={([from, to]) => onRangeChange(from, to)}
-      marks={dockMarks}
-      label={(v) => `Page ${v}`}
-      thumbSize={isCompact ? 16 : 20}
-      thumbFromLabel="Start page"
-      thumbToLabel="End page"
-      thumbValueText={(v) => `Page ${v}`}
-      restrictToMarks={!isCompact && pageCount <= 12}
-      styles={sliderStyles}
-    />
-  );
-
-  const confirmButton = (
-    <Button
-      size={isCompact ? "sm" : "md"}
-      radius="xl"
-      variant="filled"
-      color="lavender"
-      px={isCompact ? "lg" : "xl"}
-      fw={600}
-      fullWidth={isCompact}
-      h={isCompact ? 40 : undefined}
-      rightSection={<IconArrowRight size={isCompact ? 15 : 18} stroke={2.25} />}
-      onClick={onConfirm}
-      loading={confirming}
-      disabled={!hasSelection}
-      style={{ flexShrink: 0, whiteSpace: "nowrap" }}
-    >
-      {confirmLabel}
-    </Button>
-  );
-
-  const selectionActions = (
-    <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
-      <Button variant="default" size="sm" radius="xl" onClick={onSelectAll} styles={secondaryButtonStyles}>
-        All
-      </Button>
-      <Button
-        variant="default"
-        size="sm"
-        radius="xl"
-        onClick={onClearAll}
-        disabled={!hasSelection}
-        styles={secondaryButtonStyles}
-      >
-        Clear
-      </Button>
-    </Group>
-  );
-
-  if (isCompact) {
-    return (
-      <Box
-        pos="absolute"
-        left={0}
-        right={0}
-        bottom={0}
-        bg={isDark ? "dark.7" : "gray.0"}
-        style={{
-          zIndex: 2,
-          pointerEvents: "none",
-          borderTop: `1px solid ${hairline}`,
-          paddingBottom: "calc(12px + env(safe-area-inset-bottom))",
-          boxShadow: isDark
-            ? "0 -10px 32px rgba(0, 0, 0, 0.4)"
-            : "0 -6px 20px rgba(0, 0, 0, 0.08)",
-        }}
-      >
-        <Stack gap={8} px="md" pt={10} pb={4} style={{ pointerEvents: "auto" }}>
-          {rangeSlider}
-          <Group justify="space-between" align="center" wrap="nowrap" gap="sm">
-            <Box miw={0} style={{ flex: 1 }}>
-              {subtitle && (
-                <Group gap={6} wrap="nowrap" mb={2}>
-                  <Text
-                    size="xs"
-                    c="dimmed"
-                    lineClamp={1}
-                    tt="uppercase"
-                    fw={600}
-                    style={{ letterSpacing: "0.05em", fontSize: 10 }}
-                  >
-                    {subtitle}
-                  </Text>
-                  {pdfLoading && <Loader size="xs" />}
-                </Group>
-              )}
-              <Text
-                fw={600}
-                size="sm"
-                lineClamp={1}
-                c={hasSelection ? "var(--mantine-color-text)" : "dimmed"}
-              >
-                {summary}
-              </Text>
-            </Box>
-            <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
-              <Button variant="subtle" size="compact-sm" radius="xl" onClick={onSelectAll} px="sm">
-                All
-              </Button>
-              <Button
-                variant="subtle"
-                size="compact-sm"
-                radius="xl"
-                onClick={onClearAll}
-                disabled={!hasSelection}
-                px="sm"
-                style={{ flexShrink: 0, whiteSpace: "nowrap" }}
-              >
-                Clear
-              </Button>
-            </Group>
-          </Group>
-          {confirmButton}
-          {setupError && (
-            <Text size="xs" c="terracotta.7" ta="center">
-              {setupError}
-            </Text>
-          )}
-        </Stack>
-      </Box>
-    );
-  }
-
   return (
     <Box
-      pos="absolute"
-      left={0}
-      right={0}
-      bottom={0}
-      w={dockStacked ? "92%" : SELECTION_DOCK_WIDTH}
-      mx="auto"
-      pb="md"
-      pt="xs"
-      style={{ zIndex: 2, pointerEvents: "none" }}
+      style={{
+        flexShrink: 0,
+        borderTop: `1px solid ${hairline}`,
+        background: barBg,
+        paddingBottom: isCompact ? "max(10px, env(safe-area-inset-bottom))" : undefined,
+      }}
     >
-      <Paper
-        withBorder
-        radius="lg"
-        w="100%"
-        bg={isDark ? "dark.7" : "gray.0"}
-        style={{
-          pointerEvents: "auto",
-          borderColor: panelBorder,
-          boxShadow: isDark
-            ? "0 -12px 40px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.04) inset"
-            : "0 -8px 32px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(255, 255, 255, 0.6) inset",
-        }}
-      >
-      <Stack gap={0}>
-        <Box px={isCompact ? "sm" : "lg"} pt={isCompact ? "sm" : "md"} pb={isCompact ? "xs" : "sm"}>
-          {isCompact ? (
-            <Stack gap="sm">
-              <Group justify="center" gap={8} wrap="nowrap">
-                <Text size="xs" c="dimmed" fw={500}>
-                  From
-                </Text>
-                <NumberInput
-                  hideControls
-                  size="xs"
-                  w={56}
-                  radius="md"
-                  min={1}
-                  max={pageCount}
-                  value={sliderFrom}
-                  onChange={(v) => onRangeChange(typeof v === "number" ? v : 1, sliderTo)}
-                  styles={numberInputStyles}
-                />
-                <Text size="xs" c="dimmed" fw={500}>
-                  To
-                </Text>
-                <NumberInput
-                  hideControls
-                  size="xs"
-                  w={56}
-                  radius="md"
-                  min={sliderFrom}
-                  max={pageCount}
-                  value={sliderTo}
-                  onChange={(v) => onRangeChange(sliderFrom, typeof v === "number" ? v : sliderFrom)}
-                  styles={numberInputStyles}
-                />
-              </Group>
-              {rangeSlider}
-            </Stack>
-          ) : (
-            <Group align="center" gap="md" wrap="nowrap" w="100%">
-              <Group gap={6} align="center" wrap="nowrap" style={{ flexShrink: 0 }}>
-                <Text size="xs" c="dimmed" fw={500}>
-                  From
-                </Text>
-                <NumberInput
-                  hideControls
-                  size="xs"
-                  w={52}
-                  radius="md"
-                  min={1}
-                  max={pageCount}
-                  value={sliderFrom}
-                  onChange={(v) => onRangeChange(typeof v === "number" ? v : 1, sliderTo)}
-                  styles={numberInputStyles}
-                />
-                <Text size="xs" c="dimmed" fw={500}>
-                  To
-                </Text>
-                <NumberInput
-                  hideControls
-                  size="xs"
-                  w={52}
-                  radius="md"
-                  min={sliderFrom}
-                  max={pageCount}
-                  value={sliderTo}
-                  onChange={(v) => onRangeChange(sliderFrom, typeof v === "number" ? v : sliderFrom)}
-                  styles={numberInputStyles}
-                />
-              </Group>
-              <Box flex={1} miw={120} style={{ minWidth: 0 }}>
-                {rangeSlider}
-              </Box>
-            </Group>
-          )}
-        </Box>
+      <Stack gap={isCompact ? 8 : 10} px={padX} pt={isCompact ? 10 : 14} pb={isCompact ? 8 : 14}>
+        <Group gap="sm" wrap="nowrap" align="center">
+          <NumberInput
+            hideControls
+            size="xs"
+            radius="md"
+            min={1}
+            max={pageCount}
+            value={sliderFrom}
+            aria-label="Start page"
+            onChange={(v) => onRangeChange(typeof v === "number" ? v : 1, sliderTo)}
+            styles={numberInputStyles}
+          />
+          <Box flex={1} miw={80} style={{ minWidth: 0 }}>
+            <RangeSlider
+              color="lavender"
+              min={1}
+              max={pageCount}
+              minRange={1}
+              step={1}
+              value={[sliderFrom, sliderTo]}
+              onChange={([from, to]) => onRangeChange(from, to)}
+              marks={dockMarks}
+              label={(v) => `Page ${v}`}
+              thumbSize={isCompact ? 16 : 20}
+              thumbFromLabel="Start page"
+              thumbToLabel="End page"
+              thumbValueText={(v) => `Page ${v}`}
+              restrictToMarks={!isCompact && pageCount <= 12}
+              styles={sliderStyles}
+            />
+          </Box>
+          <NumberInput
+            hideControls
+            size="xs"
+            radius="md"
+            min={sliderFrom}
+            max={pageCount}
+            value={sliderTo}
+            aria-label="End page"
+            onChange={(v) => onRangeChange(sliderFrom, typeof v === "number" ? v : sliderFrom)}
+            styles={numberInputStyles}
+          />
+        </Group>
 
-        <Box h={1} bg={hairline} />
+        <Group justify="space-between" gap="sm" wrap="wrap" align="center">
+          <Text
+            fw={600}
+            size="sm"
+            c={hasSelection ? "var(--mantine-color-text)" : "dimmed"}
+            style={{ flex: "1 1 auto", minWidth: 0 }}
+            lineClamp={1}
+          >
+            {summary}
+          </Text>
+          <Button
+            size={isCompact ? "sm" : "md"}
+            radius="xl"
+            variant="filled"
+            color="lavender"
+            px={isCompact ? "lg" : "xl"}
+            fw={600}
+            fullWidth={isCompact}
+            rightSection={<IconArrowRight size={isCompact ? 15 : 18} stroke={2.25} />}
+            onClick={onConfirm}
+            loading={confirming}
+            disabled={!hasSelection}
+            style={{ flex: isCompact ? "1 1 100%" : "0 0 auto", whiteSpace: "nowrap" }}
+          >
+            {confirmLabel}
+          </Button>
+        </Group>
 
-        <Box px={isCompact ? "sm" : "lg"} py={isCompact ? "xs" : "md"}>
-          <Stack gap={isCompact ? "sm" : "xs"}>
-            {isCompact ? (
-              <Stack gap={6} align="center">
-                {subtitle && (
-                  <Group gap="xs" wrap="nowrap" justify="center">
-                    <Text
-                      size="xs"
-                      c="dimmed"
-                      ta="center"
-                      lineClamp={2}
-                      tt="uppercase"
-                      fw={600}
-                      style={{ letterSpacing: "0.04em" }}
-                    >
-                      {subtitle}
-                    </Text>
-                    {pdfLoading && <Loader size="xs" />}
-                  </Group>
-                )}
-                <Text
-                  fw={600}
-                  size="sm"
-                  ta="center"
-                  lineClamp={2}
-                  c={hasSelection ? "var(--mantine-color-text)" : "dimmed"}
-                >
-                  {summary}
-                </Text>
-                <Text size="xs" c="dimmed" ta="center">
-                  Tap a page · Shift+tap to extend
-                </Text>
-                <Group grow gap="xs" w="100%">
-                  <Button variant="default" size="sm" radius="xl" onClick={onSelectAll} styles={secondaryButtonStyles}>
-                    All
-                  </Button>
-                  <Button
-                    variant="default"
-                    size="sm"
-                    radius="xl"
-                    onClick={onClearAll}
-                    disabled={!hasSelection}
-                    styles={secondaryButtonStyles}
-                  >
-                    Clear
-                  </Button>
-                </Group>
-                {confirmButton}
-              </Stack>
-            ) : dockStacked ? (
-              <Stack gap="sm">
-                <Group align="flex-start" justify="space-between" gap="md" wrap="nowrap" w="100%">
-                  <Box miw={0} style={{ flex: 1 }}>
-                    {subtitle && (
-                      <Group gap="xs" wrap="nowrap" align="center">
-                        <Text
-                          size="xs"
-                          c="dimmed"
-                          lineClamp={2}
-                          tt="uppercase"
-                          fw={600}
-                          style={{ letterSpacing: "0.04em" }}
-                        >
-                          {subtitle}
-                        </Text>
-                        {pdfLoading && <Loader size="xs" />}
-                      </Group>
-                    )}
-                  </Box>
-                  <Stack gap={2} align="flex-end" miw={0} style={{ flex: 1.2 }}>
-                    <Text
-                      fw={600}
-                      size="sm"
-                      ta="right"
-                      lineClamp={2}
-                      c={hasSelection ? "var(--mantine-color-text)" : "dimmed"}
-                    >
-                      {summary}
-                    </Text>
-                    <Text size="xs" c="dimmed" ta="right" lineClamp={1}>
-                      Tap a page · Shift+tap to extend
-                    </Text>
-                  </Stack>
-                </Group>
-                <Group gap="xs" wrap="nowrap" justify="flex-end" w="100%">
-                  {selectionActions}
-                  {confirmButton}
-                </Group>
-              </Stack>
-            ) : (
-              <Group align="center" wrap="nowrap" gap="lg" w="100%" justify="space-between">
-                <Box miw={0} style={{ flex: 1, overflow: "hidden" }}>
-                  {subtitle && (
-                    <Group gap="xs" wrap="nowrap" align="center">
-                      <Text
-                        size="xs"
-                        c="dimmed"
-                        lineClamp={1}
-                        tt="uppercase"
-                        fw={600}
-                        style={{ letterSpacing: "0.04em" }}
-                      >
-                        {subtitle}
-                      </Text>
-                      {pdfLoading && <Loader size="xs" />}
-                    </Group>
-                  )}
-                </Box>
-
-                <Stack gap={2} align="center" miw={0} style={{ flex: 1.2, overflow: "hidden" }}>
-                  <Text
-                    fw={600}
-                    size="sm"
-                    ta="center"
-                    lineClamp={1}
-                    c={hasSelection ? "var(--mantine-color-text)" : "dimmed"}
-                  >
-                    {summary}
-                  </Text>
-                  <Text size="xs" c="dimmed" ta="center" lineClamp={1}>
-                    Tap a page · Shift+tap to extend
-                  </Text>
-                </Stack>
-
-                <Group gap="xs" wrap="nowrap" justify="flex-end" style={{ flexShrink: 0 }}>
-                  {selectionActions}
-                  {confirmButton}
-                </Group>
-              </Group>
-            )}
-            {setupError && (
-              <Text size="xs" c="terracotta.7" ta={isCompact ? "center" : undefined}>
-                {setupError}
-              </Text>
-            )}
-          </Stack>
-        </Box>
+        {setupError && (
+          <Text size="xs" c="terracotta.7" ta={isCompact ? "center" : undefined}>
+            {setupError}
+          </Text>
+        )}
       </Stack>
-    </Paper>
     </Box>
   );
 }
