@@ -1,18 +1,18 @@
 /*
- * Calm Paper scrollbars — thin, transparent track, a faint thumb that only firms
- * up on hover. The default chrome scrollbar is visually heavy and distracting in
- * the study view; this keeps scrolling available without drawing the eye. Theme
- * aware via Mantine border tokens (light grey on paper, soft grey on dark).
+ * Calm Paper scrollbars — quiet by design. A thin, transparent track with a faint
+ * translucent-grey thumb that's barely there at rest and only firms a little on
+ * hover. A neutral grey at low alpha reads as subtle on both the warm-paper light
+ * theme and the dark theme, so the bar never competes with the content.
  */
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--mantine-color-default-border) transparent;
+  scrollbar-color: rgba(140, 140, 140, 0.25) transparent;
 }
 
 *::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
 }
 
 *::-webkit-scrollbar-track {
@@ -20,18 +20,17 @@
 }
 
 *::-webkit-scrollbar-thumb {
-  background-color: var(--mantine-color-default-border);
+  background-color: rgba(140, 140, 140, 0.22);
   border-radius: 999px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background-color: var(--mantine-color-dimmed);
+  background-color: rgba(140, 140, 140, 0.42);
   background-clip: padding-box;
 }
 
-/* Don't paint a corner where the two bars meet. */
 *::-webkit-scrollbar-corner {
   background: transparent;
 }
