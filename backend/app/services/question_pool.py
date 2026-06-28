@@ -48,6 +48,11 @@ INITIAL_GENERATION_AHEAD = int(os.getenv("ZIVO_INITIAL_GENERATION_AHEAD", str(IN
 # never opened — 10 was pure waste (~7 unused triage calls/doc).
 EAGER_TRIAGE_LOOKAHEAD = int(os.getenv("ZIVO_EAGER_TRIAGE_LOOKAHEAD", "3"))
 ABSOLUTE_MAX_QUESTIONS_PER_PAGE = int(os.getenv("ZIVO_MAX_QUESTIONS_PER_PAGE", "150"))
+# After this many failed generation attempts, an aspect is abandoned (marked asked)
+# so a permanently un-generatable aspect — every draft rejected by the verifier,
+# critic, or dedup — can't block the page from ever completing (which would strand
+# the learner once every producible question is answered).
+MAX_ASPECT_ATTEMPTS = int(os.getenv("ZIVO_MAX_ASPECT_ATTEMPTS", "3"))
 # Backward-compatible alias for API consumers
 MAX_QUESTIONS_PER_PAGE = ABSOLUTE_MAX_QUESTIONS_PER_PAGE
 # A generate job left in 'running' after a worker crash blocks recovery until reclaimed.
@@ -588,6 +593,7 @@ from app.services.question_pool_jobs import (  # noqa: E402,F401
     _initial_pool_target,
     _maybe_enqueue_initial_pool_remainder,
     _reclaim_stale_generate_jobs,
+    bump_aspect_attempts,
     advance_to_next_page,
     clear_stale_coverage_complete,
     clear_stale_generation_pending,

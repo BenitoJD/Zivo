@@ -27,6 +27,7 @@ from app.services.question_pool import (
     FIRST_QUESTION_BATCH_SIZE,
     GENERATE_JOB_STALE_SECONDS,
     INITIAL_BATCH_SIZE,
+    MAX_ASPECT_ATTEMPTS,
     READY_LOW_WATER,
     REFILL_AFTER_ANSWERED,
     REFILL_BATCH_SIZE,
@@ -382,6 +383,39 @@ def mark_aspects_asked(
             aspect["asked"] = True
     entry["aspects"] = aspects
     save_progress(db, doc, {"page_coverage": {_page_key(page): entry}})
+
+
+def bump_aspect_attempts(
+    db: Session, document_id: uuid.UUID, page: int, aspect_keys: set[str] | list[str]
+) -> None:
+    """Record a failed generation attempt for each still-unasked aspect, and
+    abandon (mark asked) one that has now failed MAX_ASPECT_ATTEMPTS times.
+
+    Without this, an aspect generation can never satisfy (every draft rejected by
+    the verifier/critic/dedup) stays unasked forever, so coverage never completes
+    and the learner is stranded once every producible question is answered.
+    """
+    wanted = set(aspect_keys)
+    if not wanted:
+        return
+    doc = db.get(Document, document_id)
+    if not doc:
+        return
+    entry = dict(get_page_coverage(doc, page))
+    aspects = list(entry.get("aspects") or [])
+    changed = False
+    for aspect in aspects:
+        if aspect.get("key") in wanted and not aspect.get("asked"):
+            attempts = int(aspect.get("gen_attempts") or 0) + 1
+            aspect["gen_attempts"] = attempts
+            if attempts >= MAX_ASPECT_ATTEMPTS:
+                aspect["asked"] = True
+                aspect["abandoned"] = True
+            changed = True
+    if changed:
+        entry["aspects"] = aspects
+        save_progress(db, doc, {"page_coverage": {_page_key(page): entry}})
+        db.commit()
 
 
 def set_coverage_complete(db: Session, document_id: uuid.UUID, page: int) -> None:

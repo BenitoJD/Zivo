@@ -19,6 +19,7 @@ from app.services.mcq_quality import generate_quality_mcq_batch
 from app.services.question_pool import (
     clear_stale_coverage_complete,
     effective_question_budget,
+    bump_aspect_attempts,
     get_page_coverage,
     get_progress,
     mark_aspect_asked,
@@ -551,6 +552,19 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
         get_page_coverage(doc, page_number).get("aspects")
     ):
         set_coverage_complete(db, document_id, page_number)
+
+    # Stall guard: any aspect we targeted this round but still couldn't produce a
+    # question for gets a failed-attempt mark; after MAX_ASPECT_ATTEMPTS it's
+    # abandoned so a permanently un-generatable aspect can't block completion.
+    db.refresh(doc)
+    asked_now = {
+        str(a.get("key"))
+        for a in (get_page_coverage(doc, page_number).get("aspects") or [])
+        if a.get("asked")
+    }
+    still_unasked = {str(t["key"]) for t in targets if t.get("key") and str(t["key"]) not in asked_now}
+    if still_unasked:
+        bump_aspect_attempts(db, document_id, page_number, still_unasked)
 
     on_batch_completed(db, document_id, page=page_number, saved=saved)
 

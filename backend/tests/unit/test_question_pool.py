@@ -21,6 +21,43 @@ from app.services.question_pool import (
 )
 
 
+def test_bump_aspect_attempts_abandons_after_max() -> None:
+    from app.services.question_pool import MAX_ASPECT_ATTEMPTS
+    from app.services.question_pool_jobs import bump_aspect_attempts
+
+    doc_id = uuid.uuid4()
+    doc = MagicMock()
+    doc.id = doc_id
+    doc.meta = {
+        "question_progress": {
+            "current_page": 2,
+            "page_coverage": {
+                "2": {
+                    "aspects": [
+                        {"key": "x", "asked": False, "gen_attempts": MAX_ASPECT_ATTEMPTS - 1},
+                        {"key": "y", "asked": False, "gen_attempts": 0},
+                    ]
+                }
+            },
+        }
+    }
+    db = MagicMock()
+    db.get.return_value = doc
+
+    with patch("app.services.question_pool_jobs.save_progress") as sp:
+        bump_aspect_attempts(db, doc_id, 2, {"x", "y"})
+
+    entry = sp.call_args[0][2]["page_coverage"]["2"]
+    by_key = {a["key"]: a for a in entry["aspects"]}
+    # 'x' hit the attempt cap -> abandoned (asked) so it can't block completion.
+    assert by_key["x"]["asked"] is True
+    assert by_key["x"]["abandoned"] is True
+    # 'y' just incremented, still in play.
+    assert by_key["y"]["asked"] is False
+    assert by_key["y"]["gen_attempts"] == 1
+    db.commit.assert_called_once()
+
+
 def test_get_progress_defaults_to_selected_range_first_page() -> None:
     doc = MagicMock()
     doc.meta = {"selected_range": {"from": 34, "to": 49}}
