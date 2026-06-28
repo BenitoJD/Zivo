@@ -1,10 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActionIcon, Box, Button, Center, Loader, Paper, Stack, Text, Tooltip } from "@mantine/core";
+import {
+  ActionIcon,
+  Box,
+  Button,
+  Center,
+  Group,
+  Loader,
+  NumberInput,
+  Paper,
+  Popover,
+  Stack,
+  Text,
+  Tooltip,
+} from "@mantine/core";
 import { useMediaQuery } from "@mantine/hooks";
 import {
   IconBulb,
+  IconChevronLeft,
+  IconChevronRight,
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
   IconMessage2,
@@ -63,7 +78,7 @@ export function PdfReader({
   const pagesWrapRef = useRef<HTMLDivElement>(null);
   const [fitWidth, setFitWidth] = useState(0);
   const [zoom, setZoom] = useState(1);
-  const [sel, setSel] = useState<{ text: string; x: number; y: number } | null>(null);
+  const [sel, setSel] = useState<{ text: string; x: number; top: number; bottom: number } | null>(null);
   const [activePage, setActivePage] = useState(1);
 
   // The crisp render width: the fit-to-pane width scaled by the zoom factor. Pages
@@ -185,7 +200,7 @@ export function PdfReader({
     // Only react to selections inside the reader.
     if (!root.contains(s.anchorNode)) return;
     const rect = s.getRangeAt(0).getBoundingClientRect();
-    setSel({ text, x: rect.left + rect.width / 2, y: rect.top });
+    setSel({ text, x: rect.left + rect.width / 2, top: rect.top, bottom: rect.bottom });
   }, []);
 
   const onMouseUp = useCallback(() => showSelection(), [showSelection]);
@@ -388,29 +403,147 @@ export function PdfReader({
       ) : null}
 
       {sel ? (
-        <Paper
-          data-reader-popover
-          withBorder
-          radius="xl"
-          shadow="md"
-          p={4}
-          style={{
-            position: "fixed",
-            left: Math.max(12, Math.min(sel.x - 150, window.innerWidth - 312)),
-            top: Math.max(12, sel.y - 52),
-            zIndex: 400,
-            display: "flex",
-            gap: 2,
-            background: "var(--mantine-color-body)",
-          }}
-        >
-          <PopBtn icon={<IconMessage2 size={14} />} label="Ask" onClick={() => act(() => onQuote(sel.text))} />
-          <PopBtn icon={<IconBulb size={14} />} label="Explain" onClick={() => act(() => onAsk(`Explain this passage in simple terms:\n\n"${sel.text}"`))} />
-          <PopBtn icon={<IconWand size={14} />} label="Simplify" onClick={() => act(() => onAsk(`Simplify this so it's easy to understand:\n\n"${sel.text}"`))} />
-          <PopBtn icon={<IconNotebook size={14} />} label="Save" onClick={() => act(() => onSaveQuote(sel.text))} />
-        </Paper>
+        // Place above the selection, but flip below when it's too near the top
+        // edge to fit (common on phones when selecting the first lines).
+        (() => {
+          const popH = 52;
+          const above = sel.top - popH - 8;
+          const below = sel.bottom + 8;
+          const top = above >= 12 ? above : below;
+          return (
+            <Paper
+              data-reader-popover
+              withBorder
+              radius="xl"
+              shadow="md"
+              p={4}
+              style={{
+                position: "fixed",
+                left: Math.max(12, Math.min(sel.x - 150, window.innerWidth - 312)),
+                top: Math.min(top, window.innerHeight - popH - 12),
+                zIndex: 400,
+                display: "flex",
+                gap: 2,
+                background: "var(--mantine-color-body)",
+              }}
+            >
+              <PopBtn icon={<IconMessage2 size={16} />} label="Ask" large={isNarrow} onClick={() => act(() => onQuote(sel.text))} />
+              <PopBtn icon={<IconBulb size={16} />} label="Explain" large={isNarrow} onClick={() => act(() => onAsk(`Explain this passage in simple terms:\n\n"${sel.text}"`))} />
+              <PopBtn icon={<IconWand size={16} />} label="Simplify" large={isNarrow} onClick={() => act(() => onAsk(`Simplify this so it's easy to understand:\n\n"${sel.text}"`))} />
+              <PopBtn icon={<IconNotebook size={16} />} label="Save" large={isNarrow} onClick={() => act(() => onSaveQuote(sel.text))} />
+            </Paper>
+          );
+        })()
+      ) : null}
+
+      {/* Mobile page nav: the thumbnail rail is hidden on phones, so a compact
+          floating pill restores "where am I / jump to page N". */}
+      {showRail && isNarrow ? (
+        <MobilePageNav activePage={activePage} pageCount={pageCount} onJump={jumpToPage} />
       ) : null}
     </Box>
+  );
+}
+
+/** Floating page indicator + jumper for phones (no thumbnail rail there). */
+function MobilePageNav({
+  activePage,
+  pageCount,
+  onJump,
+}: {
+  activePage: number;
+  pageCount: number;
+  onJump: (n: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState<number | string>(activePage);
+
+  const toggle = () => {
+    setValue(activePage); // seed the input with the current page each time it opens
+    setOpen((o) => !o);
+  };
+
+  const go = (n: number) => {
+    const clamped = Math.min(pageCount, Math.max(1, Math.round(n)));
+    onJump(clamped);
+    setOpen(false);
+  };
+
+  return (
+    <Paper
+      withBorder
+      radius="xl"
+      shadow="sm"
+      p={2}
+      style={{
+        position: "absolute",
+        bottom: 14,
+        left: "50%",
+        transform: "translateX(-50%)",
+        zIndex: 6,
+        display: "flex",
+        alignItems: "center",
+        gap: 2,
+        background: "var(--mantine-color-body)",
+      }}
+    >
+      <ActionIcon
+        variant="subtle"
+        color="gray"
+        radius="xl"
+        size="lg"
+        onClick={() => go(activePage - 1)}
+        disabled={activePage <= 1}
+        aria-label="Previous page"
+      >
+        <IconChevronLeft size={18} stroke={2} />
+      </ActionIcon>
+      <Popover opened={open} onChange={setOpen} position="top" withArrow shadow="md" radius="md" trapFocus>
+        <Popover.Target>
+          <Button
+            variant="subtle"
+            color="gray"
+            size="compact-sm"
+            radius="xl"
+            onClick={toggle}
+            aria-label={`Page ${activePage} of ${pageCount}. Tap to jump.`}
+            style={{ fontVariantNumeric: "tabular-nums", minWidth: 64 }}
+          >
+            {activePage} / {pageCount}
+          </Button>
+        </Popover.Target>
+        <Popover.Dropdown p="xs">
+          <Group gap={6} wrap="nowrap" align="flex-end">
+            <NumberInput
+              label="Go to page"
+              size="xs"
+              min={1}
+              max={pageCount}
+              value={value}
+              onChange={setValue}
+              onKeyDown={(e) => e.key === "Enter" && go(Number(value))}
+              hideControls
+              w={92}
+              autoFocus
+            />
+            <Button size="xs" radius="md" color="lavender" onClick={() => go(Number(value))}>
+              Go
+            </Button>
+          </Group>
+        </Popover.Dropdown>
+      </Popover>
+      <ActionIcon
+        variant="subtle"
+        color="gray"
+        radius="xl"
+        size="lg"
+        onClick={() => go(activePage + 1)}
+        disabled={activePage >= pageCount}
+        aria-label="Next page"
+      >
+        <IconChevronRight size={18} stroke={2} />
+      </ActionIcon>
+    </Paper>
   );
 }
 
@@ -584,9 +717,28 @@ function ThumbTile({
   );
 }
 
-function PopBtn({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
+function PopBtn({
+  icon,
+  label,
+  large = false,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  large?: boolean;
+  onClick: () => void;
+}) {
   return (
-    <Button size="compact-xs" variant="subtle" color="lavender" leftSection={icon} radius="xl" onClick={onClick}>
+    <Button
+      size={large ? "sm" : "compact-xs"}
+      variant="subtle"
+      color="lavender"
+      leftSection={icon}
+      radius="xl"
+      onClick={onClick}
+      // Comfortable thumb target on touch (~44px) without bloating the cursor UI.
+      styles={large ? { root: { height: 44, paddingInline: 12 } } : undefined}
+    >
       {label}
     </Button>
   );
