@@ -169,11 +169,12 @@ export function ProductMock() {
 
         {/* The explanation's space is reserved at all times so revealing it fades the
             text in WITHOUT growing the card — no page jump. */}
-        <Box style={{ minHeight: "2.8em", display: "flex", alignItems: "flex-start" }}>
+        <Box style={{ minHeight: "2.8em", display: "flex", alignItems: "flex-start", justifyContent: "center" }}>
           <Text
             size="xs"
             c="gray.5"
             fs="italic"
+            ta="center"
             style={{
               fontFamily: "var(--font-serif)",
               opacity: phase === "reveal" ? 1 : 0,
@@ -250,6 +251,7 @@ function StaticCard({ q, revealed }: { q: Question; revealed: boolean }) {
           size="xs"
           c="gray.5"
           fs="italic"
+          ta="center"
           style={{ fontFamily: "var(--font-serif)" }}
         >
           {q.explanation}
