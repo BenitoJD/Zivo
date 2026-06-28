@@ -384,8 +384,6 @@ function SelectionActionBar({
   const summary = formatSelectionSummary(selectedPages, pageCount);
   const hairline = isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-3)";
   const barBg = isDark ? "var(--mantine-color-dark-7)" : "var(--mantine-color-gray-0)";
-  const inputBorder = isDark ? "var(--mantine-color-dark-3)" : "var(--mantine-color-gray-4)";
-  const inputBg = isDark ? "var(--mantine-color-dark-8)" : "var(--mantine-color-white)";
   const trackBg = isDark ? "var(--mantine-color-dark-3)" : "var(--mantine-color-gray-3)";
 
   const dockMarks = useMemo(
@@ -398,9 +396,12 @@ function SelectionActionBar({
 
   const numberInputStyles = {
     input: {
-      border: `1px solid ${inputBorder}`,
-      backgroundColor: inputBg,
-      color: isDark ? "var(--mantine-color-gray-1)" : undefined,
+      // Pin to the theme-aware text token (NOT a hardcoded palette stop): the
+      // app remaps both `dark` and `gray` to one warm NEUTRAL ramp, so e.g.
+      // gray-1 is near-white in BOTH schemes — hardcoding it left the page
+      // number invisible on the dark action bar. Let the default themed input
+      // supply the background; --mantine-color-text always contrasts it.
+      color: "var(--mantine-color-text)",
       minHeight: 30,
       height: 30,
       width: 52,
