@@ -242,7 +242,8 @@ def simulate_learner(
             )
         else:
             item = remaining[0]
-        assert item is not None
+        if item is None:  # real guard, not `assert` (which -O strips)
+            break
         remaining.remove(item)
 
         difficulty = item_difficulties[item]

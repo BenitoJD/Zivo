@@ -36,5 +36,8 @@
     "postcss-preset-mantine": "^1.18.0",
     "postcss-simple-vars": "^7.0.1",
     "typescript": "^5"
+  },
+  "overrides": {
+    "postcss": "^8.5.15"
   }
 }

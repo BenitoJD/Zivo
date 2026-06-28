@@ -42,7 +42,11 @@ def apply_prompt_cache(messages: list[dict], *, provider_slug: str) -> list[dict
             out.append(msg)
             continue
         content = msg["content"]
-        assert isinstance(content, str)
+        # Real check (not `assert`, which -O strips): only str content is cacheable;
+        # pass anything else through untouched rather than mis-wrapping it.
+        if not isinstance(content, str):
+            out.append(msg)
+            continue
         cached = dict(msg)
         cached["content"] = _anthropic_cached_block(content)
         out.append(cached)

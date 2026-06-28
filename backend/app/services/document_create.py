@@ -44,7 +44,10 @@ def assert_storage_available(
         )
         used = int(used or 0)
     else:
-        assert guest_id is not None
+        # Real check (not `assert`, which -O strips): an anonymous document must have
+        # an owning guest id, otherwise it would be created unowned/orphaned.
+        if guest_id is None:
+            raise ValueError("guest_id is required to create an anonymous document")
         doc_guest_id = guest_id
         if counts_toward_guest_cap:
             non_image_count = (

@@ -117,7 +117,11 @@ def list_documents(
             .all()
         )
 
-    assert guest_id is not None
+    # No user → guest scope. A real check (not `assert`, which -O strips): without a
+    # guest id there are no guest documents — and we must never fall through to an
+    # unfiltered query that could surface another anonymous user's documents.
+    if guest_id is None:
+        return []
     return (
         db.query(Document)
         .filter(Document.account_id.is_(None))
