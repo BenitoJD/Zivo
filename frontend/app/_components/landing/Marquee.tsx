@@ -59,7 +59,14 @@ function Chip({ item }: { item: (typeof ITEMS)[number] }) {
   );
 }
 
-/** A single row of the marquee. Duplicated for a seamless loop. */
+// The 6 source types repeated so a single row is always wider than the viewport
+// (even on ultra-wide screens) — otherwise the loop scrolls past the content and
+// leaves empty space on the right before it repeats.
+const ROW_REPEAT = 4;
+
+/** One marquee row (items repeated to fill the width). Duplicated for the loop.
+ *  paddingRight gives the trailing gap so the seam between the two rows matches
+ *  the inter-chip gap exactly — and translateX(-50%) lands one full row over. */
 function MarqueeRow() {
   return (
     <Box
@@ -71,13 +78,12 @@ function MarqueeRow() {
         alignItems: "center",
         listStyle: "none",
         margin: 0,
-        padding: 0,
         flexShrink: 0,
       }}
     >
-      {ITEMS.map((it) => (
-        <Chip key={it.label} item={it} />
-      ))}
+      {Array.from({ length: ROW_REPEAT }).flatMap((_, r) =>
+        ITEMS.map((it) => <Chip key={`${it.label}-${r}`} item={it} />),
+      )}
     </Box>
   );
 }
@@ -140,9 +146,10 @@ export function Marquee() {
         <Box
           style={{
             display: "flex",
-            gap: 18,
             width: "max-content",
-            animation: "zivo-marquee 34s linear infinite",
+            // ~same px/s as before, but the row is ROW_REPEAT× wider, so scale
+            // the duration to keep the scroll speed natural.
+            animation: "zivo-marquee 120s linear infinite",
           }}
           onMouseEnter={(e) => {
             (e.currentTarget as HTMLElement).style.animationPlayState = "paused";
