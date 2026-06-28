@@ -57,13 +57,12 @@ export function Stagger({
   className?: string;
   style?: CSSProperties;
 }) {
-  let index = 0;
-  const items = Children.map(children, (child) => {
+  // Stagger by child position (no render-time mutation). Stagger wraps <Reveal>
+  // children, so position == reveal order; each gets an incremental 80ms delay.
+  const items = Children.toArray(children).map((child, i) => {
     if (isValidElement(child) && child.type === Reveal) {
       const base = (child.props as { delay?: number }).delay ?? 0;
-      const withDelay = base + index * 80;
-      index += 1;
-      return cloneElement(child as ReactElement<{ delay?: number }>, { delay: withDelay });
+      return cloneElement(child as ReactElement<{ delay?: number }>, { delay: base + i * 80 });
     }
     return child;
   });

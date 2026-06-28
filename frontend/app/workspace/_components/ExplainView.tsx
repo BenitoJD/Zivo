@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Accordion,
   Box,
@@ -23,7 +23,7 @@ import {
   useTopicsQuery,
   type Topic,
 } from "@/lib/api/queries";
-import { GenerateGate, markGenStarted, readGenStarted } from "./GenerateGate";
+import { GenerateGate, useGenStarted } from "./GenerateGate";
 import { WaitState } from "./WaitState";
 
 /**
@@ -38,21 +38,13 @@ export function ExplainView({
   artifactId: string;
   compact?: boolean;
 }) {
-  const [started, setStarted] = useState(false);
-  useEffect(() => {
-    if (readGenStarted(artifactId, "explain")) setStarted(true);
-  }, [artifactId]);
+  const [started, start] = useGenStarted(artifactId, "explain");
 
   const { data, isError, refetch } = useTopicsQuery(artifactId, started);
   const [open, setOpen] = useState<string | null>(null);
 
   const status = data?.status;
   const topics = data?.topics ?? [];
-
-  function start() {
-    markGenStarted(artifactId, "explain");
-    setStarted(true);
-  }
 
   if (!started && topics.length === 0) {
     return (

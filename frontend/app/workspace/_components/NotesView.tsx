@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
   Box,
   Button,
@@ -24,7 +24,7 @@ import {
 import { IconNotebook } from "@tabler/icons-react";
 import { AssistantMarkdown } from "@/lib/chatMarkdown";
 import { useNotesQuery, type NoteKind } from "@/lib/api/queries";
-import { GenerateGate, markGenStarted, readGenStarted } from "./GenerateGate";
+import { GenerateGate, useGenStarted } from "./GenerateGate";
 import { WaitState } from "./WaitState";
 
 /**
@@ -45,25 +45,15 @@ export function NotesView({
   const sheetRef = useRef<HTMLDivElement>(null);
   const [exporting, setExporting] = useState<null | "pdf" | "png">(null);
 
-  // Each kind (notes / cheatsheet) is gated and remembered independently.
+  // Each kind (notes / cheatsheet) is gated and remembered independently — the
+  // hook is keyed by mode, so toggling reads the right per-kind flag.
   const mode = kind === "cheatsheet" ? "cheatsheet" : "notes";
-  const [startedKinds, setStartedKinds] = useState<Record<string, boolean>>({});
-  useEffect(() => {
-    if (!startedKinds[mode] && readGenStarted(artifactId, mode)) {
-      setStartedKinds((prev) => ({ ...prev, [mode]: true }));
-    }
-  }, [artifactId, mode, startedKinds]);
-  const started = Boolean(startedKinds[mode]);
+  const [started, start] = useGenStarted(artifactId, mode);
 
   const { data, isError, refetch } = useNotesQuery(artifactId, kind, started);
   const status = data?.status;
   const content = data?.content ?? "";
   const ready = status === "ready" && content.trim().length > 0;
-
-  function start() {
-    markGenStarted(artifactId, mode);
-    setStartedKinds((prev) => ({ ...prev, [mode]: true }));
-  }
 
   async function exportPng() {
     if (!sheetRef.current) return;

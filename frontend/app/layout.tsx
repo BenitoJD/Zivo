@@ -65,6 +65,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
         </Script>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        {/* eslint-disable-next-line @next/next/no-page-custom-font -- Google Fonts via <link>+preconnect in the App Router head is intentional; next/font would conflict with the Calm Paper CSS font variables */}
         <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400..700;1,400..700&family=Newsreader:ital,opsz,wght@0,6..72,200..800;1,6..72,200..800&display=swap" rel="stylesheet" />
         <style
           dangerouslySetInnerHTML={{

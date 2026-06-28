@@ -93,6 +93,7 @@ export function StudySourcePanel({
 
   useEffect(() => {
     if (!open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset zoom/width when the panel closes
       setZoom(PDF_DEFAULT_ZOOM);
       setViewerWidth(0);
     }

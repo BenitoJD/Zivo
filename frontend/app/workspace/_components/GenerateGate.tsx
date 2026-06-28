@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback, useSyncExternalStore } from "react";
 import { Button, Center, Stack, Text, ThemeIcon } from "@mantine/core";
 import { IconSparkles } from "@tabler/icons-react";
 
@@ -22,6 +23,10 @@ export function readGenStarted(artifactId: string, mode: string): boolean {
   }
 }
 
+// In-process subscribers so marking a flag re-renders any useGenStarted reading it
+// in the same tab (the native `storage` event only fires cross-tab).
+const genStartedListeners = new Set<() => void>();
+
 export function markGenStarted(artifactId: string, mode: string) {
   if (typeof window === "undefined") return;
   try {
@@ -29,6 +34,34 @@ export function markGenStarted(artifactId: string, mode: string) {
   } catch {
     /* ignore */
   }
+  genStartedListeners.forEach((l) => l());
+}
+
+/**
+ * Read the per-source+mode "already generated" flag reactively. Uses
+ * useSyncExternalStore so it's SSR-safe (server renders `false`, no hydration
+ * mismatch) and updates when markGenStarted runs — without a setState-in-effect.
+ * Returns the flag plus a `start()` that marks it.
+ */
+export function useGenStarted(artifactId: string, mode: string): [boolean, () => void] {
+  const subscribe = useCallback((onChange: () => void) => {
+    genStartedListeners.add(onChange);
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === null || e.key === genStartedKey(artifactId, mode)) onChange();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => {
+      genStartedListeners.delete(onChange);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [artifactId, mode]);
+  const started = useSyncExternalStore(
+    subscribe,
+    () => readGenStarted(artifactId, mode),
+    () => false,
+  );
+  const start = useCallback(() => markGenStarted(artifactId, mode), [artifactId, mode]);
+  return [started, start];
 }
 
 /**

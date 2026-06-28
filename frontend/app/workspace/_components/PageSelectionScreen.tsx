@@ -918,6 +918,7 @@ function PageThumbnailCell({
 
   useEffect(() => {
     if (!compact) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- async PDF page-aspect load — inherently an effect
       setFrameWidth(thumbWidth);
       return;
     }
@@ -942,9 +943,11 @@ function PageThumbnailCell({
     };
   }, [pdfDoc, isPdf, page]);
 
+  // eslint-disable-next-line react-hooks/immutability -- register into a ref-held canvas registry (not React-owned state) inside an effect
   useEffect(() => {
     const canvas = canvasRef.current;
     const registry = thumbCanvasRefs.current;
+    // eslint-disable-next-line react-hooks/immutability -- clean up the ref-held canvas registry on unmount
     registry[page] = canvas;
     return () => {
       if (registry[page] === canvas) {

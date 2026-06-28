@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ActionIcon,
   Badge,
@@ -29,7 +29,7 @@ import {
   IconSparkles,
 } from "@tabler/icons-react";
 import { useMemoryPalaceQuery, type PalaceStation } from "@/lib/api/queries";
-import { GenerateGate, markGenStarted, readGenStarted } from "./GenerateGate";
+import { GenerateGate, useGenStarted } from "./GenerateGate";
 import { WaitState } from "./WaitState";
 
 /**
@@ -47,10 +47,7 @@ export function MemoryPalaceView({
 }) {
   // Empty string = let the AI pick a familiar place; a value regenerates there.
   const [setting, setSetting] = useState("");
-  const [started, setStarted] = useState(false);
-  useEffect(() => {
-    if (readGenStarted(artifactId, "palace")) setStarted(true);
-  }, [artifactId]);
+  const [started, start] = useGenStarted(artifactId, "palace");
 
   const { data, isError, refetch } = useMemoryPalaceQuery(artifactId, setting, started);
   const [phase, setPhase] = useState<"walk" | "rehearse">("walk");
@@ -58,11 +55,6 @@ export function MemoryPalaceView({
   const status = data?.status;
   const palace = data?.palace ?? null;
   const ready = status === "ready" && palace && palace.stations.length > 0;
-
-  function start() {
-    markGenStarted(artifactId, "palace");
-    setStarted(true);
-  }
 
   if (!started && !palace) {
     return (

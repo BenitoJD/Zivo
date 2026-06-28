@@ -110,6 +110,7 @@ export function McqHeroPanel({
   const [stuckSeconds, setStuckSeconds] = useState(0);
   useEffect(() => {
     if (!stagnant) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset the stuck-timer when stagnation flips (time-based state)
       setStuckSeconds(0);
       return;
     }
@@ -138,6 +139,7 @@ export function McqHeroPanel({
     if (waiting) setStatusTick((t) => t + 1);
   }, 1200);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset the loading-message rotation tick when the message changes
     setStatusTick(0);
   }, [waitStatus.rotateKey]);
 

@@ -190,6 +190,7 @@ export default function WorkspaceArtifactPage({
   const chatHydratedRef = useRef<string | null>(null);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync server query result into locally-editable state
     if (artifactQuery.data) setArtifact(artifactQuery.data);
     if (artifactQuery.error) {
       setSetupError(artifactQuery.error instanceof Error ? artifactQuery.error.message : "Could not load source");
@@ -198,6 +199,7 @@ export default function WorkspaceArtifactPage({
 
   useEffect(() => {
     if (pagesQuery.data) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- sync server pages into local state + reset selection
       setPages(pagesQuery.data);
       setSelectedPages([]);
       setLastClickedPage(null);
@@ -214,6 +216,7 @@ export default function WorkspaceArtifactPage({
   // Switching conversation surface (mode) clears the view until the new thread loads.
   useEffect(() => {
     chatHydratedRef.current = null;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrate chat thread from server once per surface (chat is appended to locally during streaming)
     setChatMessages([]);
   }, [artifactId, chatSurface]);
 
@@ -235,6 +238,7 @@ export default function WorkspaceArtifactPage({
   useEffect(() => {
     if (invalidArtifactId || !artifact || !isPdf) return;
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async PDF document load — inherently an effect
     setPdfError(null);
     const cached = getCachedPdfDocument(artifactId);
     if (cached) {
@@ -264,11 +268,13 @@ export default function WorkspaceArtifactPage({
     return () => {
       cancelled = true;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- depend on artifact?.id (stable); the artifact object changes identity on every edit and would needlessly reload the PDF
   }, [artifactId, invalidArtifactId, isPdf, artifact?.id]);
 
   useEffect(() => {
     if (!pdfDoc?.numPages || pdfDoc.numPages <= 1) return;
     const n = pdfDoc.numPages;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clamp the selection when the loaded PDF's page count changes
     setSelectedPages((prev) => prev.filter((p) => p <= n));
   }, [pdfDoc]);
 
@@ -444,6 +450,7 @@ export default function WorkspaceArtifactPage({
 
   useEffect(() => {
     if (invalidArtifactId || queue?.current_assertion_id) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- project the fetched assertion into the question/options view state
     setOptions([]);
     setSelected(null);
     setGradeState(null);
@@ -453,6 +460,7 @@ export default function WorkspaceArtifactPage({
   useEffect(() => {
     if (invalidArtifactId || !queue?.current_assertion_id) return;
     if (assertionQuery.isError) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentionally reset grade/feedback when the study mode changes
       setQuestion("Could not load question.");
       setOptions([]);
       return;
@@ -468,6 +476,7 @@ export default function WorkspaceArtifactPage({
   }, [assertionQuery.data, assertionQuery.isError, queue?.current_assertion_id, invalidArtifactId]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentionally reset grade/feedback on the active question change
     setGradeState(null);
     setFeedback(null);
   }, [mode]);
@@ -478,6 +487,7 @@ export default function WorkspaceArtifactPage({
       void refreshQueue();
     }, 1500);
     return () => window.clearTimeout(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshQueue is recreated each render; listing it would reset this debounce timer every render
   }, [queue?.page_complete, queue?.current_assertion_id, queue?.document_complete]);
 
   async function refreshQueue() {
