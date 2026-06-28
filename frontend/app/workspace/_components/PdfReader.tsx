@@ -9,6 +9,8 @@ import {
   IconLayoutSidebarLeftExpand,
   IconMessage2,
   IconNotebook,
+  IconPlus,
+  IconMinus,
   IconWand,
 } from "@tabler/icons-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
@@ -24,6 +26,11 @@ import { apiGet } from "@/lib/api/client";
 const THUMB_RAIL_HIDE_BP = "(max-width: 47.99em)";
 const THUMB_TILE_WIDTH = 116; // css px of the thumbnail canvas
 const THUMB_RAIL_WIDTH = THUMB_TILE_WIDTH + 32; // tile + horizontal padding/gutter
+
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 4;
+const ZOOM_STEP = 0.25;
+const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
 
 /**
  * Read mode — a focused reader for the source with a real, selectable text layer.
@@ -53,9 +60,17 @@ export function PdfReader({
   onSaveQuote: (text: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(0);
+  const pagesWrapRef = useRef<HTMLDivElement>(null);
+  const [fitWidth, setFitWidth] = useState(0);
+  const [zoom, setZoom] = useState(1);
   const [sel, setSel] = useState<{ text: string; x: number; y: number } | null>(null);
   const [activePage, setActivePage] = useState(1);
+
+  // The crisp render width: the fit-to-pane width scaled by the zoom factor. Pages
+  // re-render to canvas at this width, so zoomed text stays sharp (not a blurry
+  // upscale). When zoomed past the pane, the reader scrolls horizontally too.
+  const renderWidth = Math.round((fitWidth || 0) * zoom);
+  const zoomable = isPdf && Boolean(pdfDoc);
 
   const showRail = Boolean(isPdf && pdfDoc && pageCount > 0);
   const isNarrow = useMediaQuery(THUMB_RAIL_HIDE_BP, false, { getInitialValueInEffect: true });
@@ -68,14 +83,97 @@ export function PdfReader({
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const measure = () => setWidth(Math.min(el.clientWidth - 24, 1100));
+    const measure = () => setFitWidth(Math.min(el.clientWidth - 24, 1100));
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
 
-  const onMouseUp = useCallback(() => {
+  // --- Touch zoom: pinch + double-tap -------------------------------------
+  // Live pinch scales the pages wrapper with a CSS transform (cheap, smooth),
+  // then commits to `zoom` on release so the canvas re-renders crisp.
+  const pointers = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchStart = useRef<{ dist: number; zoom: number } | null>(null);
+  const pinchHappened = useRef(false);
+  const liveTargetZoom = useRef(1);
+  const lastTap = useRef<{ t: number; x: number; y: number } | null>(null);
+
+  const applyLiveScale = useCallback((scale: number) => {
+    const el = pagesWrapRef.current;
+    if (!el) return;
+    el.style.transformOrigin = "top center";
+    el.style.transform = scale === 1 ? "" : `scale(${scale})`;
+  }, []);
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      if (!zoomable || e.pointerType !== "touch") return;
+      pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointers.current.size === 2) {
+        const [a, b] = [...pointers.current.values()];
+        pinchStart.current = { dist: Math.hypot(a.x - b.x, a.y - b.y), zoom };
+        liveTargetZoom.current = zoom;
+        pinchHappened.current = true;
+      }
+    },
+    [zoomable, zoom],
+  );
+
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (!pointers.current.has(e.pointerId)) return;
+      pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const start = pinchStart.current;
+      if (pointers.current.size === 2 && start && start.dist > 0) {
+        const [a, b] = [...pointers.current.values()];
+        const dist = Math.hypot(a.x - b.x, a.y - b.y);
+        const target = clampZoom(start.zoom * (dist / start.dist));
+        liveTargetZoom.current = target;
+        applyLiveScale(target / zoom);
+        e.preventDefault();
+      }
+    },
+    [applyLiveScale, zoom],
+  );
+
+  const endPointer = useCallback(
+    (e: React.PointerEvent) => {
+      const hadTwo = pointers.current.size === 2;
+      pointers.current.delete(e.pointerId);
+      // Commit the pinch when the gesture drops below two fingers.
+      if (pinchStart.current && hadTwo) {
+        const target = liveTargetZoom.current;
+        pinchStart.current = null;
+        applyLiveScale(1);
+        if (Math.abs(target - zoom) > 0.01) setZoom(Number(target.toFixed(2)));
+        return;
+      }
+      if (pointers.current.size > 0) return;
+      // All fingers up. A pinch consumes the gesture — never treat its final
+      // lift as a tap.
+      const wasPinch = pinchHappened.current;
+      pinchHappened.current = false;
+      if (e.pointerType === "touch" && !wasPinch) {
+        const now = Date.now();
+        const prev = lastTap.current;
+        if (prev && now - prev.t < 300 && Math.hypot(e.clientX - prev.x, e.clientY - prev.y) < 30) {
+          setZoom((z) => (z > 1 ? 1 : 2));
+          lastTap.current = null;
+        } else {
+          lastTap.current = { t: now, x: e.clientX, y: e.clientY };
+        }
+      }
+    },
+    [applyLiveScale, zoom],
+  );
+
+  const zoomBy = useCallback((delta: number) => setZoom((z) => clampZoom(Number((z + delta).toFixed(2)))), []);
+
+  // Show the quote popover for the current selection. Shared by mouse-up (desktop)
+  // and touch-end (mobile long-press selection), so the Ask/Explain/Save actions
+  // are reachable with a finger, not just a cursor.
+  const showSelection = useCallback(() => {
     const s = window.getSelection();
     const text = s?.toString().trim() ?? "";
     if (!text || text.length < 3) {
@@ -90,15 +188,26 @@ export function PdfReader({
     setSel({ text, x: rect.left + rect.width / 2, y: rect.top });
   }, []);
 
+  const onMouseUp = useCallback(() => showSelection(), [showSelection]);
+  const onTouchEnd = useCallback(() => {
+    if (pinchStart.current) return; // don't pop during a pinch gesture
+    // Let the browser settle the selection handles before measuring it.
+    window.setTimeout(showSelection, 16);
+  }, [showSelection]);
+
   useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      // Keep the popover if the click is on it.
+    const onDown = (e: MouseEvent | TouchEvent) => {
+      // Keep the popover if the interaction is on it.
       const t = e.target as HTMLElement;
       if (t.closest?.("[data-reader-popover]")) return;
       setSel(null);
     };
     document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
+    document.addEventListener("touchstart", onDown, { passive: true });
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("touchstart", onDown);
+    };
   }, []);
 
   const act = (fn: () => void) => {
@@ -136,7 +245,7 @@ export function PdfReader({
     const tiles = root.querySelectorAll<HTMLElement>("[data-pdf-page]");
     tiles.forEach((t) => io.observe(t));
     return () => io.disconnect();
-  }, [showRail, pageCount, width, pdfDoc]);
+  }, [showRail, pageCount, renderWidth, pdfDoc]);
 
   const jumpToPage = useCallback((n: number) => {
     const root = scrollRef.current;
@@ -181,22 +290,102 @@ export function PdfReader({
         ref={scrollRef}
         data-reader-scroll
         onMouseUp={onMouseUp}
+        onTouchEnd={onTouchEnd}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endPointer}
+        onPointerCancel={endPointer}
         flex={1}
         mih={0}
         px="sm"
         py="md"
-        style={{ overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain" }}
+        style={{
+          overflowY: "auto",
+          // When zoomed past the pane, allow horizontal panning to reach the edges.
+          overflowX: zoom > 1 ? "auto" : "hidden",
+          overscrollBehavior: "contain",
+          // Let one finger pan/scroll while we handle two-finger pinch in JS
+          // (so pinch zooms the page, not the whole app chrome).
+          touchAction: zoomable ? "pan-x pan-y" : undefined,
+        }}
       >
-        <Box w={isPdf ? width || "100%" : undefined} maw={isPdf ? undefined : 760} mx="auto">
+        <Box
+          ref={pagesWrapRef}
+          w={isPdf ? renderWidth || "100%" : undefined}
+          maw={isPdf ? undefined : 760}
+          mx="auto"
+        >
           {isPdf && pdfDoc ? (
             Array.from({ length: pageCount }).map((_, i) => (
-              <PdfPage key={i + 1} pdfDoc={pdfDoc} pageNumber={i + 1} width={width} />
+              <PdfPage key={i + 1} pdfDoc={pdfDoc} pageNumber={i + 1} width={renderWidth} />
             ))
           ) : (
             <TextReader artifactId={artifactId} />
           )}
         </Box>
       </Box>
+
+      {/* Zoom controls — handy on desktop, essential on touch (pair with pinch /
+          double-tap). Sit out of the way at the bottom-right of the reader. */}
+      {zoomable && fitWidth > 0 ? (
+        <Paper
+          withBorder
+          radius="xl"
+          shadow="sm"
+          p={4}
+          style={{
+            position: "absolute",
+            bottom: 14,
+            right: 14,
+            zIndex: 6,
+            display: "flex",
+            alignItems: "center",
+            gap: 2,
+            background: "var(--mantine-color-body)",
+          }}
+        >
+          <Tooltip label="Zoom out" withArrow openDelay={400}>
+            <ActionIcon
+              variant="subtle"
+              color="gray"
+              radius="xl"
+              size="lg"
+              onClick={() => zoomBy(-ZOOM_STEP)}
+              disabled={zoom <= ZOOM_MIN}
+              aria-label="Zoom out"
+            >
+              <IconMinus size={18} stroke={2} />
+            </ActionIcon>
+          </Tooltip>
+          <Tooltip label="Reset zoom" withArrow openDelay={400}>
+            <Button
+              variant="subtle"
+              color="gray"
+              size="compact-sm"
+              radius="xl"
+              onClick={() => setZoom(1)}
+              disabled={zoom === 1}
+              aria-label="Reset zoom to 100%"
+              style={{ minWidth: 52, fontVariantNumeric: "tabular-nums" }}
+            >
+              {Math.round(zoom * 100)}%
+            </Button>
+          </Tooltip>
+          <Tooltip label="Zoom in" withArrow openDelay={400}>
+            <ActionIcon
+              variant="subtle"
+              color="gray"
+              radius="xl"
+              size="lg"
+              onClick={() => zoomBy(ZOOM_STEP)}
+              disabled={zoom >= ZOOM_MAX}
+              aria-label="Zoom in"
+            >
+              <IconPlus size={18} stroke={2} />
+            </ActionIcon>
+          </Tooltip>
+        </Paper>
+      ) : null}
 
       {sel ? (
         <Paper
