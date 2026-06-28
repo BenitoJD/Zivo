@@ -61,7 +61,7 @@ def test_record_answer_increments_counter() -> None:
     db.execute.return_value.mappings.return_value.first.return_value = None
 
     with (
-        patch("app.services.question_pool.maybe_refill_pool", return_value=None),
+        patch("app.services.question_pool_jobs.maybe_refill_pool", return_value=None),
         patch("app.services.question_pool.save_progress_row") as save_row,
     ):
         record_answer(db, doc_id, assertion_id)
@@ -92,7 +92,7 @@ def test_record_answer_skips_duplicate_increment() -> None:
     db = MagicMock()
     db.get.return_value = doc
 
-    with patch("app.services.question_pool.maybe_refill_pool", return_value=None):
+    with patch("app.services.question_pool_jobs.maybe_refill_pool", return_value=None):
         record_answer(db, doc_id, assertion_id)
 
     progress = doc.meta["question_progress"]
@@ -119,9 +119,9 @@ def test_clear_stale_generation_pending_clears_without_active_job() -> None:
     db.get.return_value = doc
 
     with (
-        patch("app.services.question_pool._reclaim_stale_generate_jobs", return_value=0),
-        patch("app.services.question_pool._has_active_generate_job", return_value=False),
-        patch("app.services.question_pool.save_progress") as save,
+        patch("app.services.question_pool_jobs._reclaim_stale_generate_jobs", return_value=0),
+        patch("app.services.question_pool_jobs._has_active_generate_job", return_value=False),
+        patch("app.services.question_pool_jobs.save_progress") as save,
     ):
         clear_stale_generation_pending(db, doc)
 
@@ -151,12 +151,12 @@ def test_ensure_question_pool_requeues_triage_when_no_coverage() -> None:
     db.get.return_value = doc
 
     with (
-        patch("app.services.question_pool.release_stuck_generation"),
-        patch("app.services.question_pool.kick_generation_sync"),
-        patch("app.services.question_pool.next_assertion_id", return_value=None),
-        patch("app.services.question_pool._has_active_generate_job", return_value=False),
-        patch("app.services.question_pool.maybe_refill_pool", return_value=None),
-        patch("app.services.question_pool.enqueue_page_triage") as triage,
+        patch("app.services.question_pool_jobs.release_stuck_generation"),
+        patch("app.services.question_pool_jobs.kick_generation_sync"),
+        patch("app.services.question_pool_jobs.next_assertion_id", return_value=None),
+        patch("app.services.question_pool_jobs._has_active_generate_job", return_value=False),
+        patch("app.services.question_pool_jobs.maybe_refill_pool", return_value=None),
+        patch("app.services.question_pool_jobs.enqueue_page_triage") as triage,
     ):
         triage.return_value = MagicMock()
         ensure_question_pool(db, doc_id)
@@ -186,7 +186,7 @@ def test_reset_for_new_page_range_clears_pool_state() -> None:
 
     from app.services.question_pool import reset_for_new_page_range
 
-    with patch("app.services.question_pool.save_progress_row") as save_row:
+    with patch("app.services.question_pool_jobs.save_progress_row") as save_row:
         reset_for_new_page_range(db, doc, {"from": 51, "to": 100})
 
     assert doc.meta["selected_range"] == {"from": 51, "to": 100}
@@ -222,10 +222,10 @@ def test_reset_for_new_page_range_clears_pool_state() -> None:
     db.get.return_value = doc
 
     with (
-        patch("app.services.question_pool.count_assertions_on_page", return_value=5),
-        patch("app.services.question_pool.count_answered_on_page", return_value=REFILL_AFTER_ANSWERED),
-        patch("app.services.question_pool._count_available", return_value=2),
-        patch("app.services.question_pool.enqueue_page_batch") as enqueue,
+        patch("app.services.question_pool_jobs.count_assertions_on_page", return_value=5),
+        patch("app.services.question_pool_jobs.count_answered_on_page", return_value=REFILL_AFTER_ANSWERED),
+        patch("app.services.question_pool_jobs._count_available", return_value=2),
+        patch("app.services.question_pool_jobs.enqueue_page_batch") as enqueue,
     ):
         enqueue.return_value = MagicMock()
         maybe_refill_pool(db, doc_id)
@@ -276,8 +276,8 @@ def test_release_stuck_generation_keeps_queued_jobs_when_not_pending() -> None:
     db.execute.side_effect = execute_side_effect
 
     with (
-        patch("app.services.question_pool._reclaim_stale_generate_jobs", return_value=0),
-        patch("app.services.question_pool._cancel_queued_generate_jobs") as cancel,
+        patch("app.services.question_pool_jobs._reclaim_stale_generate_jobs", return_value=0),
+        patch("app.services.question_pool_jobs._cancel_queued_generate_jobs") as cancel,
     ):
         release_stuck_generation(db, doc_id)
 
@@ -300,10 +300,10 @@ def test_release_stuck_generation_clears_pending_when_no_active_job() -> None:
     db.get.return_value = doc
 
     with (
-        patch("app.services.question_pool._reclaim_stale_generate_jobs", return_value=0),
-        patch("app.services.question_pool._has_active_generate_job", return_value=False),
-        patch("app.services.question_pool._cancel_queued_generate_jobs") as cancel,
-        patch("app.services.question_pool.save_progress") as save,
+        patch("app.services.question_pool_jobs._reclaim_stale_generate_jobs", return_value=0),
+        patch("app.services.question_pool_jobs._has_active_generate_job", return_value=False),
+        patch("app.services.question_pool_jobs._cancel_queued_generate_jobs") as cancel,
+        patch("app.services.question_pool_jobs.save_progress") as save,
     ):
         release_stuck_generation(db, doc_id)
 
@@ -321,9 +321,9 @@ def test_release_stuck_generation_keeps_pending_when_job_queued() -> None:
     db.get.return_value = doc
 
     with (
-        patch("app.services.question_pool._reclaim_stale_generate_jobs", return_value=0),
-        patch("app.services.question_pool._has_active_generate_job", return_value=True),
-        patch("app.services.question_pool.save_progress") as save,
+        patch("app.services.question_pool_jobs._reclaim_stale_generate_jobs", return_value=0),
+        patch("app.services.question_pool_jobs._has_active_generate_job", return_value=True),
+        patch("app.services.question_pool_jobs.save_progress") as save,
     ):
         release_stuck_generation(db, doc_id)
 
@@ -350,12 +350,12 @@ def test_ensure_question_pool_skips_enqueue_when_job_active() -> None:
     db.get.return_value = doc
 
     with (
-        patch("app.services.question_pool.release_stuck_generation"),
-        patch("app.services.question_pool.kick_generation_sync"),
-        patch("app.services.question_pool.next_assertion_id", return_value=None),
-        patch("app.services.question_pool._has_active_generate_job", return_value=True),
-        patch("app.services.question_pool.maybe_refill_pool") as refill,
-        patch("app.services.question_pool.enqueue_page_triage") as triage,
+        patch("app.services.question_pool_jobs.release_stuck_generation"),
+        patch("app.services.question_pool_jobs.kick_generation_sync"),
+        patch("app.services.question_pool_jobs.next_assertion_id", return_value=None),
+        patch("app.services.question_pool_jobs._has_active_generate_job", return_value=True),
+        patch("app.services.question_pool_jobs.maybe_refill_pool") as refill,
+        patch("app.services.question_pool_jobs.enqueue_page_triage") as triage,
     ):
         ensure_question_pool(db, doc_id)
 
@@ -379,12 +379,12 @@ def test_ensure_question_pool_refills_when_pool_exhausted() -> None:
     refill_job = MagicMock()
 
     with (
-        patch("app.services.question_pool.release_stuck_generation"),
-        patch("app.services.question_pool.kick_generation_sync") as kick,
-        patch("app.services.question_pool.next_assertion_id", return_value=None),
-        patch("app.services.question_pool._has_active_generate_job", return_value=False),
-        patch("app.services.question_pool.maybe_refill_pool", return_value=refill_job) as refill,
-        patch("app.services.question_pool._enqueue_pool_work") as enqueue_work,
+        patch("app.services.question_pool_jobs.release_stuck_generation"),
+        patch("app.services.question_pool_jobs.kick_generation_sync") as kick,
+        patch("app.services.question_pool_jobs.next_assertion_id", return_value=None),
+        patch("app.services.question_pool_jobs._has_active_generate_job", return_value=False),
+        patch("app.services.question_pool_jobs.maybe_refill_pool", return_value=refill_job) as refill,
+        patch("app.services.question_pool_jobs._enqueue_pool_work") as enqueue_work,
     ):
         job = ensure_question_pool(db, doc_id)
 
@@ -418,7 +418,7 @@ def test_maybe_transition_prefetch_enqueues_once() -> None:
     db = MagicMock()
     db.get.return_value = doc
 
-    with patch("app.services.question_pool.enqueue_transition_prep") as enqueue:
+    with patch("app.services.question_pool_jobs.enqueue_transition_prep") as enqueue:
         enqueue.return_value = MagicMock()
         maybe_transition_prefetch(db, doc_id)
 

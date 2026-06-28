@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.models import User
-from app.services.auth import create_session_token, csrf_from_session_token, get_current_user
+from app.services.auth import create_session_token, csrf_from_session_token, get_optional_user
 
 
 def test_csrf_from_session_token_roundtrip() -> None:
@@ -23,13 +23,14 @@ def test_get_session_returns_csrf_for_valid_cookie() -> None:
     # rejects. Set it explicitly so the test reflects a real (DB-loaded) user.
     fake_user = User(username="benito", password_hash="hashed", is_admin=False)
 
-    app.dependency_overrides[get_current_user] = lambda: fake_user
+    app.dependency_overrides[get_optional_user] = lambda: fake_user
     try:
         client = TestClient(app)
         client.cookies.set("zivo_session", token)
         res = client.get("/api/auth/session")
         assert res.status_code == 200
         body = res.json()
+        assert body["authenticated"] is True
         assert body["username"] == "benito"
         assert body["csrf_token"] == csrf
     finally:
@@ -37,6 +38,12 @@ def test_get_session_returns_csrf_for_valid_cookie() -> None:
 
 
 def test_get_session_unauthenticated() -> None:
+    # Anonymous visitors get a 200 with authenticated:false (not a 401), so the
+    # browser console stays clean. See SessionResponse in app/api/auth.py.
     client = TestClient(app)
     res = client.get("/api/auth/session")
-    assert res.status_code == 401
+    assert res.status_code == 200
+    body = res.json()
+    assert body["authenticated"] is False
+    assert body["username"] is None
+    assert body["csrf_token"] is None

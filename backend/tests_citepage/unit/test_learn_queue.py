@@ -85,9 +85,9 @@ def test_advance_to_next_page_enqueues_triage_for_new_page() -> None:
         saved.update(patch)
 
     with (
-        patch("app.services.question_pool.enqueue_page_triage") as triage,
-        patch("app.services.question_pool.count_assertions_on_page", return_value=0),
-        patch("app.services.question_pool.save_progress", side_effect=_capture_save),
+        patch("app.services.question_pool_jobs.enqueue_page_triage") as triage,
+        patch("app.services.question_pool_jobs.count_assertions_on_page", return_value=0),
+        patch("app.services.question_pool_jobs.save_progress", side_effect=_capture_save),
         patch("app.services.rag_window.is_rag_window_ready", return_value=True),
     ):
         triage.return_value = MagicMock()
