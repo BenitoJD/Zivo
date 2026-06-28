@@ -17,7 +17,7 @@ from app.db import SessionLocal, get_db
 from app.models import Account, Document
 from app.repositories import workspace as workspace_repo
 from app.services.auth import get_optional_user, require_csrf_or_guest
-from app.services.guest import can_access_document
+from app.api.access import require_document
 from app.services.guest_session import guest_session_for_read
 from app.services.question_pool import (
     advance_to_next_page,
@@ -115,9 +115,7 @@ def _learn_queue_handler(
     guest_id: str | None,
 ) -> dict:
     with SessionLocal() as db:
-        doc = db.get(Document, artifact_id)
-        if not doc or not can_access_document(doc, user, guest_id):
-            raise HTTPException(status_code=404, detail="Not found")
+        doc = require_document(db, artifact_id, user, guest_id)
         if doc.status == "ready":
             ensure_question_pool(db, artifact_id)
             db.refresh(doc)
@@ -132,9 +130,7 @@ def _learn_stream_tick(
     ensure_pool: bool,
 ) -> dict:
     with SessionLocal() as db:
-        doc = db.get(Document, artifact_id)
-        if not doc or not can_access_document(doc, user, guest_id):
-            raise HTTPException(status_code=404, detail="not found")
+        doc = require_document(db, artifact_id, user, guest_id)
         if ensure_pool and doc.status == "ready":
             ensure_question_pool(db, artifact_id)
             db.refresh(doc)
@@ -160,9 +156,7 @@ async def learn_queue_stream(
 ):
     db = SessionLocal()
     try:
-        doc = db.get(Document, artifact_id)
-        if not doc or not can_access_document(doc, user, guest_id):
-            raise HTTPException(status_code=404, detail="Not found")
+        require_document(db, artifact_id, user, guest_id)
     finally:
         db.close()
 
@@ -225,9 +219,7 @@ def advance_page(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> dict:
-    doc = db.get(Document, artifact_id)
-    if not doc or not can_access_document(doc, user, guest_id):
-        raise HTTPException(status_code=404, detail="Not found")
+    doc = require_document(db, artifact_id, user, guest_id)
     progress = get_progress(doc)
     if int(progress.get("current_page") or 0) == page and is_page_complete(db, doc, progress):
         advance_to_next_page(db, doc)
@@ -261,9 +253,7 @@ def set_study_mode_endpoint(
     """Switch this document between the Adaptive tutor and Classic (fixed) order.
     Both run over the same question pool, so the change takes effect on the next
     question with no regeneration."""
-    doc = db.get(Document, artifact_id)
-    if not doc or not can_access_document(doc, user, guest_id):
-        raise HTTPException(status_code=404, detail="Not found")
+    doc = require_document(db, artifact_id, user, guest_id)
     mode = set_study_mode(db, doc, body.mode)
     db.commit()
     return {"study_mode": mode}
@@ -276,7 +266,5 @@ def get_study_mode_endpoint(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> dict:
-    doc = db.get(Document, artifact_id)
-    if not doc or not can_access_document(doc, user, guest_id):
-        raise HTTPException(status_code=404, detail="Not found")
+    doc = require_document(db, artifact_id, user, guest_id)
     return {"study_mode": get_study_mode(doc)}

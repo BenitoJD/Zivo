@@ -12,10 +12,10 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import get_db
 from app.graphs.mcq_graph import grade_mcq
-from app.models import Account, Document
+from app.models import Account
 from app.services.answer_signal import record_answer_signal
 from app.services.auth import get_optional_user, require_csrf_or_guest
-from app.services.guest import can_access_document
+from app.api.access import require_document
 from app.services.guest_session import guest_session_for_read
 from app.services.question_pool import record_answer, save_confirmed_answer
 from app.services.rate_limit import rate_limit_dependency
@@ -53,9 +53,7 @@ def _resolve_assertion_artifact(
     if not row or not row[0]:
         raise HTTPException(status_code=404, detail="Not found")
     artifact_id = uuid.UUID(str(row[0]))
-    doc = db.get(Document, artifact_id)
-    if not doc or not can_access_document(doc, user, guest_id):
-        raise HTTPException(status_code=404, detail="Not found")
+    require_document(db, artifact_id, user, guest_id)
     return artifact_id
 
 

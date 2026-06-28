@@ -10,10 +10,10 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Account, Document, User
+from app.models import Account, User
 from app.repositories.intel import create_activity
 from app.services.auth import get_current_user, get_optional_user, require_csrf
-from app.services.guest import can_access_document
+from app.api.access import require_document
 from app.services.guest_session import guest_session_for_read
 from app.services.jobs import enqueue_generate
 from app.services.mcq_dedup import (
@@ -73,9 +73,7 @@ def _assertion_access(
         raise HTTPException(status_code=404, detail="Not found")
     artifact_raw = (row.get("payload") or {}).get("artifact_id")
     if artifact_raw:
-        doc = db.get(Document, uuid.UUID(str(artifact_raw)))
-        if not doc or not can_access_document(doc, user, guest_id):
-            raise HTTPException(status_code=404, detail="Not found")
+        require_document(db, uuid.UUID(str(artifact_raw)), user, guest_id)
     return _sanitize_assertion_row(dict(row))
 
 
@@ -110,9 +108,7 @@ def list_assertions(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> list[dict]:
-    doc = db.get(Document, artifact_id)
-    if not doc or not can_access_document(doc, user, guest_id):
-        raise HTTPException(status_code=404, detail="Not found")
+    require_document(db, artifact_id, user, guest_id)
     rows = db.execute(
         text(
             """
@@ -135,9 +131,7 @@ def generate_assertions(
     user: User = Depends(get_current_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> dict:
-    doc = db.get(Document, body.artifact_id)
-    if not doc or not can_access_document(doc, user, guest_id):
-        raise HTTPException(status_code=404, detail="Not found")
+    require_document(db, body.artifact_id, user, guest_id)
     activity_id = create_activity(
         db,
         type_uri="/vocab/activity/generate_questions",

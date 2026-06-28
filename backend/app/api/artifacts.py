@@ -11,10 +11,10 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Account, Document
+from app.models import Account
 from app.repositories import workspace as workspace_repo
 from app.services.auth import get_optional_user, require_csrf_or_guest
-from app.services.guest import can_access_document
+from app.api.access import require_document
 from app.services.guest_session import optional_guest_session
 from app.services.jobs import enqueue_rag_window
 from app.services.question_pool import reset_for_new_page_range
@@ -44,17 +44,6 @@ class ArtifactOut(BaseModel):
     ingest_kind: str | None = None
 
 
-def _resolve_document(
-    db: Session,
-    artifact_id: uuid.UUID,
-    user: Account | None,
-    guest_id: str | None,
-) -> Document:
-    doc = db.get(Document, artifact_id)
-    if not doc or not can_access_document(doc, user, guest_id):
-        raise HTTPException(status_code=404, detail="Not found")
-    return doc
-
 
 @router.get("/{artifact_id}", response_model=ArtifactOut)
 def get_artifact(
@@ -63,7 +52,7 @@ def get_artifact(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(optional_guest_session),
 ) -> ArtifactOut:
-    doc = _resolve_document(db, artifact_id, user, guest_id)
+    doc = require_document(db, artifact_id, user, guest_id)
     return ArtifactOut(
         id=doc.id,
         artifact_captured_at=doc.artifact_captured_at,
@@ -83,7 +72,7 @@ def get_pages(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(optional_guest_session),
 ) -> dict:
-    doc = _resolve_document(db, artifact_id, user, guest_id)
+    doc = require_document(db, artifact_id, user, guest_id)
     page_count = (doc.meta or {}).get("page_count") or 1
     return {
         "artifact_id": str(doc.id),
@@ -101,7 +90,7 @@ def confirm_page_range(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(optional_guest_session),
 ) -> dict:
-    doc = _resolve_document(db, artifact_id, user, guest_id)
+    doc = require_document(db, artifact_id, user, guest_id)
     page_count = (doc.meta or {}).get("page_count") or body.to_page
 
     if body.pages:
@@ -150,7 +139,7 @@ def list_segments(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(optional_guest_session),
 ) -> list[dict]:
-    doc = _resolve_document(db, artifact_id, user, guest_id)
+    doc = require_document(db, artifact_id, user, guest_id)
     rows = db.execute(
         text(
             """

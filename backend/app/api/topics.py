@@ -8,10 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Account, Document
+from app.models import Account
 from app.services.auth import get_optional_user
-from app.services.guest import can_access_document
 from app.services.guest_session import guest_session_for_read
+from app.api.access import require_document
 from app.services.topics import (
     ensure_explanation,
     ensure_topics,
@@ -33,9 +33,7 @@ def get_topics(
 
     Returns {status: indexing|generating|ready|failed, topics: [{key,title,summary}]}.
     """
-    doc = db.get(Document, artifact_id)
-    if not doc or not can_access_document(doc, user, guest_id):
-        raise HTTPException(status_code=404, detail="Not found")
+    doc = require_document(db, artifact_id, user, guest_id)
     if doc.status != "ready":
         return {"status": "indexing", "topics": []}
     return ensure_topics(db, artifact_id)
@@ -55,9 +53,7 @@ def explain_topic_endpoint(
     immediately with status 'generating' the first time and the client polls — no
     synchronous LLM call that could exceed the ingress timeout. Cached after first build.
     """
-    doc = db.get(Document, artifact_id)
-    if not doc or not can_access_document(doc, user, guest_id):
-        raise HTTPException(status_code=404, detail="Not found")
+    require_document(db, artifact_id, user, guest_id)
 
     outline = load_outline(db, artifact_id)
     if outline["status"] != "ready":

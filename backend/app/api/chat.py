@@ -25,6 +25,7 @@ from app.services.embed import embed_query
 from app.services.llm_router import is_failover_eligible, stream_chat_completion
 from app.services.prompts import get_prompt
 from app.services.guest import can_access_document
+from app.api.access import require_document
 from app.services.guest_session import guest_session_for_read, optional_guest_session
 from app.services.response_cache import get_cached_response, store_response
 from app.services.rate_limit import rate_limit_dependency
@@ -278,9 +279,7 @@ def list_messages(
 ) -> list[ChatMessage]:
     if offset < 0:
         raise HTTPException(status_code=400, detail="offset must be >= 0")
-    doc = db.get(Document, document_id)
-    if not doc or not can_access_document(doc, user, guest_id):
-        raise HTTPException(status_code=404, detail="Document not found")
+    doc = require_document(db, document_id, user, guest_id)
     thread = _get_or_create_thread(db, user.id if user else None, doc, _chat_surface(surface))
     return (
         db.query(ChatMessage)
@@ -300,9 +299,7 @@ def clear_thread(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> dict[str, int]:
-    doc = db.get(Document, document_id)
-    if not doc or not can_access_document(doc, user, guest_id):
-        raise HTTPException(status_code=404, detail="Document not found")
+    doc = require_document(db, document_id, user, guest_id)
     resolved_surface = _chat_surface(surface)
     current = _get_or_create_thread(db, user.id if user else None, doc, resolved_surface)
     new_version = current.version + 1
@@ -641,10 +638,7 @@ async def grade_mcq(
 
     def _load_doc() -> Document:
         with SessionLocal() as session:
-            doc = session.get(Document, body.document_id)
-            if not doc or not can_access_document(doc, user, guest_id):
-                raise HTTPException(status_code=404, detail="Document not found")
-            return doc
+            return require_document(session, body.document_id, user, guest_id)
 
     doc = await asyncio.to_thread(_load_doc)
     if body.correct_index >= len(body.options) or body.selected_index >= len(body.options):
