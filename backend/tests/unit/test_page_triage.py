@@ -44,6 +44,16 @@ def test_fallback_triage_empty_page_is_non_content() -> None:
     assert result["non_content"] is True
 
 
+def test_fallback_triage_never_persists_the_strand_shape() -> None:
+    # Contract pinning the strand fix: a fallback result must NEVER be the dead
+    # shape (zero aspects AND not non_content), for any input — content pages get
+    # aspects, contentless pages get non_content=True. Either way the page resolves.
+    for text in ["", "   \n\t ", "word " * 600, "para one\n\npara two\n\npara three"]:
+        r = _fallback_triage(text, page_number=7)
+        has_aspects = len(r["aspects"]) > 0
+        assert has_aspects or r["non_content"] is True, f"strand shape for {text!r}"
+
+
 def test_finalize_triage_shrinks_budget_after_dedup() -> None:
     aspects = [
         {"key": "a", "label": "chlorophyll absorption", "asked": False, "answered": False},

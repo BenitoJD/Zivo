@@ -114,3 +114,17 @@ def test_writer_prompt_matches_the_gate() -> None:
     assert "assertion" in system.lower()
     # ...but cloze is no longer requested (the gate rejects blanks).
     assert "cloze" not in system.lower()
+
+
+def test_prompt_warns_about_every_avoidable_fatal_trigger() -> None:
+    # Contract: the writer prompt must tell the model about each fatal pattern the
+    # gate auto-rejects, or drafts get silently discarded (the gate<->prompt
+    # contradiction that wasted ~80% of drafts). One assertion per gate rule.
+    s = DEFAULTS["mcq_page_generate_system"].lower()
+    assert "not" in s and "except" in s and "false" in s and "never" in s  # negative_wording
+    assert "none of the above" in s and "all of the above" in s  # none_or_all_of_above
+    assert "___" in s or "blank" in s  # unfocused_stem (fill-in-the-blank)
+    assert "figure" in s and "above" in s  # not_self_contained (dangling refs)
+    assert "page" in s and "book" in s  # meta_page_reference
+    assert "longest" in s  # longest_option_correct
+    assert "?" in DEFAULTS["mcq_page_generate_system"]  # stem-ends-with-? rule stated
