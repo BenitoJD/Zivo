@@ -39,7 +39,7 @@ GENERATION_AHEAD_BUFFER = int(os.getenv("ZIVO_GENERATION_AHEAD_BUFFER", "12"))
 # prefetch (which fires at 40% page progress) without triaging pages that are
 # never opened — 10 was pure waste (~7 unused triage calls/doc).
 EAGER_TRIAGE_LOOKAHEAD = int(os.getenv("ZIVO_EAGER_TRIAGE_LOOKAHEAD", "3"))
-ABSOLUTE_MAX_QUESTIONS_PER_PAGE = int(os.getenv("ZIVO_MAX_QUESTIONS_PER_PAGE", "40"))
+ABSOLUTE_MAX_QUESTIONS_PER_PAGE = int(os.getenv("ZIVO_MAX_QUESTIONS_PER_PAGE", "150"))
 # Backward-compatible alias for API consumers
 MAX_QUESTIONS_PER_PAGE = ABSOLUTE_MAX_QUESTIONS_PER_PAGE
 # A generate job left in 'running' after a worker crash blocks recovery until reclaimed.
@@ -191,8 +191,13 @@ def get_question_budget(doc: Document, page: int) -> int:
     # of open-world: ask nothing on a cover page rather than force filler.
     if cov.get("non_content"):
         return 0
-    budget = int(cov.get("question_budget") or INITIAL_BATCH_SIZE)
-    return max(INITIAL_BATCH_SIZE, min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, budget))
+    # No floor: the budget is exactly what triage decided (the count of distinct
+    # testable ideas), capped only at the absolute max. A missing budget means
+    # triage hasn't landed yet — seed a small speculative batch so generation can
+    # start, but a triaged value of 0 is honoured (distinguish missing from 0).
+    raw = cov.get("question_budget")
+    budget = int(raw) if raw is not None else INITIAL_BATCH_SIZE
+    return max(0, min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, budget))
 
 
 def effective_question_budget(

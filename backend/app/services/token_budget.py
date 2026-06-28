@@ -14,7 +14,11 @@ OUTPUT_MAX_TOKENS_BATCH = int(os.getenv("ZIVO_LLM_OUTPUT_MAX_TOKENS_BATCH", "163
 CHAT_OUTPUT_MAX_TOKENS = int(os.getenv("ZIVO_CHAT_MAX_TOKENS", "2048"))
 
 # Input context sent to models (page text, RAG excerpts, chat blocks).
-PAGE_INPUT_MAX_TOKENS = int(os.getenv("ZIVO_PAGE_INPUT_MAX_TOKENS", "32000"))
+# Page text for the question pipeline (triage + generation + critic + verifier) is
+# effectively NOT truncated: one page is tiny and truncating it would silently drop
+# testable content. 1,000,000 matches the model's context window and only guards
+# against a degenerate "whole document as one page" input — never a real page.
+PAGE_INPUT_MAX_TOKENS = int(os.getenv("ZIVO_PAGE_INPUT_MAX_TOKENS", "1000000"))
 CHAT_INPUT_MAX_TOKENS = int(os.getenv("ZIVO_CHAT_INPUT_MAX_TOKENS", "16000"))
 GRADE_CONTEXT_MAX_TOKENS = int(os.getenv("ZIVO_GRADE_CONTEXT_MAX_TOKENS", "8000"))
 SUMMARIZE_CHUNK_INPUT_MAX_TOKENS = int(os.getenv("ZIVO_SUMMARIZE_CHUNK_INPUT_MAX_TOKENS", "8000"))

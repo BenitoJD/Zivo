@@ -196,12 +196,13 @@ def _non_content_result(
 
 
 def _fallback_triage(page_text: str, page_number: int) -> dict[str, Any]:
+    # No floor (bottom 0) and a 150 cap: the count tracks how much testable content
+    # the page actually has — one aspect per paragraph, else ~one per 120 words.
     words = len(page_text.split()) if page_text else 0
     paragraphs = [p.strip() for p in page_text.split("\n\n") if p.strip()] if page_text else []
-    aspect_count = max(3, min(50, len(paragraphs) or max(3, words // 120)))
-    budget = max(INITIAL_BATCH_SIZE, min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, aspect_count))
+    aspect_count = min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, max(0, len(paragraphs), words // 120))
     aspects = []
-    for i, para in enumerate(paragraphs[:budget]):
+    for i, para in enumerate(paragraphs[:aspect_count]):
         label = para[:120].replace("\n", " ")
         aspects.append(
             {
@@ -211,7 +212,8 @@ def _fallback_triage(page_text: str, page_number: int) -> dict[str, Any]:
                 "answered": False,
             }
         )
-    if not aspects:
+    # Some text but no paragraph breaks — one consolidated aspect rather than zero.
+    if not aspects and words > 0:
         aspects = [
             {
                 "key": f"page-{page_number}-main",
@@ -220,10 +222,9 @@ def _fallback_triage(page_text: str, page_number: int) -> dict[str, Any]:
                 "answered": False,
             }
         ]
-        budget = INITIAL_BATCH_SIZE
     return _finalize_triage(
         aspects=aspects,
-        budget=budget,
+        budget=len(aspects),
         rationale="Heuristic triage from page length.",
     )
 
@@ -335,10 +336,11 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
                     _triage_cache.put(page_text, page_number, result)
                     return result
 
-                # Legacy path (flag off): keep the >=5 floor; content_type is
-                # captured for free but never forces a zero.
-                budget = int(raw_yield or INITIAL_BATCH_SIZE)
-                budget = max(INITIAL_BATCH_SIZE, min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, budget))
+                # Legacy path (flag off): no floor — honour the model's count of
+                # distinct testable ideas, capped only at the absolute max. The
+                # number of questions tracks the material, not a quota.
+                budget = int(raw_yield) if raw_yield is not None else INITIAL_BATCH_SIZE
+                budget = max(0, min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, budget))
                 if not aspects:
                     return _fallback_triage(page_text, page_number)
                 if budget < len(aspects):

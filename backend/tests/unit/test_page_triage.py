@@ -35,10 +35,11 @@ def test_fallback_triage_dense_page() -> None:
     assert result["aspects"][0]["label"]
 
 
-def test_fallback_triage_sparse_page() -> None:
+def test_fallback_triage_empty_page_yields_zero() -> None:
+    # No floor: an empty page honestly yields zero questions.
     result = _fallback_triage("", page_number=1)
-    assert result["question_budget"] == 1
-    assert len(result["aspects"]) == 1
+    assert result["question_budget"] == 0
+    assert len(result["aspects"]) == 0
 
 
 def test_finalize_triage_shrinks_budget_after_dedup() -> None:

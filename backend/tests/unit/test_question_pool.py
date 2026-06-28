@@ -36,7 +36,21 @@ def test_get_question_budget_from_triage() -> None:
             "page_coverage": {"34": {"question_budget": 47, "aspects": []}},
         }
     }
-    assert get_question_budget(doc, 34) == 40
+    # Honoured as-is now (cap is 150, no 40 ceiling, no floor).
+    assert get_question_budget(doc, 34) == 47
+
+
+def test_get_question_budget_no_floor_and_150_cap() -> None:
+    def _doc(budget: int) -> MagicMock:
+        d = MagicMock()
+        d.meta = {"question_progress": {"page_coverage": {"7": {"question_budget": budget, "aspects": []}}}}
+        return d
+
+    # A triaged budget below the old floor of 5 is honoured exactly...
+    assert get_question_budget(_doc(2), 7) == 2
+    assert get_question_budget(_doc(0), 7) == 0
+    # ...and the cap is 150, not 40.
+    assert get_question_budget(_doc(300), 7) == 150
 
 
 def test_record_answer_increments_counter() -> None:
