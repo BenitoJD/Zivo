@@ -64,6 +64,15 @@ _NOT_SELF_CONTAINED_RE = re.compile(
     re.IGNORECASE,
 )
 _ABSOLUTE_RE = re.compile(r"\b(always|never|only|all|none)\b", re.IGNORECASE)
+# Assertion–Reason items are clear, structured stems that legitimately end with a
+# period (the Reason claim), not "?". Recognize the canonical shape so the
+# question-mark rule doesn't fatally reject a valid A/R item — the writer is told
+# to produce these, so rejecting them was pure wasted generation.
+_ASSERTION_REASON_RE = re.compile(r"\bassertion\b.*\breason\b", re.IGNORECASE | re.DOTALL)
+
+
+def _is_assertion_reason(question: str) -> bool:
+    return bool(_ASSERTION_REASON_RE.search(question))
 
 
 def run_heuristic_checks(
@@ -169,7 +178,7 @@ def run_heuristic_checks(
                 )
                 break
 
-    if not question.endswith("?"):
+    if not question.endswith("?") and not _is_assertion_reason(question):
         flaws.append({"code": "unfocused_stem", "message": "Stem should be a clear question ending with ?"})
 
     if prior_mcqs:

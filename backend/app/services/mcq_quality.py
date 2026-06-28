@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import random
 import uuid
+from collections import Counter
 from typing import Any, Callable
 
 from sqlalchemy.orm import Session
@@ -33,6 +35,8 @@ from app.services.mcq_parsing import (
     _parse_mcq_blocks,
     _normalize_mcq_payload,
 )
+
+logger = logging.getLogger(__name__)
 
 _PAGE_EXCERPT_MAX_TOKENS = PAGE_INPUT_MAX_TOKENS
 
@@ -557,12 +561,18 @@ def generate_quality_mcq_batch(
     accepted: list[tuple[dict[str, Any], dict[str, Any]]] = []
     accepted_payloads: list[dict[str, Any]] = []
     prior_embeddings = prior_mcq_embeddings(list(prior_mcqs or []))
+    # Why drafts get discarded, so the gen→accept yield is measurable in prod
+    # (a high rejection rate is wasted generation time — the lever we tune).
+    rejected: Counter[str] = Counter()
     for idx, draft in enumerate(drafts):
         target = targets[idx] if idx < len(targets) else None
         check_against = list(prior_mcqs or []) + accepted_payloads
 
         heuristic_flaws = run_heuristic_checks(draft, prior_mcqs=check_against)
         if has_fatal_heuristic_flaws(heuristic_flaws):
+            rejected.update(
+                f.get("code", "?") for f in heuristic_flaws if f.get("code") in FATAL_FLAW_CODES
+            )
             continue
 
         too_similar, max_sim = is_mcq_too_similar(
@@ -571,6 +581,7 @@ def generate_quality_mcq_batch(
             prior_embeddings=prior_embeddings,
         )
         if too_similar:
+            rejected["too_similar_to_prior"] += 1
             continue
 
         run_critic = bool(heuristic_flaws) or idx == 0 or random.random() < CRITIC_SAMPLE_RATE
@@ -598,10 +609,14 @@ def generate_quality_mcq_batch(
                     model_id=model_id,
                 )
                 if not rewritten:
+                    rejected["rewrite_failed"] += 1
                     continue
                 draft = rewritten
                 heuristic_flaws = run_heuristic_checks(draft, prior_mcqs=check_against)
                 if has_fatal_heuristic_flaws(heuristic_flaws):
+                    rejected.update(
+                        f.get("code", "?") for f in heuristic_flaws if f.get("code") in FATAL_FLAW_CODES
+                    )
                     continue
                 too_similar, max_sim = is_mcq_too_similar(
                     draft,
@@ -609,6 +624,7 @@ def generate_quality_mcq_batch(
                     prior_embeddings=prior_embeddings,
                 )
                 if too_similar:
+                    rejected["too_similar_to_prior"] += 1
                     continue
                 critique = critique_mcq(
                     db,
@@ -621,6 +637,7 @@ def generate_quality_mcq_batch(
                 )
                 critic_meta = critique
                 if not _critique_passes(critique):
+                    rejected["critic_rejected"] += 1
                     continue
 
         draft["quality"] = {
@@ -643,4 +660,12 @@ def generate_quality_mcq_batch(
         if on_accept is not None and on_accept(target, draft) is False:
             break
 
+    logger.info(
+        "mcq batch gate: page=%s drafts=%d accepted=%d rejected=%d reasons=%s",
+        page_number,
+        len(drafts),
+        len(accepted),
+        sum(rejected.values()),
+        dict(rejected),
+    )
     return accepted

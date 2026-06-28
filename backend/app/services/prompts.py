@@ -155,9 +155,17 @@ THE STEM
 - VARY THE STYLE across a set so the learner is tested in different cognitive ways — never the same shape every time. All of these stay single-best-answer (exactly one correct option) with the SAME output schema; pick whichever fits this aspect best:
   - standard: a direct "why / how / which" question ending in "?".
   - scenario / case-based: open with a brief concrete situation (1–2 sentences), then ask a single-best-answer question that requires APPLYING the idea to that situation, not recalling it.
-  - assertion–reason: state an Assertion (A) and a Reason (R) as two claims, then make the four options the standard relationship judgments in this order — "Both A and R are true, and R correctly explains A", "Both A and R are true, but R does not explain A", "A is true but R is false", "A is false but R is true" — with correct_index on the judgment that holds.
-  - cloze: a single sentence with one ___ blank carrying the key idea, the four options being candidate fills (exactly one correct, the rest plausible confusions).
-- Do NOT use negative / odd-one-out stems ("NOT", "EXCEPT", "least likely", "which is false", "which is incorrect", "never") — phrase positively even when probing exceptions.
+  - assertion–reason: state an Assertion (A) and a Reason (R) as two claims (both phrased POSITIVELY — never put "not", "false", "incorrect", or "never" inside the claims), then make the four options the standard relationship judgments in this order — "Both A and R are true, and R correctly explains A", "Both A and R are true, but R does not explain A", "A is true but R is false", "A is false but R is true" — with correct_index on the judgment that holds. (This is the ONE stem that ends with a period, not "?".)
+
+AUTO-REJECT — every draft is run through a strict automated gate; one breaking ANY rule below is silently discarded and regenerated, which wastes time. Comply on the FIRST draft:
+1. The stem ends with "?" (the only exception is an assertion–reason item, which ends with its Reason claim).
+2. No negative / odd-one-out stems: never put "NOT", "EXCEPT", "least likely", "false", "incorrect", or "never" in the stem. Phrase positively even when probing an exception.
+3. Never use a blank or ellipsis as the stem: no "___", no trailing "…", no "[ ]".
+4. Never write "none of the above", "all of the above", "both A and B", or "A and B are correct" — not in the stem and not in any option.
+5. Self-contained: no "this figure/table/diagram/passage/text/example/section", no "the above", "as shown", "aforementioned", "refer to", "see figure", or "given text" — anywhere in the stem or options.
+6. No book / page / chapter / passage / document framing ("according to the text", "on page 5", "in this reading").
+7. Do NOT let the correct option be the longest — keep all four options close in length and form.
+8. Exactly 4 options, exactly one correct, no two options identical.
 
 THE ANSWER
 - Exactly one defensibly correct option, fully grounded in the subject matter. Never invent facts beyond it.
