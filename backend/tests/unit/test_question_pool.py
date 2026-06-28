@@ -9,6 +9,7 @@ from app.services.question_pool import (
     REFILL_AFTER_ANSWERED,
     _merge_progress,
     clear_stale_generation_pending,
+    effective_question_budget,
     ensure_question_pool,
     get_progress,
     get_question_budget,
@@ -51,6 +52,17 @@ def test_get_question_budget_no_floor_and_150_cap() -> None:
     assert get_question_budget(_doc(0), 7) == 0
     # ...and the cap is 150, not 40.
     assert get_question_budget(_doc(300), 7) == 150
+
+
+def test_effective_budget_modest_before_engagement_then_deep() -> None:
+    doc = MagicMock()
+    doc.meta = {"question_progress": {"page_coverage": {"3": {"question_budget": 150, "aspects": []}}}}
+    # Before the first answer: only a modest pre-build (don't over-invest on a bounce).
+    assert effective_question_budget(doc, 3, {"answered_on_page": 0}) == 10
+    # Once engaged: a deep buffer stays well ahead of consumption...
+    assert effective_question_budget(doc, 3, {"answered_on_page": 20}) == 50
+    # ...still capped at the page budget near the end.
+    assert effective_question_budget(doc, 3, {"answered_on_page": 130}) == 150
 
 
 def test_record_answer_increments_counter() -> None:

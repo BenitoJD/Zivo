@@ -27,11 +27,19 @@ REFILL_AFTER_ANSWERED = 2
 # drains to empty before the next question is needed. The moment the count of
 # ready, unanswered questions dips below this, a refill batch is staged — instead
 # of only topping up every REFILL_AFTER_ANSWERED answers or once fully drained.
-# This is what keeps a fast solver from ever catching up to an empty pool.
-READY_LOW_WATER = int(os.getenv("ZIVO_READY_LOW_WATER", "6"))
+# This is what keeps a fast solver from ever catching up to an empty pool. Sized
+# to keep a deep buffer even on a 150-question page (refills well before it drains).
+READY_LOW_WATER = int(os.getenv("ZIVO_READY_LOW_WATER", "15"))
 TRANSITION_PREFETCH_RATIO = float(os.getenv("ZIVO_TRANSITION_PREFETCH_RATIO", "0.70"))
 TRANSITION_GENERATION_RATIO = float(os.getenv("ZIVO_TRANSITION_GENERATION_RATIO", "0.30"))
-GENERATION_AHEAD_BUFFER = int(os.getenv("ZIVO_GENERATION_AHEAD_BUFFER", "12"))
+# How far ahead of what's been ANSWERED we keep generating, once the learner is
+# engaged. Deep enough that a fast reader never catches up on a long page, while
+# staying demand-driven (we never pre-build the whole 150 up front).
+GENERATION_AHEAD_BUFFER = int(os.getenv("ZIVO_GENERATION_AHEAD_BUFFER", "30"))
+# Before the FIRST answer, pre-build only a modest batch — don't invest 30
+# questions into a page the learner might bounce off. The first answer (real
+# engagement) unlocks the deep buffer above.
+INITIAL_GENERATION_AHEAD = int(os.getenv("ZIVO_INITIAL_GENERATION_AHEAD", str(INITIAL_BATCH_SIZE * 2)))
 # Eagerly triage the current page + this many pages ahead at init, so the document
 # is understood before the reader arrives. Triage only (cheap, ~1 call/page);
 # batches stay on-demand + next-page prefetch, so we don't burn tokens generating
@@ -211,7 +219,7 @@ def effective_question_budget(
         return cap
     answered = int(progress.get("answered_on_page") or 0)
     if answered <= 0:
-        return min(cap, max(INITIAL_BATCH_SIZE * 2, GENERATION_AHEAD_BUFFER))
+        return min(cap, INITIAL_GENERATION_AHEAD)
     return min(cap, answered + GENERATION_AHEAD_BUFFER)
 
 
