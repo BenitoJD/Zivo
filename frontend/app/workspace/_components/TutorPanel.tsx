@@ -298,7 +298,9 @@ export function TutorPanel({
               }
               value={input}
               onChange={(e) => onInputChange(e.currentTarget.value)}
-              disabled={busy || !contextReady}
+              // Let the learner compose (and quote) freely while context finishes
+              // preparing — only sending waits on `contextReady` (see canSend).
+              disabled={busy}
               styles={{
                 input: {
                   paddingTop: 6,

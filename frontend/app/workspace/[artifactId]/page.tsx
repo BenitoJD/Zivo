@@ -47,6 +47,7 @@ import { StudySourcePanel } from "@/app/workspace/_components/StudySourcePanel";
 import { StudyEdgeTrigger } from "@/app/workspace/_components/StudyRails";
 import { FloatingPanel } from "@/app/workspace/_components/FloatingPanel";
 import { StudyMobileShell } from "@/app/workspace/_components/StudyMobileShell";
+import { SelectionQuote } from "@/app/workspace/_components/SelectionQuote";
 import { StudyMetaBar } from "@/app/workspace/_components/StudyMetaBar";
 import {
   suggestNextPageRange,
@@ -132,6 +133,9 @@ export default function WorkspaceArtifactPage({
   // so the workspace only needs the row ref to bound them.
   const studyRowRef = useRef<HTMLDivElement>(null);
   const [reselectOpen, setReselectOpen] = useState(false);
+  // Bumped when the learner quotes selected MCQ text into chat, so the mobile
+  // shell can jump to the tutor tab (desktop just opens the floating panel).
+  const [mobileTutorFocus, setMobileTutorFocus] = useState(0);
 
   // Tutor chat (per-mode conversation: hydrate, stream, regenerate, clear, plus
   // Read-mode Study-Buddy quote/ask/save) lives in its own hook.
@@ -367,6 +371,11 @@ export default function WorkspaceArtifactPage({
     const needsPoll =
       !queue?.document_complete &&
       (!queue?.current_assertion_id ||
+        // The RAG window slides as the learner advances pages, resetting
+        // rag_window_ready to false until the new pages finish indexing. Keep
+        // polling until it flips back so the chat composer re-enables on its own
+        // instead of being stuck on "Preparing chat context…" until a refresh.
+        queue.rag_window_ready === false ||
         (Boolean(queue.generation_pending) && (queue.pool_available ?? 0) === 0));
     if (!needsPoll) return;
 
@@ -386,6 +395,7 @@ export default function WorkspaceArtifactPage({
     queue?.generation_pending,
     queue?.pool_available,
     queue?.document_complete,
+    queue?.rag_window_ready,
   ]);
 
   useEffect(() => {
@@ -445,6 +455,21 @@ export default function WorkspaceArtifactPage({
     } catch {
       void refreshQueue();
     }
+  }
+
+  // Surface the tutor composer (floating panel on desktop, tutor tab on mobile)
+  // so a quoted passage is immediately visible and editable.
+  function revealTutor() {
+    if (isLg) openTutor();
+    else setMobileTutorFocus((n) => n + 1);
+  }
+  function quoteSelectionToChat(text: string) {
+    quoteToComposer(text);
+    revealTutor();
+  }
+  function explainSelectionInChat(text: string) {
+    setChatInput(`Explain this in simple terms:\n\n"${text}"\n\n`);
+    revealTutor();
   }
 
   function handleMcqSelect(value: string) {
@@ -848,6 +873,11 @@ export default function WorkspaceArtifactPage({
           // Fill the whole study area — the question is its own page: the stem stays
           // sticky at the top while options + explanation scroll beneath it.
           <Box style={{ height: "100%", minHeight: 0, width: "100%", overflow: "hidden" }}>
+          <SelectionQuote
+            onAsk={quoteSelectionToChat}
+            onExplain={explainSelectionInChat}
+            disabled={mcqLoading || !queue?.current_assertion_id}
+          >
           <McqHeroPanel
             stem={stem}
             options={options}
@@ -871,6 +901,7 @@ export default function WorkspaceArtifactPage({
             onContinue={() => void advanceMcq()}
             onRetry={() => void refreshQueue()}
           />
+          </SelectionQuote>
           </Box>
           )}
         </Box>
@@ -1136,6 +1167,7 @@ export default function WorkspaceArtifactPage({
         </>
       ) : (
         <StudyMobileShell
+          focusTutorKey={mobileTutorFocus}
           question={questionColumn}
           renderSource={(visible) => (
             <StudySourcePanel
