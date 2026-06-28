@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 _LEARN_NOTIFY_PREFIX = "zivo_learn_"
 
@@ -25,11 +28,16 @@ def _conninfo() -> str:
 def wait_learn_notify(document_id: uuid.UUID, *, timeout: float) -> bool:
     """Block up to *timeout* seconds for a learn-progress NOTIFY (sync)."""
     import psycopg
+    from psycopg import sql
 
     channel = learn_notify_channel(document_id)
     try:
         with psycopg.connect(_conninfo(), autocommit=True) as conn:
-            conn.execute(f"LISTEN {channel}")
+            # The channel name embeds a UUID, whose dashes are illegal in an
+            # unquoted identifier — quote it so it matches pg_notify's literal
+            # name exactly. (An f-string here silently failed every LISTEN,
+            # leaving the SSE stream on its polling fallback.)
+            conn.execute(sql.SQL("LISTEN {}").format(sql.Identifier(channel)))
             notifies = conn.notifies(timeout=timeout)
             try:
                 next(notifies)
@@ -37,4 +45,5 @@ def wait_learn_notify(document_id: uuid.UUID, *, timeout: float) -> bool:
             except StopIteration:
                 return False
     except Exception:
+        logger.warning("learn NOTIFY listen failed; falling back to poll", exc_info=True)
         return False
