@@ -232,7 +232,15 @@ def ingest_rag_window_job(payload: dict) -> dict:
         study = selected_page_list(doc)
         target = chat_rag_window(current, study)
         save_rag_window(db, doc, target)
-        doc.status = "indexing"
+        # Only take the document back to "indexing" for the INITIAL window. Once a
+        # doc is "ready" the learner is actively studying it (questions already
+        # exist), and a sliding-window re-index for chat context must not flip the
+        # whole document back to "indexing" — that makes the study UI flash its
+        # full-screen "loading N%" takeover on refresh. The window's readiness is
+        # tracked independently via meta["rag_window_ready"] (popped by
+        # save_rag_window above), which gates chat without disrupting the queue.
+        if doc.status != "ready":
+            doc.status = "indexing"
         db.commit()
         pages_to_ingest = sync_rag_window(db, document_id, target)
         db.commit()
