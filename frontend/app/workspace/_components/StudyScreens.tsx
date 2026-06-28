@@ -8,7 +8,6 @@ import {
   Button,
   Center,
   Group,
-  Loader,
   Paper,
   Progress,
   Stack,
@@ -319,8 +318,16 @@ export function DocumentCompleteScreen({
     <Center py={compact ? "lg" : "xl"} px="md" h="100%">
       <Stack align="center" gap={compact ? "lg" : "xl"} maw={440}>
         <Stack align="center" gap="xs">
-          <ThemeIcon size={52} radius="xl" variant="light" color="sage">
-            <IconClipboardList size={26} stroke={1.5} />
+          {/* Filled gradient emblem — the old `variant="light"` sage tile was
+              near-invisible on the dark study background. */}
+          <ThemeIcon
+            size={56}
+            radius="xl"
+            variant="gradient"
+            gradient={{ from: "sage", to: "lavender", deg: 135 }}
+            style={{ boxShadow: "0 8px 22px rgba(94, 124, 99, 0.28)" }}
+          >
+            <IconClipboardList size={28} stroke={1.75} />
           </ThemeIcon>
           <Title
             order={2}
@@ -433,11 +440,17 @@ export function StudyRangeReselectOverlay({
         p={isCompact ? "md" : "xl"}
         w="100%"
         maw={isCompact ? "100%" : 900}
-        mih={isCompact ? "85vh" : "min(88vh, 760px)"}
+        // A DEFINITE, viewport-bounded height (not just a min) so the inner
+        // thumbnail grid's flex scroll container has something to scroll within.
+        // Previously the Paper grew taller than the screen and the grid couldn't
+        // scroll at all — pages past the fold were unreachable.
+        h={isCompact ? "92dvh" : "min(88vh, 760px)"}
+        mah={isCompact ? "92dvh" : "min(88vh, 760px)"}
         onClick={(e) => e.stopPropagation()}
         style={{
           display: "flex",
           flexDirection: "column",
+          minHeight: 0,
           borderBottomLeftRadius: isCompact ? 0 : undefined,
           borderBottomRightRadius: isCompact ? 0 : undefined,
           paddingBottom: isCompact ? "max(20px, env(safe-area-inset-bottom))" : undefined,
@@ -496,16 +509,110 @@ export function PageCompleteInterstitial({
   compact?: boolean;
   generating?: boolean;
 }) {
+  // A celebratory beat between pages: a gradient ring draws itself, a checkmark
+  // traces in, sparkles drift up, and "Well done" rises — then animated dots while
+  // the next question loads. On-brand (lavender→sage, serif) and centered on screen.
+  const ring = compact ? 104 : 124;
+  const r = ring / 2 - 9;
+  const c = 2 * Math.PI * r;
+  const cx = ring / 2;
   return (
-    <Center py={compact ? "md" : "xl"}>
-      <Stack align="center" gap="md" maw={320}>
-        <Loader type="oval" size="sm" />
-        <Text size="lg" fw={500} ta="center" style={{ letterSpacing: "-0.02em" }}>
-          Well done
-        </Text>
-        <Text size="sm" c="dimmed" ta="center" lh={1.55}>
-          {generating ? "Preparing what's next…" : "Continuing…"}
-        </Text>
+    <Center h="100%" mih="60vh" px="md">
+      <Stack align="center" gap={compact ? "md" : "lg"} maw={360}>
+        <style>{`
+          @keyframes zv-pc-pop { 0% { opacity: 0; transform: scale(0.4); } 60% { transform: scale(1.06); } 100% { opacity: 1; transform: scale(1); } }
+          @keyframes zv-pc-ring { to { stroke-dashoffset: 0; } }
+          @keyframes zv-pc-check { to { stroke-dashoffset: 0; } }
+          @keyframes zv-pc-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+          @keyframes zv-pc-spark { 0% { opacity: 0; transform: translateY(0) scale(0.4); } 25% { opacity: 1; } 100% { opacity: 0; transform: translateY(-160%) scale(1); } }
+          @keyframes zv-pc-glow { 0%,100% { opacity: 0.35; transform: scale(0.92); } 50% { opacity: 0.6; transform: scale(1.04); } }
+          @keyframes zv-pc-dot { 0%,100% { opacity: 0.4; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-3px); } }
+          .zv-pc-emblem { animation: zv-pc-pop 560ms cubic-bezier(0.34,1.56,0.64,1) both; }
+          .zv-pc-glow { animation: zv-pc-glow 3s ease-in-out infinite; transform-origin: center; }
+          .zv-pc-ring { animation: zv-pc-ring 760ms cubic-bezier(0.4,0,0.2,1) 140ms both; }
+          .zv-pc-check { animation: zv-pc-check 440ms ease-out 600ms both; }
+          .zv-pc-rise { animation: zv-pc-rise 520ms cubic-bezier(0.32,0.72,0,1) 200ms both; }
+          .zv-pc-rise-2 { animation: zv-pc-rise 520ms cubic-bezier(0.32,0.72,0,1) 360ms both; }
+          .zv-pc-spark { animation: zv-pc-spark 2.4s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+          .zv-pc-dot { animation: zv-pc-dot 1.1s ease-in-out infinite; }
+          @media (prefers-reduced-motion: reduce) {
+            .zv-pc-emblem,.zv-pc-glow,.zv-pc-ring,.zv-pc-check,.zv-pc-rise,.zv-pc-rise-2,.zv-pc-spark,.zv-pc-dot {
+              animation: none !important; opacity: 1 !important; transform: none !important; stroke-dashoffset: 0 !important;
+            }
+          }
+        `}</style>
+        <Box className="zv-pc-emblem" pos="relative" w={ring} h={ring} style={{ display: "grid", placeItems: "center" }}>
+          <svg width={ring} height={ring} viewBox={`0 0 ${ring} ${ring}`} style={{ overflow: "visible" }}>
+            <defs>
+              <linearGradient id="zv-pc-grad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stopColor="var(--mantine-color-lavender-5)" />
+                <stop offset="100%" stopColor="var(--mantine-color-sage-5)" />
+              </linearGradient>
+            </defs>
+            {/* soft pulsing halo */}
+            <circle className="zv-pc-glow" cx={cx} cy={cx} r={r + 6} fill="var(--mantine-color-sage-4)" opacity={0.25} />
+            {/* track + drawn progress ring */}
+            <circle cx={cx} cy={cx} r={r} fill="none" stroke="var(--mantine-color-default-border)" strokeWidth={6} opacity={0.4} />
+            <circle
+              className="zv-pc-ring"
+              cx={cx}
+              cy={cx}
+              r={r}
+              fill="none"
+              stroke="url(#zv-pc-grad)"
+              strokeWidth={6}
+              strokeLinecap="round"
+              strokeDasharray={c}
+              strokeDashoffset={c}
+              transform={`rotate(-90 ${cx} ${cx})`}
+            />
+            {/* checkmark trace */}
+            <path
+              className="zv-pc-check"
+              d={`M${ring * 0.33} ${ring * 0.52} L${ring * 0.45} ${ring * 0.64} L${ring * 0.67} ${ring * 0.39}`}
+              fill="none"
+              stroke="var(--mantine-color-sage-6)"
+              strokeWidth={6}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeDasharray={44}
+              strokeDashoffset={44}
+            />
+            {/* drifting sparks */}
+            <circle className="zv-pc-spark" cx={ring * 0.82} cy={ring * 0.32} r={3} fill="var(--mantine-color-lavender-5)" style={{ animationDelay: "0.5s" }} />
+            <circle className="zv-pc-spark" cx={ring * 0.17} cy={ring * 0.42} r={2.2} fill="var(--mantine-color-sage-5)" style={{ animationDelay: "1.3s" }} />
+            <circle className="zv-pc-spark" cx={ring * 0.7} cy={ring * 0.72} r={2.2} fill="var(--mantine-color-lavender-4)" style={{ animationDelay: "2s" }} />
+          </svg>
+        </Box>
+        <Stack align="center" gap={6}>
+          <Text
+            className="zv-pc-rise"
+            ff="var(--font-serif)"
+            fz={compact ? 26 : 32}
+            fw={500}
+            ta="center"
+            c="var(--mantine-color-text)"
+            style={{ letterSpacing: "-0.02em", lineHeight: 1.1 }}
+          >
+            Well done
+          </Text>
+          <Group className="zv-pc-rise-2" gap={7} align="center" wrap="nowrap">
+            <Text fz="sm" c="dimmed">
+              {generating ? "Preparing what's next" : "Loading your next question"}
+            </Text>
+            <Box style={{ display: "inline-flex", gap: 3 }}>
+              {[0, 1, 2].map((i) => (
+                <Box
+                  key={i}
+                  className="zv-pc-dot"
+                  w={4}
+                  h={4}
+                  style={{ borderRadius: "50%", background: "var(--mantine-color-lavender-5)", animationDelay: `${i * 0.16}s` }}
+                />
+              ))}
+            </Box>
+          </Group>
+        </Stack>
       </Stack>
     </Center>
   );
