@@ -18,10 +18,34 @@ from dataclasses import dataclass
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.models import Account
 from app.repositories.intel import concept_id
 from app.services.calibration import record_outcome
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_subject_entity(
+    db: Session, user: Account | None, guest_id: str | None
+) -> uuid.UUID | None:
+    """Resolve the measurement subject for a learner (the answer/report identity).
+
+    Logged-in users → their linked intel.entity (qb.account_entity). Anonymous
+    guests → a stable per-guest concept entity (lazily created), so their answers
+    still feed calibration and the report card without an account. None only if
+    neither identity is available.
+    """
+    if user:
+        row = db.execute(
+            text("SELECT entity_id FROM qb.account_entity WHERE account_id = :id"),
+            {"id": user.id},
+        ).first()
+        return row[0] if row else None
+    if not guest_id:
+        return None
+    from app.repositories.intel import get_or_create_concept_entity
+
+    return get_or_create_concept_entity(db, f"guest:{guest_id}", f"Guest {guest_id[:8]}")
 
 # One row per answer carries the verdict (value_numeric) plus choice/latency/confidence
 # in value_json, under this metric.

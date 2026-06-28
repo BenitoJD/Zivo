@@ -13,7 +13,7 @@ from app.config import get_settings
 from app.db import get_db
 from app.graphs.mcq_graph import grade_mcq
 from app.models import Account
-from app.services.answer_signal import record_answer_signal
+from app.services.answer_signal import record_answer_signal, resolve_subject_entity
 from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.api.access import require_document
 from app.services.guest_session import guest_session_for_read
@@ -86,7 +86,7 @@ def grade(
     # double-count). Logged-in users resolve to their account entity; anonymous guests
     # to a stable per-guest entity, so their answers still feed the moat. Calibration
     # (Elo) runs only on a genuinely new event and only when enabled.
-    subject_entity_id = _resolve_subject_entity(db, user, guest_id)
+    subject_entity_id = resolve_subject_entity(db, user, guest_id)
     learner_ability: float | None = None
     item_difficulty: float | None = None
     if subject_entity_id is not None:
@@ -121,26 +121,3 @@ def grade(
     return result
 
 
-def _resolve_subject_entity(db: Session, user: Account | None, guest_id: str | None) -> uuid.UUID | None:
-    """Resolve the measurement subject for an answer event.
-
-    Logged-in users → their linked intel.entity (qb.account_entity).
-    Anonymous guests → a stable per-guest concept entity (lazily created), so
-    their practice answers still feed calibration without an account. Returns
-    None only if neither identity is available.
-    """
-    if user:
-        row = db.execute(
-            text("SELECT entity_id FROM qb.account_entity WHERE account_id = :id"),
-            {"id": user.id},
-        ).first()
-        return row[0] if row else None
-
-    if not guest_id:
-        return None
-
-    from app.repositories.intel import get_or_create_concept_entity
-
-    # Stable canonical_uri per guest; type 'concept' keeps it in the graph without
-    # needing a 'person' type. The guest_id is the identity for calibration.
-    return get_or_create_concept_entity(db, f"guest:{guest_id}", f"Guest {guest_id[:8]}")

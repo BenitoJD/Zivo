@@ -25,7 +25,26 @@ export const queryKeys = {
   memoryPalace: (id: string, setting: string) => ["memory-palace", id, setting] as const,
   savedNotes: (id: string) => ["saved-notes", id] as const,
   quiz: (id: string, config: string) => ["quiz", id, config] as const,
+  studyReport: (id: string) => ["study-report", id] as const,
 };
+
+export type StudyReport = {
+  total: number;
+  correct: number;
+  wrong: number;
+  topics: { concept: string; correct: number; total: number }[];
+};
+
+/** Persistent end-of-study report (first-attempt accuracy per concept), aggregated
+ *  server-side from immutable answer measurements — survives reloads. */
+export function useStudyReportQuery(artifactId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.studyReport(artifactId),
+    queryFn: () => apiGet<StudyReport>(`/api/learn/${artifactId}/report`),
+    enabled: enabled && Boolean(artifactId),
+    staleTime: 0,
+  });
+}
 
 export type Topic = { key: string; title: string; summary: string };
 export type TopicsResponse = {

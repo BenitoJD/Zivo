@@ -18,6 +18,8 @@ from app.models import Account, Document
 from app.repositories import workspace as workspace_repo
 from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.api.access import require_document
+from app.repositories.intel import concept_id
+from app.services.answer_signal import ANSWER_CORRECT_METRIC_URI, resolve_subject_entity
 from app.services.guest_session import guest_session_for_read
 from app.services.question_pool import (
     advance_to_next_page,
@@ -209,6 +211,54 @@ async def mastery(
         "page_mastered": q["page_mastered"],
         "page_ready": q["page_ready"],
     }
+
+
+@router.get("/{artifact_id}/report")
+def study_report(
+    artifact_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """Persistent study report: first-attempt accuracy per concept for this learner.
+
+    Sourced from the immutable intel.measurement rows (one per learner+item, the
+    FIRST answer — retries are idempotent no-ops), so it survives reloads and is a
+    true per-document record, unlike the in-session client history.
+    """
+    require_document(db, artifact_id, user, guest_id)
+    subject_id = resolve_subject_entity(db, user, guest_id)
+    if subject_id is None:
+        return {"total": 0, "correct": 0, "wrong": 0, "topics": []}
+    rows = db.execute(
+        text(
+            """
+            SELECT COALESCE(NULLIF(TRIM(a.payload->>'primary_concept'), ''), 'General') AS concept,
+                   COUNT(*) AS total,
+                   COALESCE(SUM(m.value_numeric), 0) AS correct
+            FROM intel.measurement m
+            JOIN intel.assertion a ON a.id = m.source_assertion_id
+            WHERE m.subject_entity_id = :subject
+              AND m.metric_concept_id = :metric
+              AND a.payload->>'artifact_id' = :artifact_id
+            GROUP BY 1
+            ORDER BY (COALESCE(SUM(m.value_numeric), 0)::float / NULLIF(COUNT(*), 0)) ASC,
+                     COUNT(*) DESC
+            """
+        ),
+        {
+            "subject": subject_id,
+            "metric": concept_id(db, ANSWER_CORRECT_METRIC_URI),
+            "artifact_id": str(artifact_id),
+        },
+    ).mappings().all()
+    topics = [
+        {"concept": r["concept"], "correct": int(r["correct"]), "total": int(r["total"])}
+        for r in rows
+    ]
+    total = sum(t["total"] for t in topics)
+    correct = sum(t["correct"] for t in topics)
+    return {"total": total, "correct": correct, "wrong": total - correct, "topics": topics}
 
 
 @router.post("/{artifact_id}/pages/{page}/advance", dependencies=[Depends(require_csrf_or_guest)])

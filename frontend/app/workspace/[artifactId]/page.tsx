@@ -32,6 +32,7 @@ import {
   useChatMessagesQuery,
   useSavedNotesQuery,
   useSavedNotesActions,
+  useStudyReportQuery,
 } from "@/lib/api/queries";
 import { ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import { ExplainView } from "@/app/workspace/_components/ExplainView";
@@ -189,6 +190,11 @@ export default function WorkspaceArtifactPage({
   // Each mode (Read / Learn / Test) is its own conversation surface.
   const chatSurface = chatSurfaceForMode(mode);
   const chatMessagesQuery = useChatMessagesQuery(artifactId, mode, !invalidArtifactId);
+  // Persistent report card — only fetched once a range is complete.
+  const studyReportQuery = useStudyReportQuery(
+    artifactId,
+    Boolean(queue?.document_complete) && !invalidArtifactId,
+  );
   const chatHydratedRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -1024,6 +1030,7 @@ export default function WorkspaceArtifactPage({
               correct={testCorrect}
               total={answeredHistory.length}
               answered={answeredHistory}
+              report={studyReportQuery.data}
               compact={isCompact}
               canChoosePages={Boolean(completedRange)}
               onReview={() => setReviewIndex(0)}
@@ -1038,6 +1045,7 @@ export default function WorkspaceArtifactPage({
               nextFrom={nextRangeSuggestion?.from}
               nextTo={nextRangeSuggestion?.to}
               answered={answeredHistory}
+              report={studyReportQuery.data}
               compact={isCompact}
               onChoosePages={openReselectPages}
             />

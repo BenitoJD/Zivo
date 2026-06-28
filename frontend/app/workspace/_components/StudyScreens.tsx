@@ -23,6 +23,7 @@ import {
   SELECTION_PAD_X_COMPACT,
   type AnsweredCard,
 } from "@/app/workspace/_components/studyLayout";
+import { type StudyReport } from "@/lib/api/queries";
 import { PageSelectionBody } from "@/app/workspace/_components/PageSelectionScreen";
 
 /**
@@ -32,27 +33,38 @@ import { PageSelectionBody } from "@/app/workspace/_components/PageSelectionScre
  */
 export function StudyReportCard({
   answered,
+  report,
   showSummary = true,
   compact,
 }: {
   answered: AnsweredCard[];
+  report?: StudyReport | null;
   showSummary?: boolean;
   compact?: boolean;
 }) {
-  const total = answered.length;
-  if (total === 0) return null;
-  const correct = answered.filter((a) => a.firstTryCorrect).length;
-  const wrong = total - correct;
+  // Prefer the persistent server report (aggregated from immutable measurements,
+  // so it survives reloads); fall back to the in-session history before it loads.
+  const useServer = report != null && report.total > 0;
 
-  const byConcept = new Map<string, { name: string; correct: number; total: number }>();
-  for (const a of answered) {
-    const name = (a.concept || "").trim() || "General";
-    const t = byConcept.get(name) ?? { name, correct: 0, total: 0 };
-    t.total += 1;
-    if (a.firstTryCorrect) t.correct += 1;
-    byConcept.set(name, t);
+  let topics: { name: string; correct: number; total: number }[];
+  if (useServer) {
+    topics = report.topics.map((t) => ({ name: t.concept, correct: t.correct, total: t.total }));
+  } else {
+    const byConcept = new Map<string, { name: string; correct: number; total: number }>();
+    for (const a of answered) {
+      const name = (a.concept || "").trim() || "General";
+      const t = byConcept.get(name) ?? { name, correct: 0, total: 0 };
+      t.total += 1;
+      if (a.firstTryCorrect) t.correct += 1;
+      byConcept.set(name, t);
+    }
+    topics = [...byConcept.values()];
   }
-  const topics = [...byConcept.values()];
+
+  const total = useServer ? report.total : answered.length;
+  if (total === 0) return null;
+  const correct = useServer ? report.correct : answered.filter((a) => a.firstTryCorrect).length;
+  const wrong = total - correct;
   const weak = topics
     .filter((t) => t.correct < t.total)
     .sort((a, b) => a.correct / a.total - b.correct / b.total);
@@ -190,6 +202,7 @@ export function TestResultsScreen({
   correct,
   total,
   answered = [],
+  report,
   compact,
   canChoosePages,
   onReview,
@@ -198,6 +211,7 @@ export function TestResultsScreen({
   correct: number;
   total: number;
   answered?: AnsweredCard[];
+  report?: StudyReport | null;
   compact?: boolean;
   canChoosePages?: boolean;
   onReview: () => void;
@@ -257,7 +271,7 @@ export function TestResultsScreen({
             Review every question to see the correct answers and the reasoning behind them.
           </Text>
         </Stack>
-        <StudyReportCard answered={answered} showSummary={false} compact={compact} />
+        <StudyReportCard answered={answered} report={report} showSummary={false} compact={compact} />
         <Stack gap={8} w="100%" maw={300} mt="xs">
           <Button radius="xl" size="md" color="forest" onClick={onReview} leftSection={<IconHistory size={16} stroke={2} />}>
             Review answers
@@ -281,6 +295,7 @@ export function DocumentCompleteScreen({
   nextFrom,
   nextTo,
   answered = [],
+  report,
   compact,
   onChoosePages,
 }: {
@@ -291,6 +306,7 @@ export function DocumentCompleteScreen({
   nextFrom?: number;
   nextTo?: number;
   answered?: AnsweredCard[];
+  report?: StudyReport | null;
   compact?: boolean;
   onChoosePages: () => void;
 }) {
@@ -321,7 +337,7 @@ export function DocumentCompleteScreen({
           </Text>
         </Stack>
 
-        <StudyReportCard answered={answered} compact={compact} />
+        <StudyReportCard answered={answered} report={report} compact={compact} />
 
         {!bookFinished && nextFrom !== undefined && nextTo !== undefined && (
           <Paper withBorder radius="lg" p="md" w="100%" bg="var(--mantine-color-body)">
