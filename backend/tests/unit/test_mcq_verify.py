@@ -62,6 +62,13 @@ def test_unparseable_verifier_response_does_not_reject() -> None:
     assert _verify("the model rambled, no json here", _mcq(correct_index=0)) is None
 
 
+def test_out_of_range_index_does_not_reject() -> None:
+    # A nonsense index (>= number of options) is a malformed reply, not a real
+    # disagreement — must not reject a good item.
+    resp = '{"answer_index": 9, "multiple_defensible": false, "none_defensible": false}'
+    assert _verify(resp, _mcq(correct_index=0)) is None
+
+
 def test_structural_problem_is_left_to_the_heuristic_gate() -> None:
     # Out-of-range key: verifier abstains (returns None) without an LLM call.
     with patch("app.services.mcq_quality._complete_chat_sync") as llm:

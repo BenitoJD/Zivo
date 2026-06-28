@@ -222,6 +222,11 @@ def _fallback_triage(page_text: str, page_number: int) -> dict[str, Any]:
                 "answered": False,
             }
         ]
+    # No testable text at all → genuinely non-content. Must be marked so the page
+    # completes (is_page_complete treats 0 generated + not non_content as "not done"
+    # and would otherwise strand the learner here with nothing to answer).
+    if not aspects:
+        return _non_content_result(rationale="Heuristic triage: no testable text on this page.")
     return _finalize_triage(
         aspects=aspects,
         budget=len(aspects),

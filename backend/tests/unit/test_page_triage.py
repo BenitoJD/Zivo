@@ -35,11 +35,13 @@ def test_fallback_triage_dense_page() -> None:
     assert result["aspects"][0]["label"]
 
 
-def test_fallback_triage_empty_page_yields_zero() -> None:
-    # No floor: an empty page honestly yields zero questions.
+def test_fallback_triage_empty_page_is_non_content() -> None:
+    # No floor: an empty page yields zero — and must be flagged non_content so the
+    # page completes (a 0-budget page that isn't non_content strands the learner).
     result = _fallback_triage("", page_number=1)
     assert result["question_budget"] == 0
     assert len(result["aspects"]) == 0
+    assert result["non_content"] is True
 
 
 def test_finalize_triage_shrinks_budget_after_dedup() -> None:

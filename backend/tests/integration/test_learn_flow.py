@@ -139,10 +139,10 @@ def test_ensure_question_pool_enqueues_triage_when_coverage_missing() -> None:
                 enqueued.append(str(page))
                 return None
 
-            mp.setattr("app.services.question_pool.enqueue_page_triage", _fake_triage)
-            mp.setattr("app.services.question_pool._has_active_generate_job", lambda *_a, **_k: False)
-            mp.setattr("app.services.question_pool.release_stuck_generation", lambda *_a, **_k: None)
-            mp.setattr("app.services.question_pool.next_assertion_id", lambda *_a, **_k: None)
+            mp.setattr("app.services.question_pool_jobs.enqueue_page_triage", _fake_triage)
+            mp.setattr("app.services.question_pool_jobs._has_active_generate_job", lambda *_a, **_k: False)
+            mp.setattr("app.services.question_pool_jobs.release_stuck_generation", lambda *_a, **_k: None)
+            mp.setattr("app.services.question_pool_jobs.next_assertion_id", lambda *_a, **_k: None)
 
             ensure_question_pool(db, doc_id)
 

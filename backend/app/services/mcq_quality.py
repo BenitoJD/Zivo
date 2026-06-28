@@ -328,6 +328,10 @@ def verify_answer_key(
         independent = int(parsed.get("answer_index"))
     except (TypeError, ValueError):
         return None
+    # An out-of-range index is a malformed verifier reply, not a real
+    # disagreement — don't reject a good item over it (stay conservative).
+    if not (0 <= independent < len(options)):
+        return None
     if independent != marked:
         return {
             "code": "wrong_answer_key",
