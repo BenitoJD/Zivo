@@ -29,6 +29,7 @@ from app.services.question_pool import (
     get_study_mode,
     is_page_complete,
     page_range_bounds,
+    selected_page_list,
     set_study_mode,
 )
 from app.services.learn_notify import wait_learn_notify
@@ -220,15 +221,18 @@ def study_report(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> dict:
-    """Persistent study report: first-attempt accuracy per concept for this learner.
+    """Persistent study report: first-attempt accuracy per concept for this learner,
+    scoped to the page range they just finished.
 
     Sourced from the immutable intel.measurement rows (one per learner+item, the
     FIRST answer — retries are idempotent no-ops), so it survives reloads and is a
-    true per-document record, unlike the in-session client history.
+    true record, unlike the in-session client history. Scoped to the currently
+    selected pages so the card reflects the range just completed, not the whole doc.
     """
-    require_document(db, artifact_id, user, guest_id)
+    doc = require_document(db, artifact_id, user, guest_id)
     subject_id = resolve_subject_entity(db, user, guest_id)
-    if subject_id is None:
+    pages = selected_page_list(doc)
+    if subject_id is None or not pages:
         return {"total": 0, "correct": 0, "wrong": 0, "topics": []}
     rows = db.execute(
         text(
@@ -241,6 +245,7 @@ def study_report(
             WHERE m.subject_entity_id = :subject
               AND m.metric_concept_id = :metric
               AND a.payload->>'artifact_id' = :artifact_id
+              AND (a.payload->>'page_number')::int = ANY(:pages)
             GROUP BY 1
             ORDER BY (COALESCE(SUM(m.value_numeric), 0)::float / NULLIF(COUNT(*), 0)) ASC,
                      COUNT(*) DESC
@@ -250,6 +255,7 @@ def study_report(
             "subject": subject_id,
             "metric": concept_id(db, ANSWER_CORRECT_METRIC_URI),
             "artifact_id": str(artifact_id),
+            "pages": pages,
         },
     ).mappings().all()
     topics = [
