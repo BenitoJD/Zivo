@@ -1,5 +1,6 @@
-import { Box, Center, Loader, Stack, Text } from "@mantine/core";
+import { Box, Center, Stack, Text } from "@mantine/core";
 import { BrandMark } from "@/app/_components/BrandMark";
+import { PetPlayground } from "@/app/_components/pets/PetPlayground";
 
 /**
  * Route-level loading state. A calm paper skeleton — used by Next.js while a
@@ -11,7 +12,7 @@ export default function Loading() {
       <Center style={{ minHeight: "100dvh" }} p="md">
         <Stack gap="lg" align="center" ta="center">
           <BrandMark height={36} />
-          <Loader size="sm" color="lavender" type="dots" />
+          <PetPlayground height={120} count={3} style={{ maxWidth: 380 }} />
           <Text
             size="sm"
             c="gray.5"

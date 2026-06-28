@@ -1,0 +1,94 @@
+/* Pixel-pet engine styles — ported from LucasHJin/obsidian-pets (MIT).
+   Scoped under .zv-pet-world so they never leak into the rest of the app. */
+
+.zv-pet-world {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.zv-pet {
+  position: absolute;
+  width: var(--pet-size);
+  height: var(--pet-size);
+  left: var(--left);
+  top: var(--top);
+  transform: translate(-50%, -50%) scale(var(--scale, 1)) scaleX(var(--scale-x, 1));
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  background-image: var(--sprite-url);
+  background-size: var(--sprite-size);
+  image-rendering: pixelated;
+  transition: left var(--move-duration, 300ms) linear;
+  z-index: 100;
+  cursor: pointer;
+}
+
+.zv-pet-name-tooltip {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%) translateY(-2px) scaleX(var(--scale-x, 1));
+  background-color: color-mix(in srgb, var(--mantine-color-body) 80%, transparent);
+  color: var(--mantine-color-text);
+  padding: 3px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  z-index: 1000;
+}
+
+.zv-pet:hover .zv-pet-name-tooltip {
+  opacity: 1;
+}
+
+.zv-pet-ball {
+  position: absolute;
+  transform: translate(var(--x, 0), var(--y, 0)) scale(var(--scale, 1));
+  width: var(--ballwidth);
+  height: var(--ballheight);
+  z-index: 200;
+  pointer-events: none;
+}
+.zv-pet-ball img {
+  display: block;
+  image-rendering: pixelated;
+  width: 100%;
+  height: 100%;
+}
+
+.zv-pet-heart {
+  position: absolute;
+  width: 13px;
+  height: 12px;
+  left: var(--heart-random-x);
+  top: -10px;
+  transform: translateX(-50%) scaleX(var(--scale-x, 1));
+  background-image: var(--heart-url);
+  background-size: cover;
+  image-rendering: pixelated;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 1001;
+  animation: zv-heart-float 1s ease-out forwards;
+}
+
+@keyframes zv-heart-float {
+  0% { opacity: 1; transform: translateX(-50%) scaleX(var(--scale-x, 1)) translateY(0) scale(0.5); }
+  50% { opacity: 1; transform: translateX(-50%) scaleX(var(--scale-x, 1)) translateY(-15px) scale(1); }
+  100% { opacity: 0; transform: translateX(-50%) scaleX(var(--scale-x, 1)) translateY(-30px) scale(0.8); }
+}
+
+@keyframes zv-pet-sprite {
+  from { background-position: 0 0; }
+  to { background-position: var(--sprite-total-width) 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zv-pet { transition: none; }
+}

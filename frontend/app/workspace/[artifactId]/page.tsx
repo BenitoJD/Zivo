@@ -63,7 +63,7 @@ import {
   pagesInRange,
   type AnsweredCard,
 } from "@/app/workspace/_components/studyLayout";
-import { PetLoader } from "@/app/_components/PetLoader";
+import { PetPlayground } from "@/app/_components/pets/PetPlayground";
 import { indexingStage } from "@/lib/constants";
 import { getCachedPdfDocument, loadPdfForArtifact } from "@/lib/pdf";
 import {
@@ -737,7 +737,7 @@ export default function WorkspaceArtifactPage({
         <Paper withBorder p={{ base: "lg", sm: "xl" }} maw={520} w="100%">
           <Stack gap="lg">
             <Stack gap="xs" align="center">
-              <PetLoader size={64} variant="lavender" />
+              <PetPlayground height={120} count={3} style={{ maxWidth: 380 }} />
               <Text size="lg" fw={500} ta="center" style={{ letterSpacing: "-0.02em", fontFamily: "var(--font-serif), Georgia, serif" }}>
                 {stage.title}
               </Text>

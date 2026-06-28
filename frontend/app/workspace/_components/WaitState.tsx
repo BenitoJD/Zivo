@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { Center, Stack, Text, ThemeIcon } from "@mantine/core";
 import { IconSparkles } from "@tabler/icons-react";
-import { PetLoader } from "@/app/_components/PetLoader";
+import { PetPlayground } from "@/app/_components/pets/PetPlayground";
 
 /**
  * Shared loading / empty / error placeholder for the study-mode views
@@ -20,20 +20,18 @@ export function WaitState({
   body,
   action,
   pet = false,
-  petVariant = "lavender",
 }: {
   icon?: ReactNode;
   title: string;
   body: string;
   action?: ReactNode;
   pet?: boolean;
-  petVariant?: "lavender" | "sage" | "terracotta";
 }) {
   return (
     <Center mih={280}>
       <Stack align="center" gap="sm" ta="center" maw={440}>
         {pet ? (
-          <PetLoader size={78} variant={petVariant} />
+          <PetPlayground height={130} count={3} style={{ maxWidth: 360 }} />
         ) : (
           <ThemeIcon variant="light" color="lavender" radius="xl" size={54}>
             {icon ?? <IconSparkles size={26} />}
