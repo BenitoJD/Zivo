@@ -29,6 +29,7 @@ import { type StudyMode } from "@/app/workspace/_components/studyNav";
 export function StudyMetaBar({
   questionIndex,
   questionTotal,
+  page,
   mode,
   onModeChange,
   showProgress = true,
@@ -38,6 +39,8 @@ export function StudyMetaBar({
 }: {
   questionIndex: number;
   questionTotal: number;
+  /** The page the learner is currently on (shown next to question progress). */
+  page?: number;
   mode: StudyMode;
   onModeChange: (mode: StudyMode) => void;
   showProgress?: boolean;
@@ -128,6 +131,16 @@ export function StudyMetaBar({
 
   const progress = !showBar ? null : (
     <Group gap={compact ? 8 : 12} wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
+      {page ? (
+        <Text
+          size="xs"
+          c="dimmed"
+          fw={600}
+          style={{ flexShrink: 0, letterSpacing: "0.01em" }}
+        >
+          Page {page}
+        </Text>
+      ) : null}
       <Tooltip
         label={`Question ${questionIndex} of ${questionTotal}. The total is sized to this page — roughly one question per distinct idea worth testing.`}
         position="bottom"

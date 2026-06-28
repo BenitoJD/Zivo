@@ -964,6 +964,7 @@ export default function WorkspaceArtifactPage({
       <StudyMetaBar
         questionIndex={questionIndex}
         questionTotal={questionTotal}
+        page={queue?.current_page}
         mode={mode}
         onModeChange={setMode}
         showProgress={(mode === "learn" || mode === "test") && !mcqLoading && Boolean(queue?.current_assertion_id) && !showPageComplete && !showDocumentComplete}
