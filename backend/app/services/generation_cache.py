@@ -16,6 +16,7 @@ slightly less-fresh LLM output.
 """
 
 from __future__ import annotations
+import logging
 
 import json
 import uuid
@@ -29,6 +30,8 @@ DEFAULT_TTL_SECONDS = 24 * 60 * 60
 # Sweep at most this many expired rows per write to bound write latency.
 SWEEP_BATCH = 50
 
+
+logger = logging.getLogger(__name__)
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -108,7 +111,7 @@ def _opportunistic_sweep(db: Session, ttl_seconds: int) -> None:
             {"cutoff": _expired_expr(ttl_seconds), "batch": SWEEP_BATCH},
         )
     except Exception:
-        pass
+        logger.debug("generation cache sweep failed", exc_info=True)
 
 
 # --- key builders (mirror the in-process cache hashing) ---------------------

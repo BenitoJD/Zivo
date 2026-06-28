@@ -1,5 +1,6 @@
 """IO workload handlers."""
 
+import logging
 from uuid import UUID
 
 from app.db import SessionLocal
@@ -9,6 +10,8 @@ from app.services.chunks import persist_document_index
 from app.services.jobs import enqueue_job
 from app.services.storage import delete_object, get_json, ingest_tmp_key
 
+
+logger = logging.getLogger(__name__)
 
 @eta(name="ingest.fetch_file", workload=JobWorkload.io)
 def fetch_file(payload: dict) -> dict:
@@ -48,7 +51,7 @@ def write_chunks(payload: dict) -> dict:
             delete_object(ingest_tmp_key(document_id, "pages"))
             delete_object(ingest_tmp_key(document_id, "chunks"))
         except Exception:
-            pass
+            logger.debug("ingest temp-object cleanup failed", exc_info=True)
     return {"document_id": str(document_id), "chunks": count}
 
 

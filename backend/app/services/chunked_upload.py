@@ -1,6 +1,7 @@
 """Resumable multipart uploads via MinIO + qb.upload_session."""
 
 from __future__ import annotations
+import logging
 
 import json
 import math
@@ -26,6 +27,8 @@ from app.services.storage import (
 DEFAULT_CHUNK_SIZE = 5 * 1024 * 1024
 SESSION_TTL_HOURS = 24
 
+
+logger = logging.getLogger(__name__)
 
 def _session_row(db: Session, session_id: uuid.UUID) -> dict[str, Any] | None:
     row = db.execute(
@@ -242,6 +245,6 @@ def abort_upload_session(
     try:
         abort_multipart_upload(row["storage_key"], row["multipart_upload_id"])
     except Exception:
-        pass
+        logger.debug("multipart upload abort failed", exc_info=True)
     db.execute(text("DELETE FROM qb.upload_session WHERE id = :id"), {"id": session_id})
     db.commit()

@@ -1,6 +1,7 @@
 """Token budget helpers — consistent sizing across char-based caps."""
 
 from __future__ import annotations
+import logging
 
 import functools
 import os
@@ -24,6 +25,8 @@ SUMMARIZE_SINGLE_SHOT_MAX_TOKENS = int(os.getenv("ZIVO_SUMMARIZE_SINGLE_SHOT_MAX
 MIN_MODEL_META_MAX_TOKENS = int(os.getenv("ZIVO_MIN_MODEL_META_MAX_TOKENS", "8192"))
 
 
+logger = logging.getLogger(__name__)
+
 @functools.lru_cache(maxsize=1)
 def _tiktoken_encoding():
     try:
@@ -31,6 +34,7 @@ def _tiktoken_encoding():
 
         return tiktoken.get_encoding("cl100k_base")
     except Exception:
+        logger.debug("tiktoken unavailable; using heuristic token count", exc_info=True)
         return None
 
 

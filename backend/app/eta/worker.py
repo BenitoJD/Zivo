@@ -258,7 +258,7 @@ def run_eta_worker(should_stop: Callable[[], bool] | None = None) -> None:
                     embed = resolve_embedding_model(db)
                     set_active_embed_model(embed.record.litellm_model)
                 except Exception:
-                    pass
+                    logger.debug("embedding model resolve failed; using default", exc_info=True)
             get_embedder()
             logger.info("Embedding model preloaded")
         except Exception:

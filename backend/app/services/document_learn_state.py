@@ -1,6 +1,7 @@
 """Dedicated learn-progress storage — avoids rewriting full documents.meta blobs."""
 
 from __future__ import annotations
+import logging
 
 import json
 import uuid
@@ -9,6 +10,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+
+logger = logging.getLogger(__name__)
 
 def load_progress(db: Session, document_id: uuid.UUID) -> dict[str, Any] | None:
     row = db.execute(
@@ -42,4 +45,4 @@ def save_progress_row(db: Session, document_id: uuid.UUID, progress: dict[str, A
             {"channel": f"zivo_learn_{document_id}"},
         )
     except Exception:
-        pass
+        logger.debug("learn-state pg_notify failed", exc_info=True)

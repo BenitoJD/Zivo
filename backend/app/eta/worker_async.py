@@ -293,7 +293,7 @@ async def _listen_for_job_notifications() -> None:
                 try:
                     await conn.close()
                 except Exception:
-                    pass
+                    logger.debug("best-effort worker step failed", exc_info=True)
 
 
 async def _periodic_stale_reaper() -> None:

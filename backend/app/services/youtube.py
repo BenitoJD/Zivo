@@ -16,6 +16,7 @@ fetching routes through it and starts working — with no behavior change when u
 """
 
 from __future__ import annotations
+import logging
 
 import os
 import re
@@ -37,6 +38,8 @@ _OEMBED_URL = "https://www.youtube.com/oembed"
 _FETCH_TIMEOUT_S = 15.0
 _TRANSCRIPT_LANGS = ["en", "en-US", "en-GB"]
 
+
+logger = logging.getLogger(__name__)
 
 def _transcript_kwargs() -> dict:
     """Optional proxy/cookies for the transcript fetch — the only thing that makes it
@@ -91,7 +94,7 @@ def _fetch_title(video_id: str) -> str:
         if resp.status_code == 200:
             return str(resp.json().get("title") or "").strip()[:200]
     except Exception:
-        pass
+        logger.debug("youtube oembed title fetch failed", exc_info=True)
     return ""
 
 

@@ -1,5 +1,6 @@
 """CPU workload handlers."""
 
+import logging
 from uuid import UUID
 
 from app.db import SessionLocal
@@ -19,6 +20,8 @@ from app.services.rag_window import (
 from app.services.question_pool import get_progress, selected_page_list
 from app.services.storage import delete_object, fetch_object, get_json, ingest_tmp_key, put_json
 
+
+logger = logging.getLogger(__name__)
 
 @eta(name="ingest.parse_document", workload=JobWorkload.cpu)
 def parse_document_job(payload: dict) -> dict:
@@ -104,7 +107,7 @@ def embed_chunks_job(payload: dict) -> dict:
         try:
             delete_object(ingest_tmp_key(document_id, suffix))
         except Exception:
-            pass
+            logger.debug("ingest temp-object cleanup failed", exc_info=True)
 
     return {"document_id": str(document_id), "chunks": count}
 

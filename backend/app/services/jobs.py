@@ -1,25 +1,33 @@
+import logging
 import uuid
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.eta.submit import build_job
 from app.models import Job, JobWorkload
+
+# NOTE: `build_job` (app.eta.submit) is imported lazily inside the enqueue
+# functions below — importing it at module load pulls in the eta registry, which
+# imports the handlers (app.eta.handlers.cpu), which import this module back,
+# forming a cycle. Deferring it (the same pattern _wake_workers uses for
+# job_notify) lets this service import cleanly on its own.
 
 _ETA_NOTIFY_CHANNEL = "zivo_eta_job"
 
+
+logger = logging.getLogger(__name__)
 
 def _wake_workers(db: Session) -> None:
     try:
         db.execute(text("SELECT pg_notify(:channel, '')"), {"channel": _ETA_NOTIFY_CHANNEL})
     except Exception:
-        pass
+        logger.debug("pg_notify worker wake failed", exc_info=True)
     try:
         from app.eta.job_notify import wake_eta_workers
 
         wake_eta_workers()
     except Exception:
-        pass
+        logger.debug("eta worker wake failed", exc_info=True)
 
 
 def batch_enqueue_jobs(
@@ -29,6 +37,8 @@ def batch_enqueue_jobs(
     chunk_size: int = 50,
 ) -> list[Job]:
     """Enqueue many jobs with batched commits and one NOTIFY per chunk."""
+    from app.eta.submit import build_job
+
     jobs: list[Job] = []
     for offset in range(0, len(specs), chunk_size):
         chunk = specs[offset : offset + chunk_size]
@@ -60,6 +70,8 @@ def enqueue_job(
     Workload/priority are resolved from the handler registry when the job name is
     registered; explicit ``workload`` overrides only when the handler is unknown.
     """
+    from app.eta.submit import build_job
+
     job = build_job(
         name=name,
         payload=payload,
