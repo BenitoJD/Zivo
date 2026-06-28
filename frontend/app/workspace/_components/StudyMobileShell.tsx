@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Box, Group, Stack, Text, UnstyledButton } from "@mantine/core";
 import { IconClipboardList, IconFileText, IconMessageCircle } from "@tabler/icons-react";
 import { ZIVO_ASSISTANT_NAME } from "@/lib/brand";
@@ -16,12 +16,21 @@ export function StudyMobileShell({
   question,
   renderSource,
   renderTutor,
+  focusTutorKey = 0,
 }: {
   question: ReactNode;
   renderSource: (visible: boolean) => ReactNode;
   renderTutor: () => ReactNode;
+  /** Bump this to programmatically jump to the tutor tab (e.g. after quoting). */
+  focusTutorKey?: number;
 }) {
   const [active, setActive] = useState<StudyMobileTab>("question");
+
+  // Switch to the tutor tab whenever a quote-to-chat action fires.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- react to an external "focus tutor" signal from the parent
+    if (focusTutorKey > 0) setActive("tutor");
+  }, [focusTutorKey]);
 
   const tabs: { id: StudyMobileTab; label: string; icon: typeof IconClipboardList }[] = [
     { id: "question", label: "Question", icon: IconClipboardList },
