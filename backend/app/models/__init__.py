@@ -73,7 +73,7 @@ class Account(Base):
     documents: Mapped[list["Document"]] = relationship(back_populates="account")
 
 
-User = Account  # citepage port alias
+User = Account  # zivo port alias
 
 
 class Document(Base):

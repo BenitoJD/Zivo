@@ -2,7 +2,7 @@
 
 Monorepo for [zivo.fyi](https://zivo.fyi). Engineering codename: **Zivo**. Product brand: **Question Better.**
 
-Same deployment model as [citepage](https://github.com/BenitoJD/citepage): **K3s + Helm on one VPS**; Docker Compose only for local Postgres and MinIO.
+Same deployment model as [zivo](https://github.com/BenitoJD/zivo): **K3s + Helm on one VPS**; Docker Compose only for local Postgres and MinIO.
 
 **Product direction:** measure and improve understanding through questions. Year 1 = best AI-powered question generator. Strategy: [docs/VISION.md](docs/VISION.md). **Data model (all tables):** [docs/DATA_MODEL.md](docs/DATA_MODEL.md).
 
@@ -17,7 +17,7 @@ Same deployment model as [citepage](https://github.com/BenitoJD/citepage): **K3s
 | **Legacy `intel` schema** | Present | `intel_foundation.sql` unchanged; product data in `intel.*` |
 | **QB app schema** | Ready | `qb_app.sql` + `qb_infra.sql` via Alembic (`./scripts/dev.sh db migrate`) |
 | **API** | Ready | FastAPI — auth, sources, artifacts, activities, assertions, chat, mcq |
-| **Workers** | Ready | Citepage ETA IO+CPU — `backend/app/eta/`, `run_eta_worker_*.py` |
+| **Workers** | Ready | Zivo ETA IO+CPU — `backend/app/eta/`, `run_eta_worker_*.py` |
 | **Workspace UI** | Ready | `/workspace` — Mantine `AppShell`, Learn/Test layout in `app/` routes |
 | **Helm / K8s** | Ready | postgres, minio, api, web, db-schema charts |
 | **CI** | Ready | `.github/workflows/ci.yml` — self-hosted `zivo` runner on VPS |

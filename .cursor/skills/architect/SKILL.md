@@ -10,7 +10,7 @@ description: Design system architecture for this repo's FastAPI backend, React +
 ## Repo Note
 
 Use this skill for higher-level architecture and boundary decisions in this
-repo. Favor the simplest design that fits the actual citepage stack:
+repo. Favor the simplest design that fits the actual zivo stack:
 FastAPI backend, React + Vite frontend, PostgreSQL + pgvector, MinIO/S3, and
 K3s on a single VPS. Do not introduce microservices or event-driven
 complexity unless the requirements justify it.

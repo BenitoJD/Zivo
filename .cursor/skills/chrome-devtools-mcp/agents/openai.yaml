@@ -2,6 +2,6 @@ interface:
   display_name: "Chrome DevTools MCP"
   short_description: "Real Chrome debugging via chrome-devtools-mcp"
   brand_color: "#4285F4"
-  default_prompt: "Debug citepage UI in Chrome using chrome-devtools-mcp (console, network, snapshots)"
+  default_prompt: "Debug zivo UI in Chrome using chrome-devtools-mcp (console, network, snapshots)"
 policy:
   allow_implicit_invocation: true

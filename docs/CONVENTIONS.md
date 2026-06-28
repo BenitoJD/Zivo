@@ -138,16 +138,14 @@ truth for UI; this file does not restate it.
 
 ## 4. Testing
 
-- **Rule.** Tests live under `backend/tests/` and `backend/tests_citepage/`. CI runs
-  the **`unit/`** subtrees of both (`tests/unit/`, `tests_citepage/unit/`). Pure logic
-  goes in a `unit/` tree and must run without a database. Tests that need Postgres go
-  in `tests_citepage/integration/` and self-skip when the dev DB is unreachable.
+- **Rule.** All tests live under a single `backend/tests/` tree: `unit/` (DB-free,
+  CI-gated), `integration/` (DB-gated, self-skipping), and `services/`. Pure logic
+  goes in `unit/` and must run without a database; tests that need Postgres go in
+  `integration/` and self-skip when the dev DB is unreachable.
 - **Why.** Fast, DB-free unit tests gate every PR; DB-bound tests stay opt-in.
-- **Proof.** CI "Unit tests" step runs `tests/unit/ tests_citepage/unit/`
+- **Proof.** CI "Unit tests" step runs `tests/unit/`
   ([.github/workflows/ci.yml](../.github/workflows/ci.yml)); the skip pattern is in
-  `tests_citepage/integration/test_learn_queue_api.py:19-29`.
-- **Status.** Two parallel test trees is a known wart (6 files vs 54). Consolidation
-  is tracked in [ADR 0005](adr/0005-enforcement-and-known-divergences.md).
+  `tests/integration/test_learn_queue_api.py:19-29`.
 
 ## 5. What is enforced, and what is not (yet)
 

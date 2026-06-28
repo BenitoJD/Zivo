@@ -31,9 +31,9 @@ trustworthy and gives each cleanup a definition of done.
 5. **Oversized modules.** `app/services/question_pool.py` is ~1365 lines. Target: split
    along its seams (pool refill, page coverage, transition prefetch, answer recording)
    into focused modules with unchanged behavior.
-6. **Two test trees.** `backend/tests/` (small) and `backend/tests_citepage/` (large).
-   Target: one convention — `unit/` (DB-free, CI-gated) and `integration/` (DB-gated,
-   self-skipping) under a single tree.
+6. **Test layout.** RESOLVED (2026-06): the former two trees were consolidated into a
+   single `backend/tests/` — `unit/` (DB-free, CI-gated), `integration/` (DB-gated,
+   self-skipping), and `services/`.
 7. **Dead code.** Target: remove unreferenced helpers/modules as they are found during
    the slices above; never in a big-bang pass.
 

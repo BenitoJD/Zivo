@@ -13,9 +13,8 @@ exists, and do not author `*.spec.ts` Playwright tests against imagined infrastr
 
 ## How to verify a change here
 
-- **Backend behavior:** `pytest` — DB-free unit tests (`tests/unit/`,
-  `tests_citepage/unit/`, run in CI) and DB-gated integration tests
-  (`tests_citepage/integration/`, self-skipping). See
+- **Backend behavior:** `pytest` — DB-free unit tests (`tests/unit/`, run in CI)
+  and DB-gated integration tests (`tests/integration/`, self-skipping). See
   [docs/CONVENTIONS.md → Testing](../../../docs/CONVENTIONS.md#4-testing).
 - **Frontend build/lint:** `cd frontend && npm run build && npm run lint`.
 - **Manual UI check:** run the stack (`./scripts/dev.sh start`) and exercise the flow

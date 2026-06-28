@@ -9,7 +9,7 @@ from app.services.dev_seed import SeedUserSpec, assert_local_dev_seed_allowed, u
 
 def test_assert_local_dev_seed_allowed_rejects_non_development(monkeypatch) -> None:
     monkeypatch.setenv("ENVIRONMENT", "production")
-    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://citepage:citepage@localhost:5453/citepage")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://zivo:zivo@localhost:5453/zivo")
     monkeypatch.setenv("SECRET_KEY", "real-prod-secret-32chars-or-more")
     monkeypatch.setenv("CSRF_SECRET", "real-prod-csrf-32chars-or-more")
     monkeypatch.setenv("MINIO_ACCESS_KEY", "prod-access")
@@ -26,7 +26,7 @@ def test_assert_local_dev_seed_allowed_rejects_non_development(monkeypatch) -> N
 
 def test_assert_local_dev_seed_allowed_rejects_remote_db(monkeypatch) -> None:
     monkeypatch.setenv("ENVIRONMENT", "development")
-    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://citepage:citepage@db.example.com:5432/citepage")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://zivo:zivo@db.example.com:5432/zivo")
     from app.config import get_settings
 
     get_settings.cache_clear()

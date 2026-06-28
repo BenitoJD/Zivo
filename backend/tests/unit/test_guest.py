@@ -86,3 +86,17 @@ def test_claim_guest_documents_transfers_ownership() -> None:
     assert doc.account_id == account_id
     assert "guest_id" not in doc.meta
     db.commit.assert_called_once()
+
+
+def test_claim_guest_documents_skips_without_cookie() -> None:
+    from unittest.mock import MagicMock
+
+    from app.services.guest_session import read_guest_id_from_cookie
+
+    account_id = uuid.uuid4()
+    assert read_guest_id_from_cookie(None) is None
+
+    db = MagicMock()
+    claimed = claim_guest_documents(db, account_id, read_guest_id_from_cookie(None))
+    assert claimed == []
+    db.commit.assert_not_called()

@@ -8,7 +8,7 @@ legacy DDL. All Question Better product data goes in additive `qb.*` tables
 join across both schemas but never alter `intel.*` DDL.
 
 **Why.** `intel_foundation.sql` is a ported, general-purpose knowledge-graph foundation
-(entities, assertions, measurements, projections) shared with the citepage lineage.
+(entities, assertions, measurements, projections) shared with the zivo lineage.
 Keeping it unchanged means upstream improvements stay mergeable and our migrations only
 ever *add*. The product maps its nouns onto the existing graph (a question is an
 `intel.assertion`, a learner an `intel.entity`, an answer an `intel.measurement`).

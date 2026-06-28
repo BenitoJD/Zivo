@@ -1,6 +1,6 @@
 ---
 name: backend-refactor-worker
-description: Incremental backend refactor worker for citepage FastAPI modernization and behavior-preserving repository extraction.
+description: Incremental backend refactor worker for zivo FastAPI modernization and behavior-preserving repository extraction.
 ---
 
 # Backend Refactor Worker
@@ -9,7 +9,7 @@ NOTE: Startup and cleanup are handled by `worker-base`. This skill defines the W
 
 ## When to Use This Skill
 
-Use this skill for backend refactor features in citepage that change architecture or code organization while preserving behavior, including:
+Use this skill for backend refactor features in zivo that change architecture or code organization while preserving behavior, including:
 - app bootstrap/lifespan refactors
 - typed settings/config cleanup
 - request-scoped DB/session cleanup

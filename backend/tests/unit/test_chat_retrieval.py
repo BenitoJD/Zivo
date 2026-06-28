@@ -12,7 +12,7 @@ def test_extract_page_range_natural_language() -> None:
     assert _extract_page_range("on page 12") == (12, 12)
 
 
-def test_extract_page_range_ignores_citepage_labels() -> None:
+def test_extract_page_range_ignores_page_labels() -> None:
     assert _extract_page_range("[p.5] mitochondria") == (None, None)
     assert _extract_page_range("see p. 9 for details") == (None, None)
 

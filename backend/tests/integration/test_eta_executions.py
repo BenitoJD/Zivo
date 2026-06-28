@@ -4,7 +4,7 @@ These require a reachable Postgres (the dev DB on localhost:5453) and are
 skipped automatically when it is unavailable. Run with the dev deps up:
 
     ./scripts/dev.sh deps start
-    ~/.venv/citepage/bin/python -m pytest tests/integration -q
+    ~/.venv/zivo/bin/python -m pytest tests/integration -q
 """
 
 from __future__ import annotations

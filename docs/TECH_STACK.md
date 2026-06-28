@@ -3,7 +3,7 @@
 | Layer | Choice |
 |-------|--------|
 | API | FastAPI, SQLAlchemy, psycopg |
-| Workers | Citepage ETA (IO + CPU), LangGraph agents |
+| Workers | Zivo ETA (IO + CPU), LangGraph agents |
 | DB | PostgreSQL 16 + pgvector — `intel.*` product + `qb.*` app/ops |
 | Object storage | MinIO (S3) |
 | UI | Next.js 16 App Router, mobile-first workspace |

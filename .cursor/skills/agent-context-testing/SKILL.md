@@ -100,7 +100,7 @@ Use the lightest faithful execution mode:
 When using a disposable task, keep it harmless:
 
 ```bash
-git worktree add ../citepage-context-probe -b codex/agent-context-probe HEAD
+git worktree add ../zivo-context-probe -b codex/agent-context-probe HEAD
 ```
 
 Prefer documentation-only or test-only edits. Remove the probe worktree after

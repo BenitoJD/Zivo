@@ -1,9 +1,9 @@
 ---
 name: chrome-devtools-mcp
-description: Debug citepage in real Chrome via chrome-devtools-mcp — console, network, snapshots, Lighthouse, performance traces. Use for prod-only UI bugs, mixed-content/CORS, PDF viewer issues, or when DevTools-level inspection beats Playwright scripts.
+description: Debug zivo in real Chrome via chrome-devtools-mcp — console, network, snapshots, Lighthouse, performance traces. Use for prod-only UI bugs, mixed-content/CORS, PDF viewer issues, or when DevTools-level inspection beats Playwright scripts.
 ---
 
-# Chrome DevTools MCP (citepage)
+# Chrome DevTools MCP (zivo)
 
 Drive a real Chrome instance through the [chrome-devtools-mcp](https://www.npmjs.com/package/chrome-devtools-mcp) MCP server. Prefer this over guessing from code when the bug is browser-only (prod CSS, MIME types, presigned URLs, pdf.js warnings).
 
@@ -43,20 +43,20 @@ In `CallMcpTool`, the server id is usually `chrome-devtools` or `user-chrome-dev
 | PR screenshot/video upload | `pr-screenshot-workflow` (after capturing media) |
 | Quick in-IDE browse without full DevTools | `cursor-ide-browser` (fallback only) |
 
-## citepage URLs
+## zivo URLs
 
 | Environment | Frontend | API |
 |-------------|----------|-----|
 | Local (`./scripts/dev.sh start`) | `http://localhost:5273` | `http://localhost:8100` |
-| Production | `https://citepage.example` | `https://api.citepage.example` |
-| Object storage (presigned) | — | `https://s3.citepage.example` |
+| Production | `https://zivo.example` | `https://api.zivo.example` |
+| Object storage (presigned) | — | `https://s3.zivo.example` |
 
-Local dev users: `dev` / `admin` (passwords from `SEED_DEV_PASSWORD`, `SEED_ADMIN_PASSWORD` in env). See `citepage-dev` skill.
+Local dev users: `dev` / `admin` (passwords from `SEED_DEV_PASSWORD`, `SEED_ADMIN_PASSWORD` in env). See `zivo-dev` skill.
 
 ## Core workflow
 
 1. **`list_pages`** — see open tabs; **`select_page`** if needed.
-2. **`navigate_page`** — `{ "type": "url", "url": "https://citepage.example" }` (or local URL).
+2. **`navigate_page`** — `{ "type": "url", "url": "https://zivo.example" }` (or local URL).
 3. **`take_snapshot`** — a11y tree with `uid` per element; re-snapshot after each navigation or major DOM change.
 4. Interact: **`click`**, **`fill`**, **`press_key`**, **`hover`** using `uid` from the latest snapshot.
 5. **`wait_for`** — text or conditions before asserting.
@@ -65,12 +65,12 @@ Local dev users: `dev` / `admin` (passwords from `SEED_DEV_PASSWORD`, `SEED_ADMI
 
 Do not reuse stale `uid` values across snapshots.
 
-## citepage-specific checks
+## zivo-specific checks
 
 **PDF viewer blank / wasm warnings**
 
 - Console: pdf.js `wasmUrl`, JBig2, MIME errors on `.mjs` assets.
-- Network: document file redirect → presigned URL host must be `https://s3.citepage.example`, not internal `minio.citepage.svc` or `http://`.
+- Network: document file redirect → presigned URL host must be `https://s3.zivo.example`, not internal `minio.zivo.svc` or `http://`.
 
 **Mixed content**
 
@@ -83,7 +83,7 @@ Do not reuse stale `uid` values across snapshots.
 
 **Indexing stuck**
 
-- Usually worker/API — use `citepage-dev` logs first; use DevTools only to confirm UI polling/API errors.
+- Usually worker/API — use `zivo-dev` logs first; use DevTools only to confirm UI polling/API errors.
 
 ## Performance & audits
 
@@ -104,7 +104,7 @@ For PR evidence, save screenshots under `output/playwright/<task-slug>/` and run
 
 ## Related skills
 
-- `citepage-dev` — start stack, ports, worker logs
+- `zivo-dev` — start stack, ports, worker logs
 - `e2e-testing` — repeatable Playwright tests
 - `pr-screenshot-workflow` — upload captured media to PR body
 - `responsive-ui-audit` — breakpoint matrix (can use either Playwright or this MCP)

@@ -14,7 +14,7 @@ from app.models import Document
 from app.services.guest_session import GUEST_ID_HEADER
 
 PUBLIC_URL = (
-    "https://s3.citepage.example/citepage/demo/test/file.pdf"
+    "https://s3.zivo.example/zivo/demo/test/file.pdf"
     "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc"
 )
 
@@ -68,7 +68,7 @@ def test_document_file_redirects_to_public_https(client: TestClient) -> None:
         )
         assert res.status_code in (307, 302), res.text
         assert res.headers["location"] == PUBLIC_URL
-        assert res.headers["location"].startswith("https://s3.citepage.example/")
+        assert res.headers["location"].startswith("https://s3.zivo.example/")
     finally:
         if doc_id:
             db = SessionLocal()

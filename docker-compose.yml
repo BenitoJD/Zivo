@@ -1,5 +1,5 @@
 # Local dev dependencies only (Postgres + MinIO + PgBouncer).
-# API and workers run on the host via ./scripts/dev.sh — same pattern as citepage.
+# API and workers run on the host via ./scripts/dev.sh — same pattern as zivo.
 # Production deploys to K3s on the VPS (see infra/k8s/).
 services:
   postgres:

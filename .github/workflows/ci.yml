@@ -58,7 +58,7 @@ jobs:
         run: python -m alembic upgrade head
 
       - name: Unit tests
-        run: python -m pytest tests/unit/ tests_citepage/unit/ -q --tb=no
+        run: python -m pytest tests/unit/ -q --tb=no
 
       - name: Stop Postgres
         if: always()

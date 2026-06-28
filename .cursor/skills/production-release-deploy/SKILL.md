@@ -1,11 +1,11 @@
 ---
 name: production-release-deploy
-description: Run the citepage production release workflow: prepare release notes, trigger the GitHub Actions deploy with approval gates, monitor the VPS/K3s rollout, and hand release notes back to the user.
+description: Run the zivo production release workflow: prepare release notes, trigger the GitHub Actions deploy with approval gates, monitor the VPS/K3s rollout, and hand release notes back to the user.
 ---
 
 # Production Release Deploy
 
-Use this skill when the user asks to deploy or release citepage production after
+Use this skill when the user asks to deploy or release zivo production after
 checking what changed since the last deployment.
 
 Keep this skill separate from `release-notes-since-deploy`: that skill is the
@@ -40,7 +40,7 @@ against prod without approval.
 2. Review the release-note summary with the user and ask for explicit approval
    to continue to deployment.
 3. Confirm target branch, normally `main`.
-4. Trigger the citepage deploy workflow via GitHub Actions.
+4. Trigger the zivo deploy workflow via GitHub Actions.
 5. Watch the workflow until success/failure.
 6. Monitor the prod VPS/K3s rollout until the new images and pods are replaced
    and healthy.
@@ -70,7 +70,7 @@ approves.
 
 ## Deployment
 
-citepage ships API and web from a single deploy workflow
+zivo ships API and web from a single deploy workflow
 (`workflow_dispatch`), not separate backend/frontend pipelines.
 
 Production deploy workflow:
@@ -91,12 +91,12 @@ gh run watch <run-id> --exit-status
 Expected deploy behavior:
 
 - `build` job (ubuntu-latest): Docker Buildx builds and pushes
-  `ghcr.io/<owner>/citepage-api` and `ghcr.io/<owner>/citepage-web`, tagged
-  `Citepage_0.1.<run>`, with GHA layer cache per image.
-- `deploy` job (self-hosted `citepage` runner on the VPS): `helm upgrade --install`
+  `ghcr.io/<owner>/zivo-api` and `ghcr.io/<owner>/zivo-web`, tagged
+  `Zivo_0.1.<run>`, with GHA layer cache per image.
+- `deploy` job (self-hosted `zivo` runner on the VPS): `helm upgrade --install`
   for postgres + minio, then a one-off Kubernetes **Job** `alembic-migrate`
   (`alembic upgrade head` under an advisory lock) using the new API image and
-  `citepage-secrets`, **before** rolling out api/web/workers.
+  `zivo-secrets`, **before** rolling out api/web/workers.
 - After migration: `helm upgrade --install` for api, web, worker-eta-cpu,
   worker-eta-io.
 - The deploy job updates all prod image tags via
@@ -108,7 +108,7 @@ Expected deploy behavior:
 Prod is a single VPS running K3s. SSH alias:
 
 ```bash
-ssh citepage-vps
+ssh zivo-vps
 ```
 
 Then set the kubeconfig for kubectl:
@@ -120,22 +120,22 @@ export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 Prod namespace:
 
 ```text
-citepage
+zivo
 ```
 
 Read-only monitoring commands:
 
 ```bash
-ssh citepage-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n citepage get pods -o wide'
-ssh citepage-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n citepage get deploy'
-ssh citepage-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n citepage get ingress'
-ssh citepage-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n citepage get pods -o jsonpath='\''{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{range .spec.containers[*]}{.image}{" "}{end}{"\n"}{end}'\'''
+ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo get pods -o wide'
+ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo get deploy'
+ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo get ingress'
+ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo get pods -o jsonpath='\''{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{range .spec.containers[*]}{.image}{" "}{end}{"\n"}{end}'\'''
 ```
 
 Inspect the migration job that runs before rollout:
 
 ```bash
-ssh citepage-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n citepage logs job/alembic-migrate'
+ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo logs job/alembic-migrate'
 ```
 
 For each rollout, verify:
@@ -144,20 +144,20 @@ For each rollout, verify:
 - The `alembic-migrate` Job completed successfully.
 - Old api/worker pods are gone or terminating.
 - New api, web, worker-eta-cpu, worker-eta-io pods are running.
-- Running pod images use the new `Citepage_0.1.<run>` tag.
+- Running pod images use the new `Zivo_0.1.<run>` tag.
 - No relevant pods are in `CrashLoopBackOff`, `ImagePullBackOff`, `ErrImagePull`,
   `Pending`, or repeatedly restarting.
 
 Useful waits, still read-only:
 
 ```bash
-ssh citepage-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n citepage rollout status deployment/citepage-api --timeout=10m'
-ssh citepage-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n citepage rollout status deployment/worker-eta-cpu --timeout=10m'
-ssh citepage-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n citepage rollout status deployment/worker-eta-io --timeout=10m'
+ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo rollout status deployment/zivo-api --timeout=10m'
+ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo rollout status deployment/worker-eta-cpu --timeout=10m'
+ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo rollout status deployment/worker-eta-io --timeout=10m'
 ```
 
 If a deployment name differs from the Helm release name, inspect current
-deployments with `kubectl -n citepage get deploy` and use the actual deployment
+deployments with `kubectl -n zivo get deploy` and use the actual deployment
 name. Do not restart, delete, patch, or sync anything without a new
 state-changing approval.
 
@@ -178,7 +178,7 @@ Stop and report before continuing if:
 Include:
 
 - deploy workflow run URL and result
-- deployed image tag (`Citepage_0.1.<run>`)
+- deployed image tag (`Zivo_0.1.<run>`)
 - pod replacement / rollout result
 - migration Job result
 - release notes report path

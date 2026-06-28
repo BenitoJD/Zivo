@@ -1,6 +1,6 @@
 # Zivo production (K3s on single VPS)
 
-Helm charts and prod values. Deploy model matches [citepage](https://github.com/BenitoJD/citepage).
+Helm charts and prod values. Deploy model matches [zivo](https://github.com/BenitoJD/zivo).
 
 ## VPS
 

@@ -12,7 +12,7 @@ the *workflow* around them.
 ## Repo testing surface (what this repo actually runs)
 
 - **Backend:** `pytest`. CI runs the DB-free unit trees `tests/unit/` and
-  `tests_citepage/unit/`; DB-bound tests live in `tests_citepage/integration/` and
+  `tests/unit/`; DB-bound tests live in `tests/integration/` and
   self-skip when Postgres is unreachable. See
   [.github/workflows/ci.yml](../../../.github/workflows/ci.yml).
 - **Frontend:** the quality gates are `npm run build` and `npm run lint` in
@@ -52,9 +52,9 @@ def test_difficulty_edge_targets_the_learner_edge() -> None:
     assert out == "b"
 ```
 
-DB-bound behavior → `tests_citepage/integration/`, guarded by the
+DB-bound behavior → `tests/integration/`, guarded by the
 `_db_reachable()` skip so it never fails on a machine without Postgres
-(`tests_citepage/integration/test_learn_queue_api.py:19`).
+(`tests/integration/test_learn_queue_api.py:19`).
 
 ### 4. Run it and confirm red
 
@@ -84,7 +84,7 @@ excepts — behavior unchanged.
 
 ```bash
 # Backend
-cd backend && python -m pytest tests/unit tests_citepage/unit
+cd backend && python -m pytest tests/unit
 # Frontend
 cd frontend && npm run build && npm run lint
 # Schema changes

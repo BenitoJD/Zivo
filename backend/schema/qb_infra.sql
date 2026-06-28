@@ -18,7 +18,7 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
--- System prompts (ported from citepage)
+-- System prompts (ported from the platform template)
 CREATE TABLE IF NOT EXISTS qb.system_prompts (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   key        VARCHAR(64) UNIQUE NOT NULL,
@@ -225,7 +225,7 @@ CREATE INDEX IF NOT EXISTS llm_usage_event_document_idx
   ON qb.llm_usage_event (document_id, created_at DESC)
   WHERE document_id IS NOT NULL;
 
--- Citepage-compatible document/chunk tables (ORM port layer; canonical evidence in intel.artifact)
+-- Document document/chunk tables (ORM port layer; canonical evidence in intel.artifact)
 CREATE TABLE IF NOT EXISTS qb.documents (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   account_id     UUID REFERENCES qb.account (id) ON DELETE SET NULL,

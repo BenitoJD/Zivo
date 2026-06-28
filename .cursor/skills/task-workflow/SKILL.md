@@ -76,7 +76,7 @@ cd ../<worktree-name>
 
 ## 4) Start local instance
 
-Start citepage detached and inspect it with status/logs (do not use tailing workflows in task docs):
+Start zivo detached and inspect it with status/logs (do not use tailing workflows in task docs):
 ```bash
 ./scripts/dev.sh app start
 ./scripts/dev.sh app status
