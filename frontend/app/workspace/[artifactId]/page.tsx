@@ -731,6 +731,21 @@ export default function WorkspaceArtifactPage({
     void runAssistant(userMsg);
   }
 
+  // Clear the current conversation: empty the panel now, start a fresh thread on the
+  // server (per-surface), and drop the cached messages so it stays empty.
+  async function clearChat() {
+    if (chatBusy) return;
+    setChatMessages([]);
+    setChatInput("");
+    chatHydratedRef.current = `${artifactId}:${chatSurface}`;
+    try {
+      await apiPost(`/api/chat/threads/${artifactId}/clear?surface=${chatSurface}`, {});
+    } catch {
+      /* best-effort — the panel is already cleared locally */
+    }
+    void queryClient.invalidateQueries({ queryKey: queryKeys.chatMessages(artifactId, chatSurface) });
+  }
+
   // Read-mode (Study Buddy) helpers — quote a selection into the composer, ask the
   // buddy directly about a passage, and save answers/passages as notes linked to the doc.
   function quoteToComposer(text: string) {
@@ -1184,6 +1199,7 @@ export default function WorkspaceArtifactPage({
               onStop={stopChat}
               onRegenerate={regenerateChat}
               onEditUser={editChatFromUser}
+              onClear={() => void clearChat()}
               onSaveNote={(c) => saveNote(c)}
               suggestions={READ_CHAT_SUGGESTIONS}
               emptyHint="Read on the left. Highlight anything to ask about it, or start here:"
@@ -1352,6 +1368,7 @@ export default function WorkspaceArtifactPage({
                 onStop={stopChat}
                 onRegenerate={regenerateChat}
                 onEditUser={editChatFromUser}
+                onClear={() => void clearChat()}
               />
             </StudyPushRail>
           </Box>
@@ -1383,6 +1400,7 @@ export default function WorkspaceArtifactPage({
               onStop={stopChat}
               onRegenerate={regenerateChat}
               onEditUser={editChatFromUser}
+              onClear={() => void clearChat()}
               showHeader
             />
           )}

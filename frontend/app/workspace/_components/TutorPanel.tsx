@@ -23,6 +23,7 @@ import {
   IconPencil,
   IconPlayerStop,
   IconRefresh,
+  IconTrash,
 } from "@tabler/icons-react";
 import { ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import { BrandMark } from "@/app/_components/BrandMark";
@@ -49,6 +50,7 @@ export function TutorPanel({
   onRegenerate,
   onEditUser,
   onSaveNote,
+  onClear,
   suggestions = CHAT_SUGGESTIONS,
   emptyHint = "Questions about this page, the source, or how to think through the answer.",
   showHeader = false,
@@ -63,6 +65,8 @@ export function TutorPanel({
   onRegenerate?: () => void;
   onEditUser?: (index: number) => void;
   onSaveNote?: (content: string) => void;
+  /** Clear the whole conversation (starts a fresh thread). */
+  onClear?: () => void;
   suggestions?: string[];
   emptyHint?: string;
   /** Show a branded top bar — for surfaces (Read, mobile) that have no rail header. */
@@ -131,6 +135,27 @@ export function TutorPanel({
         </Group>
       ) : null}
       <Box flex={1} mih={0} pos="relative">
+        {onClear && messages.length > 0 ? (
+          <Tooltip label="Clear conversation" position="left" withArrow openDelay={300}>
+            <ActionIcon
+              pos="absolute"
+              top={8}
+              right={8}
+              size={28}
+              radius="xl"
+              variant="subtle"
+              color="gray"
+              aria-label="Clear conversation"
+              onClick={onClear}
+              style={{
+                zIndex: 6,
+                background: isDark ? "var(--mantine-color-dark-7)" : "var(--mantine-color-gray-0)",
+              }}
+            >
+              <IconTrash size={15} stroke={1.8} />
+            </ActionIcon>
+          </Tooltip>
+        ) : null}
         <Box
           ref={scrollRef}
           h="100%"
@@ -310,14 +335,14 @@ export function TutorPanel({
                       ? "var(--mantine-color-white)"
                       : "var(--mantine-color-dark-9)"
                     : isDark
-                      ? "var(--mantine-color-dark-5)"
+                      ? "var(--mantine-color-dark-4)"
                       : "var(--mantine-color-gray-3)",
                   color: canSend
                     ? isDark
                       ? "var(--mantine-color-dark-9)"
                       : "var(--mantine-color-white)"
                     : isDark
-                      ? "var(--mantine-color-dark-2)"
+                      ? "var(--mantine-color-dark-0)"
                       : "var(--mantine-color-gray-5)",
                   "&:hover": canSend
                     ? {

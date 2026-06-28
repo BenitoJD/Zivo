@@ -54,10 +54,25 @@ export function StudyMetaBar({
   const modeBadge =
     mode === "learn" || mode === "test" ? (
       <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
-        <ThemeIcon size={20} radius="xl" variant="light" color={barAccent}>
+        <ThemeIcon
+          size={20}
+          radius="xl"
+          variant="light"
+          color={barAccent}
+          // Brighten the glyph in dark mode so the badge icon stays legible.
+          style={{ color: `light-dark(var(--mantine-color-${barAccent}-7), var(--mantine-color-${barAccent}-3))` }}
+        >
           {isTestMode ? <IconClipboardList size={12} stroke={2} /> : <IconBulb size={12} stroke={2} />}
         </ThemeIcon>
-        <Text fz="xs" fw={700} tt="uppercase" c={`var(--mantine-color-${barAccent}-${isTestMode ? 8 : 7})`} style={{ letterSpacing: "0.04em" }}>
+        <Text
+          fz="xs"
+          fw={700}
+          tt="uppercase"
+          style={{
+            letterSpacing: "0.04em",
+            color: `light-dark(var(--mantine-color-${barAccent}-${isTestMode ? 8 : 7}), var(--mantine-color-${barAccent}-3))`,
+          }}
+        >
           {isTestMode ? "Test" : "Learn"}
         </Text>
       </Group>
