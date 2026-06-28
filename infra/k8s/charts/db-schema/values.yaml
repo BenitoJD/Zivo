@@ -9,8 +9,9 @@ image:
   tag: latest
   pullPolicy: IfNotPresent
 
-imagePullSecrets:
-  - name: ghcr-cred
+# Images are built on the VPS and imported into k3s containerd before rollout
+# (pullPolicy IfNotPresent), so no registry pull happens — no pull secret needed.
+imagePullSecrets: []
 
 secretName: zivo-secrets
 
