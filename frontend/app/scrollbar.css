@@ -34,3 +34,38 @@
 *::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+/*
+ * Opt-in: fully hide the scrollbar on a scroll region (e.g. the question card),
+ * where a "there's more below" cue reads calmer than a bar. Pair with the
+ * zv-scroll-cue chevron below.
+ */
+.zv-noscrollbar {
+  scrollbar-width: none;
+}
+.zv-noscrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+/* A gentle "scroll down" nudge — a chevron that breathes downward. */
+@keyframes zv-scroll-cue {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  50% {
+    transform: translateY(4px);
+    opacity: 1;
+  }
+}
+.zv-scroll-cue {
+  animation: zv-scroll-cue 1.5s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .zv-scroll-cue {
+    animation: none;
+  }
+}

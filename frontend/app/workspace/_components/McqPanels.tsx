@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Box,
   Button,
@@ -19,6 +19,7 @@ import {
   IconArrowRight,
   IconBulb,
   IconCheck,
+  IconChevronDown,
   IconClipboardList,
   IconHistory,
   IconX,
@@ -35,6 +36,69 @@ import { type AnsweredCard } from "@/app/workspace/_components/studyLayout";
  * UI, keyboard control — and the step-back review of already-answered questions
  * (McqReviewView).
  */
+
+/**
+ * A scroll region with no visible scrollbar (which reads as distracting on the
+ * question card). When there's more content below, a soft bottom fade and a
+ * gently bouncing chevron cue the learner to scroll; both fade out at the end.
+ */
+function ScrollHintArea({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [showCue, setShowCue] = useState(false);
+
+  const update = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const canScroll = el.scrollHeight - el.clientHeight > 6;
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 8;
+    setShowCue(canScroll && !atBottom);
+  }, []);
+
+  useEffect(() => {
+    update();
+    const el = ref.current;
+    if (!el) return;
+    // Recompute when the region or its content resizes (e.g. an explanation reveals).
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    Array.from(el.children).forEach((c) => ro.observe(c));
+    return () => ro.disconnect();
+  }, [update]);
+
+  return (
+    <Box style={{ position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <Box
+        ref={ref}
+        onScroll={update}
+        className="zv-noscrollbar"
+        style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}
+      >
+        {children}
+      </Box>
+      <Box
+        aria-hidden
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: 52,
+          pointerEvents: "none",
+          display: "flex",
+          alignItems: "flex-end",
+          justifyContent: "center",
+          paddingBottom: 2,
+          background: "linear-gradient(to bottom, transparent, var(--mantine-color-body) 80%)",
+          opacity: showCue ? 1 : 0,
+          transition: "opacity 240ms ease",
+        }}
+      >
+        <IconChevronDown className="zv-scroll-cue" size={22} stroke={2} style={{ color: "var(--mantine-color-dimmed)" }} />
+      </Box>
+    </Box>
+  );
+}
+
 export function McqHeroPanel({
   stem,
   options,
@@ -323,16 +387,9 @@ export function McqHeroPanel({
       {/* Centered, scrollable content region. The card height is fixed by the
           parent (clamp), so showing feedback or a longer stem reflows WITHIN
           this region instead of resizing the card — the footer below never
-          moves and the page no longer jumps. */}
-      <Box
-        style={{
-          flex: 1,
-          minHeight: 0,
-          overflowY: "auto",
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
+          moves and the page no longer jumps. ScrollHintArea hides the scrollbar
+          and shows a fade + chevron when there's more below. */}
+      <ScrollHintArea>
       {/* Top-anchored so the question is its own scrollable page. */}
       <Box
         style={{
@@ -491,7 +548,7 @@ export function McqHeroPanel({
           </Text>
         </Box>
       </Center>
-      </Box>
+      </ScrollHintArea>
 
       <Stack align="center" gap={8} pt={compact ? "sm" : "md"} style={{ flexShrink: 0 }}>
         {showNextQuestion ? (
@@ -615,7 +672,7 @@ export function McqReviewView({
         </Button>
       </Group>
 
-      <Box style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+      <ScrollHintArea>
         <Box style={{ width: "100%", display: "flex", flexDirection: "column", gap: compact ? 14 : 18 }}>
           <Title
             order={2}
@@ -701,7 +758,7 @@ export function McqReviewView({
             <McqFeedbackCard feedback={card.feedback} isCorrect={correct} compact={compact} isDark={isDark} />
           ) : null}
         </Box>
-      </Box>
+      </ScrollHintArea>
 
       <Group justify="center" gap={8} pt={compact ? "sm" : "md"} style={{ flexShrink: 0 }}>
         <Button
