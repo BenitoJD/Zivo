@@ -31,7 +31,7 @@ export function WaitState({
     <Center mih={280}>
       <Stack align="center" gap="sm" ta="center" maw={440}>
         {pet ? (
-          <PetPlayground height={130} count={3} style={{ maxWidth: 360 }} />
+          <PetPlayground height={140} count={3} style={{ width: 360, maxWidth: "100%" }} />
         ) : (
           <ThemeIcon variant="light" color="lavender" radius="xl" size={54}>
             {icon ?? <IconSparkles size={26} />}

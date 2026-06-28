@@ -285,6 +285,9 @@ class Pet {
       "--scale": `${this.scale}`,
       "--heart-url": `url(${HEART_URL})`,
     });
+    // Soft ground shadow that travels with the pet — grounds it so it reads
+    // as standing on a surface rather than floating.
+    makeDiv(el, "zv-pet-shadow");
     this.tooltipEl = makeDiv(el, "zv-pet-name-tooltip");
     this.tooltipEl.textContent = this.petName;
     setVars(this.tooltipEl, { "--scale-x": `${this.direction}` });
@@ -357,9 +360,11 @@ class Pet {
 
     return new Promise((res) => {
       let settled = false;
+      let timer: number | undefined;
       const settle = () => {
         if (settled) return;
         settled = true;
+        if (timer) window.clearTimeout(timer);
         this.petEl.removeEventListener("transitionend", done);
         this.interruptMove = null;
         res();
@@ -371,6 +376,10 @@ class Pet {
         settle();
       };
       this.petEl.addEventListener("transitionend", done);
+      // Safety net: `transitionend` doesn't fire in backgrounded tabs (and can be
+      // dropped if the transition is interrupted), which would stall the whole
+      // behaviour loop. Always settle shortly after the expected duration.
+      timer = window.setTimeout(() => done(), duration + 80);
       this.interruptMove = settle;
       void this.petEl.offsetWidth;
       setVars(this.petEl, {
@@ -430,7 +439,7 @@ class Cat extends Pet {
         } else if (key === "jump" || key === "jump2") {
           if (!this.interruptAction) await this.move(this.animations[key].duration, key);
         } else if (key === "sit" || key === "sleep") {
-          const n = Math.floor(Math.random() * 8) + 5;
+          const n = Math.floor(Math.random() * 3) + 2;
           for (let i = 0; i < n; i++) {
             if (this.interruptAction) break;
             await wait(this.animations[key].duration);
@@ -458,7 +467,15 @@ class Cat extends Pet {
   protected async startActionLoop(): Promise<void> {
     const getRandDelay = (min: number, max: number, multiple: number) =>
       Math.round((Math.random() * (max - min) + min) / multiple) * multiple;
-    const ACTIONS = Object.keys(this.animations).filter((a) => a !== "die" && a !== "run" && a !== "fly");
+    // Weighted behaviour pool: mostly brief idles and the odd jump, with sit /
+    // sleep kept rare so the pets spend most of their time walking around.
+    const ACTIONS: string[] = [];
+    for (const a of Object.keys(this.animations)) {
+      if (a === "die" || a === "run" || a === "fly") continue;
+      if (a === "idle" || a === "idle2") ACTIONS.push(a, a, a);
+      else if (a === "jump" || a === "jump2") ACTIONS.push(a, a);
+      else ACTIONS.push(a); // sit / sleep / liking — rare
+    }
     while (!this.isDestroyed) {
       if (this.chasingBall) {
         this.interruptAction = false;
@@ -556,13 +573,24 @@ function wait(ms: number): Promise<void> {
   return new Promise((res) => window.setTimeout(res, ms));
 }
 
+function shuffle<T>(arr: T[]): T[] {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 /* --------------------------- pet roster ---------------------------- */
 
+// Colorful, light-on-their-feet cats picked so the strip reads bright and
+// varied on a pale loading screen — the near-black variants (black-cat,
+// batman-black, demon, vampire, witch) are intentionally left out so no pet
+// shows up as a dark blob. The full set still lives in /pet-assets if needed.
 const CAT_TYPES = [
-  "batman-black-cat", "batman-blue-cat", "black-cat", "brown-cat", "classic-cat",
-  "deer-cat", "demon-cat", "egypt-cat", "pirate-cat", "pirate-v2-cat", "pirate-v3-cat",
-  "siamese-cat", "three-cat", "tiger-cat", "vampire-cat", "white-cat", "witch-cat",
-  "xmas-cat", "xmas-v2-cat", "xmas-v3-cat",
+  "classic-cat", "brown-cat", "tiger-cat", "siamese-cat", "white-cat",
+  "three-cat", "deer-cat", "egypt-cat", "xmas-cat", "xmas-v2-cat",
+  "xmas-v3-cat", "pirate-cat",
 ];
 
 const BALL_COLORS = ["blue", "cyan", "green", "orange", "pink", "purple", "red", "yellow"];
@@ -622,24 +650,29 @@ export class PetWorld {
 
   private spawn(): void {
     const { count, scale, species, groundFraction } = this.opts;
+    // Distinct cat colors: draw from a shuffled pool so no two cats match
+    // (until the pool runs out), giving every pet its own look.
+    const catPool = shuffle([...CAT_TYPES]);
+    const names = shuffle([...PET_NAMES]);
+    let catIdx = 0;
     for (let i = 0; i < count; i++) {
-      const moveDist = 28 + Math.random() * 22;
+      const moveDist = 32 + Math.random() * 20;
       let kind: "cat" | "bunny" | "ghost" = "cat";
       if (species === "random") {
+        // Mostly cats, with the occasional bunny for variety; ghost is rare.
         const r = Math.random();
-        kind = r < 0.78 ? "cat" : r < 0.9 ? "bunny" : "ghost";
+        kind = r < 0.82 ? "cat" : r < 0.95 ? "bunny" : "ghost";
       } else {
         kind = species;
       }
-      const name = randomName();
+      const name = names[i % names.length];
       if (kind === "bunny") {
         this.pets.push(new Bunny(this.container, getBunnyAnimations("pets/grey-bunny"), moveDist, scale, name, groundFraction));
       } else if (kind === "ghost") {
         this.pets.push(new Ghost(this.container, getGhostAnimations("pets/ghost"), moveDist, scale, name, groundFraction));
       } else {
-        const type = CAT_TYPES[Math.floor(Math.random() * CAT_TYPES.length)];
-        const canFly = type === "witch-cat";
-        const cat = new Cat(this.container, getCatAnimations(`pets/${type}`), moveDist, scale, name, groundFraction, canFly);
+        const type = catPool[catIdx++ % catPool.length];
+        const cat = new Cat(this.container, getCatAnimations(`pets/${type}`), moveDist, scale, name, groundFraction, false);
         this.cats.push(cat);
         this.pets.push(cat);
       }

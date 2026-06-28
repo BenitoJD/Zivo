@@ -12,7 +12,7 @@ export default function Loading() {
       <Center style={{ minHeight: "100dvh" }} p="md">
         <Stack gap="lg" align="center" ta="center">
           <BrandMark height={36} />
-          <PetPlayground height={120} count={3} style={{ maxWidth: 380 }} />
+          <PetPlayground height={130} count={3} style={{ width: 380, maxWidth: "100%" }} />
           <Text
             size="sm"
             c="gray.5"

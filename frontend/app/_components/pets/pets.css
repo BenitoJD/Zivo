@@ -47,6 +47,20 @@
   opacity: 1;
 }
 
+/* Soft contact shadow beneath the paws — sits just under the feet line so it
+   grounds the pet without covering the sprite. */
+.zv-pet-shadow {
+  position: absolute;
+  left: 50%;
+  top: 31px;
+  width: 22px;
+  height: 5px;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(ellipse at center, rgba(40, 38, 32, 0.3), rgba(40, 38, 32, 0) 72%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
 .zv-pet-ball {
   position: absolute;
   transform: translate(var(--x, 0), var(--y, 0)) scale(var(--scale, 1));
