@@ -129,29 +129,12 @@ def _parse_mcq_blocks(raw: str) -> list[dict[str, Any]]:
     return out
 
 
-def _trim_explanation(text: str, *, max_chars: int = 600) -> str:
-    """Bound an MCQ explanation at a generous length, keeping the whole thing.
-
-    The learner wants the complete reasoning, so we keep the full explanation and
-    only cap pathologically long model output. When a cap is needed we cut at the
-    last sentence boundary before the limit (never mid-word), else ellipsize.
-    """
-    cleaned = (text or "").strip()
-    if not cleaned or len(cleaned) <= max_chars:
-        return cleaned
-    window = cleaned[:max_chars]
-    cut = max(window.rfind(". "), window.rfind("! "), window.rfind("? "))
-    if cut > max_chars // 2:
-        return window[: cut + 1].strip()
-    return window.rstrip() + "…"
-
-
 def _normalize_mcq_payload(data: dict[str, Any], target_aspect: dict[str, Any] | None) -> dict[str, Any]:
     question = sanitize_mcq_stem(str(data.get("question") or data.get("stem") or ""))
     options = coerce_mcq_options(data.get("options") or data.get("choices"))
-    explanation = sanitize_mcq_explanation(
-        _trim_explanation(str(data.get("explanation") or ""))
-    )
+    # No length cap — the learner needs the whole explanation to understand the
+    # answer; we only strip document/page framing.
+    explanation = sanitize_mcq_explanation(str(data.get("explanation") or ""))
     if not question or len(options) < 2:
         raise ValueError("invalid mcq")
     key = data.get("primary_concept_key") or (target_aspect or {}).get("key") or "page-concept"
