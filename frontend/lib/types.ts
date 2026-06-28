@@ -64,6 +64,7 @@ export type AssertionPayload = {
   options?: string[] | unknown;
   choices?: string[] | unknown;
   sequence?: number;
+  primary_concept?: string;
 };
 
 const OPTION_LETTER_PREFIX = /^(?:[A-Da-d]|[1-4])[.)]\s+/;

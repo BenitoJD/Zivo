@@ -3,21 +3,161 @@
 import type { ReactNode } from "react";
 import {
   ActionIcon,
+  Badge,
   Box,
   Button,
   Center,
   Group,
   Loader,
   Paper,
+  Progress,
   Stack,
   Text,
   ThemeIcon,
   Title,
 } from "@mantine/core";
-import { IconClipboardList, IconHistory, IconX } from "@tabler/icons-react";
+import { IconCheck, IconClipboardList, IconHistory, IconX } from "@tabler/icons-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import { SELECTION_PAD_X, SELECTION_PAD_X_COMPACT } from "@/app/workspace/_components/studyLayout";
+import {
+  SELECTION_PAD_X,
+  SELECTION_PAD_X_COMPACT,
+  type AnsweredCard,
+} from "@/app/workspace/_components/studyLayout";
 import { PageSelectionBody } from "@/app/workspace/_components/PageSelectionScreen";
+
+/**
+ * End-of-study report card: first-try correct vs. to-revisit, plus per-topic
+ * strengths and the topics to focus on next. Driven entirely by the answered
+ * history (first-attempt correctness, so Learn-mode retries don't hide weak spots).
+ */
+export function StudyReportCard({
+  answered,
+  showSummary = true,
+  compact,
+}: {
+  answered: AnsweredCard[];
+  showSummary?: boolean;
+  compact?: boolean;
+}) {
+  const total = answered.length;
+  if (total === 0) return null;
+  const correct = answered.filter((a) => a.firstTryCorrect).length;
+  const wrong = total - correct;
+
+  const byConcept = new Map<string, { name: string; correct: number; total: number }>();
+  for (const a of answered) {
+    const name = (a.concept || "").trim() || "General";
+    const t = byConcept.get(name) ?? { name, correct: 0, total: 0 };
+    t.total += 1;
+    if (a.firstTryCorrect) t.correct += 1;
+    byConcept.set(name, t);
+  }
+  const topics = [...byConcept.values()];
+  const weak = topics
+    .filter((t) => t.correct < t.total)
+    .sort((a, b) => a.correct / a.total - b.correct / b.total);
+  const strong = topics.filter((t) => t.correct === t.total);
+
+  return (
+    <Paper withBorder radius="lg" p={compact ? "md" : "lg"} w="100%" bg="var(--mantine-color-body)">
+      <Stack gap={compact ? "sm" : "md"}>
+        <Text size="xs" tt="uppercase" fw={700} c="dimmed" style={{ letterSpacing: "0.1em" }}>
+          Report card
+        </Text>
+
+        {showSummary ? (
+          <Group gap="lg" wrap="nowrap" align="center">
+            <Group gap={8} wrap="nowrap">
+              <ThemeIcon size={34} radius="xl" variant="light" color="sage">
+                <IconCheck size={18} stroke={2.4} />
+              </ThemeIcon>
+              <Box>
+                <Text fz={compact ? 22 : 26} fw={700} lh={1} c="var(--mantine-color-text)">
+                  {correct}
+                </Text>
+                <Text fz="xs" c="dimmed">
+                  correct first try
+                </Text>
+              </Box>
+            </Group>
+            <Group gap={8} wrap="nowrap">
+              <ThemeIcon size={34} radius="xl" variant="light" color="terracotta">
+                <IconX size={18} stroke={2.4} />
+              </ThemeIcon>
+              <Box>
+                <Text fz={compact ? 22 : 26} fw={700} lh={1} c="var(--mantine-color-text)">
+                  {wrong}
+                </Text>
+                <Text fz="xs" c="dimmed">
+                  to revisit
+                </Text>
+              </Box>
+            </Group>
+            <Box style={{ marginLeft: "auto", textAlign: "right" }}>
+              <Text
+                fz={compact ? 22 : 26}
+                fw={700}
+                lh={1}
+                c="var(--mantine-color-text)"
+                style={{ fontFamily: "var(--font-serif), Georgia, serif" }}
+              >
+                {Math.round((correct / total) * 100)}%
+              </Text>
+              <Text fz="xs" c="dimmed" style={{ fontVariantNumeric: "tabular-nums" }}>
+                {correct} / {total}
+              </Text>
+            </Box>
+          </Group>
+        ) : null}
+
+        {weak.length > 0 ? (
+          <Stack gap={8}>
+            <Text fz="sm" fw={600} c="var(--mantine-color-text)">
+              Topics to focus on
+            </Text>
+            {weak.map((t) => (
+              <Box key={t.name}>
+                <Group justify="space-between" gap="sm" wrap="nowrap" mb={3} align="flex-start">
+                  <Text fz="sm" c="var(--mantine-color-text)" style={{ minWidth: 0 }}>
+                    {t.name}
+                  </Text>
+                  <Text
+                    fz="xs"
+                    c="dimmed"
+                    style={{ flexShrink: 0, fontVariantNumeric: "tabular-nums" }}
+                  >
+                    {t.correct}/{t.total} first try
+                  </Text>
+                </Group>
+                <Progress
+                  value={Math.round((t.correct / Math.max(t.total, 1)) * 100)}
+                  color="terracotta"
+                  size="sm"
+                  radius="xl"
+                />
+              </Box>
+            ))}
+          </Stack>
+        ) : null}
+
+        {strong.length > 0 ? (
+          <Stack gap={6}>
+            <Text fz="sm" fw={600} c="var(--mantine-color-text)">
+              Strong topics
+            </Text>
+            <Group gap={6}>
+              {strong.map((t) => (
+                <Badge key={t.name} variant="light" color="sage" radius="sm" tt="none">
+                  {t.name}
+                </Badge>
+              ))}
+            </Group>
+          </Stack>
+        ) : null}
+      </Stack>
+    </Paper>
+  );
+}
 
 /**
  * End-of-study screens (extracted from the workspace page monolith): the Test
@@ -49,6 +189,7 @@ export function suggestNextPageRange(
 export function TestResultsScreen({
   correct,
   total,
+  answered = [],
   compact,
   canChoosePages,
   onReview,
@@ -56,6 +197,7 @@ export function TestResultsScreen({
 }: {
   correct: number;
   total: number;
+  answered?: AnsweredCard[];
   compact?: boolean;
   canChoosePages?: boolean;
   onReview: () => void;
@@ -115,6 +257,7 @@ export function TestResultsScreen({
             Review every question to see the correct answers and the reasoning behind them.
           </Text>
         </Stack>
+        <StudyReportCard answered={answered} showSummary={false} compact={compact} />
         <Stack gap={8} w="100%" maw={300} mt="xs">
           <Button radius="xl" size="md" color="forest" onClick={onReview} leftSection={<IconHistory size={16} stroke={2} />}>
             Review answers
@@ -137,6 +280,7 @@ export function DocumentCompleteScreen({
   bookFinished,
   nextFrom,
   nextTo,
+  answered = [],
   compact,
   onChoosePages,
 }: {
@@ -146,6 +290,7 @@ export function DocumentCompleteScreen({
   bookFinished: boolean;
   nextFrom?: number;
   nextTo?: number;
+  answered?: AnsweredCard[];
   compact?: boolean;
   onChoosePages: () => void;
 }) {
@@ -175,6 +320,8 @@ export function DocumentCompleteScreen({
               : "Every question in this range is done. When you're ready, choose the next pages from the same source."}
           </Text>
         </Stack>
+
+        <StudyReportCard answered={answered} compact={compact} />
 
         {!bookFinished && nextFrom !== undefined && nextTo !== undefined && (
           <Paper withBorder radius="lg" p="md" w="100%" bg="var(--mantine-color-body)">

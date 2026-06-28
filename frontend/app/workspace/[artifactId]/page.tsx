@@ -121,6 +121,8 @@ export default function WorkspaceArtifactPage({
   const [question, setQuestion] = useState("Loading questions…");
   const [options, setOptions] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  // The concept the current question tests — captured per question for the report card.
+  const [currentConcept, setCurrentConcept] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [gradeState, setGradeState] = useState<{ correct: boolean; correctIndex: number } | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -470,6 +472,7 @@ export default function WorkspaceArtifactPage({
     const p = (row.payload ?? {}) as AssertionPayload;
     setQuestion(sanitizeMcqStem(p.question ?? p.stem ?? row.title ?? "Question"));
     setOptions(normalizeMcqOptions(p.options, p.choices));
+    setCurrentConcept((p.primary_concept ?? "").trim() || null);
     setSelected(null);
     setFeedback(null);
     setGradeState(null);
@@ -546,17 +549,24 @@ export default function WorkspaceArtifactPage({
       // latest grade per question (learn-mode retries re-grade the same assertion).
       const answeredId = queue.current_assertion_id;
       const answeredSelection = Number(selected);
-      setAnsweredHistory((h) => [
-        ...h.filter((c) => c.assertionId !== answeredId),
-        {
-          assertionId: answeredId,
-          stem,
-          options: [...options],
-          selectedIndex: answeredSelection,
-          gradeState: { correct, correctIndex },
-          feedback: gradedFeedback,
-        },
-      ]);
+      setAnsweredHistory((h) => {
+        // Preserve the FIRST-attempt result across Learn-mode retries — the report
+        // card grades you on the first try, not the eventual retry success.
+        const prior = h.find((c) => c.assertionId === answeredId);
+        return [
+          ...h.filter((c) => c.assertionId !== answeredId),
+          {
+            assertionId: answeredId,
+            stem,
+            options: [...options],
+            selectedIndex: answeredSelection,
+            gradeState: { correct, correctIndex },
+            feedback: gradedFeedback,
+            concept: currentConcept,
+            firstTryCorrect: prior ? prior.firstTryCorrect : correct,
+          },
+        ];
+      });
     } catch {
       setFeedback("Could not grade answer — try again.");
     } finally {
@@ -1013,6 +1023,7 @@ export default function WorkspaceArtifactPage({
             <TestResultsScreen
               correct={testCorrect}
               total={answeredHistory.length}
+              answered={answeredHistory}
               compact={isCompact}
               canChoosePages={Boolean(completedRange)}
               onReview={() => setReviewIndex(0)}
@@ -1026,6 +1037,7 @@ export default function WorkspaceArtifactPage({
               bookFinished={nextRangeSuggestion?.bookFinished ?? false}
               nextFrom={nextRangeSuggestion?.from}
               nextTo={nextRangeSuggestion?.to}
+              answered={answeredHistory}
               compact={isCompact}
               onChoosePages={openReselectPages}
             />

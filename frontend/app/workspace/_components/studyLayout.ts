@@ -97,4 +97,9 @@ export type AnsweredCard = {
   selectedIndex: number;
   gradeState: { correct: boolean; correctIndex: number };
   feedback: string | null;
+  /** The concept/topic this question tested — for the end-of-study report card. */
+  concept?: string | null;
+  /** Whether the FIRST attempt was correct (Learn lets you retry; the report card
+   *  needs the first try to surface genuinely weak topics, not post-retry success). */
+  firstTryCorrect: boolean;
 };
