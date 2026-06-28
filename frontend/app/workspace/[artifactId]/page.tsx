@@ -18,7 +18,7 @@ import {
   Title,
   useMantineColorScheme,
 } from "@mantine/core";
-import { useDisclosure, useLocalStorage, useMediaQuery } from "@mantine/hooks";
+import { useDisclosure, useMediaQuery } from "@mantine/hooks";
 import { IconFileText, IconMessageCircle, IconNotebook } from "@tabler/icons-react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { PDFDocumentProxy } from "pdfjs-dist";
@@ -45,7 +45,8 @@ import { TutorPanel, READ_CHAT_SUGGESTIONS } from "@/app/workspace/_components/T
 import { useStudyNav } from "@/app/workspace/_components/studyNav";
 import { McqHeroPanel, McqReviewView } from "@/app/workspace/_components/McqPanels";
 import { StudySourcePanel } from "@/app/workspace/_components/StudySourcePanel";
-import { StudyEdgeTrigger, StudyPushRail } from "@/app/workspace/_components/StudyRails";
+import { StudyEdgeTrigger } from "@/app/workspace/_components/StudyRails";
+import { FloatingPanel } from "@/app/workspace/_components/FloatingPanel";
 import { StudyMobileShell } from "@/app/workspace/_components/StudyMobileShell";
 import { StudyMetaBar } from "@/app/workspace/_components/StudyMetaBar";
 import {
@@ -57,17 +58,8 @@ import {
 } from "@/app/workspace/_components/StudyScreens";
 import { PageSelectionScreen, buildPageSliderMarks } from "@/app/workspace/_components/PageSelectionScreen";
 import {
-  SOURCE_PANEL_DEFAULT,
-  SOURCE_PANEL_MIN,
-  SOURCE_PANEL_MAX,
-  TUTOR_PANEL_DEFAULT,
-  TUTOR_PANEL_MIN,
-  TUTOR_PANEL_MAX,
-  STUDY_CENTER_MIN,
   STUDY_DESKTOP_BP,
   STUDY_COMPACT_BP,
-  STUDY_OVERLAY_BP,
-  clampPanel,
   pagesInRange,
   type AnsweredCard,
 } from "@/app/workspace/_components/studyLayout";
@@ -96,7 +88,6 @@ export default function WorkspaceArtifactPage({
   const invalidArtifactId = !isArtifactId(artifactId);
   const isLg = useMediaQuery(STUDY_DESKTOP_BP, false, { getInitialValueInEffect: true });
   const isCompact = useMediaQuery(STUDY_COMPACT_BP, false, { getInitialValueInEffect: true });
-  const useOverlayRails = useMediaQuery(STUDY_OVERLAY_BP, false, { getInitialValueInEffect: true });
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
   // Mode selection lives in the workspace layout so the global left sidebar can
@@ -142,18 +133,9 @@ export default function WorkspaceArtifactPage({
   const [readerMobileTab, setReaderMobileTab] = useState<"reader" | "buddy">("reader");
   const [sourceOpen, { open: openSource, close: closeSource }] = useDisclosure(false);
   const [tutorOpen, { open: openTutor, close: closeTutor }] = useDisclosure(false);
+  // The floating Source/Tutor windows own their own geometry (see FloatingPanel),
+  // so the workspace only needs the row ref to bound them.
   const studyRowRef = useRef<HTMLDivElement>(null);
-  const [studyRowWidth, setStudyRowWidth] = useState(0);
-  const [sourcePanelWidth, setSourcePanelWidth] = useLocalStorage({
-    key: "zivo-source-panel-width",
-    defaultValue: SOURCE_PANEL_DEFAULT,
-  });
-  const [tutorPanelWidth, setTutorPanelWidth] = useLocalStorage({
-    key: "zivo-tutor-panel-width",
-    defaultValue: TUTOR_PANEL_DEFAULT,
-  });
-  const [resizingSource, setResizingSource] = useState(false);
-  const [resizingTutor, setResizingTutor] = useState(false);
   const [reselectOpen, setReselectOpen] = useState(false);
 
   const selectedRange = artifact?.meta?.selected_range;
@@ -295,48 +277,6 @@ export default function WorkspaceArtifactPage({
     for (let p = selectedRange.from; p <= selectedRange.to; p += 1) pages.push(p);
     return pages;
   }, [selectedRange]);
-
-  const sourcePanelMax = useMemo(() => {
-    if (studyRowWidth < 1) return SOURCE_PANEL_MAX;
-    const other = tutorOpen ? tutorPanelWidth : 0;
-    return clampPanel(
-      studyRowWidth - STUDY_CENTER_MIN - other,
-      SOURCE_PANEL_MIN,
-      SOURCE_PANEL_MAX,
-    );
-  }, [studyRowWidth, tutorOpen, tutorPanelWidth]);
-
-  const tutorPanelMax = useMemo(() => {
-    if (studyRowWidth < 1) return TUTOR_PANEL_MAX;
-    const other = sourceOpen ? sourcePanelWidth : 0;
-    return clampPanel(
-      studyRowWidth - STUDY_CENTER_MIN - other,
-      TUTOR_PANEL_MIN,
-      TUTOR_PANEL_MAX,
-    );
-  }, [studyRowWidth, sourceOpen, sourcePanelWidth]);
-
-  useEffect(() => {
-    const el = studyRowRef.current;
-    if (!el) return;
-    const update = () => setStudyRowWidth(el.clientWidth);
-    update();
-    const ro = new ResizeObserver(() => update());
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [isLg, artifact?.id]);
-
-  useEffect(() => {
-    if (sourcePanelWidth > sourcePanelMax) {
-      setSourcePanelWidth(sourcePanelMax);
-    }
-  }, [sourcePanelMax, sourcePanelWidth, setSourcePanelWidth]);
-
-  useEffect(() => {
-    if (tutorPanelWidth > tutorPanelMax) {
-      setTutorPanelWidth(tutorPanelMax);
-    }
-  }, [tutorPanelMax, tutorPanelWidth, setTutorPanelWidth]);
 
   useEffect(() => {
     return () => {
@@ -1289,18 +1229,12 @@ export default function WorkspaceArtifactPage({
             pos="relative"
             style={{ display: "flex", overflow: "hidden", minHeight: 0 }}
           >
-            {useOverlayRails && (sourceOpen || tutorOpen) && (
-              <Box
-                pos="absolute"
-                inset={0}
-                style={{ zIndex: 15, background: "rgba(0, 0, 0, 0.28)" }}
-                onClick={() => {
-                  if (sourceOpen) closeSource();
-                  if (tutorOpen) closeTutor();
-                }}
-                aria-hidden
-              />
-            )}
+            {/* Base layer: the question column fills the row; the Source and Tutor
+                windows float above it so the learner can keep answering. */}
+            <Box flex={1} mih={0} pos="relative" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
+              {questionColumn}
+            </Box>
+
             {!sourceOpen && (
               <StudyEdgeTrigger
                 side="left"
@@ -1319,23 +1253,16 @@ export default function WorkspaceArtifactPage({
                 onClick={openTutor}
               />
             )}
-            <StudyPushRail
+
+            <FloatingPanel
               open={sourceOpen}
-              width={clampPanel(sourcePanelWidth, SOURCE_PANEL_MIN, sourcePanelMax)}
-              minWidth={SOURCE_PANEL_MIN}
-              maxWidth={sourcePanelMax}
-              side="left"
               title={shortFilename}
+              icon={<IconFileText size={16} stroke={2} />}
+              accent="lavender"
+              storageKey="zv-float-source"
+              containerRef={studyRowRef}
+              defaultSide="left"
               onClose={closeSource}
-              headerSize="compact"
-              resizable
-              overlay={Boolean(useOverlayRails)}
-              isResizing={resizingSource}
-              onResizeStart={() => setResizingSource(true)}
-              onResizeEnd={() => setResizingSource(false)}
-              onWidthChange={(next) =>
-                setSourcePanelWidth(clampPanel(next, SOURCE_PANEL_MIN, sourcePanelMax))
-              }
             >
               <StudySourcePanel
                 filename={artifact.filename}
@@ -1348,36 +1275,17 @@ export default function WorkspaceArtifactPage({
                 studyPages={studyPages}
                 open={sourceOpen}
               />
-            </StudyPushRail>
+            </FloatingPanel>
 
-            <Box flex={1} mih={0} pos="relative" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
-              <Box
-                flex={1}
-                mih={0}
-                pos="relative"
-                style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}
-              >
-                {questionColumn}
-              </Box>
-            </Box>
-
-            <StudyPushRail
+            <FloatingPanel
               open={tutorOpen}
-              width={clampPanel(tutorPanelWidth, TUTOR_PANEL_MIN, tutorPanelMax)}
-              minWidth={TUTOR_PANEL_MIN}
-              maxWidth={tutorPanelMax}
-              side="right"
               title={ZIVO_ASSISTANT_NAME}
+              icon={<IconMessageCircle size={16} stroke={2} />}
+              accent="sage"
+              storageKey="zv-float-tutor"
+              containerRef={studyRowRef}
+              defaultSide="right"
               onClose={closeTutor}
-              headerSize="compact"
-              resizable
-              overlay={Boolean(useOverlayRails)}
-              isResizing={resizingTutor}
-              onResizeStart={() => setResizingTutor(true)}
-              onResizeEnd={() => setResizingTutor(false)}
-              onWidthChange={(next) =>
-                setTutorPanelWidth(clampPanel(next, TUTOR_PANEL_MIN, tutorPanelMax))
-              }
             >
               <TutorPanel
                 messages={chatMessages}
@@ -1391,7 +1299,7 @@ export default function WorkspaceArtifactPage({
                 onEditUser={editChatFromUser}
                 onClear={() => void clearChat()}
               />
-            </StudyPushRail>
+            </FloatingPanel>
           </Box>
         </>
       ) : (
