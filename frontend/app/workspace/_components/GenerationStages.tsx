@@ -62,9 +62,9 @@ export function GenerationStages({
         s2 === "todo"
           ? "Up next"
           : s2 === "active"
-            ? "Working out how many questions fit"
+            ? "Counting the distinct ideas worth testing here"
             : budget > 0
-              ? `Decided · up to ${budget} questions`
+              ? `Found ${budget} ideas worth testing — that sets your quiz size`
               : "Done",
     },
     {
@@ -94,8 +94,8 @@ export function GenerationStages({
             : st.state === "active"
               ? "var(--mantine-color-lavender-6)"
               : isDark
-                ? "var(--mantine-color-dark-4)"
-                : "var(--mantine-color-gray-3)";
+                ? "var(--mantine-color-dark-2)"
+                : "var(--mantine-color-gray-4)";
         return (
           <Box key={i} style={{ display: "flex", gap: 12, alignItems: "stretch" }}>
             {/* indicator rail */}
@@ -119,7 +119,7 @@ export function GenerationStages({
                 ) : null}
               </Box>
               {!last ? (
-                <Box style={{ width: 2, flex: 1, minHeight: 18, marginTop: 2, marginBottom: 2, background: st.state === "done" ? "var(--mantine-color-sage-4)" : isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-3)" }} />
+                <Box style={{ width: 2, flex: 1, minHeight: 18, marginTop: 2, marginBottom: 2, background: st.state === "done" ? "var(--mantine-color-sage-4)" : isDark ? "var(--mantine-color-dark-3)" : "var(--mantine-color-gray-4)" }} />
               ) : null}
             </Box>
             {/* label */}

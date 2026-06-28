@@ -129,25 +129,21 @@ def _parse_mcq_blocks(raw: str) -> list[dict[str, Any]]:
     return out
 
 
-def _trim_explanation(text: str, *, max_chars: int = 160) -> str:
-    """Cap an MCQ explanation to one concise sentence (output-token economy).
+def _trim_explanation(text: str, *, max_chars: int = 600) -> str:
+    """Bound an MCQ explanation at a generous length, keeping the whole thing.
 
-    The model is told to keep explanations to one short sentence, but it often
-    over-writes. Trimming here guarantees a compact stored payload and — more
-    importantly — fewer emitted tokens during generation means faster completion.
-    Keeps the first sentence; ellipsizes only if a second sentence was present.
+    The learner wants the complete reasoning, so we keep the full explanation and
+    only cap pathologically long model output. When a cap is needed we cut at the
+    last sentence boundary before the limit (never mid-word), else ellipsize.
     """
     cleaned = (text or "").strip()
-    if not cleaned:
-        return ""
-    # Take up to the first sentence boundary.
-    for sep in (". ", "! ", "? "):
-        idx = cleaned.find(sep)
-        if 0 < idx < max_chars:
-            return cleaned[: idx + 1].strip()
-    if len(cleaned) <= max_chars:
+    if not cleaned or len(cleaned) <= max_chars:
         return cleaned
-    return cleaned[: max_chars - 1].rstrip() + "…"
+    window = cleaned[:max_chars]
+    cut = max(window.rfind(". "), window.rfind("! "), window.rfind("? "))
+    if cut > max_chars // 2:
+        return window[: cut + 1].strip()
+    return window.rstrip() + "…"
 
 
 def _normalize_mcq_payload(data: dict[str, Any], target_aspect: dict[str, Any] | None) -> dict[str, Any]:

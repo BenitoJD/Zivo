@@ -23,7 +23,6 @@ import {
   IconHistory,
   IconX,
 } from "@tabler/icons-react";
-import { PetLoader } from "@/app/_components/PetLoader";
 import { GenerationStages } from "@/app/workspace/_components/GenerationStages";
 import { mcqOptionChrome, McqFeedbackCard } from "@/app/_components/mcq/McqCard";
 import { normalizeMcqOptions, type McqState } from "@/lib/types";
@@ -178,8 +177,18 @@ export function McqHeroPanel({
     // back to an animated indeterminate bar when no budget is known yet.
     const generated = queue?.questions_generated ?? 0;
     const budget = queue?.question_budget ?? 0;
-    const hasDeterminate = budget > 0;
-    const progressPct = hasDeterminate ? Math.min(100, Math.round((generated / budget) * 100)) : 0;
+    // Stage-weighted overall progress, driven by live backend signals, so the ring
+    // always reflects real pipeline movement (read -> plan -> write) instead of
+    // sitting at 0% until the first question lands.
+    const readingPhase = artifactStatus === "indexing" || queue?.rag_window_ready === false;
+    const planningPhase = !readingPhase && !queue?.page_triage_complete;
+    const progressPct = readingPhase
+      ? Math.min(28, Math.round((indexProgress ?? 0) * 0.28))
+      : planningPhase
+        ? 40
+        : budget > 0
+          ? Math.min(100, 48 + Math.round((generated / budget) * 52))
+          : 52;
     const RING = compact ? 124 : 140;
     const R = RING / 2 - 12;
     const CIRC = 2 * Math.PI * R;
@@ -213,38 +222,29 @@ export function McqHeroPanel({
                 </linearGradient>
               </defs>
               <circle cx={center} cy={center} r={R} fill="none" stroke="var(--mantine-color-default-border)" strokeOpacity={0.5} strokeWidth={8} />
-              <g
-                className={hasDeterminate ? undefined : "zivo-ring-spin"}
-                style={hasDeterminate ? undefined : { transformOrigin: `${center}px ${center}px`, animation: "zivo-ring-spin 1.1s linear infinite" }}
-              >
-                <circle
-                  cx={center}
-                  cy={center}
-                  r={R}
-                  fill="none"
-                  stroke="url(#zivo-ring-grad)"
-                  strokeWidth={8}
-                  strokeLinecap="round"
-                  strokeDasharray={CIRC}
-                  strokeDashoffset={hasDeterminate ? CIRC * (1 - progressPct / 100) : CIRC * 0.72}
-                  transform={`rotate(-90 ${center} ${center})`}
-                  style={{ transition: "stroke-dashoffset 600ms cubic-bezier(0.32,0.72,0,1)" }}
-                />
-              </g>
+              <circle
+                cx={center}
+                cy={center}
+                r={R}
+                fill="none"
+                stroke="url(#zivo-ring-grad)"
+                strokeWidth={8}
+                strokeLinecap="round"
+                strokeDasharray={CIRC}
+                strokeDashoffset={CIRC * (1 - progressPct / 100)}
+                transform={`rotate(-90 ${center} ${center})`}
+                style={{ transition: "stroke-dashoffset 600ms cubic-bezier(0.32,0.72,0,1)" }}
+              />
             </svg>
             <Box pos="absolute" style={{ display: "grid", placeItems: "center" }}>
-              {hasDeterminate ? (
-                <Text
-                  fz={compact ? 22 : 26}
-                  fw={600}
-                  c="var(--mantine-color-text)"
-                  style={{ fontFamily: "var(--font-serif), Georgia, serif", letterSpacing: "-0.02em", lineHeight: 1 }}
-                >
-                  {progressPct}%
-                </Text>
-              ) : (
-                <PetLoader size={compact ? 50 : 58} variant="lavender" />
-              )}
+              <Text
+                fz={compact ? 22 : 26}
+                fw={600}
+                c="var(--mantine-color-text)"
+                style={{ fontFamily: "var(--font-serif), Georgia, serif", letterSpacing: "-0.02em", lineHeight: 1 }}
+              >
+                {progressPct}%
+              </Text>
             </Box>
           </Box>
 
@@ -277,10 +277,10 @@ export function McqHeroPanel({
 
           {stuckSeconds >= 45 && onRetry ? (
             <Stack gap={6} align="center">
-              <Text size="sm" c="dimmed" ta="center">
+              <Text size="sm" c="var(--mantine-color-text)" ta="center">
                 Something&apos;s taking a while.
               </Text>
-              <Button variant="light" size="compact-sm" onClick={onRetry}>
+              <Button variant="default" color="lavender" size="compact-sm" onClick={onRetry}>
                 Retry generation
               </Button>
             </Stack>

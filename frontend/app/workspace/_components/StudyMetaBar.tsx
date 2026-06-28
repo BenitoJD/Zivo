@@ -8,6 +8,7 @@ import {
   Stack,
   Text,
   ThemeIcon,
+  Tooltip,
   UnstyledButton,
   useMantineColorScheme,
 } from "@mantine/core";
@@ -127,13 +128,22 @@ export function StudyMetaBar({
 
   const progress = !showBar ? null : (
     <Group gap={compact ? 8 : 12} wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
-      <Text size="xs" c="dimmed" fw={600} ff="monospace" style={{ flexShrink: 0, letterSpacing: "0.02em" }}>
-        {String(questionIndex).padStart(2, "0")}
-        <Text component="span" inherit style={{ opacity: 0.45 }}>
-          {" / "}
-          {String(questionTotal).padStart(2, "0")}
+      <Tooltip
+        label={`Question ${questionIndex} of ${questionTotal}. The total is sized to this page — roughly one question per distinct idea worth testing.`}
+        position="bottom"
+        withArrow
+        multiline
+        w={250}
+        openDelay={250}
+      >
+        <Text size="xs" c="dimmed" fw={600} ff="monospace" style={{ flexShrink: 0, letterSpacing: "0.02em", cursor: "help" }}>
+          {String(questionIndex).padStart(2, "0")}
+          <Text component="span" inherit style={{ opacity: 0.45 }}>
+            {" / "}
+            {String(questionTotal).padStart(2, "0")}
+          </Text>
         </Text>
-      </Text>
+      </Tooltip>
       {segmented ? (
         <Group gap={4} wrap="nowrap" style={{ flex: 1, minWidth: 0, maxWidth: 380 }}>
           {Array.from({ length: questionTotal }).map((_, i) => (

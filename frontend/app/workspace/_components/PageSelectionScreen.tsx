@@ -524,7 +524,7 @@ function PageSelectionDock({
         }}
       >
       <Stack gap={0}>
-        <Box px={isCompact ? "sm" : "md"} pt="sm" pb={isCompact ? "xs" : 4}>
+        <Box px={isCompact ? "sm" : "lg"} pt={isCompact ? "sm" : "md"} pb={isCompact ? "xs" : "sm"}>
           {isCompact ? (
             <Stack gap="sm">
               <Group justify="center" gap={8} wrap="nowrap">
@@ -600,7 +600,7 @@ function PageSelectionDock({
 
         <Box h={1} bg={hairline} />
 
-        <Box px={isCompact ? "sm" : "md"} py={isCompact ? "xs" : "sm"}>
+        <Box px={isCompact ? "sm" : "lg"} py={isCompact ? "xs" : "md"}>
           <Stack gap={isCompact ? "sm" : "xs"}>
             {isCompact ? (
               <Stack gap={6} align="center">
