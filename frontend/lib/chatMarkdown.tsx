@@ -243,18 +243,47 @@ function markdownComponents(isDark: boolean): Components {
   };
 }
 
+// Re-rendering ReactMarkdown on every token is expensive, so we throttle the
+// streamed updates to ~50ms. This must be a THROTTLE (flush at most *and at
+// least* every 50ms), not a debounce: tokens arrive faster than 50ms apart, so
+// a debounce that resets its timer on every token would never fire until the
+// stream stopped — making the whole answer appear in one go instead of
+// streaming word-by-word.
+const STREAM_FLUSH_MS = 50;
+
 function useThrottledMarkdown(content: string, streaming: boolean) {
   const [rendered, setRendered] = useState(content);
+  // Latest content, so a pending trailing flush emits the most recent text
+  // (not the stale value captured when the timer was scheduled).
+  const contentRef = useRef(content);
+  contentRef.current = content;
+  const lastFlushRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!streaming) return;
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => setRendered(content), 50);
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
+    const flush = () => {
+      lastFlushRef.current = Date.now();
+      timerRef.current = null;
+      setRendered(contentRef.current);
     };
+    const elapsed = Date.now() - lastFlushRef.current;
+    if (elapsed >= STREAM_FLUSH_MS) {
+      flush();
+    } else if (!timerRef.current) {
+      // Schedule a single trailing flush for the remainder of the window; do NOT
+      // reset it when more tokens land in the meantime.
+      timerRef.current = setTimeout(flush, STREAM_FLUSH_MS - elapsed);
+    }
   }, [content, streaming]);
+
+  // Clear any pending flush on unmount.
+  useEffect(
+    () => () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    },
+    [],
+  );
 
   return streaming ? rendered : content;
 }
