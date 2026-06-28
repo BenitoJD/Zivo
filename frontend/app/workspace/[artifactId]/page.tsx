@@ -22,14 +22,12 @@ import { useDisclosure, useMediaQuery } from "@mantine/hooks";
 import { IconFileText, IconMessageCircle, IconNotebook } from "@tabler/icons-react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import { apiFetchBytes, apiGet, apiPost, apiPostSSE, apiUrl, ensureGuestSession, humanizeApiFailure, isArtifactId } from "@/lib/api/client";
+import { apiFetchBytes, apiGet, apiPost, apiUrl, ensureGuestSession, isArtifactId } from "@/lib/api/client";
 import {
-  chatSurfaceForMode,
   queryKeys,
   useArtifactPagesQuery,
   useArtifactQuery,
   useAssertionQuery,
-  useChatMessagesQuery,
   useSavedNotesQuery,
   useSavedNotesActions,
   useStudyReportQuery,
@@ -43,6 +41,7 @@ import { QuizBuilderView } from "@/app/workspace/_components/QuizBuilderView";
 import { PdfReader } from "@/app/workspace/_components/PdfReader";
 import { TutorPanel, READ_CHAT_SUGGESTIONS } from "@/app/workspace/_components/TutorPanel";
 import { useStudyNav } from "@/app/workspace/_components/studyNav";
+import { useTutorChat } from "@/app/workspace/_components/useTutorChat";
 import { McqHeroPanel, McqReviewView } from "@/app/workspace/_components/McqPanels";
 import { StudySourcePanel } from "@/app/workspace/_components/StudySourcePanel";
 import { StudyEdgeTrigger } from "@/app/workspace/_components/StudyRails";
@@ -64,7 +63,7 @@ import {
   type AnsweredCard,
 } from "@/app/workspace/_components/studyLayout";
 import { PetLoader } from "@/app/_components/PetLoader";
-import { indexingStage, isTransientChatAssistantMessage } from "@/lib/constants";
+import { indexingStage } from "@/lib/constants";
 import { getCachedPdfDocument, loadPdfForArtifact } from "@/lib/pdf";
 import {
   normalizeMcqOptions,
@@ -123,10 +122,6 @@ export default function WorkspaceArtifactPage({
   const [answeredHistory, setAnsweredHistory] = useState<AnsweredCard[]>([]);
   const [reviewIndex, setReviewIndex] = useState<number | null>(null);
 
-  const [chatInput, setChatInput] = useState("");
-  const [chatMessages, setChatMessages] = useState<{ role: string; content: string }[]>([]);
-  const [chatBusy, setChatBusy] = useState(false);
-  const chatAbortRef = useRef<AbortController | null>(null);
   const savedNotesQuery = useSavedNotesQuery(artifactId);
   const savedNotesActions = useSavedNotesActions(artifactId);
   const [readerNotesOpen, setReaderNotesOpen] = useState(false);
@@ -137,6 +132,33 @@ export default function WorkspaceArtifactPage({
   // so the workspace only needs the row ref to bound them.
   const studyRowRef = useRef<HTMLDivElement>(null);
   const [reselectOpen, setReselectOpen] = useState(false);
+
+  // Tutor chat (per-mode conversation: hydrate, stream, regenerate, clear, plus
+  // Read-mode Study-Buddy quote/ask/save) lives in its own hook.
+  const {
+    chatInput,
+    setChatInput,
+    chatMessages,
+    chatBusy,
+    chatContextReady,
+    sendChat,
+    clearChat,
+    quoteToComposer,
+    askBuddy,
+    saveNote,
+    regenerateChat,
+    editChatFromUser,
+    stopChat,
+  } = useTutorChat({
+    artifactId,
+    mode,
+    enabled: !invalidArtifactId,
+    queue,
+    selected,
+    gradeState,
+    savedNotesActions,
+    onSavedNote: () => setReaderNotesOpen(true),
+  });
 
   const selectedRange = artifact?.meta?.selected_range;
   const studyRangeKey = selectedRange
@@ -169,15 +191,11 @@ export default function WorkspaceArtifactPage({
   const artifactQuery = useArtifactQuery(artifactId, !invalidArtifactId);
   const pagesQuery = useArtifactPagesQuery(artifactId, !invalidArtifactId);
   const assertionQuery = useAssertionQuery(queue?.current_assertion_id);
-  // Each mode (Read / Learn / Test) is its own conversation surface.
-  const chatSurface = chatSurfaceForMode(mode);
-  const chatMessagesQuery = useChatMessagesQuery(artifactId, mode, !invalidArtifactId);
   // Persistent report card — only fetched once a range is complete.
   const studyReportQuery = useStudyReportQuery(
     artifactId,
     Boolean(queue?.document_complete) && !invalidArtifactId,
   );
-  const chatHydratedRef = useRef<string | null>(null);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- sync server query result into locally-editable state
@@ -202,26 +220,6 @@ export default function WorkspaceArtifactPage({
 
   const queueRef = useRef(queue);
   queueRef.current = queue;
-
-  // Switching conversation surface (mode) clears the view until the new thread loads.
-  useEffect(() => {
-    chatHydratedRef.current = null;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrate chat thread from server once per surface (chat is appended to locally during streaming)
-    setChatMessages([]);
-  }, [artifactId, chatSurface]);
-
-  useEffect(() => {
-    if (!chatMessagesQuery.data || chatBusy) return;
-    const key = `${artifactId}:${chatSurface}`;
-    if (chatHydratedRef.current === key) return;
-    chatHydratedRef.current = key;
-    setChatMessages(
-      chatMessagesQuery.data
-        .filter((m) => (m.content || "").trim())
-        .filter((m) => !(m.role === "assistant" && isTransientChatAssistantMessage(m.content)))
-        .map((m) => ({ role: m.role, content: m.content })),
-    );
-  }, [artifactId, chatSurface, chatBusy, chatMessagesQuery.data]);
 
   const isPdf = artifact?.content_type === "application/pdf";
 
@@ -277,12 +275,6 @@ export default function WorkspaceArtifactPage({
     for (let p = selectedRange.from; p <= selectedRange.to; p += 1) pages.push(p);
     return pages;
   }, [selectedRange]);
-
-  useEffect(() => {
-    return () => {
-      chatAbortRef.current?.abort();
-    };
-  }, []);
 
   const queueStreamRef = useRef<EventSource | null>(null);
   // Tracks whether the live SSE queue stream is connected. The fallback poll
@@ -588,165 +580,6 @@ export default function WorkspaceArtifactPage({
     setLastClickedPage(page);
   }
 
-  // Core streamer — assumes chatMessages already ends with the user turn + an empty
-  // assistant placeholder to fill. Shared by send, regenerate, and edit-and-resend.
-  async function runAssistant(userMsg: string) {
-    setChatBusy(true);
-    chatAbortRef.current?.abort();
-    const abort = new AbortController();
-    chatAbortRef.current = abort;
-    try {
-      await ensureGuestSession();
-      // Scope the chat to the CURRENT mode. In Read mode the buddy is about the
-      // document the user is reading — never the Learn queue's current page — so
-      // it must not pin the learn page/question (that caused Read's "summarize"
-      // to summarize the Learn page instead).
-      const scope: Record<string, unknown> = { mode };
-      if (mode !== "read") {
-        const currentPage = queue?.current_page;
-        if (currentPage && currentPage > 0) scope.current_page = currentPage;
-        if (queue?.current_assertion_id) {
-          scope.current_assertion_id = queue.current_assertion_id;
-        }
-        // The option the learner is on right now — even before checking — so the tutor
-        // always knows which question and which choice they're considering.
-        if (selected !== null) {
-          scope.selected_choice_index = Number(selected);
-        }
-        if (gradeState !== null && selected !== null) {
-          scope.confirmed_choice_index = Number(selected);
-          scope.answer_correct = gradeState.correct;
-        }
-      }
-      let assistant = "";
-      let gotToken = false;
-      await apiPostSSE("/api/chat", {
-        document_id: artifactId,
-        message: userMsg,
-        scope,
-      }, {
-        onChunk: (chunk) => {
-          gotToken = true;
-          assistant += chunk;
-          setChatMessages((m) => {
-            const copy = [...m];
-            const i = copy.length - 1;
-            const last = copy[i];
-            if (last?.role === "assistant") {
-              copy[i] = { ...last, content: assistant };
-            } else {
-              copy.push({ role: "assistant", content: assistant });
-            }
-            return copy;
-          });
-        },
-      }, { signal: abort.signal });
-      if (!gotToken || !assistant.trim()) {
-        throw new Error("empty response");
-      }
-    } catch (e) {
-      if (e instanceof DOMException && e.name === "AbortError") {
-        setChatMessages((m) => {
-          const copy = [...m];
-          if (copy[copy.length - 1]?.role === "assistant" && !copy[copy.length - 1]?.content) {
-            copy.pop();
-          }
-          return copy;
-        });
-        return;
-      }
-      const raw = e instanceof Error && e.message ? e.message : null;
-      const timedOut = raw && /timed out|aborted/i.test(raw);
-      const detail = timedOut
-        ? `${ZIVO_ASSISTANT_NAME} is still waking up — try again in a moment.`
-        : raw && raw !== "empty response"
-          ? humanizeApiFailure(0, raw)
-          : `${ZIVO_ASSISTANT_NAME} could not reply right now. Try again in a moment.`;
-      setChatMessages((m) => {
-        const copy = [...m];
-        const i = copy.length - 1;
-        const last = copy[i];
-        if (last?.role === "assistant") {
-          copy[i] = { ...last, content: detail };
-        } else {
-          copy.push({ role: "assistant", content: detail });
-        }
-        return copy;
-      });
-    } finally {
-      if (chatAbortRef.current === abort) chatAbortRef.current = null;
-      setChatBusy(false);
-    }
-  }
-
-  function sendChat() {
-    if (!chatInput.trim() || chatBusy || !chatContextReady) return;
-    const userMsg = chatInput.trim();
-    setChatInput("");
-    setChatMessages((m) => [...m, { role: "user", content: userMsg }, { role: "assistant", content: "" }]);
-    void runAssistant(userMsg);
-  }
-
-  // Clear the current conversation: empty the panel now, start a fresh thread on the
-  // server (per-surface), and drop the cached messages so it stays empty.
-  async function clearChat() {
-    if (chatBusy) return;
-    setChatMessages([]);
-    setChatInput("");
-    chatHydratedRef.current = `${artifactId}:${chatSurface}`;
-    try {
-      await apiPost(`/api/chat/threads/${artifactId}/clear?surface=${chatSurface}`, {});
-    } catch {
-      /* best-effort — the panel is already cleared locally */
-    }
-    void queryClient.invalidateQueries({ queryKey: queryKeys.chatMessages(artifactId, chatSurface) });
-  }
-
-  // Read-mode (Study Buddy) helpers — quote a selection into the composer, ask the
-  // buddy directly about a passage, and save answers/passages as notes linked to the doc.
-  function quoteToComposer(text: string) {
-    const t = text.trim().replace(/\s+/g, " ");
-    if (!t) return;
-    setChatInput(`About this passage:\n"${t}"\n\nMy question: `);
-  }
-  function askBuddy(message: string) {
-    if (chatBusy || !chatContextReady) return;
-    const msg = message.trim();
-    if (!msg) return;
-    setChatMessages((m) => [...m, { role: "user", content: msg }, { role: "assistant", content: "" }]);
-    void runAssistant(msg);
-  }
-  function saveNote(content: string, quote?: string | null) {
-    const c = content.trim();
-    if (!c) return;
-    void savedNotesActions.save(c, quote ?? null);
-    setReaderNotesOpen(true);
-  }
-
-  // Regenerate the most recent answer: drop the trailing assistant turn and re-ask
-  // the last user message.
-  function regenerateChat() {
-    if (chatBusy || !chatContextReady) return;
-    const lastUserIdx = chatMessages.map((x) => x.role).lastIndexOf("user");
-    if (lastUserIdx === -1) return;
-    const lastUser = chatMessages[lastUserIdx].content;
-    setChatMessages([...chatMessages.slice(0, lastUserIdx + 1), { role: "assistant", content: "" }]);
-    void runAssistant(lastUser);
-  }
-
-  // Edit a previous question: lift it back into the composer and trim the thread
-  // from that point, so the user can tweak and resend (ChatGPT-style).
-  function editChatFromUser(index: number) {
-    if (chatBusy) return;
-    const msg = chatMessages[index];
-    if (!msg || msg.role !== "user") return;
-    setChatInput(msg.content);
-    setChatMessages(chatMessages.slice(0, index));
-  }
-
-  function stopChat() {
-    chatAbortRef.current?.abort();
-  }
 
   if (invalidArtifactId) {
     return (
@@ -893,7 +726,6 @@ export default function WorkspaceArtifactPage({
   // one score + a full review. (Learn keeps its encouraging per-page completion.)
   const testCorrect = answeredHistory.filter((c) => c.gradeState.correct).length;
   const showTestResults = mode === "test" && showDocumentComplete && answeredHistory.length > 0;
-  const chatContextReady = queue?.rag_window_ready !== false;
   const completedRange = selectedRange;
   const nextRangeSuggestion = completedRange
     ? suggestNextPageRange(completedRange, pageCount)
