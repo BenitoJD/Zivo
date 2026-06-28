@@ -270,6 +270,74 @@ def critique_mcq(
     return parsed
 
 
+def verify_answer_key(
+    db: Session,
+    *,
+    mcq: dict[str, Any],
+    page_text: str,
+    model_id: uuid.UUID | None = None,
+) -> dict[str, str] | None:
+    """Independently re-solve the question from the source — BLIND to the marked key.
+
+    The single most important correctness guarantee: a confidently wrong answer
+    key is the worst failure an assessment system can make. A blind solver gets
+    the source + question + options (not which is marked correct), picks the
+    best-supported option itself, and we compare. Returns a fatal flaw dict when
+    the item is untrustworthy, else None.
+
+    Conservative by design: an unparseable/failed verification returns None (we
+    do not reject a good item just because the verifier hiccuped — the critic and
+    heuristics remain). It only rejects on a *confident* disagreement.
+    """
+    options = [str(o).strip() for o in (mcq.get("options") or []) if str(o).strip()]
+    try:
+        marked = int(mcq.get("correct_index"))
+    except (TypeError, ValueError):
+        return None
+    if len(options) < 2 or marked < 0 or marked >= len(options):
+        return None  # structural problems are the heuristic gate's job
+
+    excerpt = truncate_to_tokens(page_text, _PAGE_EXCERPT_MAX_TOKENS)
+    options_block = "\n".join(f"{i}. {opt}" for i, opt in enumerate(options))
+    system = get_prompt(db, "mcq_verify_system")
+    body = get_prompt(
+        db,
+        "mcq_verify_format",
+        question=mcq.get("question") or mcq.get("stem") or "",
+        options_block=options_block,
+    )
+    raw = _complete_chat_sync(
+        db,
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": f"{SUBJECT_MATTER_PREFIX}\n{excerpt}"},
+            {"role": "user", "content": body},
+        ],
+        log_tag="verify_mcq",
+        model_id=model_id,
+    )
+    parsed = _parse_critic_json(raw)
+    if not parsed:
+        return None  # verifier failed — don't punish the item
+
+    if parsed.get("none_defensible") is True:
+        return {"code": "not_grounded", "message": "Verifier: no option is supported by the source"}
+    if parsed.get("multiple_defensible") is True:
+        return {"code": "more_than_one_correct", "message": "Verifier: two or more options are defensible"}
+    try:
+        independent = int(parsed.get("answer_index"))
+    except (TypeError, ValueError):
+        return None
+    if independent != marked:
+        return {
+            "code": "wrong_answer_key",
+            "message": (
+                f"Verifier independently chose option {independent}, not the marked {marked}"
+            ),
+        }
+    return None
+
+
 def generate_quality_mcq(
     db: Session,
     *,
@@ -360,6 +428,14 @@ def generate_quality_mcq(
         if has_fatal_heuristic_flaws(heuristic_flaws):
             last_critique_bundle = _merge_critique_for_rewrite(heuristic_flaws, None)
             continue
+
+        from app.config import get_settings
+
+        if get_settings().verify_answer_key:
+            key_flaw = verify_answer_key(db, mcq=draft, page_text=page_text, model_id=model_id)
+            if key_flaw is not None:
+                last_critique_bundle = _merge_critique_for_rewrite([key_flaw], None)
+                continue
 
         if not heuristic_flaws:
             too_similar, max_sim = is_mcq_too_similar(draft, prior_mcqs)
@@ -532,6 +608,10 @@ def generate_quality_mcq_batch(
 
         model_id = default_chat_model_id(db)
 
+    from app.config import get_settings
+
+    verify_enabled = get_settings().verify_answer_key
+
     # Generation response cache: skip the LLM call if we've already generated
     # drafts for this (page context, aspect set). The quality gate below still
     # runs on every retrieval — only the generation call is skipped. DB-backed
@@ -584,6 +664,14 @@ def generate_quality_mcq_batch(
             rejected["too_similar_to_prior"] += 1
             continue
 
+        # Correctness gate: independently re-solve and confirm the marked key.
+        # Always-on (cheap, short output) — the one check too important to sample.
+        if verify_enabled:
+            key_flaw = verify_answer_key(db, mcq=draft, page_text=page_text, model_id=model_id)
+            if key_flaw is not None:
+                rejected[key_flaw["code"]] += 1
+                continue
+
         run_critic = bool(heuristic_flaws) or idx == 0 or random.random() < CRITIC_SAMPLE_RATE
         critic_meta: dict[str, Any] | None = None
         if run_critic:
@@ -626,6 +714,12 @@ def generate_quality_mcq_batch(
                 if too_similar:
                     rejected["too_similar_to_prior"] += 1
                     continue
+                # The rewrite may have moved the answer — re-verify the key.
+                if verify_enabled:
+                    key_flaw = verify_answer_key(db, mcq=draft, page_text=page_text, model_id=model_id)
+                    if key_flaw is not None:
+                        rejected[key_flaw["code"]] += 1
+                        continue
                 critique = critique_mcq(
                     db,
                     mcq=draft,

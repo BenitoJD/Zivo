@@ -29,6 +29,9 @@ FATAL_FLAW_CODES = frozenset(
         "longest_option_correct",
         "negative_wording",
         "not_grounded",
+        # The marked answer is not the one the source independently supports — the
+        # gravest flaw (it teaches the wrong thing). Set by the answer-key verifier.
+        "wrong_answer_key",
         "invalid_structure",
         "too_similar_to_prior",
         "meta_page_reference",

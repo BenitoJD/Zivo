@@ -244,9 +244,10 @@ def test_generate_quality_mcq_rewrites_then_passes() -> None:
     bad_block = f'```zv-mcq\n{json.dumps(bad)}\n```'
     good_block = f'```zv-mcq\n{json.dumps(good)}\n```'
 
-    with patch(
-        "app.services.mcq_quality._complete_chat_sync",
-        side_effect=[bad_block, good_block],
+    with (
+        patch("app.services.mcq_quality._complete_chat_sync", side_effect=[bad_block, good_block]),
+        # This test exercises the rewrite flow, not key verification.
+        patch("app.services.mcq_quality.verify_answer_key", return_value=None),
     ):
         result = generate_quality_mcq(
             db,
@@ -339,6 +340,8 @@ def test_generate_quality_mcq_embedding_gate_retries() -> None:
     with (
         patch("app.services.mcq_quality._complete_chat_sync", side_effect=[similar_block, distinct_block]),
         patch("app.services.mcq_quality.is_mcq_too_similar", side_effect=[(True, 0.95), (False, 0.4)]),
+        # This test exercises the embedding gate, not key verification.
+        patch("app.services.mcq_quality.verify_answer_key", return_value=None),
     ):
         result = generate_quality_mcq(
             db,

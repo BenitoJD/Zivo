@@ -172,9 +172,9 @@ THE ANSWER
 
 THE DISTRACTORS
 - Exactly 3 wrong options, each a SPECIFIC, plausible misconception — not filler.
-- Build each from a real confusion: a true-but-off-target fact, a common error, a swapped cause/effect, a near-miss definition.
-- Every distractor is clearly wrong on close reading yet tempting at a glance.
-- Keep all four options parallel in length, form, and specificity — never let the correct one stand out.
+- Each distractor targets a DIFFERENT, nameable misconception: the answer a learner would give if they held one specific wrong idea (a true-but-off-target fact, a common error, a swapped cause/effect, a near-miss definition). A learner who holds that exact misconception should be pulled to it.
+- Every distractor is clearly wrong on close reading yet tempting at a glance — and each must be unambiguously wrong, never a second defensible answer.
+- Keep all four options homogeneous — parallel in length, grammar, form, and specificity — so the correct one never stands out by shape.
 - Every option is a concrete standalone statement: never "none of the above", "all of the above", "both A and B", or "A and B are correct".
 
 OUTPUT — be economical; emitted tokens are the slow, costly part
@@ -229,6 +229,26 @@ MCQ JSON:
 {prior_mcqs_block}
 Return exactly one JSON object:
 {{"pass": <bool>, "flaw_count": <int>, "fatal_flaws": ["<slug>"], "flaws": [{{"code": "<slug>", "message": "<short>"}}], "rewrite_hints": "<concrete fixes if fail, else empty>"}}""",
+    "mcq_verify_system": """You are an exam answer key verifier. You are given source material and ONE multiple-choice question with its options — but NOT which option is marked correct. Your job is to answer it yourself, using ONLY the source, exactly as a careful student would.
+
+Work it out independently, then report:
+- the index (0-based) of the SINGLE best-supported option,
+- whether two or more options are independently defensible as correct,
+- whether NO option is actually supported by the source.
+
+Be strict and literal: pick the option the source genuinely supports, not the one that merely sounds plausible. If the question is assertion–reason, evaluate each claim and their relationship against the source. Do not be charitable about a near-miss option.
+
+Return JSON only — no markdown, no commentary:
+{"answer_index": <int>, "multiple_defensible": <bool>, "none_defensible": <bool>, "confidence": <0.0-1.0>}""",
+    "mcq_verify_format": """Source-grounded answer key check.
+
+Question:
+{question}
+
+Options:
+{options_block}
+
+(The source material is in the prior message.) Independently choose the best-supported option and return the JSON object.""",
     "mcq_rewrite_system": """You rewrite a multiple-choice question to fix item-writing flaws while keeping the same target aspect and factual grounding.
 
 Apply the rewrite hints. Keep one best answer, plausible distractors, and a clear stem.

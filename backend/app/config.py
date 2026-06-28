@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     # 2. Let generation adapt its question style + truth model to the material's
     #    content_type (expository/narrative/argumentative/procedural/reference).
     content_aware_generation: bool = False
+    # Independent answer-key verification ("solve-back"): a blind solver re-answers
+    # each question from the source WITHOUT seeing the marked key, and the item is
+    # rejected if it disagrees, finds 2+ defensible answers, or finds none grounded.
+    # The correctness guarantee of a world-class assessment system. One short LLM
+    # call per surviving draft — turn off to trade that correctness check for speed.
+    verify_answer_key: bool = True
     # 3. How the next question is chosen: "sequence" (legacy, by generation order),
     #    "concept_reinforce" (adaptive — reacts to the last answer), or
     #    "difficulty_edge" (targets the productive-struggle band from calibration).
