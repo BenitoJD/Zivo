@@ -66,6 +66,31 @@ def db():
     session.close()
 
 
+@pytest.fixture()
+def iso_db():
+    """Session whose entire transaction is rolled back at teardown.
+
+    Reservation is global (picks the oldest eligible job across the whole table),
+    so on a shared dev DB real queued app jobs would be reserved instead of the
+    test's. This fixture lets a test hide those competing jobs *within its own
+    transaction* (restored on rollback) so it sees only its DAG — without ever
+    disturbing the real jobs, since the changes are never committed.
+    """
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.rollback()
+        session.close()
+
+
+def _hide_competing_queued_jobs(session) -> None:
+    # Uncommitted: only visible inside this transaction, undone by rollback.
+    session.execute(
+        Job.__table__.update().where(Job.status == JobStatus.queued).values(status=JobStatus.cancelled)
+    )
+
+
 def _node(key: str, **kw) -> EtaDagNode:
     return EtaDagNode(key=key, name="test.worker.success", payload={"val": 1}, **kw)
 
@@ -129,47 +154,47 @@ def test_execution_state_rolls_up_to_succeeded(db) -> None:
 # Dependency-gated reservation
 # --------------------------------------------------------------------------- #
 
-def test_reservation_skips_job_with_unsatisfied_dependency(db) -> None:
+def test_reservation_skips_job_with_unsatisfied_dependency(iso_db) -> None:
     """A job whose dependency hasn't succeeded must NOT be reserved."""
-    execution = submit_dag(db, spec=EtaDagSpec(
+    _hide_competing_queued_jobs(iso_db)
+    execution = submit_dag(iso_db, spec=EtaDagSpec(
         name="wtest-gating",
         nodes=[_node("a"), _node("b")],
         edges=[EtaDagEdge("a", "b")],
     ))
-    jobs = {j.node_key: j for j in db.query(Job).filter(Job.execution_id == execution.id).all()}
+    iso_db.flush()
+    jobs = {j.node_key: j for j in iso_db.query(Job).filter(Job.execution_id == execution.id).all()}
 
-    # 'a' has no deps → reservable. Worker reserves it (now 'running').
-    with SessionLocal.begin() as reserve_db:
-        reserved = _reserve_next_job(reserve_db)
+    # 'a' has no deps → reservable.
+    reserved = _reserve_next_job(iso_db)
     assert reserved is not None
     assert str(reserved[0]) == str(jobs["a"].id)
 
-    # 'a' is now running, 'b' is blocked on 'a' → nothing reservable.
-    with SessionLocal.begin() as reserve_db:
-        reserved2 = _reserve_next_job(reserve_db)
+    # 'a' is now running, 'b' is blocked on 'a' → nothing else reservable.
+    reserved2 = _reserve_next_job(iso_db)
     assert reserved2 is None
 
 
-def test_reservation_picks_dependency_after_satisfied(db) -> None:
-    execution = submit_dag(db, spec=EtaDagSpec(
+def test_reservation_picks_dependency_after_satisfied(iso_db) -> None:
+    _hide_competing_queued_jobs(iso_db)
+    execution = submit_dag(iso_db, spec=EtaDagSpec(
         name="wtest-gating-ok",
         nodes=[_node("a"), _node("b")],
         edges=[EtaDagEdge("a", "b")],
     ))
-    jobs = {j.node_key: j for j in db.query(Job).filter(Job.execution_id == execution.id).all()}
+    iso_db.flush()
+    jobs = {j.node_key: j for j in iso_db.query(Job).filter(Job.execution_id == execution.id).all()}
 
     # Reserve 'a'
-    with SessionLocal.begin() as reserve_db:
-        reserved = _reserve_next_job(reserve_db)
+    reserved = _reserve_next_job(iso_db)
     assert str(reserved[0]) == str(jobs["a"].id)
 
-    # Mark 'a' succeeded
-    db.get(Job, jobs["a"].id).status = JobStatus.succeeded
-    db.commit()
+    # Mark 'a' succeeded (within this transaction)
+    iso_db.get(Job, jobs["a"].id).status = JobStatus.succeeded
+    iso_db.flush()
 
     # Now 'b' should be reservable
-    with SessionLocal.begin() as reserve_db:
-        reserved2 = _reserve_next_job(reserve_db)
+    reserved2 = _reserve_next_job(iso_db)
     assert reserved2 is not None
     assert str(reserved2[0]) == str(jobs["b"].id)
 

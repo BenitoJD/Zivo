@@ -6,18 +6,29 @@ import pytest
 
 # Register ETA handlers before any test module imports question_pool → jobs.
 from app.main import app as _app  # noqa: F401
+from app.repositories import intel as _intel
 from app.services import prompts as _prompts
 
 
 @pytest.fixture(autouse=True)
-def _isolate_prompt_cache():
-    """Clear the in-process prompt-template cache around every test.
+def _isolate_module_caches():
+    """Clear in-process memo caches around every test so order can't leak state.
 
-    get_prompt() memoizes templates in a module-level dict (60s TTL). A test that
-    calls it with a mock DB caches a mock value under a real prompt key, which then
-    leaks into a later test that expects the real default. Clearing it per test
-    keeps tests order-independent.
+    Several modules memoize lookups in module-level dicts. A unit test that calls
+    one with a mock DB caches a mock value under a real key, which then poisons a
+    later test that expects the real value:
+      - get_prompt() -> prompts._prompt_template_cache (templates, 60s TTL)
+      - concept_id()/source ids -> intel._concept_id_store / _source_id_store
+        (a poisoned concept id breaks the calibration write path downstream).
+    Clearing them per test keeps the suite order-independent.
     """
-    _prompts._prompt_template_cache.clear()
+    caches = (
+        _prompts._prompt_template_cache,
+        _intel._concept_id_store,
+        _intel._source_id_store,
+    )
+    for cache in caches:
+        cache.clear()
     yield
-    _prompts._prompt_template_cache.clear()
+    for cache in caches:
+        cache.clear()
