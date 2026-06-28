@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass
 
 from fastapi import HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import Settings, get_settings
@@ -118,6 +119,26 @@ def default_chat_model_id(db: Session) -> uuid.UUID | None:
     model = (
         _enabled_chat_query(db)
         .order_by(LlmModel.is_default.desc(), LlmModel.sort_order, LlmModel.display_name)
+        .first()
+    )
+    return model.id if model else None
+
+
+def draft_chat_model_id(db: Session) -> uuid.UUID | None:
+    """The model to use for writing DRAFTS, if a separate draft model is configured.
+
+    Lets ops point drafting at a faster/cheaper model (latency lever) while the
+    critic + answer-key verifier keep using the strong default. Returns None when
+    `draft_model_name` is unset or doesn't match an enabled chat model, so callers
+    fall back to `default_chat_model_id`.
+    """
+    name = (get_settings().draft_model_name or "").strip()
+    if not name:
+        return None
+    model = (
+        _enabled_chat_query(db)
+        .filter(func.lower(LlmModel.display_name) == name.lower())
+        .order_by(LlmModel.sort_order)
         .first()
     )
     return model.id if model else None

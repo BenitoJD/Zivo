@@ -68,6 +68,20 @@ class Settings(BaseSettings):
     # The correctness guarantee of a world-class assessment system. One short LLM
     # call per surviving draft — turn off to trade that correctness check for speed.
     verify_answer_key: bool = True
+    # Best-of-N: over-generate this many candidate drafts per aspect in the (single)
+    # batch call and keep the structurally-strongest one (free heuristic scoring),
+    # before the verifier/critic gate. 1 = current behaviour (no over-generation).
+    mcq_candidates_per_aspect: int = 1
+    # Use a separate (typically faster/cheaper) model to write DRAFTS, reserving the
+    # strong default for the critic + answer-key verifier. Empty = use the default
+    # for everything. Match is by the model's display name (case-insensitive).
+    draft_model_name: str = ""
+    # Self-improving loop: a periodic job retires items that real learners almost
+    # never get right (likely broken — wrong key / ambiguous), from intel.measurement.
+    # Reversible (sets assertion status), conservative thresholds below.
+    item_self_improve_enabled: bool = True
+    item_retire_min_exposure: int = 12
+    item_retire_max_correct_rate: float = 0.08
     # 3. How the next question is chosen: "sequence" (legacy, by generation order),
     #    "concept_reinforce" (adaptive — reacts to the last answer), or
     #    "difficulty_edge" (targets the productive-struggle band from calibration).

@@ -367,6 +367,12 @@ def generate_quality_mcq(
 
         model_id = default_chat_model_id(db)
 
+    # Drafts can use a faster/cheaper model; the rewrite + critic + verifier keep
+    # the strong default (they fix and judge, where quality matters most).
+    from app.services.llm_registry import draft_chat_model_id
+
+    draft_model_id = draft_chat_model_id(db) or model_id
+
     draft: dict[str, Any] | None = None
     last_critique_bundle: dict[str, Any] = {"flaws": [], "rewrite_hints": ""}
 
@@ -379,7 +385,7 @@ def generate_quality_mcq(
                 sequence=sequence,
                 target_aspect=target_aspect,
                 prior_mcqs=prior_mcqs,
-                model_id=model_id,
+                model_id=draft_model_id,
                 content_type=content_type,
             )
         else:
@@ -391,7 +397,7 @@ def generate_quality_mcq(
                     sequence=sequence,
                     target_aspect=target_aspect,
                     prior_mcqs=prior_mcqs,
-                    model_id=model_id,
+                    model_id=draft_model_id,
                     content_type=content_type,
                 )
             elif last_critique_bundle.get("flaws") or last_critique_bundle.get("rewrite_hints"):
@@ -413,7 +419,7 @@ def generate_quality_mcq(
                     sequence=sequence,
                     target_aspect=target_aspect,
                     prior_mcqs=prior_mcqs,
-                    model_id=model_id,
+                    model_id=draft_model_id,
                     content_type=content_type,
                 )
 
@@ -516,6 +522,29 @@ BATCH_MCQ_CAP = 5
 CRITIC_SAMPLE_RATE = float(os.getenv("ZIVO_CRITIC_SAMPLE_RATE", "0.25"))
 
 
+def _draft_score(draft: dict[str, Any]) -> tuple[int, int, float]:
+    """Lower is better. Free (no-LLM) structural-quality signal for best-of-N
+    selection: fewest fatal flaws, then fewest total flaws, then the smallest gap
+    between the correct option's length and the others' mean (guards the
+    longest-answer give-away)."""
+    flaws = run_heuristic_checks(draft)
+    fatal = sum(1 for f in flaws if f.get("code") in FATAL_FLAW_CODES)
+    options = [str(o) for o in (draft.get("options") or [])]
+    gap = 0.0
+    try:
+        ci = int(draft.get("correct_index"))
+        others = [len(o) for i, o in enumerate(options) if i != ci]
+        if others:
+            gap = abs(len(options[ci]) - sum(others) / len(others))
+    except (TypeError, ValueError, IndexError):
+        gap = 0.0
+    return (fatal, len(flaws), gap)
+
+
+def _select_best_draft(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+    return min(candidates, key=_draft_score) if candidates else None
+
+
 def _generate_batch_drafts(
     db: Session,
     *,
@@ -526,12 +555,17 @@ def _generate_batch_drafts(
     model_id: uuid.UUID | None = None,
     aspect_hints: str = "",
     content_type: str | None = None,
+    candidates_per_aspect: int = 1,
 ) -> list[dict[str, Any]]:
-    """One LLM call producing up to N MCQs (one per target aspect).
+    """One LLM call producing MCQ drafts for the target aspects.
 
-    Returns normalized payload dicts for every block the model emitted. The
-    quality gates (heuristics, embedding similarity) run on each in the caller.
+    With ``candidates_per_aspect`` > 1 (best-of-N), the model writes that many
+    candidates per aspect and we keep the structurally-strongest one (free
+    heuristic scoring) — selection over generation. Returns one normalized draft
+    per aspect; the quality gates (verifier, critic, dedup) run on each in the
+    caller.
     """
+    k = max(1, candidates_per_aspect)
     excerpt = truncate_to_tokens(page_text, _PAGE_EXCERPT_MAX_TOKENS)
     targets_block = "\n".join(
         f"{i + 1}. {t.get('label')} (key: {t.get('key')})"
@@ -542,17 +576,30 @@ def _generate_batch_drafts(
     hints_block = f"\n\nAspect focus hints (variable — not part of cached prefix):\n{aspect_hints}" if aspect_hints else ""
 
     system = get_prompt(db, "mcq_page_generate_system")
-    instructions = (
-        f"Generate exactly {len(targets)} multiple-choice questions — ONE per target aspect below. "
-        f"Each must test a distinct idea from the subject matter.\n"
-        f"{_content_style_line(content_type)}\n"
-        f"Target aspects:\n{targets_block}\n\n"
-        f"{prior_block}"
-        f"{hints_block}\n"
-        f"Return ONLY {len(targets)} ```zv-mcq``` JSON blocks, one per aspect, in order. "
-        "Each block's primary_concept_key must match its target aspect key. "
-        "Be economical with tokens: no commentary, explanation at most ONE short sentence."
-    )
+    if k == 1:
+        instructions = (
+            f"Generate exactly {len(targets)} multiple-choice questions — ONE per target aspect below. "
+            f"Each must test a distinct idea from the subject matter.\n"
+            f"{_content_style_line(content_type)}\n"
+            f"Target aspects:\n{targets_block}\n\n"
+            f"{prior_block}"
+            f"{hints_block}\n"
+            f"Return ONLY {len(targets)} ```zv-mcq``` JSON blocks, one per aspect, in order. "
+            "Each block's primary_concept_key must match its target aspect key. "
+            "Be economical with tokens: no commentary, explanation at most ONE short sentence."
+        )
+    else:
+        instructions = (
+            f"For EACH of the {len(targets)} target aspects below, write {k} DISTINCT candidate "
+            f"multiple-choice questions — {len(targets) * k} ```zv-mcq``` blocks total. The candidates "
+            f"for one aspect should differ in angle/wording so the best can be chosen.\n"
+            f"{_content_style_line(content_type)}\n"
+            f"Target aspects:\n{targets_block}\n\n"
+            f"{prior_block}"
+            f"{hints_block}\n"
+            f"Every block's primary_concept_key MUST equal its aspect key — that is how candidates are grouped. "
+            "Be economical with tokens: no commentary, explanation at most ONE short sentence."
+        )
     raw = _complete_chat_sync(
         db,
         [
@@ -564,17 +611,45 @@ def _generate_batch_drafts(
         model_id=model_id,
     )
     blocks = _parse_mcq_blocks(raw)
-    # Pair each parsed block with its target aspect (in order). If the model
-    # returned fewer blocks than targets, we keep what we got. Normalization is
-    # per-block so one malformed block can't fail the rest.
-    normalized: list[dict[str, Any]] = []
-    for idx, data in enumerate(blocks):
-        target = targets[idx] if idx < len(targets) else None
+
+    if k == 1:
+        # Pair each parsed block with its target aspect (in order). If the model
+        # returned fewer blocks than targets, we keep what we got. Normalization is
+        # per-block so one malformed block can't fail the rest.
+        normalized: list[dict[str, Any]] = []
+        for idx, data in enumerate(blocks):
+            target = targets[idx] if idx < len(targets) else None
+            try:
+                normalized.append(_normalize_mcq_payload(data, target))
+            except ValueError:
+                continue
+        return normalized
+
+    # Best-of-N: group candidates by the aspect key the model tagged (robust to
+    # ordering/count drift), then keep the strongest candidate per aspect.
+    key_to_target = {str(t.get("key")): t for t in targets if t.get("key")}
+    by_key: dict[str, list[dict[str, Any]]] = {}
+    for data in blocks:
+        raw_key = str(data.get("primary_concept_key") or "")
         try:
-            normalized.append(_normalize_mcq_payload(data, target))
+            norm = _normalize_mcq_payload(data, key_to_target.get(raw_key))
         except ValueError:
             continue
-    return normalized
+        by_key.setdefault(str(norm.get("primary_concept_key") or raw_key), []).append(norm)
+
+    selected: list[dict[str, Any]] = []
+    for t in targets:
+        best = _select_best_draft(by_key.get(str(t.get("key")), []))
+        if best is not None:
+            selected.append(best)
+    # Fallback if key-grouping matched nothing (keys drifted): positional best-effort.
+    if not selected:
+        for idx, data in enumerate(blocks[: len(targets)]):
+            try:
+                selected.append(_normalize_mcq_payload(data, targets[idx] if idx < len(targets) else None))
+            except ValueError:
+                continue
+    return selected
 
 
 def generate_quality_mcq_batch(
@@ -609,8 +684,13 @@ def generate_quality_mcq_batch(
         model_id = default_chat_model_id(db)
 
     from app.config import get_settings
+    from app.services.llm_registry import draft_chat_model_id
 
-    verify_enabled = get_settings().verify_answer_key
+    settings = get_settings()
+    verify_enabled = settings.verify_answer_key
+    # Drafts can use a faster/cheaper model; critic + verifier keep the strong default.
+    draft_model_id = draft_chat_model_id(db) or model_id
+    candidates_per_aspect = max(1, settings.mcq_candidates_per_aspect)
 
     # Generation response cache: skip the LLM call if we've already generated
     # drafts for this (page context, aspect set). The quality gate below still
@@ -627,9 +707,10 @@ def generate_quality_mcq_batch(
             page_number=page_number,
             targets=targets,
             prior_mcqs=prior_mcqs,
-            model_id=model_id,
+            model_id=draft_model_id,
             aspect_hints=aspect_hints,
             content_type=content_type,
+            candidates_per_aspect=candidates_per_aspect,
         )
         if drafts:
             cache_put(db, kind="batch_drafts", cache_key=drafts_cache_key, value=drafts)

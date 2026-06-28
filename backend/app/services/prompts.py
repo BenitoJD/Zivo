@@ -172,6 +172,7 @@ THE ANSWER
 
 THE DISTRACTORS
 - Exactly 3 wrong options, each a SPECIFIC, plausible misconception — not filler.
+- First (silently, in your head) name the 3 most likely misconceptions a learner could hold about THIS aspect; then write one distractor as the exact answer each of those misconceptions would produce. Do not output the misconceptions — only the resulting options.
 - Each distractor targets a DIFFERENT, nameable misconception: the answer a learner would give if they held one specific wrong idea (a true-but-off-target fact, a common error, a swapped cause/effect, a near-miss definition). A learner who holds that exact misconception should be pulled to it.
 - Every distractor is clearly wrong on close reading yet tempting at a glance — and each must be unambiguously wrong, never a second defensible answer.
 - Keep all four options homogeneous — parallel in length, grammar, form, and specificity — so the correct one never stands out by shape.
