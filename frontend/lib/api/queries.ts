@@ -64,8 +64,7 @@ export function useTopicsQuery(artifactId: string, enabled = true) {
     enabled: enabled && Boolean(artifactId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      if (status === "ready" || status === "failed") return false;
-      return document.visibilityState === "visible" ? 3000 : false;
+      return status === "ready" || status === "failed" ? false : 3000;
     },
   });
 }
@@ -85,13 +84,20 @@ export type FlashcardsResponse = {
 const stillBuilding = (status?: string) =>
   status === "indexing" || status === "generating" || status === "missing" || !status;
 
+// NOTE: poll callbacks must NEVER gate the interval on `document.visibilityState`.
+// Returning `false` tells React Query to STOP the timer (not pause it); with the
+// global `refetchOnWindowFocus: false`, nothing re-triggers a fetch when the tab
+// regains focus, so polling wedges and the result only appears after a manual
+// refresh (the "stuck at 40%" bug). React Query already pauses interval refetches
+// in the background and resumes them on focus — let it. Just return the interval
+// while work is pending.
+
 export function useNotesQuery(artifactId: string, kind: NoteKind = "notes", enabled = true) {
   return useQuery({
     queryKey: queryKeys.notes(artifactId, kind),
     queryFn: () => apiGet<NotesResponse>(`/api/artifacts/${artifactId}/notes?kind=${kind}`),
     enabled: enabled && Boolean(artifactId),
-    refetchInterval: (query) =>
-      stillBuilding(query.state.data?.status) && document.visibilityState === "visible" ? 3000 : false,
+    refetchInterval: (query) => (stillBuilding(query.state.data?.status) ? 3000 : false),
   });
 }
 
@@ -100,8 +106,7 @@ export function useFlashcardsQuery(artifactId: string, enabled = true) {
     queryKey: queryKeys.flashcards(artifactId),
     queryFn: () => apiGet<FlashcardsResponse>(`/api/artifacts/${artifactId}/flashcards`),
     enabled: enabled && Boolean(artifactId),
-    refetchInterval: (query) =>
-      stillBuilding(query.state.data?.status) && document.visibilityState === "visible" ? 3000 : false,
+    refetchInterval: (query) => (stillBuilding(query.state.data?.status) ? 3000 : false),
   });
 }
 
@@ -126,8 +131,7 @@ export function useMemoryPalaceQuery(artifactId: string, setting = "", enabled =
     queryKey: queryKeys.memoryPalace(artifactId, setting),
     queryFn: () => apiGet<MemoryPalaceResponse>(`/api/artifacts/${artifactId}/memory-palace${qs}`),
     enabled: enabled && Boolean(artifactId),
-    refetchInterval: (query) =>
-      stillBuilding(query.state.data?.status) && document.visibilityState === "visible" ? 3000 : false,
+    refetchInterval: (query) => (stillBuilding(query.state.data?.status) ? 3000 : false),
   });
 }
 
@@ -198,8 +202,7 @@ export function useQuizQuery(artifactId: string, cfg: QuizConfig, enabled = true
     queryKey: queryKeys.quiz(artifactId, qs),
     queryFn: () => apiGet<QuizResponse>(`/api/artifacts/${artifactId}/quiz?${qs}`),
     enabled: enabled && Boolean(artifactId) && cfg.types.length > 0,
-    refetchInterval: (query) =>
-      stillBuilding(query.state.data?.status) && document.visibilityState === "visible" ? 3000 : false,
+    refetchInterval: (query) => (stillBuilding(query.state.data?.status) ? 3000 : false),
   });
 }
 
@@ -225,11 +228,8 @@ export function useSourcesQuery(enabled = true) {
     queryKey: queryKeys.sources,
     queryFn: () => apiGet<SourceDocument[]>("/api/sources"),
     enabled,
-    refetchInterval: (query) => {
-      const docs = query.state.data;
-      if (!docs?.some((d) => d.status === "indexing")) return false;
-      return document.visibilityState === "visible" ? 4000 : false;
-    },
+    refetchInterval: (query) =>
+      query.state.data?.some((d) => d.status === "indexing") ? 4000 : false,
   });
 }
 
@@ -253,10 +253,7 @@ export function useArtifactQuery(artifactId: string, enabled = true) {
     queryKey: queryKeys.artifact(artifactId),
     queryFn: () => apiGet<ArtifactMeta>(`/api/artifacts/${artifactId}`),
     enabled: enabled && Boolean(artifactId),
-    refetchInterval: (query) => {
-      if (query.state.data?.status !== "indexing") return false;
-      return document.visibilityState === "visible" ? 5000 : false;
-    },
+    refetchInterval: (query) => (query.state.data?.status === "indexing" ? 5000 : false),
   });
 }
 
