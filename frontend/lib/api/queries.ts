@@ -253,7 +253,13 @@ export function useArtifactQuery(artifactId: string, enabled = true) {
     queryKey: queryKeys.artifact(artifactId),
     queryFn: () => apiGet<ArtifactMeta>(`/api/artifacts/${artifactId}`),
     enabled: enabled && Boolean(artifactId),
-    refetchInterval: (query) => (query.state.data?.status === "indexing" ? 5000 : false),
+    // NOTE: the indexing → ready poll is driven explicitly by the workspace page,
+    // not by refetchInterval here. A fresh upload first settles this query on
+    // status "pending" (awaiting page selection); React Query does not reliably
+    // (re)arm a refetchInterval that was previously false when the status later
+    // transitions to "indexing", so the indexing loader would freeze at its last
+    // sampled percent until a manual refresh. See the explicit poll effect in
+    // app/workspace/[artifactId]/page.tsx.
   });
 }
 

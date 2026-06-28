@@ -218,6 +218,33 @@ export default function WorkspaceArtifactPage({
     }
   }, [pagesQuery.data]);
 
+  // Explicit indexing → ready poll. A freshly-uploaded PDF first settles the
+  // artifact query on status "pending" (awaiting page selection); React Query
+  // does not reliably (re)arm a refetchInterval that was previously false once
+  // the status transitions to "indexing" after the learner confirms pages — so
+  // the full-screen "indexing N%" loader would freeze at its last sampled value
+  // until a manual refresh. Own the poll here so it always runs while indexing
+  // and stops the instant the document is ready.
+  useEffect(() => {
+    if (invalidArtifactId || artifact?.status !== "indexing") return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const data = await apiGet<ArtifactMeta>(`/api/artifacts/${artifactId}`);
+        if (cancelled) return;
+        setArtifact(data);
+        queryClient.setQueryData(queryKeys.artifact(artifactId), data);
+      } catch {
+        /* transient — keep polling */
+      }
+    };
+    const id = window.setInterval(() => void poll(), 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [invalidArtifactId, artifactId, artifact?.status, queryClient]);
+
   useEffect(() => {
     void ensureGuestSession();
   }, []);
