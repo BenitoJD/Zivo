@@ -76,6 +76,36 @@ def run_page_triage(
         page_end=page_number,
     )
     page_text = "\n\n".join(c["text"] for c in chunks if c.get("text")).strip()
+
+    # Guard the indexing race. Eager lookahead triage (EAGER_TRIAGE_LOOKAHEAD
+    # pages ahead of the reader) can reach a page BEFORE its text is ingested —
+    # the RAG window indexes lazily, a few pages at a time. With no chunks yet,
+    # page_text is empty and triage would persist a FALSE non_content verdict,
+    # permanently marking a content-rich page "empty". The learn queue then
+    # auto-skips every such page and can declare the whole document complete
+    # after only a couple of genuinely-studied pages. Defer instead: write NO
+    # coverage so the page is re-triaged (with real text) once the window
+    # indexes it. A genuinely blank page is indexed-but-textless and still flows
+    # through to a real non_content verdict below.
+    if not page_text:
+        from app.services.rag_window import indexed_pages_for_document
+
+        if page_number not in set(indexed_pages_for_document(db, document_id)):
+            logger.info(
+                "page triage deferred: page %s not indexed yet (doc %s)",
+                page_number,
+                document_id,
+            )
+            return {
+                "question_budget": 0,
+                "aspects": [],
+                "rationale": "Deferred — page text not indexed yet.",
+                "aspect_dedup": None,
+                "content_type": None,
+                "non_content": False,
+                "deferred": True,
+            }
+
     result = _triage_page(db, page_text=page_text, page_number=page_number)
 
     save_page_coverage(

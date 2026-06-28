@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+import uuid
+from unittest.mock import MagicMock, patch
 
+from app.graphs import page_triage_graph as ptg
 from app.graphs.page_triage_graph import (
     _fallback_triage,
     _finalize_triage,
@@ -52,6 +54,24 @@ def test_fallback_triage_never_persists_the_strand_shape() -> None:
         r = _fallback_triage(text, page_number=7)
         has_aspects = len(r["aspects"]) > 0
         assert has_aspects or r["non_content"] is True, f"strand shape for {text!r}"
+
+
+def test_run_page_triage_defers_unindexed_page_instead_of_non_content() -> None:
+    # The indexing race: eager lookahead triage reaches a page before its text is
+    # ingested. With no chunks, triage must DEFER (write no coverage) — never
+    # persist a false non_content verdict that would auto-skip a real page and
+    # prematurely complete the whole document.
+    db = MagicMock()
+    with (
+        patch.object(ptg, "fetch_chunks_for_page_range", return_value=[]),
+        patch("app.services.rag_window.indexed_pages_for_document", return_value=set()),
+        patch.object(ptg, "save_page_coverage") as save_cov,
+    ):
+        result = ptg.run_page_triage(db, uuid.uuid4(), page_number=12, precompute=True)
+
+    assert result.get("deferred") is True
+    assert result["non_content"] is False
+    save_cov.assert_not_called()
 
 
 def test_finalize_triage_shrinks_budget_after_dedup() -> None:
