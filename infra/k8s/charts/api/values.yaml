@@ -8,8 +8,8 @@ image:
 
 imagePullSecrets: []
 
-# Judge0 code-execution sandbox (interview coding rounds). In-cluster service.
-judge0Url: "http://judge0-server.judge0.svc:2358"
+# coderunner code-execution sandbox (interview coding rounds). In-cluster service.
+codeRunnerUrl: "http://coderunner.coderunner.svc:2358"
 
 service:
   port: 8000

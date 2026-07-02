@@ -110,9 +110,11 @@ class Settings(BaseSettings):
     # When false, the public practice endpoints return 404 (kill switch).
     practice_enabled: bool = True
 
-    # Judge0 code-execution sandbox. Local dev → docker-compose service on :2358;
-    # prod → in-cluster service http://judge0-server.judge0.svc:2358 (via JUDGE0_URL).
-    judge0_url: str = "http://localhost:2358"
+    # Code-execution sandbox (coderunner — k8s-native, cgroup v2). Local dev →
+    # docker-compose service on :2358; prod → http://coderunner.coderunner.svc:2358
+    # (via CODE_RUNNER_URL). JUDGE0_URL kept as a fallback alias for back-compat.
+    code_runner_url: str = "http://localhost:2358"
+    judge0_url: str = ""
 
     session_days: int = 7
     session_remember_days: int = 30

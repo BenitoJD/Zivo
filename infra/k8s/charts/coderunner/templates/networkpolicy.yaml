@@ -1,0 +1,30 @@
+# The executed code runs inside these pods and inherits their network namespace, so denying the
+# pod's egress = the untrusted code has NO network at all. Ingress is limited to the app namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: coderunner-default-deny
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# Only the Zivo app may call the runner on :2358.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: coderunner-ingress
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: coderunner
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: zivo
+      ports:
+        - protocol: TCP
+          port: 2358

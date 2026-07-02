@@ -72,14 +72,16 @@ if [[ -d ./infra/k8s/charts/pgbouncer ]]; then
   fi
 fi
 
-# Judge0 code-execution sandbox (own `judge0` namespace; release metadata stored in $NS to
-# avoid a create-namespace chicken-egg). Requires the judge0-secrets Secret to pre-exist in
-# the judge0 namespace (createSecret=false in prod). See infra/k8s/charts/judge0/README.md.
-if [[ -d ./infra/k8s/charts/judge0 ]]; then
-  helm_record judge0
-  helm upgrade --install judge0 ./infra/k8s/charts/judge0 -n "$NS" \
-    -f infra/k8s/environments/prod/judge0-values.yaml \
-    --wait --timeout 10m || echo "WARN: judge0 install did not converge — check privileged/cgroup support on the node"
+# coderunner — k8s-native code-execution sandbox (own `coderunner` namespace; release metadata
+# stored in $NS to avoid a create-namespace chicken-egg). Built locally + imported to containerd,
+# same as the api/web images. See infra/k8s/charts/coderunner.
+if [[ -d ./infra/k8s/charts/coderunner ]]; then
+  CODERUNNER_IMAGE="ghcr.io/benitojd/zivo-coderunner:latest"
+  docker build -t "${CODERUNNER_IMAGE}" ./backend/coderunner
+  docker save "${CODERUNNER_IMAGE}" | sudo k3s ctr images import -
+  helm_record coderunner
+  helm upgrade --install coderunner ./infra/k8s/charts/coderunner -n "$NS" \
+    --wait --timeout 5m || echo "WARN: coderunner install did not converge"
 fi
 
 for release in zivo-worker-io zivo-worker-cpu; do

@@ -1,0 +1,18 @@
+namespace: coderunner
+
+image:
+  repository: ghcr.io/benitojd/zivo-coderunner
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+# Memory limit is the k8s backstop above the per-submission RLIMIT_AS (512Mi × up to 4 concurrent).
+resources:
+  requests: { cpu: "100m", memory: "256Mi" }
+  limits: { cpu: "1", memory: "2Gi" }
+
+env:
+  RUN_CPU_SECONDS: "5"
+  RUN_MEM_BYTES: "536870912"      # 512Mi RLIMIT_AS per submission
+  RUN_MAX_CONCURRENCY: "4"
