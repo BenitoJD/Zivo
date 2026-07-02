@@ -24,7 +24,9 @@ jobs:
     runs-on: [self-hosted, zivo]
     timeout-minutes: 60
     env:
-      KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      # The runner lives on the small Judge0 box (no k3s, too little RAM to build). It orchestrates
+      # the heavy build + k3s import + helm on the prod VPS over SSH (github-runner@prod, key authorized).
+      PROD_HOST: 103.194.228.47
     steps:
       - uses: actions/checkout@v6
         with:
@@ -34,12 +36,12 @@ jobs:
       - id: tag
         run: echo "image_tag=Zivo_0.1.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and deploy on VPS
+      - name: Build and deploy on prod VPS (over SSH)
         env:
           PREBUILT: ${{ github.event.inputs.prebuilt == '1' && '1' || '0' }}
         run: |
-          chmod +x scripts/deploy-vps-local-build.sh scripts/promote-prod-image-tags.sh
-          REPO="${{ github.workspace }}" bash scripts/deploy-vps-local-build.sh "${{ steps.tag.outputs.image_tag }}"
+          ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "github-runner@${PROD_HOST}" \
+            "cd /opt/zivo && PREBUILT=${PREBUILT} bash scripts/deploy-vps-local-build.sh '${{ steps.tag.outputs.image_tag }}'"
 
       - name: Promote image tags in git
         if: ${{ github.event.inputs.branch == '' || github.event.inputs.branch == 'main' }}
