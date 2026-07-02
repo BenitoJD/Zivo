@@ -5,6 +5,10 @@
 # roll out tags already in GHCR. Run by the Deploy Zivo workflow; also runnable by hand.
 set -euo pipefail
 
+# The web Dockerfile uses `RUN --mount=type=cache`, which needs BuildKit; the box's docker
+# defaults to the legacy builder, so force BuildKit on.
+export DOCKER_BUILDKIT=1
+
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 
 # The self-hosted runner (github-runner) can't read root's k3s.yaml (0600 root:root), so helm/kubectl
