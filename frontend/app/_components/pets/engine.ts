@@ -157,7 +157,9 @@ class Ball {
     this.container = container;
     this.groundFraction = groundFraction;
     const BALL_SIZE = 10;
-    this.radius = BALL_SIZE / 2;
+    // Visual radius: the element is CSS-scaled, so collisions must use the
+    // scaled size or the ball clips through walls/floor.
+    this.radius = (BALL_SIZE / 2) * scale;
 
     this.ballEl = makeDiv(container, "zv-pet-ball");
     const img = document.createElement("img");
@@ -174,6 +176,8 @@ class Ball {
     this.y = Math.random() * (rect.height * 0.15 - this.radius * 2) + this.radius;
     this.vx = (Math.random() - 0.5) * 15;
     this.vy = (Math.random() - 0.5) * 8;
+    // Position before first paint — otherwise the ball flashes at (0,0).
+    setVars(this.ballEl, { "--x": `${this.x - 5}px`, "--y": `${this.y - 5}px` });
 
     this.update = this.update.bind(this);
     this.frameId = requestAnimationFrame(this.update);
@@ -183,8 +187,9 @@ class Ball {
   private groundFraction: number;
 
   private getGroundHeight(): number {
+    // Same ground line the pets' feet stand on.
     const rect = this.container.getBoundingClientRect();
-    return rect.height * this.groundFraction + 15;
+    return rect.height * this.groundFraction;
   }
 
   private update(): void {
@@ -213,7 +218,9 @@ class Ball {
     }
     this.vx *= this.airRes;
     this.vy *= this.airRes;
-    setVars(this.ballEl, { "--x": `${this.x - this.radius}px`, "--y": `${this.y - this.radius}px` });
+    // Offset by the *unscaled* half-size (5px): CSS scale() runs around the
+    // element center, so the center stays where translate() put it.
+    setVars(this.ballEl, { "--x": `${this.x - 5}px`, "--y": `${this.y - 5}px` });
     this.frameId = requestAnimationFrame(this.update);
   }
 
@@ -265,7 +272,8 @@ class Pet {
     window.setTimeout(() => {
       if (this.isDestroyed) return;
       const w = (this.container as HTMLElement).offsetWidth;
-      this.currentX = Math.random() * (w * 0.8) + w * 0.1;
+      const halfW = (this.animations["idle"].frameWidth * this.scale) / 2;
+      this.currentX = halfW + Math.random() * Math.max(w - halfW * 2, 0);
       this.petEl = this.createPetElement();
       this.setupHoverListeners();
       void (async () => {
@@ -277,9 +285,14 @@ class Pet {
 
   protected createPetElement(): HTMLElement {
     const el = makeDiv(this.container, "zv-pet");
+    // The element is centered on (--left, --top) then scaled, so put the feet
+    // line (drawn at row 31 of the 32px frame) exactly on the ground line —
+    // otherwise the scaled bottom half hangs below it and gets clipped by the
+    // container's overflow:hidden.
+    const feetOffset = (this.animations["idle"].frameHeight / 2 - 1) * this.scale;
     setVars(el, {
       "--left": `${this.currentX}px`,
-      "--top": `${this.groundFraction * 100}%`,
+      "--top": `calc(${this.groundFraction * 100}% - ${feetOffset}px)`,
       "--pet-size": `${this.animations["idle"].frameWidth}px`,
       "--scale-x": `${this.direction}`,
       "--scale": `${this.scale}`,
@@ -345,10 +358,11 @@ class Pet {
 
   protected move(duration: number, action?: string): Promise<void> {
     if (this.actionLoopPaused || this.isDestroyed) return Promise.resolve();
-    const petWidth = this.animations["idle"].frameWidth;
+    // Clamp with the *scaled* half-width so the sprite never pokes past the edges.
+    const halfW = (this.animations["idle"].frameWidth * this.scale) / 2;
     const containerWidth = (this.container as HTMLElement).offsetWidth;
-    const maxLeft = containerWidth - petWidth / 2;
-    const minLeft = petWidth / 2;
+    const maxLeft = containerWidth - halfW;
+    const minLeft = halfW;
     const magnitude = action?.includes("jump") ? this.moveDist * (Math.random() * 0.3 + 1.5) : this.moveDist;
     const direction = Math.random() < 0.9 ? this.direction : -this.direction;
     let dx = magnitude * direction;
@@ -501,10 +515,10 @@ class Cat extends Pet {
 
   private async chaseBall(): Promise<void> {
     if (!this.chasingBall || this.isDestroyed) return;
-    const petWidth = this.animations["idle"].frameWidth;
+    const halfW = (this.animations["idle"].frameWidth * this.scale) / 2;
     const containerWidth = (this.container as HTMLElement).offsetWidth;
-    const minLeft = petWidth / 2;
-    const maxLeft = containerWidth - petWidth / 2;
+    const minLeft = halfW;
+    const maxLeft = containerWidth - halfW;
     for (let i = 0; i < 3; i++) {
       if (!this.chasingBall) break;
       const dx = this.chasingBall.getPosition().x - this.currentX;
