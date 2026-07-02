@@ -1,0 +1,15 @@
+# Copy to judge0.conf and fill in random passwords (openssl rand -hex 16).
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_PASSWORD=CHANGE_ME
+POSTGRES_HOST=db
+POSTGRES_PORT=5432
+POSTGRES_DB=judge0
+POSTGRES_USER=judge0
+POSTGRES_PASSWORD=CHANGE_ME
+ENABLE_WAIT_RESULT=true
+MAX_CPU_TIME_LIMIT=15
+MAX_WALL_TIME_LIMIT=20
+MAX_MEMORY_LIMIT=256000
+# Optional: require a token from the app (send as X-Auth-Token).
+# AUTHN_TOKEN=CHANGE_ME

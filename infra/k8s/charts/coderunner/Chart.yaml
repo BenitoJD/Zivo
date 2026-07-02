@@ -1,6 +1,0 @@
-apiVersion: v2
-name: coderunner
-description: Kubernetes-native code-execution sandbox (rlimits + no-network pod) for coding rounds
-type: application
-version: 0.1.0
-appVersion: "0.1.0"

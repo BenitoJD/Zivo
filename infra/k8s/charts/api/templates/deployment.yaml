@@ -42,9 +42,9 @@ spec:
             - secretRef:
                 name: zivo-secrets
           env:
-            # coderunner code-execution sandbox (in-cluster, coderunner namespace).
-            - name: CODE_RUNNER_URL
-              value: {{ .Values.codeRunnerUrl | default "http://coderunner.coderunner.svc:2358" | quote }}
+            # Judge0 code-execution sandbox (dedicated box — see infra/judge0/).
+            - name: JUDGE0_URL
+              value: {{ .Values.judge0Url | quote }}
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

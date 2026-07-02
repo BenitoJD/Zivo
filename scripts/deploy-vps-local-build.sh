@@ -72,17 +72,8 @@ if [[ -d ./infra/k8s/charts/pgbouncer ]]; then
   fi
 fi
 
-# coderunner — k8s-native code-execution sandbox (own `coderunner` namespace; release metadata
-# stored in $NS to avoid a create-namespace chicken-egg). Built locally + imported to containerd,
-# same as the api/web images. See infra/k8s/charts/coderunner.
-if [[ -d ./infra/k8s/charts/coderunner ]]; then
-  CODERUNNER_IMAGE="ghcr.io/benitojd/zivo-coderunner:latest"
-  docker build -t "${CODERUNNER_IMAGE}" ./backend/coderunner
-  docker save "${CODERUNNER_IMAGE}" | sudo k3s ctr images import -
-  helm_record coderunner
-  helm upgrade --install coderunner ./infra/k8s/charts/coderunner -n "$NS" \
-    --wait --timeout 5m || echo "WARN: coderunner install did not converge"
-fi
+# Note: code execution (Judge0) runs on a dedicated box, not in this cluster — see
+# infra/judge0/. The API reaches it via JUDGE0_URL (set in the api chart values).
 
 for release in zivo-worker-io zivo-worker-cpu; do
   helm_record "$release"

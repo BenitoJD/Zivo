@@ -50,14 +50,8 @@ services:
     volumes:
       - minio:/data
 
-  # --- coderunner code-execution sandbox (interview coding rounds) ----------------
-  # k8s-native runner (rlimits + no-net). API on :2358. Start: docker compose up -d coderunner
-  coderunner:
-    build: ./backend/coderunner
-    container_name: zivo-coderunner
-    ports:
-      - "2358:2358"
-    restart: unless-stopped
+# Code execution (Judge0) runs on a dedicated box, not here — see infra/judge0/.
+# For local coding-round work, set JUDGE0_URL to a reachable Judge0 instance.
 
 volumes:
   pgdata:

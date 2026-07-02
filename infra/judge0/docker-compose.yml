@@ -1,0 +1,28 @@
+# Judge0 code-execution sandbox — runs on its OWN dedicated box (not the app cluster),
+# because isolate needs cgroup v1 + a privileged container, which our modern k3s node denies.
+# See README.md for the box requirements (Ubuntu 20.04 / cgroup v1) and setup.
+services:
+  server:
+    image: judge0/judge0:1.13.1
+    volumes: ["./judge0.conf:/judge0.conf:ro"]
+    ports: ["2358:2358"]
+    restart: always
+  workers:
+    image: judge0/judge0:1.13.1
+    command: ["./scripts/workers"]
+    volumes: ["./judge0.conf:/judge0.conf:ro"]
+    cgroup: host          # isolate needs the host cgroup namespace
+    privileged: true      # isolate needs privileged (cgroups/namespaces)
+    restart: always
+  db:
+    image: postgres:13
+    env_file: judge0.conf
+    volumes: ["pgdata:/var/lib/postgresql/data/"]
+    restart: always
+  redis:
+    image: redis:6
+    command: ["bash", "-c", 'docker-entrypoint.sh --appendonly no --requirepass "$$REDIS_PASSWORD"']
+    env_file: judge0.conf
+    restart: always
+volumes:
+  pgdata:

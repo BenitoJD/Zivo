@@ -1,13 +1,12 @@
-"""Code execution via the self-hosted coderunner sandbox.
+"""Code execution via a self-hosted Judge0 sandbox.
 
-coderunner (``backend/coderunner/`` + ``infra/k8s/charts/coderunner``) compiles + runs
-untrusted source and returns stdout/stderr/status. It's a Kubernetes-native sandbox (non-root
-pod, read-only FS, no network via NetworkPolicy, per-submission POSIX rlimits) — chosen over
-Judge0 because Judge0's isolate needs cgroup v1 + privileged, which our cgroup-v2 k3s denies.
+Judge0 (https://github.com/judge0/judge0) compiles + runs untrusted source in an isolated
+sandbox and returns stdout/stderr/status. We use it for the interview coding rounds (run a
+candidate's solution against hidden test cases) and, later, any coding-practice feature.
 
-The URL comes from settings (`code_runner_url`, or the `JUDGE0_URL` alias) — locally the
-docker-compose service on :2358, in prod ``http://coderunner.coderunner.svc:2358``. This module
-is the single reusable client; callers never talk to the sandbox directly.
+The sandbox URL comes from settings (`judge0_url`, env `JUDGE0_URL`). Judge0 runs on its own
+dedicated box (it needs cgroup v1 + privileged isolate — see infra/judge0/README.md), reachable
+over the network. This module is the single reusable client; callers never talk to Judge0 directly.
 """
 
 from __future__ import annotations
@@ -19,26 +18,40 @@ import httpx
 
 from app.config import get_settings
 
-# language ids (Judge0-compatible, so nothing else changes) → the label shown in the editor.
-# Must stay in sync with coderunner's LANGUAGES. Add ids here + in the runner to support more.
+# Judge0 language ids (from the CE language list) → the label we show in the editor.
+# Kept small on purpose; add ids here as we support more languages.
 LANGUAGES: dict[int, str] = {
-    71: "Python (3)",
+    71: "Python (3.8)",
     63: "JavaScript (Node.js)",
-    54: "C++ (G++)",
-    50: "C (GCC)",
+    62: "Java (OpenJDK 13)",
+    54: "C++ (GCC 9)",
+    50: "C (GCC 9)",
+    60: "Go (1.13)",
 }
 DEFAULT_LANGUAGE_ID = 71
 
-# coderunner status ids: 3 = Accepted; 5 = TLE; 6 = Compile Error; 11 = Runtime Error; 13 = internal.
+# Judge0 status ids: 3 = Accepted. <3 are in-queue/processing; >3 are errors
+# (Wrong Answer only applies when we submit expected_output, which we don't — we compare
+# ourselves so we can trim + show diffs).
 _ACCEPTED = 3
 
-# Bound every call so a stuck sandbox can never hang a request.
-_HTTP_TIMEOUT = 30.0
+# Bound every call so a stuck sandbox can never hang a request. wait=true blocks server-side
+# until the run finishes or hits its own cpu/wall limit; this is the outer safety net.
+_HTTP_TIMEOUT = 20.0
 
 
-def _runner_url() -> str:
-    s = get_settings()
-    return (s.code_runner_url or s.judge0_url or "http://localhost:2358").rstrip("/")
+def _normalize(result: dict[str, Any]) -> dict[str, Any]:
+    """Flatten a Judge0 submission result into the shape the app uses."""
+    status = (result.get("status") or {})
+    return {
+        "status_id": status.get("id"),
+        "status": status.get("description") or "Unknown",
+        "stdout": (result.get("stdout") or "").rstrip("\n"),
+        "stderr": (result.get("stderr") or "").strip(),
+        "compile_output": (result.get("compile_output") or "").strip(),
+        "time": result.get("time"),
+        "memory": result.get("memory"),
+    }
 
 
 async def run_code(
@@ -46,37 +59,35 @@ async def run_code(
     language_id: int,
     stdin: str = "",
     *,
-    cpu_time_limit: int = 5,
+    cpu_time_limit: float = 5.0,
+    memory_limit_kb: int = 128000,
 ) -> dict[str, Any]:
-    """Compile + run one submission, returning the flat result.
+    """Compile + run one submission, returning the normalized result.
 
     Never raises for a *program* failure (compile error, runtime error, timeout) — those come
-    back in the result dict. Raises RuntimeError only when the sandbox is unreachable.
+    back in the normalized dict. Raises RuntimeError only when the sandbox is unreachable.
     """
     if language_id not in LANGUAGES:
         language_id = DEFAULT_LANGUAGE_ID
+    base = get_settings().judge0_url.rstrip("/")
     payload = {
-        "source": source or "",
+        "source_code": source or "",
         "language_id": language_id,
         "stdin": stdin or "",
         "cpu_time_limit": cpu_time_limit,
+        "memory_limit": memory_limit_kb,
     }
     try:
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-            resp = await client.post(f"{_runner_url()}/run", json=payload)
+            resp = await client.post(
+                f"{base}/submissions",
+                params={"base64_encoded": "false", "wait": "true"},
+                json=payload,
+            )
             resp.raise_for_status()
-            data = resp.json()
+            return _normalize(resp.json())
     except (httpx.HTTPError, ValueError) as exc:
         raise RuntimeError(f"code sandbox unavailable: {exc}") from exc
-    return {
-        "status_id": data.get("status_id"),
-        "status": data.get("status") or "Unknown",
-        "stdout": (data.get("stdout") or "").rstrip("\n"),
-        "stderr": (data.get("stderr") or "").strip(),
-        "compile_output": (data.get("compile_output") or "").strip(),
-        "time": data.get("time"),
-        "memory": data.get("memory"),
-    }
 
 
 def _matches(actual: str, expected: str) -> bool:
@@ -123,7 +134,13 @@ async def run_tests(
 
 
 if __name__ == "__main__":  # pragma: no cover
-    # ponytail: pure self-check — trim-compare + config, no live sandbox.
+    # ponytail: pure self-check — normalization + trim-compare, no live sandbox.
+    n = _normalize({
+        "status": {"id": 3, "description": "Accepted"},
+        "stdout": "42\n", "stderr": None, "time": "0.01",
+    })
+    assert n["status_id"] == 3 and n["stdout"] == "42" and n["stderr"] == "", n
+
     assert _matches("5\n", "5")
     assert _matches("a \nb\n\n", "a\nb")  # trailing ws + blank lines ignored
     assert not _matches("5", "6")
