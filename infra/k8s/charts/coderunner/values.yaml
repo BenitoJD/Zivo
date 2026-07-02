@@ -14,5 +14,8 @@ resources:
 
 env:
   RUN_CPU_SECONDS: "5"
-  RUN_MEM_BYTES: "536870912"      # 512Mi RLIMIT_AS per submission
+  # 2Gi RLIMIT_AS (virtual): compilers (cc1plus) + Node need >512Mi VSZ just to start.
+  # Physical use stays low; the pod memory limit is the real backstop.
+  RUN_MEM_BYTES: "2147483648"
+  RUN_NPROC: "256"                # compilers fork; Node uses worker threads
   RUN_MAX_CONCURRENCY: "4"
