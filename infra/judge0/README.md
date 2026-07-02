@@ -7,6 +7,9 @@ and isolate needs cgroup v1 + privileged (which our cgroup-v2 k3s node refuses).
 The app reaches it via `JUDGE0_URL` (set in `infra/k8s/charts/api/values.yaml`). Client code:
 `backend/app/services/code_execution.py`.
 
+**If code execution breaks, read [TROUBLESHOOTING.md](TROUBLESHOOTING.md) first** — it documents
+the root cause we hit (must submit `wait=false`) and the red herrings that wasted days.
+
 ## ⚠️ Box requirements (learned the hard way)
 - **Ubuntu 20.04 (kernel 5.4).** Judge0 1.13.1 bundles `isolate 1.8.1` (2019), whose sandbox
   **segfaults in glibc's loader on kernel 5.15+** (Ubuntu 22.04/24.04) — every sandboxed program
