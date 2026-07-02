@@ -55,7 +55,7 @@ def test_detects_longest_option_correct() -> None:
 
 def test_detects_negative_wording() -> None:
     mcq = {
-        "question": "Which of the following is NOT a function of the nucleus?",
+        "question": "Which of the following is not a function of the nucleus?",
         "options": ["DNA storage", "Ribosome assembly", "Gene regulation", "Cell division control"],
         "correct_index": 1,
         "explanation": "Ribosomes assemble in the cytoplasm.",
@@ -178,6 +178,41 @@ def test_normalize_strips_explanation_meta_framing() -> None:
     assert "ATP" in payload["explanation"]
 
 
+def test_normalize_carries_multi_select_indices() -> None:
+    from app.services.mcq_quality import _normalize_mcq_payload
+
+    payload = _normalize_mcq_payload(
+        {
+            "question": "Which of the following are noble gases?",
+            "options": ["Helium", "Oxygen", "Argon", "Nitrogen"],
+            "correct_indices": [2, 0, 2],  # unsorted + duplicate on purpose
+            "explanation": "Helium and argon are noble gases.",
+            "primary_concept_key": "noble-gases",
+        },
+        {"key": "noble-gases", "label": "Noble gases"},
+    )
+    assert payload["correct_indices"] == [0, 2]  # sorted + de-duped
+    assert payload["correct_index"] == 0          # first correct, for back-compat
+
+
+def test_normalize_ignores_single_correct_indices() -> None:
+    from app.services.mcq_quality import _normalize_mcq_payload
+
+    payload = _normalize_mcq_payload(
+        {
+            "question": "Which is a noble gas?",
+            "options": ["Helium", "Oxygen", "Water", "Iron"],
+            "correct_indices": [0],  # only one → NOT a multi-select item
+            "correct_index": 0,
+            "explanation": "Helium is a noble gas.",
+            "primary_concept_key": "noble-gases",
+        },
+        {"key": "noble-gases", "label": "Noble gases"},
+    )
+    assert "correct_indices" not in payload
+    assert payload["correct_index"] == 0
+
+
 def test_detects_duplicate_stem_vs_prior() -> None:
     mcq = _good_mcq()
     prior = [{"question": mcq["question"], "correct_answer": "other"}]
@@ -234,7 +269,7 @@ def test_generate_quality_mcq_rewrites_then_passes() -> None:
     # rewrite on the next attempt. So the call sequence is: draft(bad) ->
     # fatal heuristic -> rewrite(good) -> clean -> return on attempt 2.
     bad = {
-        "question": "Which of the following is NOT a stage of mitosis?",
+        "question": "Which of the following is not a stage of mitosis?",
         "options": ["Prophase", "Metaphase", "Anaphase", "Digestion"],
         "correct_index": 3,
         "explanation": "Digestion is not part of mitosis.",

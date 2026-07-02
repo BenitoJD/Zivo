@@ -53,25 +53,61 @@ def test_plain_declarative_stem_without_question_mark_still_fails() -> None:
     assert "unfocused_stem" in _codes(mcq)
 
 
-def test_cloze_blank_stem_is_still_rejected() -> None:
-    # Cloze was removed from the writer prompt because the gate rejects blanks;
-    # the gate behaviour itself is unchanged.
+def test_cloze_single_blank_stem_passes() -> None:
+    # Cloze (exactly one ___ blank) is a requested exam style; the gate accepts it.
     mcq = {
         "question": "A catalyst lowers the ___ of a reaction.",
         "options": ["activation energy", "temperature", "concentration", "pressure"],
         "correct_index": 0,
     }
+    assert has_fatal_heuristic_flaws(run_heuristic_checks(mcq)) is False
+
+
+def test_multiple_blanks_are_rejected() -> None:
+    mcq = {
+        "question": "A ___ lowers the ___ of a reaction.",
+        "options": ["catalyst / activation energy", "enzyme / temperature", "solvent / pressure", "buffer / pH"],
+        "correct_index": 0,
+    }
     assert "unfocused_stem" in _codes(mcq)
 
 
-def test_negative_stem_is_fatal() -> None:
+def test_capitalized_negative_stem_passes() -> None:
+    # The deliberate negative/exception style (capitalized NOT/EXCEPT) is a valid
+    # exam format the writer is told to produce; the gate accepts it.
     mcq = {
         "question": "Which of the following is NOT a property of a catalyst?",
         "options": ["It is consumed", "It lowers activation energy", "It is regenerated", "It speeds the rate"],
         "correct_index": 0,
     }
+    assert has_fatal_heuristic_flaws(run_heuristic_checks(mcq)) is False
+
+
+def test_hidden_lowercase_negative_is_fatal() -> None:
+    mcq = {
+        "question": "Which of the following is not a property of a catalyst?",
+        "options": ["It is consumed", "It lowers activation energy", "It is regenerated", "It speeds the rate"],
+        "correct_index": 0,
+    }
     assert "negative_wording" in _codes(mcq)
     assert has_fatal_heuristic_flaws(run_heuristic_checks(mcq)) is True
+
+
+def test_statement_combination_item_passes() -> None:
+    # UPSC-style statement item: numbered claims on their own lines, enumerated
+    # combination options (never "All of the above").
+    mcq = {
+        "question": (
+            "Consider the following statements:\n"
+            "1. A catalyst lowers the activation energy of a reaction.\n"
+            "2. A catalyst is consumed during the reaction.\n"
+            "3. A catalyst does affect the position of equilibrium.\n"
+            "Which of the statements given above is/are correct?"
+        ),
+        "options": ["1 only", "1 and 2 only", "2 and 3 only", "1, 2 and 3"],
+        "correct_index": 0,
+    }
+    assert has_fatal_heuristic_flaws(run_heuristic_checks(mcq)) is False
 
 
 def test_all_of_the_above_option_is_fatal() -> None:
@@ -110,10 +146,10 @@ def test_writer_prompt_matches_the_gate() -> None:
     system = DEFAULTS["mcq_page_generate_system"]
     # The explicit auto-reject checklist (the core of the speed fix) is present.
     assert "AUTO-REJECT" in system
-    # Assertion–reason is still offered (kept; gate now accepts it)...
-    assert "assertion" in system.lower()
-    # ...but cloze is no longer requested (the gate rejects blanks).
-    assert "cloze" not in system.lower()
+    # The full exam-style repertoire is offered, and the gate accepts each shape.
+    lowered = system.lower()
+    for style in ("assertion", "cloze", "statement", "match", "ordering", "negative", "numerical"):
+        assert style in lowered, f"writer prompt no longer offers the {style} style"
 
 
 def test_prompt_warns_about_every_avoidable_fatal_trigger() -> None:

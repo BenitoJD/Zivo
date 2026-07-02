@@ -111,7 +111,13 @@ def sanitize_mcq_option(text: str) -> str:
 
 def strip_document_meta(text: str) -> str:
     """Remove leading exam-forbidden framing clauses."""
-    cleaned = re.sub(r"\s+", " ", (text or "").strip())
+    # Collapse horizontal whitespace but PRESERVE newlines — statement-based,
+    # match-the-following, ordering, and code stems carry meaningful line breaks
+    # the UI renders (white-space: pre-line). Trim spaces around each newline and
+    # cap blank-line runs so the layout stays tight.
+    cleaned = re.sub(r"[^\S\n]+", " ", (text or "").strip())
+    cleaned = re.sub(r" *\n *", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     if not cleaned:
         return ""
     for _ in range(8):

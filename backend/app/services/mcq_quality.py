@@ -290,6 +290,14 @@ def verify_answer_key(
     heuristics remain). It only rejects on a *confident* disagreement.
     """
     options = [str(o).strip() for o in (mcq.get("options") or []) if str(o).strip()]
+    # Multi-select ("select all that apply") items are verified against the full
+    # correct SET, not a single index — the single-answer verifier would wrongly
+    # flag them as "more than one correct". Route them to the set-based path.
+    marked_indices = mcq.get("correct_indices")
+    if isinstance(marked_indices, list) and len(marked_indices) >= 2:
+        return _verify_answer_key_multi(
+            db, mcq=mcq, options=options, page_text=page_text, model_id=model_id
+        )
     try:
         marked = int(mcq.get("correct_index"))
     except (TypeError, ValueError):
@@ -337,6 +345,68 @@ def verify_answer_key(
             "code": "wrong_answer_key",
             "message": (
                 f"Verifier independently chose option {independent}, not the marked {marked}"
+            ),
+        }
+    return None
+
+
+def _verify_answer_key_multi(
+    db: Session,
+    *,
+    mcq: dict[str, Any],
+    options: list[str],
+    page_text: str,
+    model_id: uuid.UUID | None = None,
+) -> dict[str, str] | None:
+    """Blind set-verifier for select-all-that-apply items.
+
+    Asks the solver which options the source supports (the full set), then compares
+    to the marked set. Conservative: an unparseable/failed reply returns None.
+    """
+    marked = sorted(
+        {i for i in (mcq.get("correct_indices") or []) if isinstance(i, int) and 0 <= i < len(options)}
+    )
+    if len(options) < 2 or len(marked) < 2:
+        return None
+
+    excerpt = truncate_to_tokens(page_text, _PAGE_EXCERPT_MAX_TOKENS)
+    options_block = "\n".join(f"{i}. {opt}" for i, opt in enumerate(options))
+    system = get_prompt(db, "mcq_verify_multi_system")
+    body = get_prompt(
+        db,
+        "mcq_verify_multi_format",
+        question=mcq.get("question") or mcq.get("stem") or "",
+        options_block=options_block,
+    )
+    raw = _complete_chat_sync(
+        db,
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": f"{SUBJECT_MATTER_PREFIX}\n{excerpt}"},
+            {"role": "user", "content": body},
+        ],
+        log_tag="verify_mcq_multi",
+        model_id=model_id,
+    )
+    parsed = _parse_critic_json(raw)
+    if not parsed:
+        return None  # verifier failed — don't punish the item
+
+    if parsed.get("none_defensible") is True:
+        return {"code": "not_grounded", "message": "Verifier: no option is supported by the source"}
+    raw_indices = parsed.get("answer_indices")
+    if not isinstance(raw_indices, list):
+        return None
+    independent = sorted(
+        {int(i) for i in raw_indices if isinstance(i, (int, float)) and 0 <= int(i) < len(options)}
+    )
+    if not independent:
+        return None  # malformed reply, not a real disagreement — stay conservative
+    if independent != marked:
+        return {
+            "code": "wrong_answer_key",
+            "message": (
+                f"Verifier independently chose options {independent}, not the marked {marked}"
             ),
         }
     return None

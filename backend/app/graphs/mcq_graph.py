@@ -44,6 +44,9 @@ class McqGradeState(TypedDict, total=False):
     is_correct: bool
     feedback: str
     feedback_ready: bool
+    # Populated only for multi-select ("select all that apply") items.
+    correct_indices: list[int]
+    selected_indices: list[int]
 
 
 def _check_answer(state: McqGradeState) -> dict[str, Any]:
@@ -80,10 +83,23 @@ def try_grade_mcq_fast(
     return {"is_correct": is_correct, "feedback": ""}
 
 
+def _labels(options: list[str], indices: list[int]) -> str:
+    """Human-readable list of option texts for the given indices."""
+    picked = [options[i] for i in indices if 0 <= i < len(options)]
+    return "; ".join(picked) if picked else "(nothing)"
+
+
 async def _teach_feedback(state: McqGradeState, *, db: Session) -> dict[str, Any]:
     options = state.get("options") or []
-    correct = options[state["correct_index"]] if state["correct_index"] < len(options) else ""
-    chosen = options[state["selected_index"]] if state["selected_index"] < len(options) else ""
+    correct_indices = state.get("correct_indices") or []
+    is_multi = len(correct_indices) >= 2
+    if is_multi:
+        selected_indices = state.get("selected_indices") or []
+        correct = _labels(options, sorted(correct_indices))
+        chosen = _labels(options, sorted(selected_indices))
+    else:
+        correct = options[state["correct_index"]] if state["correct_index"] < len(options) else ""
+        chosen = options[state["selected_index"]] if state["selected_index"] < len(options) else ""
     is_correct = bool(state.get("is_correct"))
     aspect = (state.get("aspect_label") or "").strip()
     explanation = (state.get("explanation") or "").strip()
@@ -95,9 +111,12 @@ async def _teach_feedback(state: McqGradeState, *, db: Session) -> dict[str, Any
         "Options:",
         *[f"{i}. {opt}" for i, opt in enumerate(options)],
         outcome,
+        ("This is a select-all-that-apply question with more than one correct option."
+         if is_multi else ""),
         f"Learner chose: {chosen}",
-        f"Correct answer: {correct}",
+        f"Correct answer{'s' if is_multi else ''}: {correct}",
     ]
+    user_lines = [ln for ln in user_lines if ln]
     if aspect:
         user_lines.append(f"Concept being tested: {aspect}")
     if explanation:
@@ -196,8 +215,17 @@ async def grade_mcq_answer(
     explanation: str = "",
     aspect_label: str = "",
     document_context: str = "",
+    correct_indices: list[int] | None = None,
+    selected_indices: list[int] | None = None,
 ) -> dict[str, Any]:
-    is_correct = int(selected_index) == int(correct_index)
+    # Multi-select ("select all that apply") is graded all-or-nothing: the chosen
+    # set must exactly equal the correct set. Single-best-answer stays a fast index
+    # compare. correct_index (= first correct) is kept for the feedback/return path.
+    is_multi = bool(correct_indices) and len(correct_indices) >= 2
+    if is_multi:
+        is_correct = set(selected_indices or []) == set(correct_indices or [])
+    else:
+        is_correct = int(selected_index) == int(correct_index)
 
     # Correctness is known instantly from correct_index — the LLM only writes the
     # selection-aware coaching. Bound that call tightly and NEVER let a slow/erroring
@@ -216,6 +244,9 @@ async def grade_mcq_answer(
             "document_context": document_context,
             "is_correct": is_correct,
         }
+        if is_multi:
+            state["correct_indices"] = list(correct_indices or [])
+            state["selected_indices"] = list(selected_indices or [])
         result = await asyncio.wait_for(
             graph.ainvoke(state, config={"configurable": {"db": db}}),
             timeout=GRADE_FEEDBACK_TIMEOUT,
@@ -225,10 +256,16 @@ async def grade_mcq_answer(
         logger.warning("grade feedback generation failed/timed out; using fallback", exc_info=True)
 
     if not feedback:
+        if is_multi:
+            fb_correct = _labels(options, sorted(correct_indices or []))
+            fb_chosen = _labels(options, sorted(selected_indices or []))
+        else:
+            fb_correct = options[correct_index] if correct_index < len(options) else ""
+            fb_chosen = options[selected_index] if selected_index < len(options) else ""
         feedback = (explanation or "").strip() or _fallback_feedback(
             is_correct=is_correct,
-            correct=options[correct_index] if correct_index < len(options) else "",
-            chosen=options[selected_index] if selected_index < len(options) else "",
+            correct=fb_correct,
+            chosen=fb_chosen,
         )
     return {
         "is_correct": is_correct,
@@ -236,8 +273,18 @@ async def grade_mcq_answer(
     }
 
 
-def grade_mcq(db: Session, assertion_id: uuid.UUID, choice_index: int) -> dict[str, Any]:
-    """Sync wrapper for API — loads assertion payload from intel."""
+def grade_mcq(
+    db: Session,
+    assertion_id: uuid.UUID,
+    choice_index: int,
+    *,
+    choice_indices: list[int] | None = None,
+) -> dict[str, Any]:
+    """Sync wrapper for API — loads assertion payload from intel.
+
+    Handles single-best-answer (choice_index) and multi-select (choice_indices);
+    a multi item is identified by correct_indices in the stored payload.
+    """
     import asyncio
     import json
     from sqlalchemy import text
@@ -251,6 +298,9 @@ def grade_mcq(db: Session, assertion_id: uuid.UUID, choice_index: int) -> dict[s
     payload = row[0] if isinstance(row[0], dict) else json.loads(row[0])
     options = payload.get("options") or payload.get("choices") or []
     correct_index = int(payload.get("correct_index", 0))
+    correct_indices = payload.get("correct_indices")
+    if not (isinstance(correct_indices, list) and len(correct_indices) >= 2):
+        correct_indices = None
     result = asyncio.run(
         grade_mcq_answer(
             db,
@@ -260,10 +310,15 @@ def grade_mcq(db: Session, assertion_id: uuid.UUID, choice_index: int) -> dict[s
             selected_index=choice_index,
             explanation=payload.get("explanation") or "",
             aspect_label=payload.get("primary_concept") or payload.get("primary_concept_key") or "",
+            correct_indices=[int(i) for i in correct_indices] if correct_indices else None,
+            selected_indices=choice_indices,
         )
     )
-    return {
+    out = {
         "correct": bool(result.get("is_correct")),
         "feedback": result.get("feedback"),
         "correct_index": correct_index,
     }
+    if correct_indices:
+        out["correct_indices"] = sorted(int(i) for i in correct_indices)
+    return out

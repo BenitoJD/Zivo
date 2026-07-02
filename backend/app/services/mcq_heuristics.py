@@ -47,7 +47,12 @@ _NEGATIVE_STEM_RE = re.compile(
     r"\b(which .{0,40} not\b|except\b|least likely\b|incorrect\b|false\b|never\b.{0,20}\?)",
     re.IGNORECASE,
 )
-_FILL_BLANK_RE = re.compile(r"_{3,}|\.{3,}\s*$|\[\s*\]")
+# A deliberate negative/exception item is a valid exam format ONLY when the
+# negative word is capitalized so it cannot be missed (NOT / EXCEPT / LEAST).
+# Hidden lowercase negatives remain a fatal flaw.
+_CAPITALIZED_NEGATIVE_RE = re.compile(r"\b(NOT|EXCEPT|LEAST|FALSE|INCORRECT)\b")
+_BLANK_RE = re.compile(r"_{3,}")
+_ELLIPSIS_OR_BRACKET_BLANK_RE = re.compile(r"\.{3,}\s*$|\[\s*\]")
 # Dangling references — the stem/option points at something the reader can't see
 # (a figure, the text above, an example, an "aforementioned" noun). A question
 # with these can't stand alone outside the source document.
@@ -93,6 +98,21 @@ def run_heuristic_checks(
     if not question or len(options) < 2:
         flaws.append({"code": "invalid_structure", "message": "Question or options missing"})
         return flaws
+
+    # Multi-select ("select all that apply") items key on correct_indices; validate
+    # the set and remember it so single-answer-only checks (longest option) skip.
+    raw_multi = mcq.get("correct_indices")
+    multi_indices: list[int] | None = None
+    if isinstance(raw_multi, list) and len(raw_multi) >= 2:
+        try:
+            cand = sorted({int(i) for i in raw_multi})
+        except (TypeError, ValueError):
+            flaws.append({"code": "invalid_structure", "message": "correct_indices invalid"})
+            return flaws
+        if any(i < 0 or i >= len(options) for i in cand):
+            flaws.append({"code": "invalid_structure", "message": "correct_indices out of range"})
+            return flaws
+        multi_indices = cand
 
     try:
         ci = int(correct_index)
@@ -152,23 +172,29 @@ def run_heuristic_checks(
             )
             break
 
-    if _FILL_BLANK_RE.search(question):
-        flaws.append({"code": "unfocused_stem", "message": "Fill-in-the-blank style stem"})
+    # Cloze (exactly one ___ blank) is a valid exam format; multiple blanks,
+    # trailing ellipses, and empty brackets remain flaws.
+    blanks = _BLANK_RE.findall(question)
+    if len(blanks) > 1 or _ELLIPSIS_OR_BRACKET_BLANK_RE.search(question):
+        flaws.append({"code": "unfocused_stem", "message": "Malformed blank (multiple ___, trailing …, or [ ])"})
 
-    if _NEGATIVE_STEM_RE.search(question):
-        flaws.append({"code": "negative_wording", "message": "Negative or exception-style stem"})
+    if _NEGATIVE_STEM_RE.search(question) and not _CAPITALIZED_NEGATIVE_RE.search(question):
+        flaws.append({"code": "negative_wording", "message": "Hidden lowercase negative in stem (capitalize NOT/EXCEPT or rephrase)"})
 
-    correct_len = len(options[ci])
-    other_lens = [len(o) for i, o in enumerate(options) if i != ci]
-    if other_lens:
-        avg_other = sum(other_lens) / len(other_lens)
-        if avg_other > 0 and correct_len > avg_other * 1.6 and correct_len - avg_other > 12:
-            flaws.append(
-                {
-                    "code": "longest_option_correct",
-                    "message": "Correct option noticeably longer than distractors",
-                }
-            )
+    # The "longest option is the answer" give-away only makes sense for a single
+    # correct option — skip it for multi-select, where several options are correct.
+    if multi_indices is None:
+        correct_len = len(options[ci])
+        other_lens = [len(o) for i, o in enumerate(options) if i != ci]
+        if other_lens:
+            avg_other = sum(other_lens) / len(other_lens)
+            if avg_other > 0 and correct_len > avg_other * 1.6 and correct_len - avg_other > 12:
+                flaws.append(
+                    {
+                        "code": "longest_option_correct",
+                        "message": "Correct option noticeably longer than distractors",
+                    }
+                )
 
     if _ABSOLUTE_RE.search(options[ci]):
         for i, opt in enumerate(options):
@@ -181,7 +207,7 @@ def run_heuristic_checks(
                 )
                 break
 
-    if not question.endswith("?") and not _is_assertion_reason(question):
+    if not question.endswith("?") and not _is_assertion_reason(question) and len(blanks) != 1:
         flaws.append({"code": "unfocused_stem", "message": "Stem should be a clear question ending with ?"})
 
     if prior_mcqs:

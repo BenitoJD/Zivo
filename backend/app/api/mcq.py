@@ -26,6 +26,9 @@ router = APIRouter()
 class GradeIn(BaseModel):
     assertion_id: uuid.UUID
     choice_index: int
+    # Multi-select ("select all that apply") items send the full chosen set here;
+    # single-best-answer items leave it null and use choice_index.
+    choice_indices: list[int] | None = None
     mode: str = "learn"
     latency_ms: int | None = None
     confidence: int | None = None
@@ -80,7 +83,7 @@ def grade(
 ) -> dict:
     _require_actor(user, guest_id)
     artifact_id = _resolve_assertion_artifact(db, body.assertion_id, user, guest_id)
-    result = grade_mcq(db, body.assertion_id, body.choice_index)
+    result = grade_mcq(db, body.assertion_id, body.choice_index, choice_indices=body.choice_indices)
 
     # Record the answer event for calibration — idempotently (a retry/replay does not
     # double-count). Logged-in users resolve to their account entity; anonymous guests

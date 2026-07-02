@@ -158,6 +158,9 @@ class QuestionItem(BaseModel):
     question: str
     options: list[str] = []
     correct_index: int = 0
+    # Present only for multi-select ("select all that apply") items; its length
+    # (≥2) marks the item multi so the UI renders checkboxes.
+    correct_indices: list[int] | None = None
     explanation: str = ""
 
 
@@ -185,12 +188,17 @@ def list_questions(
     items: list[QuestionItem] = []
     for row in rows:
         payload = _sanitize_payload(row.get("payload") if isinstance(row.get("payload"), dict) else {})
+        raw_ci = payload.get("correct_indices")
+        correct_indices = (
+            [int(i) for i in raw_ci] if isinstance(raw_ci, list) and len(raw_ci) >= 2 else None
+        )
         items.append(
             QuestionItem(
                 id=str(row["id"]),
                 question=payload.get("question") or row.get("title") or "",
                 options=list(payload.get("options") or []),
                 correct_index=int(payload.get("correct_index", 0)),
+                correct_indices=correct_indices,
                 explanation=payload.get("explanation") or row.get("summary") or "",
             )
         )

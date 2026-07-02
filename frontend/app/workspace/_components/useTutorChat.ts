@@ -43,7 +43,7 @@ export function useTutorChat({
   enabled: boolean;
   queue: McqState | null;
   selected: string | null;
-  gradeState: { correct: boolean; correctIndex: number } | null;
+  gradeState: { correct: boolean; correctIndex: number; correctIndices?: number[] } | null;
   savedNotesActions: ReturnType<typeof useSavedNotesActions>;
   onSavedNote: () => void;
 }) {
