@@ -5,6 +5,18 @@
 set -euo pipefail
 
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
+
+# The self-hosted runner (github-runner) can't read root's k3s.yaml (0600 root:root), so helm/kubectl
+# fail with "Kubernetes cluster unreachable ... permission denied". Stage a runner-readable copy using
+# the runner's scoped passwordless sudo (limited to `k3s` — not cp/install). Regenerated each deploy,
+# so k3s restarts (which reset k3s.yaml to 0600) never break us.
+if [[ ! -r "$KUBECONFIG" ]]; then
+  RUNNER_KUBECONFIG="${HOME}/.kube/config"
+  mkdir -p "$(dirname "$RUNNER_KUBECONFIG")"
+  sudo -n k3s kubectl config view --raw > "$RUNNER_KUBECONFIG"
+  chmod 600 "$RUNNER_KUBECONFIG"
+  export KUBECONFIG="$RUNNER_KUBECONFIG"
+fi
 TAG="${1:-Zivo_0.1.$(date +%Y%m%d%H%M)}"
 REPO="${REPO:-/opt/zivo}"
 OWNER="${OWNER:-benitojd}"
