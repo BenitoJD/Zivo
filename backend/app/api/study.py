@@ -14,7 +14,9 @@ from app.models import Account
 from app.services import saved_notes as saved_notes_service
 from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.services.guest_session import guest_session_for_read
+from app.services.rate_limit import rate_limit_dependency
 from app.api.access import require_document, require_ready_document
+from app.services import interview as interview_service
 from app.services.memory_palace import ensure_palace
 from app.services.quiz import ensure_quiz, load_quiz
 from app.services.study_artifacts import NOTE_KINDS, ensure_flashcards, ensure_notes
@@ -114,6 +116,195 @@ def create_saved_note(
     """Save an answer (and the passage it came from) as a note linked to this source."""
     require_document(db, artifact_id, user, guest_id)
     return saved_notes_service.add_note(db, artifact_id, content=body.content, quote=body.quote)
+
+
+# --------------------------------------------------- interview mode (mock interview)
+class InterviewStartIn(BaseModel):
+    category: str = Field(min_length=1, max_length=40)
+
+
+class InterviewAnswerIn(BaseModel):
+    # Typed rounds send text; MCQ rounds send the selected option index; coding rounds send
+    # an object {source, language_id}.
+    answer: str | int | dict = Field(default="")
+
+
+@router.get("/{artifact_id}/interview")
+def get_interview(
+    artifact_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """Current mock-interview state (setup | in_progress | complete). The pending question
+    is returned with its answer key stripped; a `report` is included once complete."""
+    doc = require_ready_document(db, artifact_id, user, guest_id)
+    if doc is None:
+        return {"status": "indexing", "categories": interview_service.CATEGORY_META}
+    return interview_service.load_interview(db, artifact_id)
+
+
+@router.post("/{artifact_id}/interview/start", dependencies=[Depends(require_csrf_or_guest)])
+async def start_interview(
+    artifact_id: uuid.UUID,
+    body: InterviewStartIn,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """Begin a mock interview for the chosen company category (asks the first question)."""
+    require_ready_document(db, artifact_id, user, guest_id)
+    return await interview_service.start_interview(db, artifact_id, body.category)
+
+
+@router.post("/{artifact_id}/interview/answer", dependencies=[Depends(require_csrf_or_guest)])
+async def answer_interview(
+    artifact_id: uuid.UUID,
+    body: InterviewAnswerIn,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """Evaluate the answer to the current question and advance to the next one."""
+    require_document(db, artifact_id, user, guest_id)
+    try:
+        return await interview_service.submit_answer(db, artifact_id, body.answer)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/{artifact_id}/interview/reset", dependencies=[Depends(require_csrf_or_guest)])
+def reset_interview(
+    artifact_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """Discard the current interview so a new category can be picked."""
+    require_document(db, artifact_id, user, guest_id)
+    return interview_service.reset_interview(db, artifact_id)
+
+
+class RunCodeIn(BaseModel):
+    source: str = Field(default="", max_length=50000)
+    language_id: int = 71
+    stdin: str = Field(default="", max_length=20000)
+
+
+@router.get("/{artifact_id}/interview/languages")
+def interview_languages(
+    artifact_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """Languages the coding editor can offer (Judge0 id → label)."""
+    require_document(db, artifact_id, user, guest_id)
+    from app.services.code_execution import LANGUAGES
+
+    return {"languages": [{"id": k, "label": v} for k, v in LANGUAGES.items()]}
+
+
+@router.post(
+    "/{artifact_id}/interview/run-code",
+    dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)],
+)
+async def run_code_endpoint(
+    artifact_id: uuid.UUID,
+    body: RunCodeIn,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """One-off compile+run of the editor's code against optional stdin (the 'Run' button)."""
+    require_document(db, artifact_id, user, guest_id)
+    from app.services.code_execution import run_code
+
+    try:
+        return await run_code(body.source, body.language_id, body.stdin)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+# --------------------------------------------------- resume suite (ATS / optimize / build)
+class OptimizeIn(BaseModel):
+    job_description: str = Field(default="", max_length=20000)
+
+
+class BuildResumeIn(BaseModel):
+    data: dict = Field(default_factory=dict)
+    template: str = "ats"
+
+
+@router.get("/{artifact_id}/resume/ats")
+async def get_resume_ats(
+    artifact_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """ATS score + checklist + strengths/improvements + a structured resume (cached)."""
+    from app.services import resume as resume_service
+
+    doc = require_ready_document(db, artifact_id, user, guest_id)
+    if doc is None:
+        return {"status": "indexing", "analysis": {}, "review_requested": False}
+    return await resume_service.ensure_ats(db, artifact_id)
+
+
+@router.post(
+    "/{artifact_id}/resume/optimize",
+    dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)],
+)
+async def optimize_resume(
+    artifact_id: uuid.UUID,
+    body: OptimizeIn,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """Rewrite bullets ATS-friendly, optionally aligned to a target job description."""
+    from app.services import resume as resume_service
+
+    require_ready_document(db, artifact_id, user, guest_id)
+    return await resume_service.optimize(db, artifact_id, body.job_description)
+
+
+@router.post("/{artifact_id}/resume/request-review", dependencies=[Depends(require_csrf_or_guest)])
+def request_resume_review(
+    artifact_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """Flag this resume for expert (manager) review."""
+    from app.services import resume as resume_service
+
+    require_document(db, artifact_id, user, guest_id)
+    return resume_service.request_review(db, artifact_id)
+
+
+@router.post("/{artifact_id}/resume/build.docx", dependencies=[Depends(require_csrf_or_guest)])
+def build_resume_docx_endpoint(
+    artifact_id: uuid.UUID,
+    body: BuildResumeIn,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+):
+    """Download the built resume as a .docx (template: 'ats' plain, or 'modern')."""
+    from app.services.resume_export import build_resume_docx
+
+    require_document(db, artifact_id, user, guest_id)
+    template = "modern" if body.template == "modern" else "ats"
+    data = build_resume_docx(body.data or {}, template=template)
+    name = (body.data or {}).get("name") or "resume"
+    fname = f"{str(name)[:50]}-{template}.docx".replace('"', "")
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 def _parse_types(types: str) -> list[str]:

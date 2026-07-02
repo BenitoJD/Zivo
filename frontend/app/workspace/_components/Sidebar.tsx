@@ -18,8 +18,10 @@ import {
 } from "@mantine/core";
 import {
   IconBook2,
+  IconBriefcase,
   IconBuildingCastle,
   IconBulb,
+  IconFileCv,
   IconCards,
   IconClipboardList,
   IconCpu,
@@ -57,6 +59,8 @@ const MODE_GROUPS: { heading: string; items: { value: StudyMode; label: string; 
       { value: "cards", label: "Cards", icon: IconCards },
       { value: "palace", label: "Palace", icon: IconBuildingCastle },
       { value: "quiz", label: "Quiz", icon: IconListCheck },
+      { value: "interview", label: "Interview", icon: IconBriefcase },
+      { value: "resume", label: "Resume", icon: IconFileCv },
     ],
   },
 ];

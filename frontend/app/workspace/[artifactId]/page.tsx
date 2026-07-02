@@ -38,6 +38,8 @@ import { NotesView } from "@/app/workspace/_components/NotesView";
 import { FlashcardsView } from "@/app/workspace/_components/FlashcardsView";
 import { MemoryPalaceView } from "@/app/workspace/_components/MemoryPalaceView";
 import { QuizBuilderView } from "@/app/workspace/_components/QuizBuilderView";
+import { InterviewView } from "@/app/workspace/_components/InterviewView";
+import { ResumeView } from "@/app/workspace/_components/ResumeView";
 import { PdfReader } from "@/app/workspace/_components/PdfReader";
 import { TutorPanel, READ_CHAT_SUGGESTIONS } from "@/app/workspace/_components/TutorPanel";
 import { useStudyNav } from "@/app/workspace/_components/studyNav";
@@ -861,6 +863,10 @@ export default function WorkspaceArtifactPage({
             <MemoryPalaceView artifactId={artifact.id} compact={isCompact} />
           ) : mode === "quiz" ? (
             <QuizBuilderView artifactId={artifact.id} compact={isCompact} />
+          ) : mode === "interview" ? (
+            <InterviewView artifactId={artifact.id} compact={isCompact} />
+          ) : mode === "resume" ? (
+            <ResumeView artifactId={artifact.id} compact={isCompact} />
           ) : showNoQuestions ? (
             <Stack align="center" gap="sm" py="xl" ta="center">
               <Text ff="var(--font-serif)" fz={isCompact ? 22 : 28} fw={500} c="var(--mantine-color-text)">

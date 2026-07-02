@@ -41,6 +41,10 @@ spec:
           envFrom:
             - secretRef:
                 name: zivo-secrets
+          env:
+            # Judge0 code-execution sandbox (in-cluster service in the judge0 namespace).
+            - name: JUDGE0_URL
+              value: {{ .Values.judge0Url | default "http://judge0-server.judge0.svc:2358" | quote }}
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

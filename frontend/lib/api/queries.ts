@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiDelete, apiGet, apiPost, setCsrfToken } from "@/lib/api/client";
+import { apiDelete, apiGet, apiPost, apiPostBytes, setCsrfToken } from "@/lib/api/client";
 import type { ArtifactMeta, PagesInfo, SourceDocument } from "@/lib/types";
 
 export type AuthSession = {
@@ -26,6 +26,8 @@ export const queryKeys = {
   savedNotes: (id: string) => ["saved-notes", id] as const,
   quiz: (id: string, config: string) => ["quiz", id, config] as const,
   studyReport: (id: string) => ["study-report", id] as const,
+  interview: (id: string) => ["interview", id] as const,
+  resume: (id: string) => ["resume", id] as const,
 };
 
 export type StudyReport = {
@@ -204,6 +206,149 @@ export function useQuizQuery(artifactId: string, cfg: QuizConfig, enabled = true
     enabled: enabled && Boolean(artifactId) && cfg.types.length > 0,
     refetchInterval: (query) => (stillBuilding(query.state.data?.status) ? 3000 : false),
   });
+}
+
+// -------------------------------------------------------------- interview mode
+export type InterviewCategoryMeta = { label: string; blurb: string };
+export type InterviewQuestion = {
+  kind: "mcq" | "typed" | "coding";
+  round_name: string;
+  question: string;
+  options?: string[];
+  // coding
+  starter_code?: string;
+  language_id?: number;
+  test_count?: number;
+};
+export type InterviewScores = { problem_framing: number; depth: number; tradeoffs: number; communication: number };
+export type InterviewTurn = {
+  round_name: string;
+  kind: "mcq" | "typed" | "coding";
+  question: string;
+  feedback: string;
+  // mcq
+  options?: string[];
+  selected_index?: number;
+  correct_index?: number;
+  correct?: boolean;
+  // typed
+  answer?: string;
+  scores?: InterviewScores;
+  // coding
+  passed?: number;
+  total?: number;
+  language_id?: number;
+};
+export type InterviewLanguage = { id: number; label: string };
+export type CodeRunResult = {
+  status: string;
+  stdout: string;
+  stderr: string;
+  compile_output: string;
+  time?: string | null;
+  memory?: number | null;
+};
+export type CodingAnswer = { source: string; language_id: number };
+export type InterviewReport = {
+  overall: number;
+  rounds: { name: string; kind: "mcq" | "typed"; score: number; detail: string }[];
+  strengths: string[];
+  focus_areas: string[];
+};
+export type InterviewState = {
+  status: "missing" | "indexing" | "in_progress" | "complete" | "failed";
+  category: string;
+  categories: Record<string, InterviewCategoryMeta>;
+  rounds: { name: string; kind: "mcq" | "typed"; questions: number }[];
+  round_index: number;
+  total_rounds: number;
+  current_question: InterviewQuestion | null;
+  transcript: InterviewTurn[];
+  report?: InterviewReport;
+  error?: string | null;
+};
+
+export function useInterviewQuery(artifactId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.interview(artifactId),
+    queryFn: () => apiGet<InterviewState>(`/api/artifacts/${artifactId}/interview`),
+    enabled: enabled && Boolean(artifactId),
+    refetchInterval: (query) => (query.state.data?.status === "indexing" ? 3000 : false),
+  });
+}
+
+/** start / answer / reset all return the full new state — write it straight into the cache. */
+export function useInterviewActions(artifactId: string) {
+  const qc = useQueryClient();
+  const put = (state: InterviewState) => qc.setQueryData(queryKeys.interview(artifactId), state);
+  return {
+    start: async (category: string) =>
+      put(await apiPost<InterviewState>(`/api/artifacts/${artifactId}/interview/start`, { category })),
+    answer: async (answer: string | number | CodingAnswer) =>
+      put(await apiPost<InterviewState>(`/api/artifacts/${artifactId}/interview/answer`, { answer })),
+    reset: async () =>
+      put(await apiPost<InterviewState>(`/api/artifacts/${artifactId}/interview/reset`, {})),
+    runCode: (source: string, language_id: number, stdin = "") =>
+      apiPost<CodeRunResult>(`/api/artifacts/${artifactId}/interview/run-code`, { source, language_id, stdin }),
+  };
+}
+
+export function useInterviewLanguagesQuery(artifactId: string, enabled = true) {
+  return useQuery({
+    queryKey: ["interview", artifactId, "languages"] as const,
+    queryFn: () => apiGet<{ languages: InterviewLanguage[] }>(`/api/artifacts/${artifactId}/interview/languages`),
+    enabled: enabled && Boolean(artifactId),
+    staleTime: Infinity,
+  });
+}
+
+// -------------------------------------------------------------- resume suite
+export type ResumeCheck = { name: string; pass: boolean; detail: string };
+export type ResumeJob = { role: string; company: string; dates: string; bullets: string[] };
+export type ResumeEducation = { degree: string; school: string; dates: string };
+export type ResumeStructured = {
+  name?: string; title?: string; email?: string; phone?: string; location?: string;
+  links?: string[]; summary?: string; experience?: ResumeJob[]; education?: ResumeEducation[]; skills?: string[];
+};
+export type ResumeAnalysis = {
+  score: number; det_score: number; content_score: number;
+  checks: ResumeCheck[]; strengths: string[]; improvements: string[]; structured: ResumeStructured;
+};
+export type ResumeState = {
+  status: "missing" | "indexing" | "pending" | "ready" | "failed";
+  analysis: Partial<ResumeAnalysis>;
+  review_requested: boolean;
+  error?: string | null;
+};
+export type OptimizeResult = {
+  summary: string;
+  bullets: { original: string; improved: string }[];
+  missing_keywords: string[];
+  notes: string;
+};
+
+export function useResumeAtsQuery(artifactId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.resume(artifactId),
+    queryFn: () => apiGet<ResumeState>(`/api/artifacts/${artifactId}/resume/ats`),
+    enabled: enabled && Boolean(artifactId),
+    refetchInterval: (query) => (query.state.data?.status === "indexing" ? 3000 : false),
+  });
+}
+
+export function useResumeActions(artifactId: string) {
+  const qc = useQueryClient();
+  return {
+    optimize: (job_description: string) =>
+      apiPost<OptimizeResult>(`/api/artifacts/${artifactId}/resume/optimize`, { job_description }),
+    requestReview: async () => {
+      const s = await apiPost<ResumeState>(`/api/artifacts/${artifactId}/resume/request-review`, {});
+      qc.setQueryData(queryKeys.resume(artifactId), s);
+      return s;
+    },
+    buildDocx: (data: ResumeStructured, template: "ats" | "modern") =>
+      apiPostBytes(`/api/artifacts/${artifactId}/resume/build.docx`, { data, template }),
+  };
 }
 
 export function useTopicExplanationQuery(artifactId: string, topicKey: string | null) {

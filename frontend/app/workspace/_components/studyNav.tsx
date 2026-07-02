@@ -11,7 +11,9 @@ export type StudyMode =
   | "cards"
   | "palace"
   | "read"
-  | "quiz";
+  | "quiz"
+  | "interview"
+  | "resume";
 
 type StudyNavValue = {
   /** True while an artifact study view is mounted (so the sidebar shows modes). */

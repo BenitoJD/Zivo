@@ -254,13 +254,14 @@ const STREAM_FLUSH_MS = 50;
 function useThrottledMarkdown(content: string, streaming: boolean) {
   const [rendered, setRendered] = useState(content);
   // Latest content, so a pending trailing flush emits the most recent text
-  // (not the stale value captured when the timer was scheduled).
+  // (not the stale value captured when the timer was scheduled). Updated in the
+  // effect below (never during render).
   const contentRef = useRef(content);
-  contentRef.current = content;
   const lastFlushRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    contentRef.current = content;
     if (!streaming) return;
     const flush = () => {
       lastFlushRef.current = Date.now();

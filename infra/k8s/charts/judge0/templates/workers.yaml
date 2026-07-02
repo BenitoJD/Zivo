@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: judge0-workers
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: {{ .Values.workers.replicas }}
+  selector:
+    matchLabels:
+      app: judge0-workers
+  template:
+    metadata:
+      labels:
+        app: judge0-workers
+    spec:
+      containers:
+        - name: workers
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["./scripts/workers"]
+          # REQUIRED: the isolate sandbox needs privileged (cgroups/namespaces) to run
+          # untrusted code. The NetworkPolicies (networkpolicy.yaml) are what stop that
+          # code from reaching the Zivo namespace, the DB, or the internet.
+          securityContext:
+            privileged: true
+          envFrom:
+            - configMapRef:
+                name: judge0-config
+            - secretRef:
+                name: judge0-secrets
+          resources:
+            {{- toYaml .Values.workers.resources | nindent 12 }}

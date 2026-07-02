@@ -50,6 +50,61 @@ services:
     volumes:
       - minio:/data
 
+  # --- Judge0 code-execution sandbox (interview coding rounds) --------------------
+  # Adapted from Judge0's official compose. API on :2358. Workers run untrusted code,
+  # so they need privileged + cgroup access (dev only — prod hardening is in the Helm chart).
+  # Start just these: docker compose up -d judge0-db judge0-redis judge0-server judge0-workers
+  judge0-db:
+    image: postgres:16-alpine
+    container_name: zivo-judge0-db
+    environment:
+      POSTGRES_USER: judge0
+      POSTGRES_PASSWORD: judge0
+      POSTGRES_DB: judge0
+    volumes:
+      - judge0-db:/var/lib/postgresql/data
+
+  judge0-redis:
+    image: redis:7-alpine
+    container_name: zivo-judge0-redis
+    command: ["redis-server", "--requirepass", "judge0", "--appendonly", "no"]
+
+  judge0-server:
+    image: judge0/judge0:1.13.1
+    container_name: zivo-judge0-server
+    ports:
+      - "2358:2358"
+    environment:
+      REDIS_HOST: judge0-redis
+      REDIS_PASSWORD: judge0
+      POSTGRES_HOST: judge0-db
+      POSTGRES_DB: judge0
+      POSTGRES_USER: judge0
+      POSTGRES_PASSWORD: judge0
+      ENABLE_NETWORK: "false"
+    depends_on:
+      - judge0-db
+      - judge0-redis
+    restart: unless-stopped
+
+  judge0-workers:
+    image: judge0/judge0:1.13.1
+    container_name: zivo-judge0-workers
+    command: ["./scripts/workers"]
+    privileged: true
+    environment:
+      REDIS_HOST: judge0-redis
+      REDIS_PASSWORD: judge0
+      POSTGRES_HOST: judge0-db
+      POSTGRES_DB: judge0
+      POSTGRES_USER: judge0
+      POSTGRES_PASSWORD: judge0
+      ENABLE_NETWORK: "false"
+    depends_on:
+      - judge0-server
+    restart: unless-stopped
+
 volumes:
   pgdata:
   minio:
+  judge0-db:

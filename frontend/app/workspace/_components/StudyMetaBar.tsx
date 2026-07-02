@@ -14,7 +14,9 @@ import {
 import {
   IconAdjustmentsHorizontal,
   IconBook,
+  IconBriefcase,
   IconBuildingMonument,
+  IconFileCv,
   IconBulb,
   IconCards,
   IconCheck,
@@ -49,6 +51,8 @@ const MODE_GROUPS: { label: string; modes: { value: StudyMode; label: string; ic
       { value: "cards", label: "Cards", icon: IconCards },
       { value: "palace", label: "Memory Palace", icon: IconBuildingMonument },
       { value: "quiz", label: "Quiz", icon: IconPencilQuestion },
+      { value: "interview", label: "Interview", icon: IconBriefcase },
+      { value: "resume", label: "Resume", icon: IconFileCv },
     ],
   },
 ];

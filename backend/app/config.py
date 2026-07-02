@@ -110,6 +110,10 @@ class Settings(BaseSettings):
     # When false, the public practice endpoints return 404 (kill switch).
     practice_enabled: bool = True
 
+    # Judge0 code-execution sandbox. Local dev → docker-compose service on :2358;
+    # prod → in-cluster service http://judge0-server.judge0.svc:2358 (via JUDGE0_URL).
+    judge0_url: str = "http://localhost:2358"
+
     session_days: int = 7
     session_remember_days: int = 30
     guest_document_limit: int = 1

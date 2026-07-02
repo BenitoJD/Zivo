@@ -156,6 +156,19 @@ export async function apiFetchBytes(path: string): Promise<ArrayBuffer> {
   return res.arrayBuffer();
 }
 
+export async function apiPostBytes(path: string, body: unknown): Promise<ArrayBuffer> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    credentials: "include",
+    headers: buildHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  captureResponseMeta(res);
+  handleAuthFailure(res);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.arrayBuffer();
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     credentials: "include",

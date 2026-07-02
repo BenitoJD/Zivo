@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: judge0-db
+  namespace: {{ .Values.namespace }}
+spec:
+  serviceName: judge0-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: judge0-db
+  template:
+    metadata:
+      labels:
+        app: judge0-db
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image }}
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: judge0-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "{{ .Values.secrets.postgresUser }}"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.postgres.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: judge0-db
+  namespace: {{ .Values.namespace }}
+spec:
+  selector:
+    app: judge0-db
+  ports:
+    - port: 5432

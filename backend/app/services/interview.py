@@ -1,0 +1,594 @@
+"""Interview Mode — a live, multi-round mock interview driven by the resume.
+
+Additive 8th study mode. The learner uploads their resume (a normal source), picks a
+target company category, and we run a round-by-round interview: one question at a time
+(MCQ or typed), evaluating each answer before asking the next. Unlike the cached study
+artifacts (notes/quiz/palace), the single ``qb.document_interview`` row is MUTATED per
+turn — it holds the resolved round plan, a cursor, and the growing transcript.
+
+Reuses: the resume chunks already ingested (``DocumentChunk``), the shared LLM primitive
+(``complete_chat``), and the MCQ grader (``grade_mcq_answer``) for MCQ turns. Typed rounds
+(technical / system-design / behavioural) are scored on a 1-4 rubric by the LLM.
+
+# ponytail: fixed question count per round, transcript-aware so the model can probe
+# naturally; add dynamic follow-up injection later only if the fixed count feels shallow.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import uuid
+from typing import Any
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from app.models import Document, DocumentChunk
+from app.services.llm_router import complete_chat
+from app.services.token_budget import truncate_to_tokens
+
+# Resumes are short; a small token budget keeps generation fast and cheap.
+RESUME_MAX_TOKENS = 6000
+
+# ---------------------------------------------------------------- round plans
+# Each round: name, kind ("mcq" | "typed"), focus (steers the question), questions (count).
+# Structure is research-backed (IN tech hiring + FAANG rubrics); editable here.
+Round = dict[str, Any]
+
+ROUND_PLANS: dict[str, list[Round]] = {
+    "service": [
+        {"name": "Aptitude & Coding", "kind": "mcq", "questions": 3,
+         "focus": "quantitative aptitude, logical reasoning, and basic coding / output-prediction MCQs"},
+        {"name": "Technical", "kind": "typed", "questions": 2,
+         "focus": "core CS fundamentals and project / tech-stack questions from the resume (OOP, DBMS, SQL, the candidate's listed technologies)"},
+        {"name": "HR & Behavioural", "kind": "typed", "questions": 2,
+         "focus": "behavioural / HR questions (strengths, weaknesses, motivation, teamwork) — expect STAR-style answers"},
+    ],
+    "product": [
+        {"name": "DSA / Coding", "kind": "coding", "questions": 1,
+         "focus": "a self-contained data-structures & algorithms problem solved by reading stdin and printing to stdout (LeetCode-easy/medium)"},
+        {"name": "Technical Fundamentals", "kind": "typed", "questions": 2,
+         "focus": "deep CS fundamentals relevant to the resume (operating systems, networks, databases, language internals)"},
+        {"name": "System Design (HLD)", "kind": "typed", "questions": 1,
+         "focus": "high-level system design: functional & non-functional requirements, capacity estimation, architecture, scaling, and trade-offs (CAP, consistency, caching)"},
+        {"name": "Low-Level Design (LLD)", "kind": "typed", "questions": 1,
+         "focus": "object-oriented / low-level design: class modelling, SOLID, design patterns, concurrency, and schema"},
+        {"name": "Behavioural", "kind": "typed", "questions": 2,
+         "focus": "behavioural / culture-fit questions grounded in the candidate's projects and experience — STAR answers"},
+    ],
+    "bank": [
+        {"name": "Aptitude", "kind": "mcq", "questions": 3,
+         "focus": "quantitative aptitude, logical reasoning, and basic technical MCQs"},
+        {"name": "Technical", "kind": "typed", "questions": 2,
+         "focus": "core CS fundamentals and the candidate's tech stack (OOP, DBMS, SQL, data structures)"},
+        {"name": "Domain & Systems", "kind": "typed", "questions": 2,
+         "focus": "banking / fintech domain awareness, secure & reliable system design, transactions and consistency"},
+        {"name": "HR", "kind": "typed", "questions": 2,
+         "focus": "behavioural / HR questions — stability, integrity, teamwork, communication"},
+    ],
+    "startup": [
+        {"name": "Coding", "kind": "coding", "questions": 1,
+         "focus": "a practical, self-contained coding problem solved by reading stdin and printing to stdout"},
+        {"name": "Machine Coding / Practical", "kind": "typed", "questions": 2,
+         "focus": "building a small feature end-to-end: API/component design, edge cases, and pragmatic trade-offs under time pressure"},
+        {"name": "System Design", "kind": "typed", "questions": 1,
+         "focus": "designing a small product system: requirements, architecture, data model, and scaling the pragmatic way"},
+        {"name": "Culture Fit", "kind": "typed", "questions": 2,
+         "focus": "ownership, ambiguity, bias-to-action, and impact — grounded in the candidate's projects"},
+    ],
+    "other": [
+        {"name": "Aptitude & Coding", "kind": "mcq", "questions": 3,
+         "focus": "aptitude, reasoning, and coding / output-prediction MCQs"},
+        {"name": "Technical", "kind": "typed", "questions": 2,
+         "focus": "core CS fundamentals and the candidate's tech stack from the resume"},
+        {"name": "System Design", "kind": "typed", "questions": 1,
+         "focus": "high-level system design: requirements, architecture, scaling, and trade-offs"},
+        {"name": "Behavioural", "kind": "typed", "questions": 2,
+         "focus": "behavioural questions grounded in the candidate's projects — STAR answers"},
+    ],
+}
+
+# value -> {label, blurb} for the setup picker (single source of truth; frontend renders these).
+CATEGORY_META: dict[str, dict[str, str]] = {
+    "service": {"label": "Service-based", "blurb": "TCS, Infosys, Wipro, Accenture, Cognizant"},
+    "product": {"label": "Product-based", "blurb": "FAANG, Flipkart, PhonePe, Swiggy, CRED"},
+    "bank": {"label": "Bank / Fintech", "blurb": "Goldman, JPMorgan, Razorpay, Paytm"},
+    "startup": {"label": "Startup", "blurb": "Early-stage, fast-paced, generalist"},
+    "other": {"label": "Other", "blurb": "A balanced general interview"},
+}
+
+RUBRIC_DIMENSIONS = ("problem_framing", "depth", "tradeoffs", "communication")
+
+# Built-in, self-contained stdin→stdout problems used when the LLM can't produce a gradable
+# coding question — so the DSA round is always a real coding round, never a silent downgrade.
+_FALLBACK_CODING: list[dict[str, Any]] = [
+    {
+        "question": "Read a line of space-separated integers from stdin and print their sum.",
+        "starter_code": "nums = list(map(int, input().split()))\nprint(sum(nums))",
+        "explanation": "Parse the ints and sum them.",
+        "tests": [
+            {"stdin": "1 2 3 4", "expected_output": "10"},
+            {"stdin": "-5 5", "expected_output": "0"},
+            {"stdin": "42", "expected_output": "42"},
+        ],
+    },
+    {
+        "question": "Read a string from stdin and print it reversed.",
+        "starter_code": "s = input()\nprint(s[::-1])",
+        "explanation": "Slice with a -1 step.",
+        "tests": [
+            {"stdin": "hello", "expected_output": "olleh"},
+            {"stdin": "racecar", "expected_output": "racecar"},
+            {"stdin": "ab", "expected_output": "ba"},
+        ],
+    },
+    {
+        "question": "Read an integer n, then a line of n space-separated integers. Print the maximum.",
+        "starter_code": "n = int(input())\nnums = list(map(int, input().split()))\nprint(max(nums))",
+        "explanation": "Read n (unused for the max) then the list; print max.",
+        "tests": [
+            {"stdin": "3\n4 9 2", "expected_output": "9"},
+            {"stdin": "1\n-7", "expected_output": "-7"},
+            {"stdin": "4\n5 5 5 5", "expected_output": "5"},
+        ],
+    },
+]
+
+_GEN_SYSTEM = (
+    "You are a senior technical interviewer running a live mock interview for a candidate, "
+    "grounded in their resume. Ask ONE realistic, high-signal question for the current round. "
+    "Tailor it to the candidate's actual experience, projects and skills where relevant; do not "
+    "repeat any question already asked. Keep the question focused and answerable in a few minutes. "
+    "Reply with STRICT JSON only, no markdown, no preamble."
+)
+
+_EVAL_SYSTEM = (
+    "You are evaluating a candidate's answer in a mock interview. Be fair but calibrated to a real "
+    "hiring bar. Score each dimension from 1 to 4 (1=poor, 2=below bar, 3=meets bar, 4=exceeds bar): "
+    "problem_framing, depth, tradeoffs, communication. Then write concise feedback (2-4 sentences): "
+    "name what was strong, the single biggest gap, and one concrete way to improve. "
+    "Reply with STRICT JSON only: "
+    '{"scores":{"problem_framing":n,"depth":n,"tradeoffs":n,"communication":n},"feedback":"..."}'
+)
+
+
+# ---------------------------------------------------------------- persistence
+def load_interview(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
+    """Return the interview state for the client (answers stripped from the pending question)."""
+    row = db.execute(
+        text(
+            "SELECT category, config, state, transcript, status, error "
+            "FROM qb.document_interview WHERE document_id = :id"
+        ),
+        {"id": document_id},
+    ).mappings().first()
+    if not row:
+        return {"status": "missing", "categories": CATEGORY_META, **_empty()}
+
+    config = _as_json(row["config"], [])
+    state = _as_json(row["state"], {})
+    transcript = _as_json(row["transcript"], [])
+    current = (state or {}).get("current")
+    out = {
+        "status": row["status"],
+        "category": row["category"] or "",
+        "categories": CATEGORY_META,
+        "rounds": [{"name": r["name"], "kind": r["kind"], "questions": r["questions"]} for r in config],
+        "round_index": (state or {}).get("round_index", 0),
+        "total_rounds": len(config),
+        "current_question": _public_question(current) if current else None,
+        "transcript": [_public_turn(t) for t in transcript],
+        "error": row["error"],
+    }
+    if row["status"] == "complete":
+        out["report"] = build_report(config, transcript)
+    return out
+
+
+def _empty() -> dict[str, Any]:
+    return {
+        "category": "", "rounds": [], "round_index": 0, "total_rounds": 0,
+        "current_question": None, "transcript": [], "error": None,
+    }
+
+
+def _save(db: Session, document_id: uuid.UUID, *, category: str, config: list,
+          state: dict, transcript: list, status: str, error: str | None = None) -> None:
+    db.execute(
+        text(
+            """
+            INSERT INTO qb.document_interview
+                (document_id, category, config, state, transcript, status, error, updated_at)
+            VALUES (:id, :category, CAST(:config AS jsonb), CAST(:state AS jsonb),
+                    CAST(:transcript AS jsonb), :status, :error, now())
+            ON CONFLICT (document_id) DO UPDATE SET
+                category = EXCLUDED.category, config = EXCLUDED.config, state = EXCLUDED.state,
+                transcript = EXCLUDED.transcript, status = EXCLUDED.status,
+                error = EXCLUDED.error, updated_at = now()
+            """
+        ),
+        {
+            "id": document_id, "category": category,
+            "config": json.dumps(config), "state": json.dumps(state),
+            "transcript": json.dumps(transcript), "status": status, "error": error,
+        },
+    )
+    db.commit()
+
+
+def reset_interview(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
+    db.execute(text("DELETE FROM qb.document_interview WHERE document_id = :id"), {"id": document_id})
+    db.commit()
+    return load_interview(db, document_id)
+
+
+# ---------------------------------------------------------------- orchestration
+async def start_interview(db: Session, document_id: uuid.UUID, category: str) -> dict[str, Any]:
+    """Begin (or resume) an interview for the chosen company category."""
+    category = (category or "").strip().lower()
+    if category not in ROUND_PLANS:
+        category = "other"
+
+    existing = load_interview(db, document_id)
+    if existing["status"] == "in_progress" and existing["category"] == category:
+        return existing  # idempotent — don't nuke progress on a repeat start
+
+    config = [dict(r) for r in ROUND_PLANS[category]]
+    resume = _resume_text(db, document_id)
+    first = await _generate_question(db, category, config[0], resume, asked=[])
+    state = {"round_index": 0, "q_in_round": 0, "current": first}
+    _save(db, document_id, category=category, config=config, state=state,
+          transcript=[], status="in_progress")
+    return load_interview(db, document_id)
+
+
+async def submit_answer(db: Session, document_id: uuid.UUID, answer: Any) -> dict[str, Any]:
+    """Evaluate the answer to the current question, then advance to the next one."""
+    row = db.execute(
+        text("SELECT category, config, state, transcript, status FROM qb.document_interview WHERE document_id = :id"),
+        {"id": document_id},
+    ).mappings().first()
+    if not row or row["status"] != "in_progress":
+        raise ValueError("no interview in progress")
+    category = row["category"]
+    config = _as_json(row["config"], [])
+    state = _as_json(row["state"], {})
+    transcript = _as_json(row["transcript"], [])
+    current = state.get("current")
+    if not current:
+        raise ValueError("no pending question")
+
+    turn = await _evaluate(db, current, answer)
+    transcript.append(turn)
+
+    # advance the cursor: next question in round → next round → complete
+    ri, qi = state["round_index"], state["q_in_round"] + 1
+    if qi >= int(config[ri]["questions"]):
+        ri, qi = ri + 1, 0
+    if ri >= len(config):
+        _save(db, document_id, category=category, config=config,
+              state={"round_index": len(config), "q_in_round": 0, "current": None},
+              transcript=transcript, status="complete")
+        return load_interview(db, document_id)
+
+    resume = _resume_text(db, document_id)
+    asked = [t["question"] for t in transcript]
+    nxt = await _generate_question(db, category, config[ri], resume, asked=asked)
+    _save(db, document_id, category=category, config=config,
+          state={"round_index": ri, "q_in_round": qi, "current": nxt},
+          transcript=transcript, status="in_progress")
+    return load_interview(db, document_id)
+
+
+# ---------------------------------------------------------------- LLM: generate
+async def _generate_question(
+    db: Session, category: str, rnd: Round, resume: str, *, asked: list[str]
+) -> dict[str, Any]:
+    label = CATEGORY_META.get(category, {}).get("label", category)
+    already = "\n".join(f"- {q}" for q in asked[-8:]) or "(none yet)"
+    if rnd["kind"] == "mcq":
+        schema = (
+            '{"question":"...","options":["a","b","c","d"],"correct_index":0,'
+            '"explanation":"why the correct option is right"}'
+        )
+        rules = "Exactly 4 options, exactly one correct. correct_index is 0-3."
+    elif rnd["kind"] == "coding":
+        schema = (
+            '{"question":"full problem statement incl. the exact stdin format and expected stdout format",'
+            '"starter_code":"a runnable Python 3 stub reading stdin","language_id":71,'
+            '"tests":[{"stdin":"...","expected_output":"..."}],'
+            '"explanation":"the intended approach"}'
+        )
+        rules = (
+            "A self-contained coding problem the candidate solves by reading stdin and printing to "
+            "stdout (no function signatures — full program). Give 3-5 tests with EXACT stdin and the "
+            "EXACT expected stdout (no trailing prose). starter_code must be valid Python 3 for "
+            "language_id 71. Keep it solvable in ~10 minutes."
+        )
+    else:
+        schema = '{"question":"..."}'
+        rules = "An open-ended question the candidate answers by typing. No options."
+    user = (
+        f"Company type: {label}\n"
+        f"Round: {rnd['name']} — focus on {rnd['focus']}.\n\n"
+        f"Questions already asked this interview (do not repeat):\n{already}\n\n"
+        f"CANDIDATE RESUME:\n{truncate_to_tokens(resume, RESUME_MAX_TOKENS) or '(resume unavailable)'}\n\n"
+        f"Ask one {rnd['kind']} question. {rules}\nReturn JSON matching: {schema}"
+    )
+    raw = await complete_chat(
+        [{"role": "system", "content": _GEN_SYSTEM}, {"role": "user", "content": user}],
+        db, log_tag="interview_gen",
+    )
+    data = _parse_json_obj(raw)
+
+    q = (data.get("question") or "").strip()
+    out: dict[str, Any] = {"kind": rnd["kind"], "round_name": rnd["name"], "focus": rnd["focus"],
+                           "question": q or _fallback_question(rnd)}
+    if rnd["kind"] == "mcq":
+        opts = [str(o).strip() for o in (data.get("options") or []) if str(o).strip()]
+        ci = int(data.get("correct_index", 0)) if str(data.get("correct_index", "")).strip() != "" else 0
+        if len(opts) < 2 or not (0 <= ci < len(opts)):
+            # Degrade to a typed question rather than serve a broken MCQ.
+            out["kind"] = "typed"
+        else:
+            out["options"] = opts[:6]
+            out["correct_index"] = min(ci, len(out["options"]) - 1)
+            out["explanation"] = (data.get("explanation") or "").strip()
+    elif rnd["kind"] == "coding":
+        from app.services.code_execution import DEFAULT_LANGUAGE_ID, LANGUAGES
+
+        tests = [
+            {"stdin": str(t.get("stdin", "")), "expected_output": str(t.get("expected_output", ""))}
+            for t in (data.get("tests") or [])
+            if isinstance(t, dict) and str(t.get("expected_output", "")).strip() != ""
+        ]
+        if not tests:
+            # LLM gave no gradable tests (weak model / bad JSON) — keep it a REAL coding round
+            # with a built-in problem rather than degrading to typed.
+            fb = _FALLBACK_CODING[len(asked) % len(_FALLBACK_CODING)]
+            out.update({
+                "kind": "coding", "question": fb["question"], "starter_code": fb["starter_code"],
+                "language_id": DEFAULT_LANGUAGE_ID, "tests": fb["tests"], "explanation": fb["explanation"],
+            })
+        else:
+            lid = data.get("language_id", DEFAULT_LANGUAGE_ID)
+            out["language_id"] = lid if lid in LANGUAGES else DEFAULT_LANGUAGE_ID
+            out["starter_code"] = (data.get("starter_code") or "").rstrip()
+            out["tests"] = tests[:6]
+            out["explanation"] = (data.get("explanation") or "").strip()
+    return out
+
+
+def _fallback_question(rnd: Round) -> str:
+    return f"Tell me about your experience relevant to {rnd['focus']}."
+
+
+# ---------------------------------------------------------------- LLM: evaluate
+async def _evaluate(db: Session, current: dict, answer: Any) -> dict[str, Any]:
+    turn: dict[str, Any] = {
+        "round_name": current.get("round_name", ""),
+        "kind": current["kind"],
+        "question": current.get("question", ""),
+    }
+    if current["kind"] == "coding":
+        from app.services.code_execution import LANGUAGES, run_tests
+
+        src = str((answer or {}).get("source", "")) if isinstance(answer, dict) else str(answer or "")
+        lang = (answer or {}).get("language_id") if isinstance(answer, dict) else None
+        language_id = lang if lang in LANGUAGES else current.get("language_id", 71)
+        tests = current.get("tests") or []
+        res = await run_tests(src, language_id, tests)
+        passed, total = res["passed"], res["total"]
+        if res.get("error"):
+            fb = f"Couldn't run your code: {res['error']}"
+        elif total and passed == total:
+            fb = f"All {total} tests passed — clean solution."
+        else:
+            failed = next((c for c in res["cases"] if not c["ok"]), None)
+            hint = ""
+            if failed:
+                detail = failed["stderr"] or f"got {failed['stdout']!r}, expected {failed['expected']!r}"
+                hint = f" First failing case: {detail}"
+            fb = f"{passed}/{total} tests passed.{hint}"
+        turn.update({
+            "answer": src,
+            "language_id": language_id,
+            "passed": passed,
+            "total": total,
+            "correct": bool(total) and passed == total,
+            "feedback": fb,
+        })
+        return turn
+
+    if current["kind"] == "mcq":
+        from app.graphs.mcq_graph import grade_mcq_answer
+
+        options = current.get("options") or []
+        correct_index = int(current.get("correct_index", 0))
+        try:
+            selected = int(answer)
+        except (TypeError, ValueError):
+            selected = -1
+        result = await grade_mcq_answer(
+            db,
+            question=current.get("question", ""),
+            options=options,
+            correct_index=correct_index,
+            selected_index=selected,
+            explanation=current.get("explanation", ""),
+        )
+        turn.update({
+            "options": options,
+            "selected_index": selected,
+            "correct_index": correct_index,
+            "correct": bool(result["is_correct"]),
+            "feedback": result["feedback"],
+        })
+        return turn
+
+    # typed answer → rubric scoring
+    answer_text = str(answer or "").strip()
+    turn["answer"] = answer_text
+    if not answer_text:
+        turn.update({"scores": {d: 1 for d in RUBRIC_DIMENSIONS},
+                     "feedback": "No answer was given, so there's nothing to evaluate. "
+                                 "Try to at least outline your approach next time."})
+        return turn
+    user = (
+        f"Round: {current.get('round_name','')} — focus: {current.get('focus','')}\n"
+        f"Question: {current.get('question','')}\n\n"
+        f"Candidate's answer:\n{answer_text}"
+    )
+    try:
+        raw = await complete_chat(
+            [{"role": "system", "content": _EVAL_SYSTEM}, {"role": "user", "content": user}],
+            db, log_tag="interview_eval",
+        )
+        data = _parse_json_obj(raw)
+        scores = {d: _clamp_score(data.get("scores", {}).get(d)) for d in RUBRIC_DIMENSIONS}
+        feedback = (data.get("feedback") or "").strip() or "Answer recorded."
+    except Exception:
+        scores = {d: 2 for d in RUBRIC_DIMENSIONS}
+        feedback = "Answer recorded (automatic scoring was unavailable for this one)."
+    turn.update({"scores": scores, "feedback": feedback})
+    return turn
+
+
+def _clamp_score(v: Any) -> int:
+    try:
+        return max(1, min(4, int(round(float(v)))))
+    except (TypeError, ValueError):
+        return 2
+
+
+# ---------------------------------------------------------------- report
+def build_report(config: list, transcript: list) -> dict[str, Any]:
+    """Per-round + overall score, normalised to a 0-100 scale for display."""
+    rounds_out: list[dict[str, Any]] = []
+    overall_pcts: list[float] = []
+    for rnd in config:
+        turns = [t for t in transcript if t.get("round_name") == rnd["name"]]
+        if not turns:
+            continue
+        if rnd["kind"] == "coding":
+            passed = sum(t.get("passed", 0) for t in turns)
+            total = sum(t.get("total", 0) for t in turns)
+            pct = round(100 * passed / total) if total else 0
+            detail = f"{passed}/{total} tests passed"
+        elif rnd["kind"] == "mcq":
+            correct = sum(1 for t in turns if t.get("correct"))
+            pct = round(100 * correct / len(turns))
+            detail = f"{correct}/{len(turns)} correct"
+        else:
+            # average rubric (1-4) across dimensions & questions → 0-100
+            vals = [s for t in turns for s in (t.get("scores") or {}).values()]
+            avg = sum(vals) / len(vals) if vals else 0
+            pct = round(100 * (avg - 1) / 3) if vals else 0
+            detail = f"avg {avg:.1f}/4 across {len(turns)} question(s)"
+        rounds_out.append({"name": rnd["name"], "kind": rnd["kind"], "score": pct, "detail": detail})
+        overall_pcts.append(pct)
+    overall = round(sum(overall_pcts) / len(overall_pcts)) if overall_pcts else 0
+    strengths = [r["name"] for r in rounds_out if r["score"] >= 67]
+    focus = [r["name"] for r in rounds_out if r["score"] < 50]
+    return {"overall": overall, "rounds": rounds_out, "strengths": strengths, "focus_areas": focus}
+
+
+# ---------------------------------------------------------------- helpers
+def _resume_text(db: Session, document_id: uuid.UUID) -> str:
+    doc = db.get(Document, document_id)
+    if not doc:
+        return ""
+    rows = (
+        db.query(DocumentChunk)
+        .filter(DocumentChunk.document_id == document_id)
+        .order_by(DocumentChunk.page_start.asc())
+        .limit(60)
+        .all()
+    )
+    return "\n\n".join(r.text for r in rows if r.text)
+
+
+def _public_question(q: dict) -> dict[str, Any]:
+    """Strip the answer key (correct_index / hidden tests / explanation) before sending
+    a pending question to the client."""
+    out = {"kind": q["kind"], "round_name": q.get("round_name", ""), "question": q.get("question", "")}
+    if q["kind"] == "mcq":
+        out["options"] = q.get("options", [])
+    elif q["kind"] == "coding":
+        out["starter_code"] = q.get("starter_code", "")
+        out["language_id"] = q.get("language_id", 71)
+        out["test_count"] = len(q.get("tests") or [])
+    return out
+
+
+def _public_turn(t: dict) -> dict[str, Any]:
+    """Answered turns may safely reveal the key (for review)."""
+    return t
+
+
+def _as_json(v: Any, default: Any) -> Any:
+    if v is None:
+        return default
+    return json.loads(v) if isinstance(v, str) else v
+
+
+def _parse_json_obj(raw: str) -> dict[str, Any]:
+    """Tolerant single-object JSON parse (handles code fences / surrounding prose)."""
+    if not raw or not raw.strip():
+        return {}
+    s = raw.strip()
+    fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", s, re.DOTALL)
+    if fence:
+        s = fence.group(1)
+    else:
+        a, b = s.find("{"), s.rfind("}")
+        if a >= 0 and b > a:
+            s = s[a : b + 1]
+    try:
+        obj = json.loads(s)
+        return obj if isinstance(obj, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+# ---------------------------------------------------------------- self-check
+if __name__ == "__main__":  # pragma: no cover
+    # ponytail: one runnable check — no DB/LLM. Exercises the pure logic: cursor
+    # advance through a plan, report math, and tolerant JSON parsing.
+    cfg = [dict(r) for r in ROUND_PLANS["product"]]
+    total_q = sum(r["questions"] for r in cfg)
+    assert total_q == 7, total_q  # DSA round is now 1 coding question (was 3 MCQ)
+    assert cfg[0]["kind"] == "coding", cfg[0]
+
+    # simulate advancing the cursor to completion
+    ri, qi, seen = 0, 0, 0
+    while ri < len(cfg):
+        seen += 1
+        qi += 1
+        if qi >= cfg[ri]["questions"]:
+            ri, qi = ri + 1, 0
+    assert seen == total_q, (seen, total_q)
+
+    # report: a coding round (3/4 tests) + a perfect typed round
+    transcript = [
+        {"round_name": "DSA / Coding", "kind": "coding", "passed": 3, "total": 4},
+        {"round_name": "Behavioural", "kind": "typed",
+         "scores": {d: 4 for d in RUBRIC_DIMENSIONS}},
+    ]
+    rep = build_report(cfg, transcript)
+    dsa = next(r for r in rep["rounds"] if r["name"] == "DSA / Coding")
+    beh = next(r for r in rep["rounds"] if r["name"] == "Behavioural")
+    assert dsa["score"] == 75, dsa
+    assert beh["score"] == 100, beh
+    assert _clamp_score(9) == 4 and _clamp_score(0) == 1 and _clamp_score("x") == 2
+
+    # every built-in coding fallback is gradable (has a question + non-empty tests)
+    for fb in _FALLBACK_CODING:
+        assert fb["question"] and fb["starter_code"] and fb["tests"], fb
+        assert all(t["expected_output"] for t in fb["tests"]), fb
+
+    assert _parse_json_obj('```json\n{"question":"hi"}\n```')["question"] == "hi"
+    assert _parse_json_obj("noise {\"a\":1} tail")["a"] == 1
+    assert _parse_json_obj("not json") == {}
+    print("interview self-check OK")

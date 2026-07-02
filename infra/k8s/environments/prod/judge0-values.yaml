@@ -1,0 +1,30 @@
+# Prod overrides for the Judge0 sandbox. Credentials are NOT here — createSecret is false,
+# so the `judge0-secrets` Secret must be pre-created on the cluster once (see chart README).
+namespace: judge0
+createSecret: false
+
+image:
+  tag: "1.13.1"
+  pullPolicy: IfNotPresent
+
+server:
+  replicas: 1
+  resources:
+    requests: { cpu: "150m", memory: "384Mi" }
+    limits: { cpu: "600m", memory: "768Mi" }
+
+workers:
+  replicas: 2
+  resources:
+    requests: { cpu: "300m", memory: "512Mi" }
+    limits: { cpu: "1", memory: "1Gi" }
+
+postgres:
+  storage: 5Gi
+
+limits:
+  maxCpuTime: 15
+  maxWallTime: 20
+  maxMemoryKb: 256000
+  maxProcesses: 60
+  enableNetwork: false
