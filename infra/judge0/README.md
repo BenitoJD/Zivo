@@ -25,11 +25,20 @@ cp judge0.conf.example judge0.conf              # fill in random passwords
 docker compose up -d db redis && sleep 10
 docker compose up -d
 ```
-Smoke test (should print `42`, status Accepted):
+Smoke test (should print `42`, status Accepted) — async submit + poll the token:
 ```bash
-curl -s -X POST 'http://localhost:2358/submissions?base64_encoded=false&wait=true' \
-  -H 'Content-Type: application/json' -d '{"language_id":71,"source_code":"print(6*7)"}'
+T=$(curl -s -X POST 'http://localhost:2358/submissions?base64_encoded=false&wait=false' \
+  -H 'Content-Type: application/json' -d '{"language_id":71,"source_code":"print(6*7)"}' \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+sleep 3; curl -s "http://localhost:2358/submissions/$T?base64_encoded=false"
 ```
+
+## ⚠️ Always submit async (`wait=false`), never `wait=true`
+`wait=true` makes Judge0 run the job **inline in the web `server` process** — which is *not*
+the privileged worker, so `isolate` can't create its sandbox and every run fails with
+`No such file or directory @ rb_sysopen - /box/script.py`. Submit with `wait=false` and poll
+the token; only the privileged `workers` container can run isolate. Our client already does this
+(`backend/app/services/code_execution.py`). The smoke test below uses `wait=false` for this reason.
 
 ## Lock it down (do this — the box is public)
 1. **Firewall** so only the app can reach 2358:

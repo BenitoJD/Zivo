@@ -30,14 +30,19 @@ LANGUAGES: dict[int, str] = {
 }
 DEFAULT_LANGUAGE_ID = 71
 
-# Judge0 status ids: 3 = Accepted. <3 are in-queue/processing; >3 are errors
+# Judge0 status ids: 1 = In Queue, 2 = Processing, 3 = Accepted; >3 are errors
 # (Wrong Answer only applies when we submit expected_output, which we don't — we compare
 # ourselves so we can trim + show diffs).
 _ACCEPTED = 3
+_PROCESSING = 2  # status_id <= this means the run isn't finished yet
 
-# Bound every call so a stuck sandbox can never hang a request. wait=true blocks server-side
-# until the run finishes or hits its own cpu/wall limit; this is the outer safety net.
+# We submit async (wait=false) and poll: wait=true makes Judge0 run the job *inline in the
+# web process*, which isn't the privileged worker, so the isolate sandbox can't start. Async
+# routes the job to the privileged workers (the only ones that can run isolate). See
+# infra/judge0/README.md. These bound total client time so a stuck sandbox can't hang a request.
 _HTTP_TIMEOUT = 20.0
+_POLL_INTERVAL = 0.4
+_POLL_MAX = 30.0
 
 
 def _normalize(result: dict[str, Any]) -> dict[str, Any]:
@@ -81,11 +86,27 @@ async def run_code(
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
             resp = await client.post(
                 f"{base}/submissions",
-                params={"base64_encoded": "false", "wait": "true"},
+                params={"base64_encoded": "false", "wait": "false"},
                 json=payload,
             )
             resp.raise_for_status()
-            return _normalize(resp.json())
+            token = resp.json().get("token")
+            if not token:
+                raise RuntimeError("code sandbox returned no token")
+            # Poll the privileged workers for the result.
+            deadline = asyncio.get_event_loop().time() + _POLL_MAX
+            while True:
+                r = await client.get(
+                    f"{base}/submissions/{token}",
+                    params={"base64_encoded": "false"},
+                )
+                r.raise_for_status()
+                result = r.json()
+                if (result.get("status") or {}).get("id", 0) > _PROCESSING:
+                    return _normalize(result)
+                if asyncio.get_event_loop().time() > deadline:
+                    raise RuntimeError("code sandbox timed out")
+                await asyncio.sleep(_POLL_INTERVAL)
     except (httpx.HTTPError, ValueError) as exc:
         raise RuntimeError(f"code sandbox unavailable: {exc}") from exc
 
