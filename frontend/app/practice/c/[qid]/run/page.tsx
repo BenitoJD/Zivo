@@ -33,6 +33,8 @@ type QuestionItem = {
   question: string;
   options: string[];
   correct_index: number;
+  /** Present only for multi-select ("select all that apply") items. */
+  correct_indices?: number[] | null;
   explanation: string;
 };
 type QuestionsResponse = { qid: string; question_count: number; items: QuestionItem[] };
@@ -44,6 +46,7 @@ export default function PracticeRunPage({ params }: { params: Promise<{ qid: str
   const [total, setTotal] = useState(0);
   const [index, setIndex] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
+  const [multiSelected, setMultiSelected] = useState<number[]>([]);
   const [gradeState, setGradeState] = useState<GradeState>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -87,32 +90,42 @@ export default function PracticeRunPage({ params }: { params: Promise<{ qid: str
   }, [qid, loadQuestions]);
 
   const current = items[index];
+  const isMulti = Array.isArray(current?.correct_indices) && (current?.correct_indices?.length ?? 0) >= 2;
+
+  const toggleMulti = useCallback((i: number) => {
+    setMultiSelected((prev) =>
+      prev.includes(i) ? prev.filter((x) => x !== i) : [...prev, i].sort((a, b) => a - b),
+    );
+  }, []);
 
   const handleSubmit = useCallback(async () => {
-    if (!current || selected === null || submitting) return;
+    const hasSelection = isMulti ? multiSelected.length > 0 : selected !== null;
+    if (!current || !hasSelection || submitting) return;
     setSubmitting(true);
     try {
       const res = await apiPost<McqGradeResponse>("/api/mcq/grade", {
         assertion_id: current.id,
-        choice_index: Number(selected),
+        choice_index: isMulti ? (multiSelected[0] ?? -1) : Number(selected),
+        ...(isMulti ? { choice_indices: multiSelected } : {}),
         mode: "test",
       });
       const correct = Boolean(res.correct);
-      const correctIndex = res.correct_index ?? Number(selected);
+      const correctIndex = res.correct_index ?? (isMulti ? (multiSelected[0] ?? 0) : Number(selected));
       setFeedback(res.feedback ?? (correct ? "Correct!" : "Not quite — see the explanation."));
-      setGradeState({ correct, correctIndex });
+      setGradeState({ correct, correctIndex, correctIndices: res.correct_indices });
       setScore((s) => ({ correct: s.correct + (correct ? 1 : 0), answered: s.answered + 1 }));
     } catch {
       setFeedback("Could not grade your answer — please try again.");
     } finally {
       setSubmitting(false);
     }
-  }, [current, selected, submitting]);
+  }, [current, isMulti, multiSelected, selected, submitting]);
 
   const handleNext = useCallback(() => {
     setFeedback(null);
     setGradeState(null);
     setSelected(null);
+    setMultiSelected([]);
     if (index + 1 >= items.length) {
       setFinished(true);
     } else {
@@ -123,6 +136,7 @@ export default function PracticeRunPage({ params }: { params: Promise<{ qid: str
   const restart = useCallback(() => {
     setIndex(0);
     setSelected(null);
+    setMultiSelected([]);
     setGradeState(null);
     setFeedback(null);
     setScore({ correct: 0, answered: 0 });
@@ -234,6 +248,9 @@ export default function PracticeRunPage({ params }: { params: Promise<{ qid: str
               options={current?.options ?? []}
               selected={selected}
               onSelect={setSelected}
+              multiSelect={isMulti}
+              selectedIndices={multiSelected}
+              onToggle={toggleMulti}
               feedback={feedback}
               mode="test"
               gradeState={gradeState}

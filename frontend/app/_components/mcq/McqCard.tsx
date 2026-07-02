@@ -10,11 +10,11 @@
  * render a question, capture a selection, show graded feedback, and advance.
  */
 
-import { Box, Button, Group, Radio, Stack, Text, ThemeIcon, Title, useMantineColorScheme } from "@mantine/core";
+import { Box, Button, Checkbox, Group, Radio, Stack, Text, ThemeIcon, Title, useMantineColorScheme } from "@mantine/core";
 import { IconBulb, IconCheck } from "@tabler/icons-react";
 import { normalizeMcqOptions } from "@/lib/types";
 
-export type GradeState = { correct: boolean; correctIndex: number } | null;
+export type GradeState = { correct: boolean; correctIndex: number; correctIndices?: number[] } | null;
 
 export type McqOptionVisualState = {
   isSelected: boolean;
@@ -162,6 +162,9 @@ export function McqCard({
   options,
   selected,
   onSelect,
+  multiSelect = false,
+  selectedIndices,
+  onToggle,
   feedback,
   mode = "test",
   gradeState,
@@ -176,6 +179,10 @@ export function McqCard({
   options: string[];
   selected: string | null;
   onSelect: (value: string) => void;
+  /** Multi-select ("select all that apply") mode. */
+  multiSelect?: boolean;
+  selectedIndices?: number[];
+  onToggle?: (index: number) => void;
   feedback: string | null;
   mode?: "learn" | "test";
   gradeState: GradeState;
@@ -191,6 +198,9 @@ export function McqCard({
   const safeOptions = normalizeMcqOptions(options);
   const graded = gradeState !== null;
   const optionsLocked = graded && (mode === "test" || gradeState.correct);
+  const multiChosen = selectedIndices ?? [];
+  const hasSelection = multiSelect ? multiChosen.length > 0 : selected !== null;
+  const correctSet = gradeState?.correctIndices;
 
   if (loading || safeOptions.length === 0) {
     return (
@@ -218,31 +228,39 @@ export function McqCard({
           fontFamily: "var(--font-serif), Georgia, serif",
           fontSize: compact ? "clamp(0.95rem, 4.2vw, 1.25rem)" : "clamp(1.05rem, 2vw, 1.6rem)",
           letterSpacing: "-0.005em",
+          whiteSpace: "pre-line", // statement/matching/code stems arrive with \n line breaks
         }}
       >
         {stem}
       </Title>
 
-      <Radio.Group
-        value={selected}
-        onChange={(value) => {
-          if (optionsLocked) return;
-          onSelect(value);
-        }}
-        name="mcq-options"
+      {multiSelect && !graded ? (
+        <Text fz="xs" fw={600} c="dimmed" ta="center" tt="uppercase" style={{ letterSpacing: "0.06em" }}>
+          Select all that apply
+        </Text>
+      ) : null}
+      <OptionGroup
+        multiSelect={multiSelect}
+        selected={selected}
+        multiChosen={multiChosen}
+        optionsLocked={optionsLocked}
+        onSelect={onSelect}
+        onToggle={onToggle}
       >
         <Stack gap={compact ? 6 : 8} mih={0}>
           {safeOptions.map((opt, i) => {
             const value = String(i);
-            const isSelected = selected === value;
-            const isCorrectOption = graded && gradeState.correctIndex === i;
-            const isWrongSelected = graded && !gradeState.correct && isSelected;
+            const isSelected = multiSelect ? multiChosen.includes(i) : selected === value;
+            const isCorrectOption =
+              graded && (multiSelect && correctSet ? correctSet.includes(i) : gradeState.correctIndex === i);
+            const isWrongSelected = graded && !gradeState.correct && isSelected && !isCorrectOption;
             const { border: borderColor, background, borderWidth } = mcqOptionChrome(
               isDark,
               { isSelected, isCorrectOption, isWrongSelected },
             );
+            const ItemComp = multiSelect ? Checkbox : Radio;
             return (
-              <Radio
+              <ItemComp
                 key={value}
                 value={value}
                 disabled={optionsLocked}
@@ -276,12 +294,13 @@ export function McqCard({
                   body: { alignItems: "flex-start" },
                   label: { width: "100%", paddingInlineStart: 8 },
                   radio: { marginTop: 4 },
+                  input: { marginTop: 4 },
                 }}
               />
             );
           })}
         </Stack>
-      </Radio.Group>
+      </OptionGroup>
 
       {feedback && (
         <McqFeedbackCard
@@ -314,12 +333,63 @@ export function McqCard({
             w="100%"
             onClick={onSubmit}
             loading={submitting}
-            disabled={selected === null}
+            disabled={!hasSelection}
           >
             Check answer
           </Button>
         )}
       </Stack>
     </Stack>
+  );
+}
+
+/** Wraps the option list in a Radio.Group (single) or Checkbox.Group (multi),
+ *  keeping the shared option-row rendering identical for both. */
+function OptionGroup({
+  multiSelect,
+  selected,
+  multiChosen,
+  optionsLocked,
+  onSelect,
+  onToggle,
+  children,
+}: {
+  multiSelect: boolean;
+  selected: string | null;
+  multiChosen: number[];
+  optionsLocked: boolean;
+  onSelect: (value: string) => void;
+  onToggle?: (index: number) => void;
+  children: React.ReactNode;
+}) {
+  if (multiSelect) {
+    return (
+      <Checkbox.Group
+        value={multiChosen.map(String)}
+        onChange={(values) => {
+          if (optionsLocked || !onToggle) return;
+          // Checkbox.Group hands back the full set; diff against current to fire
+          // one toggle for the option that changed.
+          const next = new Set(values.map(Number));
+          const prev = new Set(multiChosen);
+          for (const i of next) if (!prev.has(i)) onToggle(i);
+          for (const i of prev) if (!next.has(i)) onToggle(i);
+        }}
+      >
+        {children}
+      </Checkbox.Group>
+    );
+  }
+  return (
+    <Radio.Group
+      value={selected}
+      onChange={(value) => {
+        if (optionsLocked) return;
+        onSelect(value);
+      }}
+      name="mcq-options"
+    >
+      {children}
+    </Radio.Group>
   );
 }

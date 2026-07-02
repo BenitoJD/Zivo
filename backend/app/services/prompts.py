@@ -152,23 +152,35 @@ SELF-CONTAINED (mandatory)
 THE STEM
 - One clear question; the learner knows what is asked before reading the options.
 - Test understanding (why / how / predict / apply / compare), not phrase-matching or trivia.
-- VARY THE STYLE across a set so the learner is tested in different cognitive ways — never the same shape every time. All of these stay single-best-answer (exactly one correct option) with the SAME output schema; pick whichever fits this aspect best:
+- VARY THE STYLE across a set so the learner is tested in different cognitive ways — never the same shape every time. Draw on the style, rigor, and distractor craft of top competitive and professional exams (UPSC, GATE, JEE, NEET, CAT, SAT, GRE, GMAT, LSAT, MCAT, AWS/Azure/Cisco/Kubernetes certifications, PMP) WITHOUT copying any real exam question. Most are single-best-answer (one correct option via correct_index); the select-all-that-apply style is the one exception (several correct, via correct_indices). All share the SAME output schema; pick whichever fits this aspect and material best:
   - standard: a direct "why / how / which" question ending in "?".
-  - scenario / case-based: open with a brief concrete situation (1–2 sentences), then ask a single-best-answer question that requires APPLYING the idea to that situation, not recalling it.
-  - assertion–reason: state an Assertion (A) and a Reason (R) as two claims (both phrased POSITIVELY — never put "not", "false", "incorrect", or "never" inside the claims), then make the four options the standard relationship judgments in this order — "Both A and R are true, and R correctly explains A", "Both A and R are true, but R does not explain A", "A is true but R is false", "A is false but R is true" — with correct_index on the judgment that holds. (This is the ONE stem that ends with a period, not "?".)
+  - scenario / case-based: open with a brief concrete situation (1–3 sentences), then ask a single-best-answer question that requires APPLYING the idea to that situation, not recalling it.
+  - assertion–reason: state an Assertion (A) and a Reason (R) as two claims (both phrased POSITIVELY — never put "not", "false", "incorrect", or "never" inside the claims), then make the four options the standard relationship judgments in this order — "Both A and R are true, and R correctly explains A", "Both A and R are true, but R does not explain A", "A is true but R is false", "A is false but R is true" — with correct_index on the judgment that holds. (Ends with a period, not "?".)
+  - statement-based (UPSC style): "Consider the following statements:" then 2–4 numbered claims each on its own line (\n in the JSON string), then "Which of the statements given above is/are correct?". Options are combination codes that ENUMERATE the numbers — "1 only", "2 and 3 only", "1 and 3 only", "1, 2 and 3" — never "All of the above".
+  - true/false combination: like statement-based, but each option spells out a full truth assignment, e.g. "1 and 3 are true; 2 is false".
+  - match the following: stem presents List I and List II (each pairing on its own line via \n), asks for the correct matching; options are explicit combination codes like "A-3, B-1, C-2".
+  - sequence / ordering: stem lists 3–5 numbered items and asks for the correct order (chronological, procedural, causal); options are orderings like "2, 1, 4, 3".
+  - fill-in-the-blank (cloze): ONE sentence carrying the key idea with exactly one ___ blank; options are candidate fills, exactly one correct. (Ends without "?"; never more than one blank.)
+  - negative / exception: asks which option is NOT true / does NOT apply / is the EXCEPTION — the negative word MUST be capitalized (NOT, EXCEPT, LEAST) so it cannot be missed. The three non-answers must all be genuinely true; use sparingly.
+  - best-answer: several options are partially defensible but exactly one is BEST by established principle or best practice; the stem signals it ("most appropriate", "best explains", "most likely").
+  - numerical / calculation: requires a short computation or quantitative reasoning from values given IN the stem; options are candidate values with distractors from predictable slips (sign, unit, off-by-one, swapped formula).
+  - code / log / data-based (only when the source is technical): put a SHORT snippet, log excerpt, query, or config (≤8 lines, each line via \n) in the stem and ask an analytical question about it — predict the output, spot the bug, identify the failing component.
+  - select-all-that-apply (multi-select): the stem ends "Which of the following apply? Select all that apply." (or "Select TWO."). TWO or THREE options are genuinely correct and the rest are plausible misconceptions. Provide the answer via correct_indices (a JSON array of the 0-based correct positions, e.g. [0,2]) INSTEAD of correct_index. Use 4–6 options. Use this style sparingly — most items stay single-best-answer.
 
 AUTO-REJECT — every draft is run through a strict automated gate; one breaking ANY rule below is silently discarded and regenerated, which wastes time. Comply on the FIRST draft:
-1. The stem ends with "?" (the only exception is an assertion–reason item, which ends with its Reason claim).
-2. No negative / odd-one-out stems: never put "NOT", "EXCEPT", "least likely", "false", "incorrect", or "never" in the stem. Phrase positively even when probing an exception.
-3. Never use a blank or ellipsis as the stem: no "___", no trailing "…", no "[ ]".
-4. Never write "none of the above", "all of the above", "both A and B", or "A and B are correct" — not in the stem and not in any option.
-5. Self-contained: no "this figure/table/diagram/passage/text/example/section", no "the above", "as shown", "aforementioned", "refer to", "see figure", or "given text" — anywhere in the stem or options.
+1. The stem ends with "?" — the only exceptions are an assertion–reason item (ends with its Reason claim) and a cloze item (a statement with exactly one ___ blank).
+2. Negative wording is allowed ONLY as the deliberate negative/exception style with the negative word CAPITALIZED (NOT, EXCEPT, LEAST). Never hide a lowercase "not"/"except"/"false"/"never" in a stem, and never use double negatives.
+3. Never use an ellipsis or empty brackets as a blank: no trailing "…", no "[ ]". A single "___" is allowed only in the cloze style; never more than one blank.
+4. Never write "none of the above", "all of the above", "both A and B", or "A and B are correct" — not in the stem and not in any option. Statement-combination options must enumerate the numbers ("1, 2 and 3").
+5. Self-contained: no "this figure/table/diagram/passage/text/example/section", no "the above", "as shown", "aforementioned", "refer to", "see figure", or "given text" — anywhere in the stem or options. (Numbered statements/lists INSIDE your own stem are fine — "the statements given above" refers to them.)
 6. No book / page / chapter / passage / document framing ("according to the text", "on page 5", "in this reading").
-7. Do NOT let the correct option be the longest — keep all four options close in length and form.
-8. Exactly 4 options, exactly one correct, no two options identical.
+7. Do NOT let the correct option be the longest — keep all options close in length and form.
+8. 4 options is the default; use 5–6 only when the format genuinely benefits (e.g. richer combinations or select-all). Exactly one correct (via correct_index) UNLESS the style is select-all-that-apply, which has two or three correct (via correct_indices). No two options identical. Vary which position holds the correct answer across a set.
+
+DIFFICULTY — target roughly 20% easy, 50% medium, 30% hard across a set; difficulty must come from the depth of the idea, never from tricky wording.
 
 THE ANSWER
-- Exactly one defensibly correct option, fully grounded in the subject matter. Never invent facts beyond it.
+- Exactly one defensibly correct option (via correct_index), fully grounded in the subject matter. Never invent facts beyond it. For a select-all-that-apply item, EVERY option listed in correct_indices must be independently, defensibly correct from the source — and every other option must be clearly wrong.
 
 THE DISTRACTORS
 - Exactly 3 wrong options, each a SPECIFIC, plausible misconception — not filler.
@@ -182,13 +194,15 @@ OUTPUT — be economical; emitted tokens are the slow, costly part
 - No reasoning, no preamble, no commentary. Emit ONLY one ```zv-mcq``` JSON block.
 - Plain-text options (no "A)" / "1." prefixes — the UI adds labels).
 - explanation: ONE short sentence stating the key idea directly. No "the text says", no page numbers.
+- Include question_style (one of: standard, scenario, assertion_reason, statement_based, truefalse_combination, matching, ordering, cloze, negative, best_answer, numerical, code_based, select_all), difficulty ("easy"|"medium"|"hard"), and cognitive_level ("remember"|"understand"|"apply"|"analyze"|"evaluate").
+- For select_all items only: emit correct_indices (JSON array of 0-based correct positions) and omit correct_index. All other styles use correct_index.
 - Include primary_concept_key matching the target aspect key.
 - tested_concepts: 1–3 Wikidata concepts the question tests, each {{"qid": "Q<n>", "label": "..."}}. Use real Wikidata QIDs (e.g. Q11982 photosynthesis). If you cannot confidently identify the QID, omit the field rather than guess.
 - Do not repeat or paraphrase any prior question listed in the user message.
 
 Example:
 ```zv-mcq
-{{"question":"Why does adding a catalyst speed up a reaction without being consumed?","options":["It lowers the activation energy so more collisions succeed","It raises the temperature of the reactants","It increases the concentration of the reactants","It shifts the equilibrium toward the products"],"correct_index":0,"explanation":"A catalyst offers a lower-energy pathway, so it is regenerated unchanged.","primary_concept_key":"catalysis","tested_concepts":[{{"qid":"Q125874","label":"Catalysis"}}]}}
+{{"question":"Why does adding a catalyst speed up a reaction without being consumed?","options":["It lowers the activation energy so more collisions succeed","It raises the temperature of the reactants","It increases the concentration of the reactants","It shifts the equilibrium toward the products"],"correct_index":0,"explanation":"A catalyst offers a lower-energy pathway, so it is regenerated unchanged.","question_style":"standard","difficulty":"medium","cognitive_level":"understand","primary_concept_key":"catalysis","tested_concepts":[{{"qid":"Q125874","label":"Catalysis"}}]}}
 ```""",
     "mcq_critic_system": """You are an expert psychometrician applying the 19-item Item-Writing Flaws (IWF) rubric.
 
@@ -202,12 +216,12 @@ or spotting a keyword. Difficulty must live in the idea, never in tricky wording
 Fatal flaws (always fail):
 - recognition_only — answerable without thinking: a distinctive word in the stem appears in exactly one option (a lexical give-away), or the correct answer is a remembered phrase that can be picked by recognition without reconstructing the idea, reasoning about cause, or applying it to a new case. Where the material supports more than naming, demand reconstruction or transfer. (Do NOT flag honest recall when the source genuinely only states a bare fact; flag it when a give-away or rote-phrase match makes thinking unnecessary.)
 - ambiguous_unclear — stem or options confuse what is being asked
-- more_than_one_correct — another option is defensibly correct
+- more_than_one_correct — another option is defensibly correct. EXCEPTION: a select-all-that-apply item (its stem says "select all that apply" / "select TWO" and it carries correct_indices) is SUPPOSED to have several correct options — do not flag it for that; instead confirm every option in correct_indices is genuinely correct and every other option is genuinely wrong.
 - implausible_distractors — joke or obviously wrong fillers
 - none_or_all_of_above — uses "none/all of the above"
-- unfocused_stem — cannot understand the question without reading all options
+- unfocused_stem — cannot understand the question without reading all options. (A cloze stem with exactly one ___ blank carrying the key idea is a VALID format, not this flaw. Statement-based, match-the-following, ordering, assertion–reason, and true/false-combination stems are also valid formats — judge them on clarity, not shape.)
 - longest_option_correct — correct answer much longer than distractors
-- negative_wording — double negatives or "which is NOT" tricks
+- negative_wording — a hidden lowercase negative ("not", "except", "never") or a double negative. A deliberate negative/exception item whose negative word is CAPITALIZED (NOT, EXCEPT, LEAST) is a valid exam format — do not flag it; instead verify its three non-answers are all genuinely true.
 - not_grounded — answer not supported by the page excerpt
 - too_similar_to_prior — same fact, paraphrased stem, or overlapping correct answer vs a prior question on this page
 - meta_page_reference — ANY book/page/chapter/passage/reading/document framing in stem or options (e.g. "on page 12", "in this book", "according to the passage", "what does the text say") instead of asking the concept directly like a formal exam
@@ -237,7 +251,7 @@ Work it out independently, then report:
 - whether two or more options are independently defensible as correct,
 - whether NO option is actually supported by the source.
 
-Be strict and literal: pick the option the source genuinely supports, not the one that merely sounds plausible. If the question is assertion–reason, evaluate each claim and their relationship against the source. Do not be charitable about a near-miss option.
+Be strict and literal: pick the option the source genuinely supports, not the one that merely sounds plausible. If the question is assertion–reason, evaluate each claim and their relationship against the source. For statement-combination, true/false-combination, matching, or ordering questions, judge EVERY numbered statement/pair/step against the source individually, then pick the combination option that matches your judgments. For a negative (NOT/EXCEPT) question, pick the one option the source does NOT support. Do not be charitable about a near-miss option.
 
 Return JSON only — no markdown, no commentary:
 {"answer_index": <int>, "multiple_defensible": <bool>, "none_defensible": <bool>, "confidence": <0.0-1.0>}""",
@@ -250,6 +264,25 @@ Options:
 {options_block}
 
 (The source material is in the prior message.) Independently choose the best-supported option and return the JSON object.""",
+    "mcq_verify_multi_system": """You are an exam answer key verifier for a SELECT-ALL-THAT-APPLY question. You are given source material and ONE multiple-select question with its options — but NOT which options are marked correct. Your job is to decide, for EACH option independently, whether the source supports it, exactly as a careful student would.
+
+Work each option out on its own against the source, then report:
+- answer_indices: the 0-based indices of EVERY option the source genuinely supports (may be one or several),
+- none_defensible: true if the source supports NO option at all.
+
+Be strict and literal: include an option only if the source genuinely supports it, and exclude any option that is merely plausible-sounding. Do not be charitable about near-miss options.
+
+Return JSON only — no markdown, no commentary:
+{"answer_indices": [<int>, ...], "none_defensible": <bool>, "confidence": <0.0-1.0>}""",
+    "mcq_verify_multi_format": """Source-grounded answer key check (select ALL that apply).
+
+Question:
+{question}
+
+Options:
+{options_block}
+
+(The source material is in the prior message.) Independently decide which options the source supports and return the JSON object.""",
     "mcq_rewrite_system": """You rewrite a multiple-choice question to fix item-writing flaws while keeping the same target aspect and factual grounding.
 
 Apply the rewrite hints. Keep one best answer, plausible distractors, and a clear stem.

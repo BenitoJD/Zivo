@@ -95,7 +95,7 @@ export type AnsweredCard = {
   stem: string;
   options: string[];
   selectedIndex: number;
-  gradeState: { correct: boolean; correctIndex: number };
+  gradeState: { correct: boolean; correctIndex: number; correctIndices?: number[] };
   feedback: string | null;
   /** The concept/topic this question tested — for the end-of-study report card. */
   concept?: string | null;

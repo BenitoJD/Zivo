@@ -104,6 +104,9 @@ export function McqHeroPanel({
   options,
   selected,
   onSelect,
+  multiSelect = false,
+  selectedIndices,
+  onToggle,
   feedback,
   mcqLoading,
   artifactStatus,
@@ -125,6 +128,10 @@ export function McqHeroPanel({
   options: string[];
   selected: string | null;
   onSelect: (value: string) => void;
+  /** Multi-select ("select all that apply") mode: options toggle on/off. */
+  multiSelect?: boolean;
+  selectedIndices?: number[];
+  onToggle?: (index: number) => void;
   feedback: string | null;
   mcqLoading: boolean;
   artifactStatus?: string;
@@ -132,7 +139,7 @@ export function McqHeroPanel({
   hasQuestion?: boolean;
   queue?: McqState | null;
   mode: "learn" | "test";
-  gradeState: { correct: boolean; correctIndex: number } | null;
+  gradeState: { correct: boolean; correctIndex: number; correctIndices?: number[] } | null;
   submitting: boolean;
   compact?: boolean;
   canReview?: boolean;
@@ -148,6 +155,10 @@ export function McqHeroPanel({
   const graded = gradeState !== null;
   const showNextQuestion = graded;
   const optionsLocked = graded && (mode === "test" || gradeState.correct);
+  const multiChosen = selectedIndices ?? [];
+  // A multi-select answer set is "correct enough to lock" only when it's actually
+  // correct; a single answer locks per the existing rule above.
+  const hasSelection = multiSelect ? multiChosen.length > 0 : selected !== null;
   // Learn vs Test, the core distinction: Learn reveals the answer + explanation
   // right away (and lets you retry); Test records your choice silently and grades
   // everything at the very end — no peeking. `reveal` gates every "show the answer"
@@ -216,23 +227,24 @@ export function McqHeroPanel({
         if (graded) {
           e.preventDefault();
           onContinue();
-        } else if (selected !== null && !submitting) {
+        } else if (hasSelection && !submitting) {
           e.preventDefault();
           onSubmit();
         }
         return;
       }
       const k = e.key.toLowerCase();
-      let idx = "abcd".indexOf(k);
+      let idx = "abcdef".indexOf(k);
       if (idx < 0 && /[1-9]/.test(k)) idx = Number(k) - 1;
       if (idx >= 0 && idx < safeOptions.length && !optionsLocked) {
         e.preventDefault();
-        onSelect(String(idx));
+        if (multiSelect) onToggle?.(idx);
+        else onSelect(String(idx));
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [waiting, graded, selected, submitting, optionsLocked, safeOptions.length, onSelect, onSubmit, onContinue]);
+  }, [waiting, graded, hasSelection, submitting, optionsLocked, safeOptions.length, multiSelect, onSelect, onToggle, onSubmit, onContinue]);
 
   if (waiting) {
     // Determinate progress during generation: turn the vague spinner into a
@@ -428,20 +440,29 @@ export function McqHeroPanel({
           maxWidth: "min(640px, 100%)",
           marginInline: "auto",
           overflowWrap: "anywhere",
+          whiteSpace: "pre-line", // statement/matching/code stems arrive with \n line breaks
         }}
       >
         {stem}
       </Title>
       </Box>
 
+      {multiSelect && !graded ? (
+        <Text fz="xs" fw={600} c="dimmed" ta="center" tt="uppercase" style={{ letterSpacing: "0.06em", flexShrink: 0 }}>
+          Select all that apply
+        </Text>
+      ) : null}
       <Stack gap={compact ? 8 : 10} mih={0} style={{ flexShrink: 0 }}>
         {safeOptions.map((opt, i) => {
           const value = String(i);
-          const isSelected = selected === value;
+          const isSelected = multiSelect ? multiChosen.includes(i) : selected === value;
           // Test mode never reveals correctness per-question — the chosen option just
           // shows as "answered" (its selected tint), graded silently for the end.
-          const isCorrectOption = reveal && gradeState.correctIndex === i;
-          const isWrongSelected = reveal && !gradeState.correct && isSelected;
+          const correctSet = gradeState?.correctIndices;
+          const isCorrectOption = reveal && (
+            multiSelect && correctSet ? correctSet.includes(i) : gradeState.correctIndex === i
+          );
+          const isWrongSelected = reveal && !gradeState.correct && isSelected && !isCorrectOption;
           const { border, background, chipBg, chipColor, borderWidth } = mcqOptionChrome(isDark, {
             isSelected,
             isCorrectOption,
@@ -454,7 +475,7 @@ export function McqHeroPanel({
               key={value}
               className={isChecking ? "mcq-opt mcq-opt-checking" : "mcq-opt"}
               disabled={optionsLocked || checking}
-              onClick={() => { if (!optionsLocked && !checking) onSelect(value); }}
+              onClick={() => { if (!optionsLocked && !checking) { if (multiSelect) onToggle?.(i); else onSelect(value); } }}
               style={{
                 animationDelay: `${90 + i * 60}ms`,
                 width: "100%",
@@ -488,6 +509,8 @@ export function McqHeroPanel({
                     <IconCheck size={15} stroke={2.4} />
                   ) : isWrongSelected ? (
                     <IconX size={15} stroke={2.4} />
+                  ) : multiSelect && isSelected ? (
+                    <IconCheck size={15} stroke={2.4} />
                   ) : (
                     String.fromCharCode(65 + i)
                   )}
@@ -573,7 +596,7 @@ export function McqHeroPanel({
             w="100%"
             onClick={onSubmit}
             loading={checking}
-            disabled={selected === null}
+            disabled={!hasSelection}
           >
             {checking ? "Checking…" : isTest ? "Submit answer" : "Check answer"}
           </Button>
@@ -636,7 +659,9 @@ export function McqReviewView({
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
   const safeOptions = normalizeMcqOptions(card.options);
-  const { correct, correctIndex } = card.gradeState;
+  const { correct, correctIndex, correctIndices } = card.gradeState;
+  const isCorrect = (i: number) =>
+    correctIndices && correctIndices.length >= 2 ? correctIndices.includes(i) : correctIndex === i;
 
   return (
     <Stack key={card.assertionId} h="100%" gap={0} align="stretch" style={{ overflow: "hidden" }}>
@@ -687,6 +712,7 @@ export function McqReviewView({
               maxWidth: "min(640px, 100%)",
               marginInline: "auto",
               overflowWrap: "anywhere",
+              whiteSpace: "pre-line", // statement/matching/code stems arrive with \n line breaks
             }}
           >
             {card.stem}
@@ -694,8 +720,8 @@ export function McqReviewView({
 
           <Stack gap={compact ? 8 : 10} mih={0} style={{ flexShrink: 0 }}>
             {safeOptions.map((opt, i) => {
-              const isCorrectOption = correctIndex === i;
-              const isWrongSelected = !correct && card.selectedIndex === i;
+              const isCorrectOption = isCorrect(i);
+              const isWrongSelected = !correct && card.selectedIndex === i && !isCorrectOption;
               const { border, background, chipBg, chipColor, borderWidth } = mcqOptionChrome(isDark, {
                 isSelected: card.selectedIndex === i,
                 isCorrectOption,

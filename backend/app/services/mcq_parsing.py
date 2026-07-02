@@ -139,10 +139,28 @@ def _normalize_mcq_payload(data: dict[str, Any], target_aspect: dict[str, Any] |
         raise ValueError("invalid mcq")
     key = data.get("primary_concept_key") or (target_aspect or {}).get("key") or "page-concept"
     label = data.get("primary_concept") or (target_aspect or {}).get("label") or "Page concept"
+    # Exam-style metadata rides along when the generator emits it (question_style /
+    # difficulty / cognitive_level) — informative, never required.
+    meta = {
+        k: str(data[k]).strip().lower()[:40]
+        for k in ("question_style", "difficulty", "cognitive_level")
+        if str(data.get(k) or "").strip()
+    }
+    # Multi-select ("select all that apply" / "select TWO") items carry
+    # correct_indices; single-best-answer items carry correct_index. We always set
+    # correct_index (= first correct) for back-compat with every single-answer
+    # consumer, and add correct_indices only when the item is genuinely multi.
+    correct_indices = _coerce_correct_indices(data.get("correct_indices"), len(options))
+    if correct_indices is not None and len(correct_indices) >= 2:
+        meta["correct_indices"] = correct_indices
+        correct_index = correct_indices[0]
+    else:
+        correct_index = int(data.get("correct_index", 0))
     return {
+        **meta,
         "question": question,
         "options": options,
-        "correct_index": int(data.get("correct_index", 0)),
+        "correct_index": correct_index,
         "explanation": explanation,
         "primary_concept_key": key,
         "primary_concept": label,
@@ -151,6 +169,25 @@ def _normalize_mcq_payload(data: dict[str, Any], target_aspect: dict[str, Any] |
         # persist-time code in generation_graph.py links them to intel.entity rows.
         "tested_concepts": _coerce_tested_concepts(data.get("tested_concepts")),
     }
+
+
+def _coerce_correct_indices(raw: Any, n_options: int) -> list[int] | None:
+    """Normalize a multi-select answer key to a sorted, de-duped, in-range list.
+
+    Returns None when the field is absent/unusable — the item is then treated as
+    single-best-answer via correct_index.
+    """
+    if not isinstance(raw, list):
+        return None
+    out: list[int] = []
+    for v in raw:
+        try:
+            i = int(v)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= i < n_options and i not in out:
+            out.append(i)
+    return sorted(out) or None
 
 
 # Shape: [{"qid": "Q80001", "label": "Photosynthesis"}]

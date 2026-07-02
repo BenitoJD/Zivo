@@ -96,8 +96,10 @@ export function StudyMetaBar({
           radius="xl"
           variant="light"
           color={barAccent}
-          // Brighten the glyph in dark mode so the badge icon stays legible.
-          style={{ color: `light-dark(var(--mantine-color-${barAccent}-7), var(--mantine-color-${barAccent}-3))` }}
+          // Dark-mode accent shades are INVERTED here: low shades (-3) are deep
+          // surfaces, high shades (-7) are the bright "text/icon on ink" tone.
+          // -7 reads on both schemes (was light-dark(-7, -3) → dark glyph near-invisible).
+          style={{ color: `var(--mantine-color-${barAccent}-7)` }}
         >
           {isTestMode ? <IconClipboardList size={12} stroke={2} /> : <IconBulb size={12} stroke={2} />}
         </ThemeIcon>
@@ -107,7 +109,9 @@ export function StudyMetaBar({
           tt="uppercase"
           style={{
             letterSpacing: "0.04em",
-            color: `light-dark(var(--mantine-color-${barAccent}-${isTestMode ? 8 : 7}), var(--mantine-color-${barAccent}-3))`,
+            // Dark branch was -3 (a deep surface shade) → invisible on ink; the
+            // bright text-on-ink shade in this inverted scale is -7.
+            color: `light-dark(var(--mantine-color-${barAccent}-${isTestMode ? 8 : 7}), var(--mantine-color-${barAccent}-7))`,
           }}
         >
           {isTestMode ? "Test" : "Learn"}

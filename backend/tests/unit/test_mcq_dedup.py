@@ -78,6 +78,22 @@ def test_sanitize_mcq_stem_strips_page_framing() -> None:
     assert has_document_meta_reference("How did publication differ?") is False
 
 
+def test_sanitize_mcq_stem_preserves_newlines_for_statement_items() -> None:
+    # Statement/matching/ordering/code stems carry meaningful line breaks the UI
+    # renders — the sanitizer must collapse horizontal whitespace WITHOUT
+    # flattening newlines.
+    stem = (
+        "Consider the following statements:\n"
+        "1.  A catalyst lowers   activation energy.\n"
+        "2. A catalyst is consumed.\n"
+        "Which of the statements given above is/are correct?"
+    )
+    out = sanitize_mcq_stem(stem)
+    assert out.count("\n") == 3
+    assert "1. A catalyst lowers activation energy." in out
+    assert out.startswith("Consider the following statements:")
+
+
 def test_detects_exam_forbidden_mid_stem_refs() -> None:
     assert has_document_meta_reference("On page 12, what is photosynthesis?")
     assert has_document_meta_reference("In this book, how did Bernier describe the court?")

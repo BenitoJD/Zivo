@@ -25,12 +25,11 @@ export const MANTINE_COLOR_SCHEME_SCRIPT = `try {
     var fromCookie = _readCookie("${MANTINE_COLOR_SCHEME_COOKIE}");
     var fromStorage = window.localStorage.getItem("mantine-color-scheme-value");
     var preference = fromCookie || fromStorage || "light";
-    var colorScheme = preference === "light" || preference === "dark" || preference === "auto" ? preference : "light";
-    var computedColorScheme = colorScheme !== "auto"
-      ? colorScheme
-      : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    document.documentElement.setAttribute("data-mantine-color-scheme", computedColorScheme);
-    _writeCookie(computedColorScheme);
+    // Light is the default for everyone — dark only when the user explicitly
+    // picked it. "auto" (OS preference) is deliberately not honored.
+    var colorScheme = preference === "dark" ? "dark" : "light";
+    document.documentElement.setAttribute("data-mantine-color-scheme", colorScheme);
+    _writeCookie(colorScheme);
     if (!fromStorage || fromStorage !== colorScheme) {
       window.localStorage.setItem("mantine-color-scheme-value", colorScheme);
     }

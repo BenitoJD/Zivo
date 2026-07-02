@@ -118,6 +118,33 @@ def test_grade_mcq_answer_wrong_uses_llm() -> None:
     asyncio.run(run())
 
 
+def test_grade_mcq_answer_multi_select_all_or_nothing() -> None:
+    """Multi-select grades correct only when the chosen set exactly equals the key."""
+    db = MagicMock()
+
+    async def run(selected: list[int]) -> bool:
+        with patch("app.graphs.mcq_graph.complete_chat", new_callable=AsyncMock) as mock_complete:
+            mock_complete.return_value = "Lead idea.\n\nSecond paragraph."
+            result = await grade_mcq_answer(
+                db,
+                question="Which apply?",
+                options=["A", "B", "C", "D"],
+                correct_index=0,
+                selected_index=selected[0] if selected else -1,
+                correct_indices=[0, 2],
+                selected_indices=selected,
+                explanation="",
+                document_context="",
+            )
+        return result["is_correct"]
+
+    assert asyncio.run(run([0, 2])) is True           # exact set
+    assert asyncio.run(run([2, 0])) is True            # order-independent
+    assert asyncio.run(run([0])) is False              # missing one
+    assert asyncio.run(run([0, 2, 3])) is False        # one extra
+    assert asyncio.run(run([1, 3])) is False           # wrong set
+
+
 def test_grade_mcq_answer_llm_failure_falls_back() -> None:
     """A provider error must never break grading — the fallback feedback is returned."""
     db = MagicMock()

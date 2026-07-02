@@ -113,10 +113,14 @@ export default function WorkspaceArtifactPage({
   const [question, setQuestion] = useState("Loading questions…");
   const [options, setOptions] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  // Multi-select ("select all that apply") state: whether the current item is multi,
+  // and which option indices are currently ticked.
+  const [isMulti, setIsMulti] = useState(false);
+  const [multiSelected, setMultiSelected] = useState<number[]>([]);
   // The concept the current question tests — captured per question for the report card.
   const [currentConcept, setCurrentConcept] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
-  const [gradeState, setGradeState] = useState<{ correct: boolean; correctIndex: number } | null>(null);
+  const [gradeState, setGradeState] = useState<{ correct: boolean; correctIndex: number; correctIndices?: number[] } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [mcqLoading, setMcqLoading] = useState(true);
   // Answered-question history + a "review" cursor (null = on the live question).
@@ -448,6 +452,8 @@ export default function WorkspaceArtifactPage({
     setQuestion(sanitizeMcqStem(p.question ?? p.stem ?? row.title ?? "Question"));
     setOptions(normalizeMcqOptions(p.options, p.choices));
     setCurrentConcept((p.primary_concept ?? "").trim() || null);
+    setIsMulti(Array.isArray(p.correct_indices) && p.correct_indices.length >= 2);
+    setMultiSelected([]);
     setSelected(null);
     setFeedback(null);
     setGradeState(null);
@@ -507,6 +513,18 @@ export default function WorkspaceArtifactPage({
     setSelected(value);
   }
 
+  function handleMcqToggle(index: number) {
+    // In Learn mode, editing the selection after a wrong grade clears the verdict
+    // so the learner can retry (mirrors handleMcqSelect).
+    if (gradeState && !gradeState.correct && mode === "learn") {
+      setGradeState(null);
+      setFeedback(null);
+    }
+    setMultiSelected((prev) =>
+      prev.includes(index) ? prev.filter((i) => i !== index) : [...prev, index].sort((a, b) => a - b),
+    );
+  }
+
   async function advanceMcq() {
     setSubmitting(true);
     try {
@@ -514,6 +532,7 @@ export default function WorkspaceArtifactPage({
       setGradeState(null);
       setFeedback(null);
       setSelected(null);
+      setMultiSelected([]);
     } catch {
       setFeedback("Could not load next question.");
     } finally {
@@ -522,23 +541,28 @@ export default function WorkspaceArtifactPage({
   }
 
   async function submitMcq() {
-    if (!queue?.current_assertion_id || selected === null || submitting) return;
+    const hasSelection = isMulti ? multiSelected.length > 0 : selected !== null;
+    if (!queue?.current_assertion_id || !hasSelection || submitting) return;
     setSubmitting(true);
     try {
       const res = await apiPost<McqGradeResponse>("/api/mcq/grade", {
         assertion_id: queue.current_assertion_id,
-        choice_index: Number(selected),
+        // choice_index carries the (first) chosen option for both paths; multi
+        // items also send the full chosen set via choice_indices.
+        choice_index: isMulti ? (multiSelected[0] ?? -1) : Number(selected),
+        ...(isMulti ? { choice_indices: multiSelected } : {}),
         mode,
       });
       const correct = Boolean(res.correct);
-      const correctIndex = res.correct_index ?? Number(selected);
+      const correctIndex = res.correct_index ?? (isMulti ? (multiSelected[0] ?? 0) : Number(selected));
+      const correctIndices = res.correct_indices;
       const gradedFeedback = res.feedback ?? (correct ? "Correct!" : "Try again.");
       setFeedback(gradedFeedback);
-      setGradeState({ correct, correctIndex });
+      setGradeState({ correct, correctIndex, correctIndices });
       // Record this answer so the learner can step back to review it later. Keep the
       // latest grade per question (learn-mode retries re-grade the same assertion).
       const answeredId = queue.current_assertion_id;
-      const answeredSelection = Number(selected);
+      const answeredSelection = isMulti ? (multiSelected[0] ?? -1) : Number(selected);
       setAnsweredHistory((h) => {
         // Preserve the FIRST-attempt result across Learn-mode retries — the report
         // card grades you on the first try, not the eventual retry success.
@@ -550,7 +574,7 @@ export default function WorkspaceArtifactPage({
             stem,
             options: [...options],
             selectedIndex: answeredSelection,
-            gradeState: { correct, correctIndex },
+            gradeState: { correct, correctIndex, correctIndices },
             feedback: gradedFeedback,
             concept: currentConcept,
             firstTryCorrect: prior ? prior.firstTryCorrect : correct,
@@ -910,6 +934,9 @@ export default function WorkspaceArtifactPage({
             options={options}
             selected={selected}
             onSelect={handleMcqSelect}
+            multiSelect={isMulti}
+            selectedIndices={multiSelected}
+            onToggle={handleMcqToggle}
             feedback={feedback}
             mcqLoading={mcqLoading}
             artifactStatus={artifact.status}

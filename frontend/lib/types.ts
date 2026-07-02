@@ -56,6 +56,8 @@ export type McqGradeResponse = {
   correct?: boolean;
   feedback?: string;
   correct_index?: number;
+  /** Present only for multi-select ("select all that apply") items. */
+  correct_indices?: number[];
 };
 
 export type AssertionPayload = {
@@ -65,6 +67,8 @@ export type AssertionPayload = {
   choices?: string[] | unknown;
   sequence?: number;
   primary_concept?: string;
+  /** Present only for multi-select items — its length (≥2) marks the item multi. */
+  correct_indices?: number[];
 };
 
 const OPTION_LETTER_PREFIX = /^(?:[A-Da-d]|[1-4])[.)]\s+/;
@@ -80,7 +84,14 @@ const DOCUMENT_META_RESIDUE =
   /\b(?:page\s+text|page\s+\d+|on\s+page\s+\d+|according\s+to\s+the\s+(?:page|text|passage|reading|document|excerpt|source|book|textbook|material)|based\s+on\s+the\s+(?:page|text|passage|reading|document|excerpt|source|book|textbook|material)|(?:the\s+)?(?:passage|reading|excerpt|document)\s+(?:on\s+page\s+\d+\s+)?(?:states|says|indicates|describes|explains|mentions)|what\s+does\s+the\s+(?:passage|reading|excerpt|text|document)\s+(?:say|state|describe|mention)|from\s+the\s+(?:passage|reading|excerpt|text|document|source\s+material)|in\s+this\s+(?:book|text|reading|passage|document|chapter)|in\s+the\s+(?:passage|reading|excerpt|material)|(?:the\s+)?textbook\s+(?:says|states|describes|explains)|(?:the\s+)?source\s+material|as\s+(?:stated|described)\s+in\s+the\s+(?:text|passage|reading|material|document)|the\s+text\s+(?:states|says|specifies)|text\s+specifies|document\s+says|passage\s+states|chapter\s+\d+\s+(?:states|says|describes|explains))\b/i;
 
 function stripDocumentMeta(text: string): string {
-  let cleaned = String(text || "").trim().replace(/\s+/g, " ");
+  // Collapse horizontal whitespace but PRESERVE newlines — statement-based,
+  // matching, ordering, and code stems carry meaningful line breaks the UI
+  // renders (white-space: pre-line). Mirrors the backend sanitizer.
+  let cleaned = String(text || "")
+    .trim()
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n");
   if (!cleaned) return "";
   for (let pass = 0; pass < 8; pass += 1) {
     let changed = false;
