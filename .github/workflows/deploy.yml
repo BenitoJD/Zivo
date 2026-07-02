@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 concurrency:
   group: deploy-zivo
@@ -22,11 +23,12 @@ concurrency:
 jobs:
   deploy:
     runs-on: [self-hosted, zivo]
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
-      # The runner lives on the small Judge0 box (no k3s, too little RAM to build). It orchestrates
-      # the heavy build + k3s import + helm on the prod VPS over SSH (github-runner@prod, key authorized).
-      PROD_HOST: 103.194.228.47
+      # Runner lives entirely on the small Judge0 box: it builds the images, pushes them to GHCR, and
+      # rolls out to the prod K3s over the network via this kubeconfig (staged to point at the prod API;
+      # k3s pulls the public images from GHCR). No build or SSH runs on prod.
+      KUBECONFIG: /home/github-runner/.kube/config
     steps:
       - uses: actions/checkout@v6
         with:
@@ -36,12 +38,14 @@ jobs:
       - id: tag
         run: echo "image_tag=Zivo_0.1.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and deploy on prod VPS (over SSH)
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build, push to GHCR, and roll out to prod
         env:
           PREBUILT: ${{ github.event.inputs.prebuilt == '1' && '1' || '0' }}
         run: |
-          ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "github-runner@${PROD_HOST}" \
-            "cd /opt/zivo && PREBUILT=${PREBUILT} bash scripts/deploy-vps-local-build.sh '${{ steps.tag.outputs.image_tag }}'"
+          REPO="${{ github.workspace }}" bash scripts/deploy-vps-local-build.sh "${{ steps.tag.outputs.image_tag }}"
 
       - name: Promote image tags in git
         if: ${{ github.event.inputs.branch == '' || github.event.inputs.branch == 'main' }}

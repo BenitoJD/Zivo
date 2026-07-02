@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Build images on the VPS and roll out to K3s (no GHCR push required).
-# Set PREBUILT=1 to skip docker build and use images already in containerd.
-# Run on the VPS: bash /opt/zivo/scripts/deploy-vps-local-build.sh [tag]
+# Build images on the CI runner (the small Judge0 box), push them to GHCR, then roll out to the prod
+# K3s over the network (KUBECONFIG points at the prod API; k3s pulls the public images from GHCR).
+# Requires a prior `docker login ghcr.io` for the push. Set PREBUILT=1 to skip build+push and just
+# roll out tags already in GHCR. Run by the Deploy Zivo workflow; also runnable by hand.
 set -euo pipefail
 
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
@@ -63,14 +64,11 @@ if [[ "${PREBUILT:-0}" != "1" ]]; then
     --build-arg NEXT_PUBLIC_API_URL= \
     --build-arg API_PROXY_URL=http://zivo-api:8000 \
     frontend/
-  docker save "${API_IMAGE}" | sudo k3s ctr images import -
-  docker save "${WEB_IMAGE}" | sudo k3s ctr images import -
+  # Push to GHCR; prod k3s pulls these (images are public, unique tag per deploy).
+  docker push "${API_IMAGE}"
+  docker push "${WEB_IMAGE}"
 else
-  echo "PREBUILT=1 — pulling ${API_IMAGE} and ${WEB_IMAGE}"
-  docker pull "${API_IMAGE}"
-  docker pull "${WEB_IMAGE}"
-  docker save "${API_IMAGE}" | sudo k3s ctr images import -
-  docker save "${WEB_IMAGE}" | sudo k3s ctr images import -
+  echo "PREBUILT=1 — ${API_IMAGE} and ${WEB_IMAGE} assumed already in GHCR"
 fi
 
 helm_record pgbouncer
