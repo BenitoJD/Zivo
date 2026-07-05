@@ -76,11 +76,6 @@ _LONGFORM_GENERATION_LOG_TAGS = frozenset(
         "quiz_generate",
     }
 )
-# Hard backstop around a single LLM attempt. Some OpenAI-compatible providers ignore
-# the request `timeout` and stall on large/streamed prompts, which hung generation
-# workers forever (questions never appeared). A bit above the request timeout so
-# litellm's own fires first when it works; this guarantees the attempt always returns.
-LLM_HARD_TIMEOUT = int(os.getenv("ZIVO_LLM_HARD_TIMEOUT", str(CHAT_REQUEST_TIMEOUT + 15)))
 
 
 def _request_timeout_for(log_tag: str) -> int:

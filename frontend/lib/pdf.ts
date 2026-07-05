@@ -64,15 +64,6 @@ function rememberPdfDocument(artifactId: string, doc: PDFDocumentProxy): void {
   }
 }
 
-export function clearPdfDocumentCache(): void {
-  for (const doc of documentCache.values()) {
-    void doc.destroy();
-  }
-  documentCache.clear();
-  documentCacheOrder.length = 0;
-  documentLoadPromises.clear();
-}
-
 let activeRenderCount = 0;
 const renderWaiters: Array<() => void> = [];
 

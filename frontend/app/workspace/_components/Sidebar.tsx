@@ -21,6 +21,7 @@ import {
   IconBriefcase,
   IconBuildingCastle,
   IconBulb,
+  IconCode,
   IconFileCv,
   IconCards,
   IconClipboardList,
@@ -60,6 +61,7 @@ const MODE_GROUPS: { heading: string; items: { value: StudyMode; label: string; 
       { value: "palace", label: "Palace", icon: IconBuildingCastle },
       { value: "quiz", label: "Quiz", icon: IconListCheck },
       { value: "interview", label: "Interview", icon: IconBriefcase },
+      { value: "coding", label: "Coding", icon: IconCode },
       { value: "resume", label: "Resume", icon: IconFileCv },
     ],
   },
@@ -220,12 +222,6 @@ function ExpandedModeNav({ mode, onChange }: { mode: StudyMode; onChange: (m: St
 
 export function sourceLabel(filename: string) {
   return filename.replace(/\.[^.]+$/, "");
-}
-
-export function sourceDescription(status: SourceDocument["status"], progress: number) {
-  if (status === "indexing") return `Indexing ${progress}%`;
-  if (status === "pending") return "Choose pages";
-  return status;
 }
 
 /** Quiet status signal — a colored dot + short label, instead of raw status text. */

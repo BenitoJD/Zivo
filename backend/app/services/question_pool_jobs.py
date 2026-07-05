@@ -9,6 +9,7 @@ but nothing in core depends on it. External code should keep importing from the
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -47,6 +48,8 @@ from app.services.question_pool import (
     save_progress,
     selected_page_list,
 )
+
+logger = logging.getLogger(__name__)
 
 def enqueue_page_triage(db: Session, doc: Document, *, page: int, precompute: bool = False) -> Job:
     # Eager precompute triage for non-current pages must not touch the doc-level
@@ -223,12 +226,43 @@ def on_triage_completed(
     # Non-content / zero-yield page: nothing to generate. The learn queue will
     # treat it as complete and advance past it.
     if budget <= 0:
+        # Even a non-content page can be programmable (e.g. a code-only snippet
+        # the LLM won't turn into MCQs but is perfect for a coding challenge).
+        _maybe_spawn_coding(db, doc, page=page)
         return None
     generated = count_assertions_on_page(db, document_id, page)
     if generated > 0:
+        _maybe_spawn_coding(db, doc, page=page)
         return None
     batch = min(FIRST_QUESTION_BATCH_SIZE, budget)
-    return enqueue_page_batch(db, doc, page=page, batch_size=batch, start_sequence=0)
+    job = enqueue_page_batch(db, doc, page=page, batch_size=batch, start_sequence=0)
+    # Coding generation is independent of MCQ budget — a programmable page spawns
+    # one coding problem whether or not MCQs are also being generated for it.
+    _maybe_spawn_coding(db, doc, page=page)
+    return job
+
+
+def _maybe_spawn_coding(db: Session, doc: Document, *, page: int) -> None:
+    """Spawn coding generation when triage flagged the page as programmable.
+
+    Best-effort: a failure here (e.g. job table temporarily unavailable) must not
+    roll back the MCQ batch enqueue that just happened. The feature degrades to
+    'no coding problems for this page' silently.
+    """
+    coverage = get_page_coverage(doc, page)
+    if not coverage.get("programmable"):
+        return
+    try:
+        from app.services.question_generation import enqueue_coding_generation_for_page
+
+        enqueue_coding_generation_for_page(
+            db, doc.id, page=page, account_id=doc.account_id
+        )
+    except Exception:
+        logger.warning(
+            "coding generation enqueue failed for doc=%s page=%s",
+            doc.id, page, exc_info=True,
+        )
 
 
 def enqueue_initial_pool(db: Session, document_id: uuid.UUID) -> Job | None:

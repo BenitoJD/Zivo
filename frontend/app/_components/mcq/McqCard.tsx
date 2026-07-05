@@ -10,9 +10,10 @@
  * render a question, capture a selection, show graded feedback, and advance.
  */
 
-import { Box, Button, Checkbox, Group, Radio, Stack, Text, ThemeIcon, Title, useMantineColorScheme } from "@mantine/core";
+import { Box, Button, Checkbox, Group, Radio, Stack, Text, ThemeIcon, Title } from "@mantine/core";
 import { IconBulb, IconCheck } from "@tabler/icons-react";
 import { normalizeMcqOptions } from "@/lib/types";
+import { useIsDark } from "@/lib/useIsDark";
 
 export type GradeState = { correct: boolean; correctIndex: number; correctIndices?: number[] } | null;
 
@@ -193,8 +194,7 @@ export function McqCard({
   onSubmit: () => void;
   onNext: () => void;
 }) {
-  const { colorScheme } = useMantineColorScheme();
-  const isDark = colorScheme === "dark";
+  const isDark = useIsDark();
   const safeOptions = normalizeMcqOptions(options);
   const graded = gradeState !== null;
   const optionsLocked = graded && (mode === "test" || gradeState.correct);

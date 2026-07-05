@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.services.chunks import pgvector_literal
 
 settings = get_settings()
 
@@ -115,7 +116,7 @@ def search_chunks(
     if not document_ids:
         return []
 
-    vec_literal = "[" + ",".join(str(x) for x in query_embedding) + "]"
+    vec_literal = pgvector_literal(query_embedding)
     params: dict = {
         "doc_ids": [str(d) for d in document_ids],
         "limit": limit,

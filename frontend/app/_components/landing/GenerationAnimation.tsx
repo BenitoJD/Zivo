@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { Box } from "@mantine/core";
 import { useReducedMotion } from "framer-motion";
 import { useMediaQuery } from "@mantine/hooks";

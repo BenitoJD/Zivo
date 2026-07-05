@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import {
   Box,
   Button,
-  Center,
   Group,
   Paper,
   Stack,
@@ -16,12 +15,10 @@ import {
   Textarea,
 } from "@mantine/core";
 import {
-  IconArrowRight,
   IconBookUpload,
   IconBulb,
   IconMessageCircle,
   IconUpload,
-  IconFileText,
   IconSparkles,
 } from "@tabler/icons-react";
 import { apiUploadFile, apiPost, ensureGuestSession, isArtifactId } from "@/lib/api/client";
@@ -496,7 +493,7 @@ export default function WorkspaceIndexPage() {
 
         {/* Workflow steps timeline */}
         <Group grow align="stretch" gap="md" w="100%" visibleFrom="sm">
-          {STEPS.map((s, i) => (
+          {STEPS.map((s) => (
             <Paper
               key={s.title}
               radius="lg"

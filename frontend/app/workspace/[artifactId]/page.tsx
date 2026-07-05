@@ -16,7 +16,6 @@ import {
   Stack,
   Text,
   Title,
-  useMantineColorScheme,
 } from "@mantine/core";
 import { useDisclosure, useMediaQuery } from "@mantine/hooks";
 import { IconFileText, IconMessageCircle, IconNotebook } from "@tabler/icons-react";
@@ -39,6 +38,7 @@ import { FlashcardsView } from "@/app/workspace/_components/FlashcardsView";
 import { MemoryPalaceView } from "@/app/workspace/_components/MemoryPalaceView";
 import { QuizBuilderView } from "@/app/workspace/_components/QuizBuilderView";
 import { InterviewView } from "@/app/workspace/_components/InterviewView";
+import { CodingView } from "@/app/workspace/_components/CodingView";
 import { ResumeView } from "@/app/workspace/_components/ResumeView";
 import { PdfReader } from "@/app/workspace/_components/PdfReader";
 import { TutorPanel, READ_CHAT_SUGGESTIONS } from "@/app/workspace/_components/TutorPanel";
@@ -77,7 +77,7 @@ import {
   type McqState,
   type PagesInfo,
 } from "@/lib/types";
-
+import { useIsDark } from "@/lib/useIsDark";
 
 export default function WorkspaceArtifactPage({
   params,
@@ -90,8 +90,7 @@ export default function WorkspaceArtifactPage({
   const invalidArtifactId = !isArtifactId(artifactId);
   const isLg = useMediaQuery(STUDY_DESKTOP_BP, false, { getInitialValueInEffect: true });
   const isCompact = useMediaQuery(STUDY_COMPACT_BP, false, { getInitialValueInEffect: true });
-  const { colorScheme } = useMantineColorScheme();
-  const isDark = colorScheme === "dark";
+  const isDark = useIsDark();
   // Mode selection lives in the workspace layout so the global left sidebar can
   // host the mode navigator (below the source list) instead of a second rail.
   const { mode, setMode, setActive: setStudyNavActive } = useStudyNav();
@@ -865,6 +864,8 @@ export default function WorkspaceArtifactPage({
             <QuizBuilderView artifactId={artifact.id} compact={isCompact} />
           ) : mode === "interview" ? (
             <InterviewView artifactId={artifact.id} compact={isCompact} />
+          ) : mode === "coding" ? (
+            <CodingView artifactId={artifact.id} compact={isCompact} />
           ) : mode === "resume" ? (
             <ResumeView artifactId={artifact.id} compact={isCompact} />
           ) : showNoQuestions ? (

@@ -617,10 +617,6 @@ const PET_NAMES = [
 
 export type Species = "cat" | "bunny" | "ghost" | "random";
 
-function randomName(): string {
-  return PET_NAMES[Math.floor(Math.random() * PET_NAMES.length)];
-}
-
 /* --------------------------- PetWorld ------------------------------ */
 
 export type PetWorldOptions = {

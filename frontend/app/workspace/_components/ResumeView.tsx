@@ -8,7 +8,6 @@ import {
   Button,
   Group,
   Paper,
-  Progress,
   RingProgress,
   SegmentedControl,
   Stack,

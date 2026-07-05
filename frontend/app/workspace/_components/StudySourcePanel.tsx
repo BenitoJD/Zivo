@@ -21,7 +21,6 @@ import {
   ThemeIcon,
   Title,
   Tooltip,
-  useMantineColorScheme,
 } from "@mantine/core";
 import { IconArrowsMaximize, IconFileText, IconZoomIn, IconZoomOut } from "@tabler/icons-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
@@ -36,6 +35,7 @@ import {
   PDF_ZOOM_PRESETS,
   PDF_DEFAULT_ZOOM,
 } from "@/lib/pdf";
+import { useIsDark } from "@/lib/useIsDark";
 
 /**
  * Study source panel (extracted from the workspace page monolith): the in-session
@@ -63,8 +63,7 @@ export function StudySourcePanel({
   studyPages: number[];
   open: boolean;
 }) {
-  const { colorScheme } = useMantineColorScheme();
-  const isDark = colorScheme === "dark";
+  const isDark = useIsDark();
   const [zoom, setZoom] = useState(PDF_DEFAULT_ZOOM);
   const [viewerWidth, setViewerWidth] = useState(0);
   const [pageAspects, setPageAspects] = useState<Record<number, number>>({});

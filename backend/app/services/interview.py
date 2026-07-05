@@ -17,7 +17,6 @@ Reuses: the resume chunks already ingested (``DocumentChunk``), the shared LLM p
 from __future__ import annotations
 
 import json
-import re
 import uuid
 from typing import Any
 
@@ -25,6 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.models import Document, DocumentChunk
+from app.services.llm_json import extract_json_obj
 from app.services.llm_router import complete_chat
 from app.services.token_budget import truncate_to_tokens
 
@@ -533,23 +533,8 @@ def _as_json(v: Any, default: Any) -> Any:
     return json.loads(v) if isinstance(v, str) else v
 
 
-def _parse_json_obj(raw: str) -> dict[str, Any]:
-    """Tolerant single-object JSON parse (handles code fences / surrounding prose)."""
-    if not raw or not raw.strip():
-        return {}
-    s = raw.strip()
-    fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", s, re.DOTALL)
-    if fence:
-        s = fence.group(1)
-    else:
-        a, b = s.find("{"), s.rfind("}")
-        if a >= 0 and b > a:
-            s = s[a : b + 1]
-    try:
-        obj = json.loads(s)
-        return obj if isinstance(obj, dict) else {}
-    except json.JSONDecodeError:
-        return {}
+# Tolerant LLM-JSON extraction lives in app.services.llm_json (shared with resume.py).
+_parse_json_obj = extract_json_obj
 
 
 # ---------------------------------------------------------------- self-check

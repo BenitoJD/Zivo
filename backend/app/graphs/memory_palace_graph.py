@@ -13,13 +13,13 @@ Off the answer path: runs in a background worker.
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import uuid
 
 from sqlalchemy.orm import Session
 
-from app.models import Document, DocumentChunk
+from app.services.chunks import load_document_chunk_texts
+from app.services.llm_json import extract_json_obj
 from app.services.llm_router import complete_chat
 from app.services.prompts import get_prompt
 from app.services.token_budget import (
@@ -50,23 +50,8 @@ def _slugify(term: str, taken: set[str]) -> str:
     return key
 
 
-def _parse_palace(raw: str) -> dict:
-    """Extract the palace JSON object from an LLM response (tolerant)."""
-    if not raw or not raw.strip():
-        return {}
-    text = raw.strip()
-    fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
-    if fence:
-        text = fence.group(1)
-    else:
-        start, end = text.find("{"), text.rfind("}")
-        if start >= 0 and end > start:
-            text = text[start : end + 1]
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        return {}
-    return data if isinstance(data, dict) else {}
+# Tolerant LLM-JSON extraction lives in app.services.llm_json (shared across graphs).
+_parse_palace = extract_json_obj
 
 
 def _finalize(data: dict, fallback_setting: str) -> dict:
@@ -119,17 +104,7 @@ async def generate_memory_palace(
     db: Session, document_id: uuid.UUID, *, setting: str = ""
 ) -> dict:
     """Scan the document and return a memory-palace journey for the key facts."""
-    doc = db.get(Document, document_id)
-    if not doc:
-        return {}
-    rows = (
-        db.query(DocumentChunk)
-        .filter(DocumentChunk.document_id == document_id)
-        .order_by(DocumentChunk.page_start.asc())
-        .limit(200)
-        .all()
-    )
-    chunk_texts = [r.text for r in rows if r.text]
+    chunk_texts = load_document_chunk_texts(db, document_id)
     if not chunk_texts:
         return {}
 

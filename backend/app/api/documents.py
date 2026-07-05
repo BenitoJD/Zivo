@@ -7,12 +7,13 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.api.access import require_document
 from app.db import get_db
 from app.models import Account, Document, DocumentChunk, User
 from app.services.auth import get_current_user, get_optional_user, require_csrf, require_csrf_or_guest
 from app.services.document_create import create_document_record
 from app.services.document_purge import purge_document, purge_ingest_tmp
-from app.services.guest import can_access_document, document_owned_by_guest
+from app.services.guest import document_owned_by_guest
 from app.services.guest_session import guest_session_for_read, optional_guest_session
 from app.services.jobs import enqueue_summarize
 from app.services.storage import delete_object, presigned_get_url
@@ -84,16 +85,6 @@ class ImportGithubIn(BaseModel):
     github_url: str = Field(min_length=8, max_length=2048)
 
 
-def _assert_document_access(
-    doc: Document | None,
-    user: Account | None,
-    guest_id: str | None,
-) -> Document:
-    if not doc or not can_access_document(doc, user, guest_id):
-        raise HTTPException(status_code=404, detail="Not found")
-    return doc
-
-
 @router.get("/demo", response_model=DocumentOut)
 def get_demo_document(db: Session = Depends(get_db)) -> Document:
     doc = db.get(Document, DEMO_DOC_ID)
@@ -139,8 +130,7 @@ def get_document(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> Document:
-    doc = db.get(Document, document_id)
-    return _assert_document_access(doc, user, guest_id)
+    return require_document(db, document_id, user, guest_id)
 
 
 @router.get("/{document_id}/file")
@@ -150,7 +140,7 @@ def get_document_file(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ):
-    doc = _assert_document_access(db.get(Document, document_id), user, guest_id)
+    doc = require_document(db, document_id, user, guest_id)
     if doc.meta and doc.meta.get("is_demo"):
         chunks = (
             db.query(DocumentChunk)
@@ -171,7 +161,7 @@ def get_document_pages(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> dict:
-    _assert_document_access(db.get(Document, document_id), user, guest_id)
+    require_document(db, document_id, user, guest_id)
     chunks = (
         db.query(DocumentChunk)
         .filter(DocumentChunk.document_id == document_id)

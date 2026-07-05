@@ -135,10 +135,10 @@ export function Personas() {
                   fontFamily: "var(--font-sans), sans-serif",
                   fontWeight: 600,
                   fontSize: 14,
-                  background: isActive ? "#644791" : "var(--mantine-color-gray-0)",
-                  color: isActive ? "#FFFFFF" : "var(--mantine-color-gray-7)",
+                  background: isActive ? "var(--mantine-color-lavender-7)" : "var(--mantine-color-gray-0)",
+                  color: isActive ? "var(--mantine-color-white)" : "var(--mantine-color-gray-7)",
                   border: isActive
-                    ? "1px solid #4E3774"
+                    ? "1px solid var(--mantine-color-lavender-8)"
                     : "1px solid var(--mantine-color-default-border)",
                   transition: reduce
                     ? "none"
@@ -225,8 +225,8 @@ export function Personas() {
                             fontSize: 12,
                             fontWeight: 700,
                             fontFamily: "var(--font-sans)",
-                            background: correct ? "#644791" : "var(--mantine-color-gray-2)",
-                            color: correct ? "#FFFFFF" : "var(--mantine-color-gray-6)",
+                            background: correct ? "var(--mantine-color-lavender-7)" : "var(--mantine-color-gray-2)",
+                            color: correct ? "var(--mantine-color-white)" : "var(--mantine-color-gray-6)",
                           }}
                         >
                           {String.fromCharCode(65 + oi)}

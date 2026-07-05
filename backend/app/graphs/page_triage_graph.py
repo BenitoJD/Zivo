@@ -119,6 +119,7 @@ def run_page_triage(
         aspect_dedup=result.get("aspect_dedup"),
         content_type=result.get("content_type"),
         non_content=bool(result.get("non_content")),
+        programmable=bool(result.get("programmable")),
     )
     on_triage_completed(db, document_id, page=page_number, precompute=precompute)
 
@@ -212,7 +213,10 @@ def _looks_like_junk(text: str) -> bool:
 
 
 def _non_content_result(
-    *, content_type: str = "non_content", rationale: str = ""
+    *,
+    content_type: str = "non_content",
+    rationale: str = "",
+    programmable: bool = False,
 ) -> dict[str, Any]:
     """A deliberate, honest zero-question verdict (distinct from a parse failure)."""
     return {
@@ -221,6 +225,7 @@ def _non_content_result(
         "rationale": rationale or "No testable content on this page.",
         "aspect_dedup": None,
         "content_type": content_type or "non_content",
+        "programmable": bool(programmable),
         "non_content": True,
     }
 
@@ -270,6 +275,7 @@ def _finalize_triage(
     budget: int,
     rationale: str,
     content_type: str | None = None,
+    programmable: bool = False,
 ) -> dict[str, Any]:
     deduped, meta = dedupe_aspects(aspects)
     new_budget = min(budget, len(deduped)) if deduped else 0
@@ -284,6 +290,7 @@ def _finalize_triage(
         "rationale": (rationale + dedup_note).strip(),
         "aspect_dedup": meta,
         "content_type": content_type,
+        "programmable": bool(programmable),
         "non_content": False,
     }
 
@@ -337,6 +344,7 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
             if parsed:
                 content_type = (str(parsed.get("content_type") or "").strip().lower() or None)
                 usable = parsed.get("usable")
+                programmable = bool(parsed.get("programmable"))
                 raw_yield = parsed.get("testable_yield")
                 if raw_yield is None:
                     raw_yield = parsed.get("question_budget")
@@ -356,6 +364,7 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
                         result = _non_content_result(
                             content_type=content_type or "non_content",
                             rationale=rationale,
+                            programmable=programmable,
                         )
                         _triage_cache.put(page_text, page_number, result)
                         return result
@@ -367,6 +376,7 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
                         budget=budget,
                         rationale=rationale,
                         content_type=content_type,
+                        programmable=programmable,
                     )
                     _triage_cache.put(page_text, page_number, result)
                     return result
@@ -385,6 +395,7 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
                     budget=budget,
                     rationale=rationale,
                     content_type=content_type,
+                    programmable=programmable,
                 )
                 _triage_cache.put(page_text, page_number, result)
                 return result

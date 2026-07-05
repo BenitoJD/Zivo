@@ -11,7 +11,6 @@ import {
   ThemeIcon,
   Title,
   UnstyledButton,
-  useMantineColorScheme,
 } from "@mantine/core";
 import { useInterval } from "@mantine/hooks";
 import {
@@ -29,6 +28,7 @@ import { mcqOptionChrome, McqFeedbackCard } from "@/app/_components/mcq/McqCard"
 import { normalizeMcqOptions, type McqState } from "@/lib/types";
 import { learnWaitStatus } from "@/lib/learnStatus";
 import { type AnsweredCard } from "@/app/workspace/_components/studyLayout";
+import { useIsDark } from "@/lib/useIsDark";
 
 /**
  * MCQ panels (extracted from the workspace page monolith): the hero question card
@@ -149,8 +149,7 @@ export function McqHeroPanel({
   onAdvance?: () => void;
   onRetry?: () => void;
 }) {
-  const { colorScheme } = useMantineColorScheme();
-  const isDark = colorScheme === "dark";
+  const isDark = useIsDark();
   const safeOptions = normalizeMcqOptions(options);
   const graded = gradeState !== null;
   const showNextQuestion = graded;
@@ -656,8 +655,7 @@ export function McqReviewView({
   onNext: () => void;
   onExit: () => void;
 }) {
-  const { colorScheme } = useMantineColorScheme();
-  const isDark = colorScheme === "dark";
+  const isDark = useIsDark();
   const safeOptions = normalizeMcqOptions(card.options);
   const { correct, correctIndex, correctIndices } = card.gradeState;
   const isCorrect = (i: number) =>

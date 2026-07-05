@@ -21,6 +21,8 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.services.chunks import pgvector_literal
+
 logger = logging.getLogger(__name__)
 
 # Cosine similarity threshold above which a cached answer is reused. 0.92 is
@@ -57,7 +59,7 @@ def get_cached_response(
     threshold: float = SIMILARITY_THRESHOLD,
 ) -> dict | None:
     """Return {response_text, citations} if a similar query is cached, else None."""
-    vec_literal = "[" + ",".join(str(x) for x in query_embedding) + "]"
+    vec_literal = pgvector_literal(query_embedding)
     row = db.execute(
         text(
             """
@@ -102,7 +104,7 @@ def store_response(
     citations: list[dict],
 ) -> None:
     """Persist a freshly-generated response for future cache hits."""
-    vec_literal = "[" + ",".join(str(x) for x in query_embedding) + "]"
+    vec_literal = pgvector_literal(query_embedding)
     try:
         db.execute(
             text(

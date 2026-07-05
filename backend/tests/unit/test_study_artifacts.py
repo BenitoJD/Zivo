@@ -4,7 +4,7 @@ Pure functions only — no DB, no network. Locks the tolerant parsing that the
 intermittent-provider reality demands (truncated arrays, fenced JSON, alt keys).
 """
 
-from app.graphs.flashcards_graph import _MAX_CARDS, _finalize, _loads_obj, _parse_cards
+from app.graphs.flashcards_graph import _MAX_CARDS, _finalize, _parse_cards
 from app.graphs.notes_graph import _clean
 
 
@@ -55,12 +55,6 @@ def test_finalize_dedupes_and_caps():
     out = _finalize(cards)
     assert len(out) == _MAX_CARDS
     assert len({c["front"].lower() for c in out}) == _MAX_CARDS
-
-
-def test_loads_obj():
-    assert _loads_obj('{"a": 1}') == {"a": 1}
-    assert _loads_obj("[1,2]") is None
-    assert _loads_obj("{broken") is None
 
 
 def test_notes_clean_strips_outer_markdown_fence():

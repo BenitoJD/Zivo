@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { Box, Button, Container, Drawer, Group, Stack, Text } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { useReducedMotion } from "framer-motion";
-import { IconArrowRight, IconMenu2, IconX } from "@tabler/icons-react";
+import { IconArrowRight, IconMenu2 } from "@tabler/icons-react";
 import { BrandMark } from "@/app/_components/BrandMark";
 
 type NavItem = { label: string; href: string };
@@ -285,9 +285,4 @@ export function LandingNav() {
       </Drawer>
     </>
   );
-}
-
-/** Re-exported for the mobile drawer close affordance. */
-export function DrawerCloseIcon() {
-  return <IconX size={18} stroke={1.8} />;
 }

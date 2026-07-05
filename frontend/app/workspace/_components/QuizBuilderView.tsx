@@ -5,7 +5,6 @@ import {
   Badge,
   Box,
   Button,
-  Center,
   Checkbox,
   Group,
   NumberInput,
@@ -217,7 +216,7 @@ function QuestionCard({ n, q, showAnswers, compact }: { n: number; q: QuizQuesti
         <Text fz="sm" c="sage.7" mt={4}>Answer: {String(q.answer ?? "")}</Text>
       ) : null}
       {showAnswers && q.type === "matching" ? (
-        <Text fz="xs" c="sage.7" mt={6}>Key: {q.pairs?.map((p, pi) => `${pi + 1}→${LETTERS[pi]}`).join("  ")}</Text>
+        <Text fz="xs" c="sage.7" mt={6}>Key: {q.pairs?.map((_p, pi) => `${pi + 1}→${LETTERS[pi]}`).join("  ")}</Text>
       ) : null}
       {showAnswers && q.explanation ? <Text fz="xs" c="dimmed" fs="italic" mt={4}>{q.explanation}</Text> : null}
     </Paper>
@@ -228,7 +227,7 @@ function answerLine(q: QuizQuestion): string {
   if (SINGLE_ANSWER_MCQ.has(q.type)) return `${LETTERS[q.answer_index ?? 0]}`;
   if (q.type === "multi") return (q.answer_indices ?? []).map((i) => LETTERS[i]).join(", ");
   if (q.type === "truefalse") return q.answer ? "True" : "False";
-  if (q.type === "matching") return (q.pairs ?? []).map((p, i) => `${i + 1}→${LETTERS[i]}`).join("  ");
+  if (q.type === "matching") return (q.pairs ?? []).map((_p, i) => `${i + 1}→${LETTERS[i]}`).join("  ");
   return String(q.answer ?? "");
 }
 function toMarkdown(qs: QuizQuestion[], withAnswers: boolean): string {

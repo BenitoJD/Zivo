@@ -27,6 +27,7 @@ import { IconArrowLeft } from "@tabler/icons-react";
 import { McqCard, type GradeState } from "@/app/_components/mcq/McqCard";
 import { apiGet, apiPost, ensureGuestSession } from "@/lib/api/client";
 import type { McqGradeResponse } from "@/lib/types";
+import { Shell } from "@/app/practice/_components/Shell";
 
 type QuestionItem = {
   id: string;
@@ -43,7 +44,7 @@ export default function PracticeRunPage({ params }: { params: Promise<{ qid: str
   const router = useRouter();
   const [qid, setQid] = useState<string>("");
   const [items, setItems] = useState<QuestionItem[]>([]);
-  const [total, setTotal] = useState(0);
+  const [, setTotal] = useState(0);
   const [index, setIndex] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const [multiSelected, setMultiSelected] = useState<number[]>([]);
@@ -267,13 +268,3 @@ export default function PracticeRunPage({ params }: { params: Promise<{ qid: str
   );
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <Box
-      bg="var(--mantine-color-body)"
-      style={{ height: "100dvh", overflowY: "auto", overflowX: "hidden" }}
-    >
-      {children}
-    </Box>
-  );
-}

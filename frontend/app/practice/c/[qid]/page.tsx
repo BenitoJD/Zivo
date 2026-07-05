@@ -12,7 +12,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Anchor,
-  Box,
   Button,
   Center,
   Container,
@@ -25,6 +24,7 @@ import {
 } from "@mantine/core";
 import { IconArrowLeft, IconArrowRight } from "@tabler/icons-react";
 import { apiGet, apiPost, ensureGuestSession } from "@/lib/api/client";
+import { Shell } from "@/app/practice/_components/Shell";
 
 type ConceptSummary = { qid: string; label: string; description: string };
 type ConceptDetail = {
@@ -268,13 +268,3 @@ export default function ConceptPage({ params }: { params: Promise<{ qid: string 
   );
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <Box
-      bg="var(--mantine-color-body)"
-      style={{ height: "100dvh", overflowY: "auto", overflowX: "hidden" }}
-    >
-      {children}
-    </Box>
-  );
-}

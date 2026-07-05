@@ -111,6 +111,7 @@ Use headings and bullet points. Do not cite page numbers.""",
 First decide what the material IS and whether it can be tested at all:
 - content_type: expository (factual/explanatory), narrative (story/literary), argumentative (opinion/persuasive), procedural (steps/how-to), reference_data (tables/figures/lists/code), or non_content (cover page, table of contents, index, citations, blank/near-blank, or junk/unreadable).
 - usable: false if the text is not coherent language a learner could be quizzed on (gibberish, OCR noise, raw data with no concepts).
+- programmable: true if the page is about programming, algorithms, data structures, or competitive/problem-solving code — material a LeetCode-style coding challenge could be derived from (CLRS chapters, algorithm tutorials, DS lecture notes, problem editorials). false for everything else (biology, history, contracts, raw API dumps with no algorithmic idea).
 
 Then plan aspects — distinct angles on understanding (recall, detail, mechanism, application, comparison, exception, interpretation). Together they give a full-circle view, never redundant trivia. Match the angle to the material: a story or argument is tested by interpretation and reasoning, not date-recall.
 
@@ -124,7 +125,7 @@ Page text:
 {page_text}
 
 Return exactly one JSON object (no markdown fence required):
-{{"content_type": "expository|narrative|argumentative|procedural|reference_data|non_content", "usable": <bool>, "testable_yield": <integer>, "aspects": [{{"key": "slug-id", "label": "Short aspect name", "cognitive_angle": "recall|detail|mechanism|application|comparison|exception|interpretation"}}], "rationale": "one sentence"}}
+{{"content_type": "expository|narrative|argumentative|procedural|reference_data|non_content", "usable": <bool>, "programmable": <bool>, "testable_yield": <integer>, "aspects": [{{"key": "slug-id", "label": "Short aspect name", "cognitive_angle": "recall|detail|mechanism|application|comparison|exception|interpretation"}}], "rationale": "one sentence"}}
 
 Rules:
 - testable_yield = how many genuinely good questions this material honestly supports. Minimum 0, maximum {max_budget}. Return 0 (with aspects: []) for non_content or unusable material — this is correct, not a failure.

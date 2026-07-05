@@ -15,6 +15,11 @@ from app.models import Document, DocumentChunk
 settings = get_settings()
 
 
+def pgvector_literal(vec: list[float]) -> str:
+    """Format an embedding vector as a pgvector string literal for `CAST(:vec AS vector)`."""
+    return "[" + ",".join(str(x) for x in vec) + "]"
+
+
 def _chunk_content_hash(text_value: str) -> str:
     return hashlib.sha256((text_value or "").encode("utf-8")).hexdigest()
 
@@ -64,6 +69,24 @@ _INDEXED_PAGES_SQL = text(
     ORDER BY page_start
     """
 )
+
+
+def load_document_chunk_texts(db: Session, document_id: uuid.UUID, *, limit: int = 200) -> list[str]:
+    """Return the document's chunk texts in page order (empty list if no document/chunks).
+
+    Shared by every longform generation graph (summarize / topics / notes / cards /
+    palace / quiz), which all need the same ordered chunk text feed for map-reduce.
+    """
+    if not db.get(Document, document_id):
+        return []
+    rows = (
+        db.query(DocumentChunk)
+        .filter(DocumentChunk.document_id == document_id)
+        .order_by(DocumentChunk.page_start.asc())
+        .limit(limit)
+        .all()
+    )
+    return [r.text for r in rows if r.text]
 
 
 def indexed_pages_for_document(db: Session, document_id: uuid.UUID) -> set[int]:
@@ -123,7 +146,7 @@ def upsert_page_chunks(
             "page_start": chunk["page_start"],
             "page_end": chunk["page_end"],
             "text": chunk["text"],
-            "embedding": "[" + ",".join(str(x) for x in embedding) + "]",
+            "embedding": pgvector_literal(embedding),
             "meta": json.dumps(
                 {
                     **(chunk.get("meta") or {}),
@@ -154,7 +177,7 @@ def replace_document_chunks(
             "page_start": chunk["page_start"],
             "page_end": chunk["page_end"],
             "text": chunk["text"],
-            "embedding": "[" + ",".join(str(x) for x in embedding) + "]",
+            "embedding": pgvector_literal(embedding),
             "meta": json.dumps(chunk.get("meta") or {}),
         }
         for chunk, embedding in zip(chunks, embeddings, strict=True)

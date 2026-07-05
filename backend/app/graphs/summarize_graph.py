@@ -7,7 +7,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from app.models import Document, DocumentChunk
+from app.services.chunks import load_document_chunk_texts
 from app.services.llm_router import complete_chat
 from app.services.prompts import get_prompt
 from app.services.token_budget import (
@@ -43,17 +43,7 @@ async def _summarize_chunk(
 
 
 async def generate_whole_doc_summary(db: Session, document_id: uuid.UUID) -> str:
-    doc = db.get(Document, document_id)
-    if not doc:
-        return ""
-    rows = (
-        db.query(DocumentChunk)
-        .filter(DocumentChunk.document_id == document_id)
-        .order_by(DocumentChunk.page_start.asc())
-        .limit(200)
-        .all()
-    )
-    chunk_texts = [r.text for r in rows if r.text]
+    chunk_texts = load_document_chunk_texts(db, document_id)
     if not chunk_texts:
         return ""
 

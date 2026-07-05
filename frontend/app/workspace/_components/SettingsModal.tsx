@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Button,
   Divider,
@@ -11,12 +11,9 @@ import {
   SegmentedControl,
   Stack,
   Text,
-  TextInput,
-  Title,
   useMantineColorScheme,
 } from "@mantine/core";
 import {
-  IconAdjustments,
   IconBook,
   IconFlame,
   IconHelp,

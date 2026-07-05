@@ -80,8 +80,6 @@ const LEADING_META_PATTERNS = [
   /^(?:on\s+page\s+\d+(?:\s+of\s+the\s+(?:text|book|passage))?)[,:]?\s+/i,
   /^(?:in\s+this\s+(?:book|text|reading|passage|document))[,:]?\s+/i,
 ];
-const DOCUMENT_META_RESIDUE =
-  /\b(?:page\s+text|page\s+\d+|on\s+page\s+\d+|according\s+to\s+the\s+(?:page|text|passage|reading|document|excerpt|source|book|textbook|material)|based\s+on\s+the\s+(?:page|text|passage|reading|document|excerpt|source|book|textbook|material)|(?:the\s+)?(?:passage|reading|excerpt|document)\s+(?:on\s+page\s+\d+\s+)?(?:states|says|indicates|describes|explains|mentions)|what\s+does\s+the\s+(?:passage|reading|excerpt|text|document)\s+(?:say|state|describe|mention)|from\s+the\s+(?:passage|reading|excerpt|text|document|source\s+material)|in\s+this\s+(?:book|text|reading|passage|document|chapter)|in\s+the\s+(?:passage|reading|excerpt|material)|(?:the\s+)?textbook\s+(?:says|states|describes|explains)|(?:the\s+)?source\s+material|as\s+(?:stated|described)\s+in\s+the\s+(?:text|passage|reading|material|document)|the\s+text\s+(?:states|says|specifies)|text\s+specifies|document\s+says|passage\s+states|chapter\s+\d+\s+(?:states|says|describes|explains))\b/i;
 
 function stripDocumentMeta(text: string): string {
   // Collapse horizontal whitespace but PRESERVE newlines — statement-based,
@@ -126,13 +124,6 @@ function sanitizeMcqOption(text: string): string {
 /** Remove exam-forbidden framing so the stem stands alone like a formal test item. */
 export function sanitizeMcqStem(text: string): string {
   return capitalizeFirst(stripDocumentMeta(text));
-}
-
-export function hasDocumentMetaReference(text: string): boolean {
-  const cleaned = String(text || "").trim();
-  if (!cleaned) return false;
-  if (LEADING_META_PATTERNS.some((pattern) => pattern.test(cleaned))) return true;
-  return DOCUMENT_META_RESIDUE.test(cleaned);
 }
 
 /** Coerce assertion payload options into a string array for the MCQ UI. */

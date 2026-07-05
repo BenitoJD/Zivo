@@ -13,7 +13,6 @@ import {
   Textarea,
   Title,
   Tooltip,
-  useMantineColorScheme,
 } from "@mantine/core";
 import { useHover } from "@mantine/hooks";
 import {
@@ -28,6 +27,7 @@ import {
 import { ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import { BrandMark } from "@/app/_components/BrandMark";
 import { AssistantMarkdown, MessageCopyAction } from "@/lib/chatMarkdown";
+import { useIsDark } from "@/lib/useIsDark";
 
 /**
  * Tutor chat panel + its message UI (extracted from the workspace page monolith).
@@ -72,8 +72,7 @@ export function TutorPanel({
   /** Show a branded top bar — for surfaces (Read, mobile) that have no rail header. */
   showHeader?: boolean;
 }) {
-  const { colorScheme } = useMantineColorScheme();
-  const isDark = colorScheme === "dark";
+  const isDark = useIsDark();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showJumpLatest, setShowJumpLatest] = useState(false);
   const canSend = Boolean(input.trim()) && !busy && contextReady;

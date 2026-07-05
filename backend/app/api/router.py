@@ -7,6 +7,7 @@ from app.api import (
     auth,
     chat,
     chunked_uploads,
+    coding,
     documents,
     health,
     learn,
@@ -36,3 +37,4 @@ api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
 api_router.include_router(mcq.router, prefix="/mcq", tags=["mcq"])
 api_router.include_router(models.router, prefix="/models", tags=["models"])
 api_router.include_router(practice.router, prefix="/practice", tags=["practice"])
+api_router.include_router(coding.router, prefix="/coding", tags=["coding"])

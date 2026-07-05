@@ -6,13 +6,6 @@ from sqlalchemy.orm import Session
 
 from app.models import EtaExecution, EtaExecutionStatus, Job, JobStatus
 
-TERMINAL_STATUSES = {
-    JobStatus.succeeded,
-    JobStatus.failed,
-    JobStatus.cancelled,
-}
-
-
 def _resolve_execution_status(counts: dict[JobStatus, int], total: int) -> EtaExecutionStatus:
     queued = counts.get(JobStatus.queued, 0)
     running = counts.get(JobStatus.running, 0)

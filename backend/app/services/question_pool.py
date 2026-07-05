@@ -53,8 +53,6 @@ ABSOLUTE_MAX_QUESTIONS_PER_PAGE = int(os.getenv("ZIVO_MAX_QUESTIONS_PER_PAGE", "
 # critic, or dedup — can't block the page from ever completing (which would strand
 # the learner once every producible question is answered).
 MAX_ASPECT_ATTEMPTS = int(os.getenv("ZIVO_MAX_ASPECT_ATTEMPTS", "3"))
-# Backward-compatible alias for API consumers
-MAX_QUESTIONS_PER_PAGE = ABSOLUTE_MAX_QUESTIONS_PER_PAGE
 # A generate job left in 'running' after a worker crash blocks recovery until reclaimed.
 GENERATE_JOB_STALE_SECONDS = 180
 
@@ -171,6 +169,7 @@ def save_page_coverage(
     aspect_dedup: dict[str, Any] | None = None,
     content_type: str | None = None,
     non_content: bool = False,
+    programmable: bool = False,
 ) -> None:
     doc = db.get(Document, document_id)
     if not doc:
@@ -185,6 +184,9 @@ def save_page_coverage(
         "triage_activity_id": triage_activity_id,
         "content_type": content_type,
         "non_content": bool(non_content),
+        # Triage's verdict on whether this page is about programming/algorithms —
+        # the gate the coding-bank ETA job reads to decide whether to spawn.
+        "programmable": bool(programmable),
     }
     if aspect_dedup:
         entry["aspect_dedup"] = aspect_dedup

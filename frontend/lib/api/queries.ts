@@ -28,6 +28,10 @@ export const queryKeys = {
   studyReport: (id: string) => ["study-report", id] as const,
   interview: (id: string) => ["interview", id] as const,
   resume: (id: string) => ["resume", id] as const,
+  codingWorkspace: (id: string) => ["coding", "workspace", id] as const,
+  codingProblem: (id: string) => ["coding", "problem", id] as const,
+  codingPublic: () => ["coding", "public"] as const,
+  codingLanguages: () => ["coding", "languages"] as const,
 };
 
 export type StudyReport = {
@@ -86,6 +90,14 @@ export type FlashcardsResponse = {
 const stillBuilding = (status?: string) =>
   status === "indexing" || status === "generating" || status === "missing" || !status;
 
+/** Poll every `ms` while a status-bearing query is still building, else stop. */
+const pollWhileBuilding = (ms = 3000) => (query: { state: { data?: { status?: string } } }) =>
+  stillBuilding(query.state.data?.status) ? ms : false;
+
+/** Poll every `ms` only while a query is in the "indexing" status, else stop. */
+const pollWhileIndexing = (ms = 3000) => (query: { state: { data?: { status?: string } } }) =>
+  query.state.data?.status === "indexing" ? ms : false;
+
 // NOTE: poll callbacks must NEVER gate the interval on `document.visibilityState`.
 // Returning `false` tells React Query to STOP the timer (not pause it); with the
 // global `refetchOnWindowFocus: false`, nothing re-triggers a fetch when the tab
@@ -99,7 +111,7 @@ export function useNotesQuery(artifactId: string, kind: NoteKind = "notes", enab
     queryKey: queryKeys.notes(artifactId, kind),
     queryFn: () => apiGet<NotesResponse>(`/api/artifacts/${artifactId}/notes?kind=${kind}`),
     enabled: enabled && Boolean(artifactId),
-    refetchInterval: (query) => (stillBuilding(query.state.data?.status) ? 3000 : false),
+    refetchInterval: pollWhileBuilding(),
   });
 }
 
@@ -108,7 +120,7 @@ export function useFlashcardsQuery(artifactId: string, enabled = true) {
     queryKey: queryKeys.flashcards(artifactId),
     queryFn: () => apiGet<FlashcardsResponse>(`/api/artifacts/${artifactId}/flashcards`),
     enabled: enabled && Boolean(artifactId),
-    refetchInterval: (query) => (stillBuilding(query.state.data?.status) ? 3000 : false),
+    refetchInterval: pollWhileBuilding(),
   });
 }
 
@@ -133,7 +145,7 @@ export function useMemoryPalaceQuery(artifactId: string, setting = "", enabled =
     queryKey: queryKeys.memoryPalace(artifactId, setting),
     queryFn: () => apiGet<MemoryPalaceResponse>(`/api/artifacts/${artifactId}/memory-palace${qs}`),
     enabled: enabled && Boolean(artifactId),
-    refetchInterval: (query) => (stillBuilding(query.state.data?.status) ? 3000 : false),
+    refetchInterval: pollWhileBuilding(),
   });
 }
 
@@ -204,7 +216,7 @@ export function useQuizQuery(artifactId: string, cfg: QuizConfig, enabled = true
     queryKey: queryKeys.quiz(artifactId, qs),
     queryFn: () => apiGet<QuizResponse>(`/api/artifacts/${artifactId}/quiz?${qs}`),
     enabled: enabled && Boolean(artifactId) && cfg.types.length > 0,
-    refetchInterval: (query) => (stillBuilding(query.state.data?.status) ? 3000 : false),
+    refetchInterval: pollWhileBuilding(),
   });
 }
 
@@ -273,7 +285,7 @@ export function useInterviewQuery(artifactId: string, enabled = true) {
     queryKey: queryKeys.interview(artifactId),
     queryFn: () => apiGet<InterviewState>(`/api/artifacts/${artifactId}/interview`),
     enabled: enabled && Boolean(artifactId),
-    refetchInterval: (query) => (query.state.data?.status === "indexing" ? 3000 : false),
+    refetchInterval: pollWhileIndexing(),
   });
 }
 
@@ -300,6 +312,101 @@ export function useInterviewLanguagesQuery(artifactId: string, enabled = true) {
     enabled: enabled && Boolean(artifactId),
     staleTime: Infinity,
   });
+}
+
+// -------------------------------------------------------------- coding practice
+// LeetCode-style problem bank. Workspace view (authed, persistent status) +
+// public sampler (anonymous) share the same problem shape and the same
+// run/submit endpoints; only the list source differs.
+export type CodingTestCase = { stdin: string; expected_output: string };
+export type CodingProblemStatus = "new" | "solved";
+export type CodingProblemListItem = {
+  id: string;
+  title: string;
+  difficulty: "easy" | "medium" | "hard";
+  language_id: number;
+  sample_test_count: number;
+  hidden_test_count: number;
+  page_number?: number;
+  status?: CodingProblemStatus;
+};
+export type CodingProblem = {
+  id: string;
+  format: string;
+  title: string;
+  statement: string;
+  starter_code: string;
+  language_id: number;
+  language_label: string;
+  difficulty: "easy" | "medium" | "hard";
+  sample_tests: CodingTestCase[];
+  test_count: number;
+  concept: string;
+  tags: string[];
+  status?: CodingProblemStatus;
+};
+export type CodingSubmitResult = {
+  passed: number;
+  total: number;
+  all_passed: boolean;
+  cases: { ok: boolean; stdin?: string; expected?: string; stdout?: string; stderr?: string }[];
+  error: string | null;
+  status: CodingProblemStatus;
+};
+
+export function useCodingWorkspaceQuery(artifactId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.codingWorkspace(artifactId),
+    queryFn: () => apiGet<{ artifact_id: string; items: CodingProblemListItem[] }>(`/api/coding/workspace/${artifactId}`),
+    enabled: enabled && Boolean(artifactId),
+    refetchInterval: (query) => {
+      // Poll while problems are still being generated (page triage → coding job).
+      const n = query.state.data?.items.length ?? 0;
+      return n === 0 ? 4000 : false;
+    },
+  });
+}
+
+export function useCodingProblemQuery(id: string | null | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.codingProblem(id ?? ""),
+    queryFn: () => apiGet<CodingProblem>(`/api/coding/${id}`),
+    enabled: enabled && Boolean(id),
+  });
+}
+
+export function useCodingPublicQuery(difficulty?: "easy" | "medium" | "hard") {
+  const qs = difficulty ? `?difficulty=${difficulty}` : "";
+  return useQuery({
+    queryKey: queryKeys.codingPublic(),
+    queryFn: () => apiGet<{ items: CodingProblemListItem[]; count: number }>(`/api/coding${qs}`),
+  });
+}
+
+export function useCodingLanguagesQuery() {
+  return useQuery({
+    queryKey: queryKeys.codingLanguages(),
+    queryFn: () => apiGet<{ languages: InterviewLanguage[] }>(`/api/coding/meta/languages`),
+    staleTime: Infinity,
+  });
+}
+
+/** Run + submit actions for one problem. Both invalidate the problem + workspace
+ *  caches so per-problem status refreshes after a submit. */
+export function useCodingActions(assertionId: string) {
+  const qc = useQueryClient();
+  return {
+    runCode: (source: string, language_id: number, stdin = "") =>
+      apiPost<CodeRunResult>(`/api/coding/${assertionId}/run`, { source, language_id, stdin }),
+    submit: async (source: string, language_id: number) => {
+      const result = await apiPost<CodingSubmitResult>(`/api/coding/${assertionId}/submit`, { source, language_id });
+      qc.invalidateQueries({ queryKey: queryKeys.codingProblem(assertionId) });
+      return result;
+    },
+    invalidateWorkspace: (artifactId: string) => {
+      qc.invalidateQueries({ queryKey: queryKeys.codingWorkspace(artifactId) });
+    },
+  };
 }
 
 // -------------------------------------------------------------- resume suite
@@ -332,7 +439,7 @@ export function useResumeAtsQuery(artifactId: string, enabled = true) {
     queryKey: queryKeys.resume(artifactId),
     queryFn: () => apiGet<ResumeState>(`/api/artifacts/${artifactId}/resume/ats`),
     enabled: enabled && Boolean(artifactId),
-    refetchInterval: (query) => (query.state.data?.status === "indexing" ? 3000 : false),
+    refetchInterval: pollWhileIndexing(),
   });
 }
 
@@ -449,12 +556,4 @@ export function useChatMessagesQuery(artifactId: string, mode: string, enabled =
 export function useInvalidateSources() {
   const qc = useQueryClient();
   return () => void qc.invalidateQueries({ queryKey: queryKeys.sources });
-}
-
-export function useInvalidateArtifact(artifactId: string) {
-  const qc = useQueryClient();
-  return () => {
-    void qc.invalidateQueries({ queryKey: queryKeys.artifact(artifactId) });
-    void qc.invalidateQueries({ queryKey: queryKeys.artifactPages(artifactId) });
-  };
 }

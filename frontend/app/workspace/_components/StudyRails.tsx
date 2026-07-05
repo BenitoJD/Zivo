@@ -77,7 +77,6 @@ export function StudyPushRail({
   title,
   onClose,
   children,
-  headerSize = "default",
   resizable = false,
   overlay = false,
   isResizing = false,

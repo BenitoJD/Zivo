@@ -10,6 +10,7 @@ import psycopg
 
 CONCEPTS = [
     ("/vocab/assertion/question.mcq", "assertion_type", "Multiple-choice question"),
+    ("/vocab/assertion/question.coding", "assertion_type", "Coding question"),
     ("/vocab/activity/generate_questions", "activity_type", "Generate questions"),
     ("/vocab/activity/embed_segments", "activity_type", "Embed segments"),
     ("/vocab/activity/evaluate_quality", "activity_type", "Evaluate question quality"),
@@ -21,6 +22,7 @@ CONCEPTS = [
     ("/vocab/link/harder_than", "link_type", "Harder successor"),
     ("/vocab/link/prerequisite", "link_type", "Prerequisite link"),
     ("/vocab/metric/answer.correct", "metric_type", "Answer correct"),
+    ("/vocab/metric/coding.passed", "metric_type", "Coding tests passed"),
     ("/vocab/metric/answer.choice_index", "metric_type", "Choice index"),
     ("/vocab/metric/answer.latency_ms", "metric_type", "Answer latency ms"),
     ("/vocab/metric/confidence.self_report", "metric_type", "Self-reported confidence"),

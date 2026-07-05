@@ -13,11 +13,12 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from app.services.http_client import HTTP_TIMEOUT_S, zivo_http_client
+
 READER_PAGE_CHARS = 3200
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
-FETCH_TIMEOUT_S = 15.0
+FETCH_TIMEOUT_S = HTTP_TIMEOUT_S
 MAX_REDIRECTS = 3
-USER_AGENT = "zivo/1.0 (+https://zivo.dev; article import)"
 _METADATA_IP = ipaddress.ip_address("169.254.169.254")
 
 _WS_RE = re.compile(r"[ \t]+\n")
@@ -246,11 +247,11 @@ def extract_article(content: bytes, content_type: str, url: str) -> ImportedArti
 
 async def fetch_and_extract(url: str) -> ImportedArticle:
     normalized = normalize_public_url(url)
-    headers = {"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8"}
+    headers = {"Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8"}
 
     current_url = normalized
     try:
-        async with httpx.AsyncClient(
+        async with zivo_http_client(
             follow_redirects=False,
             timeout=FETCH_TIMEOUT_S,
             headers=headers,

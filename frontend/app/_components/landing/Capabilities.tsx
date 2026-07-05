@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Container, Group, Paper, SimpleGrid, Stack, Text, Title } from "@mantine/core";
+import { Box, Container, Paper, SimpleGrid, Stack, Text, Title } from "@mantine/core";
 import {
   IconUpload,
   IconBulb,

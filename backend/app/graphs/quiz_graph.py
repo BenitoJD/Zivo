@@ -9,13 +9,12 @@ ingest); off the answer path in a background worker.
 
 from __future__ import annotations
 
-import json
-import re
 import uuid
 
 from sqlalchemy.orm import Session
 
-from app.models import Document, DocumentChunk
+from app.services.chunks import load_document_chunk_texts
+from app.services.llm_json import extract_json_array
 from app.services.llm_router import complete_chat
 from app.services.prompts import get_prompt
 from app.services.token_budget import (
@@ -46,30 +45,7 @@ MAX_QUESTIONS = 40
 
 def _parse_questions(raw: str) -> list[dict]:
     """Extract a JSON array of question objects (tolerant of fences/prose/truncation)."""
-    if not raw or not raw.strip():
-        return []
-    text = raw.strip()
-    fence = re.search(r"```(?:json)?\s*(\[.*\])\s*```", text, re.DOTALL)
-    inner = fence.group(1) if fence else text  # un-sliced text used for salvage
-    candidate = inner
-    if not fence:
-        start, end = text.find("["), text.rfind("]")
-        if start >= 0 and end > start:
-            candidate = text[start : end + 1]
-    try:
-        data = json.loads(candidate)
-    except json.JSONDecodeError:
-        # Truncated/invalid array — salvage every complete {...} object from the full
-        # text (not the bracket-sliced candidate, whose end can land on an inner `]`).
-        data = []
-        for frag in re.findall(r"\{[^{}]*\}", inner, re.DOTALL):
-            try:
-                obj = json.loads(frag)
-                if isinstance(obj, dict):
-                    data.append(obj)
-            except json.JSONDecodeError:
-                continue
-    return data if isinstance(data, list) else []
+    return extract_json_array(raw)
 
 
 def _norm_options(item: dict) -> list[str]:
@@ -151,17 +127,8 @@ async def generate_quiz(
     db: Session, document_id: uuid.UUID, *, types: list[str], count: int, difficulty: str
 ) -> list[dict]:
     """Generate a worksheet/quiz of the requested question types from the document."""
-    doc = db.get(Document, document_id)
-    if not doc:
-        return []
-    rows = (
-        db.query(DocumentChunk)
-        .filter(DocumentChunk.document_id == document_id)
-        .order_by(DocumentChunk.page_start.asc())
-        .limit(200)
-        .all()
-    )
-    body = "\n\n".join(r.text for r in rows if r.text)
+    chunk_texts = load_document_chunk_texts(db, document_id)
+    body = "\n\n".join(chunk_texts)
     if not body.strip():
         return []
 

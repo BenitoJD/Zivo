@@ -1,74 +1,45 @@
 """Memory Palace storage + orchestration (Magnetic Memory Method).
 
 Additive to MCQ/Explain/Notes. One palace per document, generated off the answer path by
-a worker and cached. The read path (ensure_palace) returns immediately, enqueuing
-generation the first time — and regenerating when the learner picks a different place
+a worker and cached. The read path (ensure_palace) returns immediately, enqueuing generation
+the first time — and regenerating when the learner picks a different place
 (``setting``) so they can anchor the journey somewhere they personally know well.
-Raw parameterized SQL on qb.document_memory_palace.
+
+Persistence + worker skeleton are shared via ``app.services.artifact_store``; this
+module owns the palace-specific ``setting`` column (which drives regeneration) and
+the read-path setting-match rule that ``ensure_palace`` implements by hand.
 """
 
 from __future__ import annotations
 
-import json
 import uuid
 from typing import Any
 
-from sqlalchemy import text
 from sqlalchemy.orm import Session
+
+from app.services.artifact_store import ArtifactStore, coerce_jsonb, run_artifact_generation
+
+# `setting` is the learner's chosen place-name; it's written on every upsert and
+# compared on the read path so a new place regenerates the journey.
+_PALACE_STORE = ArtifactStore(
+    table="qb.document_memory_palace",
+    key_cols=[],
+    payload_col="palace",
+    extra_cols={"setting": "setting"},
+)
 
 
 def load_palace(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
     """Return {status, setting, palace, error}. status: missing|generating|ready|failed."""
-    row = db.execute(
-        text(
-            "SELECT setting, palace, status, error FROM qb.document_memory_palace "
-            "WHERE document_id = :id"
-        ),
-        {"id": document_id},
-    ).mappings().first()
+    row = _PALACE_STORE.load_row(db, document_id)
     if not row:
         return {"status": "missing", "setting": "", "palace": None, "error": None}
-    palace = row["palace"]
-    if isinstance(palace, str):
-        palace = json.loads(palace)
     return {
         "status": row["status"],
         "setting": row["setting"] or "",
-        "palace": palace or None,
+        "palace": coerce_jsonb(row["palace"]) or None,
         "error": row["error"],
     }
-
-
-def _set_status(
-    db: Session, document_id: uuid.UUID, status: str, *, setting: str, error: str | None = None
-) -> None:
-    db.execute(
-        text(
-            """
-            INSERT INTO qb.document_memory_palace (document_id, setting, status, error, updated_at)
-            VALUES (:id, :setting, :status, :error, now())
-            ON CONFLICT (document_id)
-            DO UPDATE SET setting = EXCLUDED.setting, status = EXCLUDED.status,
-                          error = EXCLUDED.error, updated_at = now()
-            """
-        ),
-        {"id": document_id, "setting": setting, "status": status, "error": error},
-    )
-
-
-def save_palace(db: Session, document_id: uuid.UUID, setting: str, palace: dict) -> None:
-    db.execute(
-        text(
-            """
-            INSERT INTO qb.document_memory_palace (document_id, setting, palace, status, error, updated_at)
-            VALUES (:id, :setting, CAST(:palace AS jsonb), 'ready', NULL, now())
-            ON CONFLICT (document_id)
-            DO UPDATE SET setting = EXCLUDED.setting, palace = EXCLUDED.palace,
-                          status = 'ready', error = NULL, updated_at = now()
-            """
-        ),
-        {"id": document_id, "setting": setting or palace.get("setting", ""), "palace": json.dumps(palace)},
-    )
 
 
 def ensure_palace(
@@ -97,7 +68,7 @@ def ensure_palace(
 def _kick(db: Session, document_id: uuid.UUID, setting: str) -> dict[str, Any]:
     from app.services.jobs import enqueue_memory_palace
 
-    _set_status(db, document_id, "generating", setting=setting)
+    _PALACE_STORE.set_status(db, document_id, "generating", setting=setting)
     db.commit()
     enqueue_memory_palace(db, document_id, setting)
     return {"status": "generating", "setting": setting, "palace": None, "error": None}
@@ -105,21 +76,14 @@ def _kick(db: Session, document_id: uuid.UUID, setting: str) -> dict[str, Any]:
 
 def run_palace_generation(db: Session, document_id: uuid.UUID, setting: str = "") -> dict:
     """Worker entry: build and persist the memory palace for a document."""
-    import asyncio
-
     from app.graphs.memory_palace_graph import generate_memory_palace
 
-    _set_status(db, document_id, "generating", setting=setting)
-    db.commit()
-    try:
-        palace = asyncio.run(generate_memory_palace(db, document_id, setting=setting))
-    except Exception as exc:
-        _set_status(db, document_id, "failed", setting=setting, error=str(exc)[:500])
-        db.commit()
-        raise
-    if palace and palace.get("stations"):
-        save_palace(db, document_id, setting, palace)
-    else:
-        _set_status(db, document_id, "failed", setting=setting, error="no_palace_generated")
-    db.commit()
-    return palace
+    return run_artifact_generation(
+        db,
+        document_id,
+        store=_PALACE_STORE,
+        generate=lambda: generate_memory_palace(db, document_id, setting=setting),
+        is_complete=lambda palace: bool(palace and palace.get("stations")),
+        empty_error="no_palace_generated",
+        key_and_extra={"setting": setting},
+    )

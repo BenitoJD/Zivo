@@ -359,3 +359,40 @@ def generate_questions_job(payload: dict) -> dict:
         except Exception:
             on_batch_failed(db, document_id, page=page_number)
             raise
+
+
+@eta(name="generate.coding", workload=JobWorkload.cpu)
+def generate_coding_job(payload: dict) -> dict:
+    """Generate LeetCode-style coding problems for one programmable page.
+
+    Spawned by ``_maybe_spawn_coding`` when page triage flags a page as
+    ``programmable``. Each problem is generate→verify→persist: the LLM's own
+    reference solution must pass every hidden test in the sandbox, or the problem
+    is discarded and retried (then dropped) — silence beats a broken problem.
+    """
+    from app.services.coding_generation import generate_coding_for_page
+    from app.services.retrieval import fetch_chunks_for_page_range
+
+    document_id = UUID(payload["document_id"])
+    page_number = int(payload.get("page_number") or 0)
+    count = int(payload.get("count") or 1)
+    with SessionLocal() as db:
+        chunks = fetch_chunks_for_page_range(
+            db,
+            document_ids=[document_id],
+            page_start=page_number,
+            page_end=page_number,
+        )
+        page_text = "\n\n".join(c.get("text", "") for c in chunks if c.get("text")).strip()
+        if not page_text:
+            return {"document_id": str(document_id), "page_number": page_number, "saved": 0}
+        saved = generate_coding_for_page(
+            db, document_id, page_number=page_number, page_text=page_text, count=count
+        )
+        return {
+            "document_id": str(document_id),
+            "page_number": page_number,
+            "saved": len(saved),
+            "problems": saved,
+        }
+

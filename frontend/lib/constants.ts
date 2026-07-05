@@ -1,6 +1,5 @@
 const GB_BYTES = 1024 * 1024 * 1024;
 export const STORAGE_LIMIT_BYTES = GB_BYTES;
-const MAX_UPLOAD_BYTES = GB_BYTES;
 
 /** Assistant replies that must not be re-shown after reload (transient backend failures). */
 export const TRANSIENT_CHAT_ASSISTANT_MESSAGES = new Set([

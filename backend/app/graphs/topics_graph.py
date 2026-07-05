@@ -11,13 +11,14 @@ path: runs in a background worker like summarize/generation.
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import uuid
 
 from sqlalchemy.orm import Session
 
-from app.models import Document, DocumentChunk
+from app.models import DocumentChunk
+from app.services.chunks import load_document_chunk_texts
+from app.services.llm_json import extract_json_array
 from app.services.llm_router import complete_chat
 from app.services.prompts import get_prompt
 from app.services.token_budget import (
@@ -49,29 +50,12 @@ def _slugify(title: str, taken: set[str]) -> str:
 
 def _parse_topics(raw: str) -> list[dict[str, str]]:
     """Extract a JSON array of {title, summary} from an LLM response (tolerant)."""
-    if not raw or not raw.strip():
-        return []
-    text = raw.strip()
-    fence = re.search(r"```(?:json)?\s*(\[.*\])\s*```", text, re.DOTALL)
-    if fence:
-        text = fence.group(1)
-    else:
-        start, end = text.find("["), text.rfind("]")
-        if start >= 0 and end > start:
-            text = text[start : end + 1]
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        return []
     out: list[dict[str, str]] = []
-    if isinstance(data, list):
-        for item in data:
-            if not isinstance(item, dict):
-                continue
-            title = str(item.get("title") or "").strip()
-            if not title:
-                continue
-            out.append({"title": title[:120], "summary": str(item.get("summary") or "").strip()[:300]})
+    for item in extract_json_array(raw):
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        out.append({"title": title[:120], "summary": str(item.get("summary") or "").strip()[:300]})
     return out
 
 
@@ -92,17 +76,7 @@ def _finalize(topics: list[dict[str, str]]) -> list[dict[str, str]]:
 
 async def generate_topic_outline(db: Session, document_id: uuid.UUID) -> list[dict[str, str]]:
     """Scan the whole document's chunks and return an ordered topic outline."""
-    doc = db.get(Document, document_id)
-    if not doc:
-        return []
-    rows = (
-        db.query(DocumentChunk)
-        .filter(DocumentChunk.document_id == document_id)
-        .order_by(DocumentChunk.page_start.asc())
-        .limit(200)
-        .all()
-    )
-    chunk_texts = [r.text for r in rows if r.text]
+    chunk_texts = load_document_chunk_texts(db, document_id)
     if not chunk_texts:
         return []
 

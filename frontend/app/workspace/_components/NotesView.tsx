@@ -2,18 +2,15 @@
 
 import { useRef, useState } from "react";
 import {
-  Box,
   Button,
-  Center,
   CopyButton,
   Group,
   Paper,
   SegmentedControl,
   Stack,
-  Text,
-  ThemeIcon,
 } from "@mantine/core";
-import { useMantineColorScheme } from "@mantine/core";
+import { useIsDark } from "@/lib/useIsDark";
+
 import {
   IconAlertTriangle,
   IconCheck,
@@ -40,8 +37,7 @@ export function NotesView({
   compact?: boolean;
 }) {
   const [kind, setKind] = useState<NoteKind>("notes");
-  const { colorScheme } = useMantineColorScheme();
-  const isDark = colorScheme === "dark";
+  const isDark = useIsDark();
   const sheetRef = useRef<HTMLDivElement>(null);
   const [exporting, setExporting] = useState<null | "pdf" | "png">(null);
 

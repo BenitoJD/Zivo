@@ -17,9 +17,8 @@ from dataclasses import dataclass
 import httpx
 
 from app.config import get_settings
+from app.services.http_client import zivo_http_client
 
-_TIMEOUT_S = 15.0
-_USER_AGENT = "zivo/1.0 (+https://zivo.fyi; practice library)"
 # Wikidata property for "subclass of".
 _SUBCLASS_OF_PROP = "P279"
 
@@ -54,7 +53,7 @@ class WikipediaArticle:
 
 
 def _client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=_TIMEOUT_S, headers={"User-Agent": _USER_AGENT})
+    return zivo_http_client()
 
 
 async def search_concepts(query: str, limit: int = 10) -> list[ConceptHit]:
