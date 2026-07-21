@@ -165,3 +165,19 @@ def quiz_generate(payload: dict) -> dict:
             difficulty=payload.get("difficulty", "mixed"),
         )
     return {"document_id": str(document_id), "questions": len(questions)}
+
+
+@eta(name="coach.mcq_page", workload=JobWorkload.io)
+def coach_mcq_page(payload: dict) -> dict:
+    """Precompute per-option feedback for a page's MCQs (off the answer path).
+
+    Makes grading an instant lookup for even the first learner. Idempotent — only
+    coaches assertions that don't already have option_feedback.
+    """
+    from app.services.option_feedback import coach_page_assertions
+
+    document_id = UUID(payload["document_id"])
+    page_number = int(payload["page_number"])
+    with SessionLocal() as db:
+        coached = coach_page_assertions(db, document_id=document_id, page_number=page_number)
+    return {"document_id": str(document_id), "page_number": page_number, "coached": coached}

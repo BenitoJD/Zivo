@@ -378,6 +378,16 @@ def on_batch_completed(db: Session, document_id: uuid.UUID, *, page: int, saved:
         patch["generated_on_page"] = count_assertions_on_page(db, document_id, page)
     save_progress(db, doc, patch)
     db.commit()
+    # Precompute per-option grade feedback for this page's questions off the answer
+    # path (option #4), so grading is an instant lookup. Best-effort — never let a
+    # coaching-enqueue hiccup affect generation flow.
+    if saved:
+        try:
+            from app.services.jobs import enqueue_coach_page
+
+            enqueue_coach_page(db, document_id=document_id, page=page, account_id=doc.account_id)
+        except Exception:
+            logger.debug("coach enqueue failed", exc_info=True)
     if current_page == page:
         _maybe_enqueue_initial_pool_remainder(db, doc, page=page)
 

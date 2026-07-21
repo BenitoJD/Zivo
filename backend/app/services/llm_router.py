@@ -112,7 +112,13 @@ LOG_TAG_MAX_TOKENS: dict[str, int] = {
     "summarize_chunk": OUTPUT_MAX_TOKENS_DEFAULT,
     "summarize_doc": OUTPUT_MAX_TOKENS_DEFAULT,
     "summarize_rollup": OUTPUT_MAX_TOKENS_DEFAULT,
-    "grade_mcq": OUTPUT_MAX_TOKENS_DEFAULT,
+    # One ~80-110 word coaching paragraph. The default 8192 let the model ramble to
+    # ~1,170 tokens (~9.8s p50) on the answer path; 512 bounds worst-case latency
+    # (~4-5s) with enough headroom that normal feedback isn't truncated mid-sentence.
+    "grade_mcq": int(os.getenv("ZIVO_GRADE_MAX_TOKENS", "512")),
+    # Batched per-option coaching (one blurb per option in a JSON map), generated
+    # off the answer path — needs room for up to ~6 options.
+    "coach_mcq": int(os.getenv("ZIVO_COACH_MAX_TOKENS", "1200")),
     "chat": CHAT_DEFAULT_MAX_TOKENS,
     "complete": CHAT_DEFAULT_MAX_TOKENS,
 }

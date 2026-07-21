@@ -248,3 +248,16 @@ def enqueue_quiz(
         workload=JobWorkload.io,
         payload={"document_id": str(document_id), "types": types, "count": count, "difficulty": difficulty},
     )
+
+
+def enqueue_coach_page(
+    db: Session, *, document_id: uuid.UUID, page: int, account_id: uuid.UUID | None = None
+) -> Job:
+    """Precompute per-option grade feedback for a page's MCQs (off the answer path)."""
+    return enqueue_job(
+        db,
+        name="coach.mcq_page",
+        workload=JobWorkload.io,
+        payload={"document_id": str(document_id), "page_number": int(page)},
+        account_id=account_id,
+    )

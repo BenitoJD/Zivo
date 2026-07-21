@@ -113,9 +113,79 @@ def test_grade_mcq_answer_wrong_uses_llm() -> None:
             )
         assert result["is_correct"] is False
         assert "correct answer" in result["feedback"].lower()
+        assert result["feedback_source"] == "llm"
         mock_complete.assert_called_once()
 
     asyncio.run(run())
+
+
+def test_grade_mcq_answer_precomputed_skips_llm() -> None:
+    """Option #4: a coached option returns instantly with ZERO LLM calls."""
+    db = MagicMock()
+
+    async def run() -> None:
+        with patch("app.graphs.mcq_graph.complete_chat", new_callable=AsyncMock) as mock_complete:
+            result = await grade_mcq_answer(
+                db,
+                question="Q?",
+                options=["A", "B", "C"],
+                correct_index=1,
+                selected_index=2,
+                option_feedback={"1": "Right one.", "2": "You picked C — the classic trap."},
+            )
+        assert result["is_correct"] is False
+        assert result["feedback"] == "You picked C — the classic trap."
+        assert result["feedback_source"] == "precomputed"
+        mock_complete.assert_not_called()  # the whole point: no LLM on the answer path
+
+    asyncio.run(run())
+
+
+def test_grade_mcq_answer_precomputed_miss_falls_through_to_llm() -> None:
+    """A coached map missing the chosen option still grades live (then warms later)."""
+    db = MagicMock()
+
+    async def run() -> None:
+        with patch("app.graphs.mcq_graph.complete_chat", new_callable=AsyncMock) as mock_complete:
+            mock_complete.return_value = "Lead idea.\n\nWhy your pick misses."
+            result = await grade_mcq_answer(
+                db,
+                question="Q?",
+                options=["A", "B", "C"],
+                correct_index=1,
+                selected_index=0,
+                option_feedback={"1": "Right one."},  # option 0 not coached
+            )
+        assert result["feedback_source"] == "llm"
+        mock_complete.assert_called_once()
+
+    asyncio.run(run())
+
+
+def test_generate_option_feedback_parses_map() -> None:
+    from app.services import option_feedback as of
+
+    db = MagicMock()
+    blob = '```json\n{"0": "A is the trap.", "1": "B is right and here is why."}\n```'
+    with patch.object(of, "_parse_mcq_json", wraps=of._parse_mcq_json):
+        with patch("app.services.mcq_quality._complete_chat_sync", return_value=blob):
+            out = of.generate_option_feedback(
+                db, question="Q?", options=["A", "B"], correct_index=1, explanation="Because B."
+            )
+    assert out == {"0": "A is the trap.", "1": "B is right and here is why."}
+
+
+def test_generate_option_feedback_partial_map_rejected() -> None:
+    """A map that doesn't cover every option is dropped (no silent half-coaching)."""
+    from app.services import option_feedback as of
+
+    db = MagicMock()
+    blob = '{"0": "only one option covered"}'
+    with patch("app.services.mcq_quality._complete_chat_sync", return_value=blob):
+        out = of.generate_option_feedback(
+            db, question="Q?", options=["A", "B", "C"], correct_index=2, explanation=""
+        )
+    assert out == {}
 
 
 def test_grade_mcq_answer_multi_select_all_or_nothing() -> None:

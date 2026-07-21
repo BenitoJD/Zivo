@@ -217,6 +217,7 @@ async def grade_mcq_answer(
     document_context: str = "",
     correct_indices: list[int] | None = None,
     selected_indices: list[int] | None = None,
+    option_feedback: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     # Multi-select ("select all that apply") is graded all-or-nothing: the chosen
     # set must exactly equal the correct set. Single-best-answer stays a fast index
@@ -227,11 +228,21 @@ async def grade_mcq_answer(
     else:
         is_correct = int(selected_index) == int(correct_index)
 
+    # Precomputed per-option coaching (option #4): if this question was coached at
+    # generation time (or warmed by an earlier miss), the feedback for the chosen
+    # option is already written — return it instantly with ZERO LLM calls. Only the
+    # single-best-answer path is precomputed; multi-select depends on the chosen set.
+    if not is_multi and option_feedback:
+        cached = option_feedback.get(str(selected_index))
+        if isinstance(cached, str) and cached.strip():
+            return {"is_correct": is_correct, "feedback": cached.strip(), "feedback_source": "precomputed"}
+
     # Correctness is known instantly from correct_index — the LLM only writes the
     # selection-aware coaching. Bound that call tightly and NEVER let a slow/erroring
     # provider make grading hang or 500: on timeout/failure fall back to the question's
     # own pre-generated explanation (or a generic line). Grading always returns fast.
     feedback = ""
+    feedback_source = "llm"
     try:
         graph = get_mcq_grade_graph()
         state: McqGradeState = {
@@ -267,10 +278,54 @@ async def grade_mcq_answer(
             correct=fb_correct,
             chosen=fb_chosen,
         )
+        feedback_source = "fallback"
     return {
         "is_correct": is_correct,
         "feedback": feedback,
+        # "precomputed" (instant cache hit) | "llm" (fresh live gen — caller may
+        # persist it back to warm the cache) | "fallback" (explanation/generic; do
+        # NOT cache, it isn't selection-aware coaching).
+        "feedback_source": feedback_source,
     }
+
+
+def _persist_option_feedback(
+    db: Session, assertion_id: uuid.UUID, option_index: int, feedback: str
+) -> None:
+    """Warm the cache: store one option's freshly-generated coaching in the payload.
+
+    Best-effort and self-contained (own commit) so a warm-up write can never fail
+    or roll back the surrounding grade transaction. Concurrent writes for different
+    options merge cleanly (jsonb_set is per-key); same-option races are harmless.
+    """
+    if not (feedback or "").strip():
+        return
+    from sqlalchemy import text
+
+    try:
+        # Merge into option_feedback, creating the object if absent. A nested
+        # jsonb_set path (ARRAY['option_feedback', idx]) can't create the missing
+        # parent object, so build/merge it explicitly instead.
+        db.execute(
+            text(
+                """
+                UPDATE intel.assertion
+                SET payload = jsonb_set(
+                    COALESCE(payload, '{}'::jsonb),
+                    '{option_feedback}',
+                    COALESCE(payload->'option_feedback', '{}'::jsonb)
+                        || jsonb_build_object(CAST(:idx AS text), CAST(:fb AS text)),
+                    true
+                )
+                WHERE id = :id
+                """
+            ),
+            {"id": assertion_id, "idx": str(int(option_index)), "fb": feedback.strip()},
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.debug("option-feedback warm-up write failed", exc_info=True)
 
 
 def grade_mcq(
@@ -301,6 +356,9 @@ def grade_mcq(
     correct_indices = payload.get("correct_indices")
     if not (isinstance(correct_indices, list) and len(correct_indices) >= 2):
         correct_indices = None
+    option_feedback = payload.get("option_feedback")
+    if not isinstance(option_feedback, dict):
+        option_feedback = None
     result = asyncio.run(
         grade_mcq_answer(
             db,
@@ -312,8 +370,19 @@ def grade_mcq(
             aspect_label=payload.get("primary_concept") or payload.get("primary_concept_key") or "",
             correct_indices=[int(i) for i in correct_indices] if correct_indices else None,
             selected_indices=choice_indices,
+            option_feedback=option_feedback,
         )
     )
+    # Lazy backfill: a fresh single-answer live generation is written back into the
+    # assertion's option_feedback map so the next learner to pick this option gets
+    # it instantly. Best-effort — a failed warm-up never affects this grade.
+    if (
+        result.get("feedback_source") == "llm"
+        and not correct_indices
+        and 0 <= int(choice_index) < len(options)
+    ):
+        _persist_option_feedback(db, assertion_id, int(choice_index), str(result.get("feedback") or ""))
+
     out = {
         "correct": bool(result.get("is_correct")),
         "feedback": result.get("feedback"),
