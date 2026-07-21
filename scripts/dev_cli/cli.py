@@ -45,7 +45,8 @@ def setup(_: argparse.Namespace) -> int:
     if not VENV.exists():
         VENV.parent.mkdir(parents=True, exist_ok=True)
         run([find_python(), "-m", "venv", str(VENV)])
-    run([str(VENV / "bin" / "pip"), "install", "-q", "-r", str(BACKEND_DIR / "requirements.txt")])
+    # Dev venv gets pytest/ruff too (requirements-dev pulls in requirements.txt).
+    run([str(VENV / "bin" / "pip"), "install", "-q", "-r", str(BACKEND_DIR / "requirements-dev.txt")])
     local_env = BACKEND_DIR / ".env.local"
     if not local_env.exists():
         print(f"Tip: copy overrides to {local_env.relative_to(ROOT)}")

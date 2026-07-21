@@ -1,0 +1,5 @@
+# Dev/CI-only tooling — NOT installed into the production image (keeps it small).
+# `pip install -r requirements-dev.txt` also pulls in the runtime deps.
+-r requirements.txt
+pytest>=8.0.0
+ruff>=0.5.2
