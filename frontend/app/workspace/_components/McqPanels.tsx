@@ -13,7 +13,7 @@ import {
   Title,
   UnstyledButton,
 } from "@mantine/core";
-import { useInterval } from "@mantine/hooks";
+import { useInterval, useLocalStorage } from "@mantine/hooks";
 import {
   IconArrowLeft,
   IconArrowRight,
@@ -26,6 +26,7 @@ import {
 } from "@tabler/icons-react";
 import { GenerationStages } from "@/app/workspace/_components/GenerationStages";
 import { PetPlayground } from "@/app/_components/pets/PetPlayground";
+import { CAT_ENABLED_KEY } from "@/app/workspace/_components/SettingsModal";
 import { mcqOptionChrome, McqFeedbackCard } from "@/app/_components/mcq/McqCard";
 import { normalizeMcqOptions, type McqState } from "@/lib/types";
 import { learnWaitStatus } from "@/lib/learnStatus";
@@ -152,6 +153,8 @@ export function McqHeroPanel({
   onRetry?: () => void;
 }) {
   const isDark = useIsDark();
+  // Roaming study cat — opt-in (off by default); toggled in Settings and applied live.
+  const [catEnabled] = useLocalStorage({ key: CAT_ENABLED_KEY, defaultValue: false });
   const safeOptions = normalizeMcqOptions(options);
   const graded = gradeState !== null;
   const showNextQuestion = graded;
@@ -608,7 +611,7 @@ export function McqHeroPanel({
           (the gate no longer depends on `graded`), so the same cat persists and
           keeps roaming from where it was instead of respawning every turn.
           Desktop Learn only — that's where the free space is. */}
-      {!isTest && !compact && (
+      {catEnabled && !isTest && !compact && (
         <Box style={{ flex: 1, minHeight: 150, width: "100%" }}>
           <PetPlayground count={1} species="cat" wander height="100%" style={{ width: "100%" }} />
         </Box>

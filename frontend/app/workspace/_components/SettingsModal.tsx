@@ -10,11 +10,14 @@ import {
   Paper,
   SegmentedControl,
   Stack,
+  Switch,
   Text,
   useMantineColorScheme,
 } from "@mantine/core";
+import { useLocalStorage } from "@mantine/hooks";
 import {
   IconBook,
+  IconCat,
   IconFlame,
   IconHelp,
   IconMoon,
@@ -22,6 +25,9 @@ import {
   IconSun,
   IconUser,
 } from "@tabler/icons-react";
+
+/** Shared key for the roaming study-cat preference (off by default). */
+export const CAT_ENABLED_KEY = "zivo-cat-enabled";
 
 type SettingsModalProps = {
   opened: boolean;
@@ -49,6 +55,9 @@ export function SettingsModal({
     const storedCount = localStorage.getItem("zivo-mcq-count");
     return storedCount ? (parseInt(storedCount, 10) || 5) : 5;
   });
+  // Applies live (Mantine useLocalStorage broadcasts to the cat's hook), so this
+  // one doesn't wait for Save — flip and the cat appears/disappears at once.
+  const [catEnabled, setCatEnabled] = useLocalStorage({ key: CAT_ENABLED_KEY, defaultValue: false });
 
   const displayName = username ? `@${username}` : "@guest";
 
@@ -159,6 +168,30 @@ export function SettingsModal({
             />
           </Group>
         </Stack>
+
+        <Divider color="gray.3" />
+
+        {/* Study companion (roaming cat) — off by default */}
+        <Group justify="space-between" align="center" wrap="nowrap">
+          <Group gap="sm" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
+            <IconCat size={20} stroke={1.6} style={{ flexShrink: 0, color: "var(--mantine-color-lavender-6)" }} />
+            <Stack gap={2}>
+              <Text fw={600} size="sm">
+                Study cat
+              </Text>
+              <Text size="xs" c="gray.6" maw={240}>
+                A little cat roams the empty space while you study. Off by default.
+              </Text>
+            </Stack>
+          </Group>
+          <Switch
+            checked={catEnabled}
+            onChange={(e) => setCatEnabled(e.currentTarget.checked)}
+            color="lavender"
+            size="md"
+            aria-label={catEnabled ? "Turn study cat off" : "Turn study cat on"}
+          />
+        </Group>
 
         <Divider color="gray.3" />
 
