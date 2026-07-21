@@ -42,26 +42,32 @@ import type { SourceDocument } from "@/lib/types";
 import { useStudyNav, type StudyMode } from "@/app/workspace/_components/studyNav";
 
 /** Mode navigator content shared by the mini + expanded sidebar (below the sources). */
-const MODE_GROUPS: { heading: string; items: { value: StudyMode; label: string; icon: typeof IconBook2 }[] }[] = [
+// Each mode carries its own vibrant hue so the rail reads as a colorful, legible
+// palette (calm-paper page, but the icons pop). Shade 6 stays readable on both
+// the cream light surface and the ink dark surface.
+const MODE_GROUPS: {
+  heading: string;
+  items: { value: StudyMode; label: string; icon: typeof IconBook2; color: string }[];
+}[] = [
   {
     heading: "Study",
     items: [
-      { value: "read", label: "Read", icon: IconBook2 },
-      { value: "learn", label: "Learn", icon: IconBulb },
-      { value: "test", label: "Test", icon: IconClipboardList },
+      { value: "read", label: "Read", icon: IconBook2, color: "indigo" },
+      { value: "learn", label: "Learn", icon: IconBulb, color: "orange" },
+      { value: "test", label: "Test", icon: IconClipboardList, color: "grape" },
     ],
   },
   {
     heading: "Tools",
     items: [
-      { value: "explain", label: "Explain", icon: IconMessage2 },
-      { value: "notes", label: "Notes", icon: IconNotebook },
-      { value: "cards", label: "Cards", icon: IconCards },
-      { value: "palace", label: "Palace", icon: IconBuildingCastle },
-      { value: "quiz", label: "Quiz", icon: IconListCheck },
-      { value: "interview", label: "Interview", icon: IconBriefcase },
-      { value: "coding", label: "Coding", icon: IconCode },
-      { value: "resume", label: "Resume", icon: IconFileCv },
+      { value: "explain", label: "Explain", icon: IconMessage2, color: "teal" },
+      { value: "notes", label: "Notes", icon: IconNotebook, color: "cyan" },
+      { value: "cards", label: "Cards", icon: IconCards, color: "pink" },
+      { value: "palace", label: "Palace", icon: IconBuildingCastle, color: "violet" },
+      { value: "quiz", label: "Quiz", icon: IconListCheck, color: "lime" },
+      { value: "interview", label: "Interview", icon: IconBriefcase, color: "yellow" },
+      { value: "coding", label: "Coding", icon: IconCode, color: "forest" },
+      { value: "resume", label: "Resume", icon: IconFileCv, color: "red" },
     ],
   },
 ];
@@ -170,7 +176,7 @@ function MiniModeNav({ mode, onChange }: { mode: StudyMode; onChange: (m: StudyM
     <Stack gap={6} align="center" w="100%" pt={6} mt={2} style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}>
       {MODE_GROUPS.flatMap((g) => g.items).map((it) => (
         <MiniRailButton key={it.value} label={it.label} active={mode === it.value} onClick={() => onChange(it.value)}>
-          <it.icon size={18} stroke={1.6} />
+          <it.icon size={18} stroke={1.7} style={{ color: `var(--mantine-color-${it.color}-6)` }} />
         </MiniRailButton>
       ))}
     </Stack>
@@ -208,7 +214,11 @@ function ExpandedModeNav({ mode, onChange }: { mode: StudyMode; onChange: (m: St
                   onClick={() => onChange(it.value)}
                   aria-current={active ? "page" : undefined}
                 >
-                  <it.icon size={18} stroke={active ? 2 : 1.7} style={{ flexShrink: 0 }} />
+                  <it.icon
+                    size={18}
+                    stroke={active ? 2 : 1.7}
+                    style={{ flexShrink: 0, color: `var(--mantine-color-${it.color}-6)` }}
+                  />
                   <Text size="sm" style={{ fontWeight: "inherit" }}>{it.label}</Text>
                 </UnstyledButton>
               );

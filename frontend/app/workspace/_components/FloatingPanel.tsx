@@ -111,14 +111,22 @@ export function FloatingPanel({
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    // Track the container's viewport-left so a sidebar collapse/expand (which
+    // slides this container's left edge) can be compensated: without this the
+    // absolutely-positioned panel lurches sideways with the reflow. We shift the
+    // panel's x by the negative of that movement so it stays pinned in the viewport.
+    let prevLeft = el.getBoundingClientRect().left;
     const ro = new ResizeObserver(() => {
+      const leftNow = el.getBoundingClientRect().left;
+      const shift = leftNow - prevLeft;
+      prevLeft = leftNow;
       setRect((r) => {
         if (!r) return r;
         const { w: cw, h: ch } = bounds();
         return {
           w: clamp(r.w, MIN_W, cw),
           h: clamp(r.h, MIN_H, ch),
-          x: clamp(r.x, 0, Math.max(0, cw - Math.min(r.w, cw))),
+          x: clamp(r.x - shift, 0, Math.max(0, cw - Math.min(r.w, cw))),
           y: clamp(r.y, 0, Math.max(0, ch - HEADER_H)),
         };
       });

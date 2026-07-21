@@ -224,7 +224,11 @@ export function McqHeroPanel({
       if (waiting) return;
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
-      if (e.key === "Enter") {
+      // Enter OR Space advances / checks — whichever hand is on the keyboard, no
+      // reach for the mouse. A focused button/link keeps its native activation so
+      // we never double-fire.
+      if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+        if (tag === "BUTTON" || tag === "A") return;
         if (graded) {
           e.preventDefault();
           onContinue();
@@ -531,12 +535,25 @@ export function McqHeroPanel({
       </Stack>
 
       {reveal && feedback ? (
-        <McqFeedbackCard
-          feedback={feedback}
-          isCorrect={gradeState?.correct === true}
-          compact={compact}
-          isDark={isDark}
-        />
+        // Click the feedback (or press Enter / Space) to continue — the target is
+        // right where your eyes already are, no reach for the bottom button. A
+        // text-selection guard means highlighting a phrase never advances.
+        <Box
+          onClick={() => {
+            if (!window.getSelection()?.toString()) onContinue();
+          }}
+          style={{ cursor: "pointer" }}
+        >
+          <McqFeedbackCard
+            feedback={feedback}
+            isCorrect={gradeState?.correct === true}
+            compact={compact}
+            isDark={isDark}
+          />
+          <Text fz="xs" c="dimmed" ta="center" mt={compact ? 6 : 8} fw={500}>
+            Click anywhere, or press Enter, to continue →
+          </Text>
+        </Box>
       ) : reveal && !isTest ? (
         // Verdict is already shown; the coaching is still streaming in. Fill the
         // wait with the pixel cats (click to toss a ball — they'll chase it) so the
@@ -565,6 +582,15 @@ export function McqHeroPanel({
         </Group>
       ) : null}
       </Box>
+
+      {/* A single cat roams the empty floor below the question while you think —
+          click to toss a ball and it'll chase. Desktop Learn only (that's where
+          the free space is); it yields to the feedback area once you answer. */}
+      {!graded && !isTest && !compact && (
+        <Box style={{ flex: 1, minHeight: 96, display: "flex", alignItems: "flex-end", width: "100%" }}>
+          <PetPlayground count={1} height={104} style={{ width: "100%" }} />
+        </Box>
+      )}
 
       {/* Anchored to the bottom of the question area — turns the old dead space into a
           calm, mode-defining strip (and the live test tally). */}
