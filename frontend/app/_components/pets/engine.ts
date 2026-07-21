@@ -243,6 +243,7 @@ class Pet {
   protected container: Element;
   petEl!: HTMLElement;
   protected currentX = 0;
+  protected currentY = 0;
   protected direction = 1;
   private currentAnimation = "none";
   protected animations: PetAnimations;
@@ -251,18 +252,22 @@ class Pet {
   protected scale: number;
   protected petName: string;
   protected groundFraction: number;
+  // When true the pet roams the whole 2D area (varying its top as well as its
+  // left) instead of walking one horizontal ground line.
+  protected wander: boolean;
   protected tooltipEl!: HTMLElement;
   protected actionLoopPaused = false;
   private interruptMove: (() => void) | null = null;
   protected soundKey = "cat";
 
-  constructor(container: Element, animations: PetAnimations, moveDist: number, scale: number, petName: string, groundFraction: number) {
+  constructor(container: Element, animations: PetAnimations, moveDist: number, scale: number, petName: string, groundFraction: number, wander = false) {
     this.container = container;
     this.animations = animations;
     this.moveDist = moveDist;
     this.scale = scale;
     this.petName = petName;
     this.groundFraction = groundFraction;
+    this.wander = wander;
 
     this.setupActions();
 
@@ -271,9 +276,14 @@ class Pet {
     // tab, where rAF is paused.
     window.setTimeout(() => {
       if (this.isDestroyed) return;
-      const w = (this.container as HTMLElement).offsetWidth;
+      const el = this.container as HTMLElement;
+      const w = el.offsetWidth;
       const halfW = (this.animations["idle"].frameWidth * this.scale) / 2;
       this.currentX = halfW + Math.random() * Math.max(w - halfW * 2, 0);
+      if (this.wander) {
+        const halfH = (this.animations["idle"].frameHeight * this.scale) / 2;
+        this.currentY = halfH + Math.random() * Math.max(el.offsetHeight - halfH * 2, 0);
+      }
       this.petEl = this.createPetElement();
       this.setupHoverListeners();
       void (async () => {
@@ -284,15 +294,16 @@ class Pet {
   }
 
   protected createPetElement(): HTMLElement {
-    const el = makeDiv(this.container, "zv-pet");
+    const el = makeDiv(this.container, this.wander ? "zv-pet zv-pet--wander" : "zv-pet");
     // The element is centered on (--left, --top) then scaled, so put the feet
     // line (drawn at row 31 of the 32px frame) exactly on the ground line —
     // otherwise the scaled bottom half hangs below it and gets clipped by the
-    // container's overflow:hidden.
+    // container's overflow:hidden. When wandering there is no ground line, so
+    // the pet floats freely at its current 2D position.
     const feetOffset = (this.animations["idle"].frameHeight / 2 - 1) * this.scale;
     setVars(el, {
       "--left": `${this.currentX}px`,
-      "--top": `calc(${this.groundFraction * 100}% - ${feetOffset}px)`,
+      "--top": this.wander ? `${this.currentY}px` : `calc(${this.groundFraction * 100}% - ${feetOffset}px)`,
       "--pet-size": `${this.animations["idle"].frameWidth}px`,
       "--scale-x": `${this.direction}`,
       "--scale": `${this.scale}`,
@@ -372,6 +383,17 @@ class Pet {
     if (targetX === this.currentX) return Promise.resolve();
     this.direction = dx < 0 ? -1 : 1;
 
+    // 2D roaming: drift toward a new vertical spot each move so the pet explores
+    // the whole free area rather than a single horizontal line.
+    let targetY = this.currentY;
+    if (this.wander) {
+      const halfH = (this.animations["idle"].frameHeight * this.scale) / 2;
+      const containerHeight = (this.container as HTMLElement).offsetHeight;
+      const dy = (Math.random() - 0.5) * this.moveDist * 1.6;
+      targetY = Math.max(halfH, Math.min(containerHeight - halfH, this.currentY + dy));
+      this.currentY = targetY;
+    }
+
     return new Promise((res) => {
       let settled = false;
       let timer: number | undefined;
@@ -398,6 +420,7 @@ class Pet {
       void this.petEl.offsetWidth;
       setVars(this.petEl, {
         "--left": `${targetX}px`,
+        ...(this.wander ? { "--top": `${targetY}px` } : {}),
         "--scale-x": `${this.direction}`,
         "--move-duration": `${duration}ms`,
       });
@@ -435,8 +458,8 @@ class Cat extends Pet {
   private chasingBall: Ball | null = null;
   private interruptAction = false;
 
-  constructor(container: Element, animations: PetAnimations, moveDist: number, scale: number, petName: string, groundFraction: number, canFly = false) {
-    super(container, animations, moveDist, scale, petName, groundFraction);
+  constructor(container: Element, animations: PetAnimations, moveDist: number, scale: number, petName: string, groundFraction: number, canFly = false, wander = false) {
+    super(container, animations, moveDist, scale, petName, groundFraction, wander);
     this.soundKey = "cat";
     this.canFly = canFly;
   }
@@ -627,7 +650,14 @@ export type PetWorldOptions = {
   sound?: boolean;
   /** Vertical ground line as a fraction of container height (0–1). */
   groundFraction?: number;
+  /** Roam the whole 2D area instead of walking one horizontal ground line. */
+  wander?: boolean;
 };
+
+// App-wide singleton: only ONE PetWorld may be alive at a time, so the user
+// never sees pets from two overlapping mounts (e.g. a loading screen fading into
+// the next). The newest mount wins — it disposes any predecessor.
+let activeWorld: PetWorld | null = null;
 
 /**
  * Owns a container element and the pets living in it. Spawns the roster, wires
@@ -644,6 +674,9 @@ export class PetWorld {
   private disposed = false;
 
   constructor(container: HTMLElement, options: PetWorldOptions = {}) {
+    // Enforce the one-pet-world-at-a-time rule before spawning anything.
+    if (activeWorld && activeWorld !== this) activeWorld.dispose();
+    activeWorld = this;
     this.container = container;
     this.opts = {
       count: options.count ?? 3,
@@ -652,6 +685,7 @@ export class PetWorld {
       interactive: options.interactive ?? true,
       sound: options.sound ?? false,
       groundFraction: options.groundFraction ?? 0.82,
+      wander: options.wander ?? false,
     };
     setSoundEnabled(this.opts.sound);
     this.spawn();
@@ -659,7 +693,7 @@ export class PetWorld {
   }
 
   private spawn(): void {
-    const { count, scale, species, groundFraction } = this.opts;
+    const { count, scale, species, groundFraction, wander } = this.opts;
     // Distinct cat colors: draw from a shuffled pool so no two cats match
     // (until the pool runs out), giving every pet its own look.
     const catPool = shuffle([...CAT_TYPES]);
@@ -677,12 +711,12 @@ export class PetWorld {
       }
       const name = names[i % names.length];
       if (kind === "bunny") {
-        this.pets.push(new Bunny(this.container, getBunnyAnimations("pets/grey-bunny"), moveDist, scale, name, groundFraction));
+        this.pets.push(new Bunny(this.container, getBunnyAnimations("pets/grey-bunny"), moveDist, scale, name, groundFraction, wander));
       } else if (kind === "ghost") {
-        this.pets.push(new Ghost(this.container, getGhostAnimations("pets/ghost"), moveDist, scale, name, groundFraction));
+        this.pets.push(new Ghost(this.container, getGhostAnimations("pets/ghost"), moveDist, scale, name, groundFraction, wander));
       } else {
         const type = catPool[catIdx++ % catPool.length];
-        const cat = new Cat(this.container, getCatAnimations(`pets/${type}`), moveDist, scale, name, groundFraction, false);
+        const cat = new Cat(this.container, getCatAnimations(`pets/${type}`), moveDist, scale, name, groundFraction, false, wander);
         this.cats.push(cat);
         this.pets.push(cat);
       }
@@ -707,6 +741,7 @@ export class PetWorld {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    if (activeWorld === this) activeWorld = null;
     if (this.clickHandler) this.container.removeEventListener("click", this.clickHandler);
     this.balls.forEach((b) => b.destroy());
     this.pets.forEach((p) => p.destroyImmediate());

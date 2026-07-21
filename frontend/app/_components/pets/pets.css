@@ -20,9 +20,15 @@
   background-image: var(--sprite-url);
   background-size: var(--sprite-size);
   image-rendering: pixelated;
-  transition: left var(--move-duration, 300ms) linear;
+  transition: left var(--move-duration, 300ms) linear, top var(--move-duration, 300ms) linear;
   z-index: 100;
   cursor: pointer;
+}
+
+/* Free-roaming pet: no single ground line, so drop the contact shadow (it would
+   read as a floating smudge under a pet that isn't standing on anything). */
+.zv-pet--wander .zv-pet-shadow {
+  display: none;
 }
 
 .zv-pet-name-tooltip {

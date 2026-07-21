@@ -19,6 +19,7 @@ export function PetPlayground({
   species = "random",
   interactive = true,
   sound = false,
+  wander = false,
   style,
   className,
 }: {
@@ -31,9 +32,9 @@ export function PetPlayground({
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const world = new PetWorld(el, { count, scale, species, interactive, sound });
+    const world = new PetWorld(el, { count, scale, species, interactive, sound, wander });
     return () => world.dispose();
-  }, [count, scale, species, interactive, sound]);
+  }, [count, scale, species, interactive, sound, wander]);
 
   return (
     <div

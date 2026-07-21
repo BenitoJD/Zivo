@@ -480,7 +480,14 @@ export function McqHeroPanel({
               key={value}
               className={isChecking ? "mcq-opt mcq-opt-checking" : "mcq-opt"}
               disabled={optionsLocked || checking}
-              onClick={() => { if (!optionsLocked && !checking) { if (multiSelect) onToggle?.(i); else onSelect(value); } }}
+              onClick={() => {
+                if (optionsLocked || checking) return;
+                if (multiSelect) { onToggle?.(i); return; }
+                // Second click on the already-selected option checks it — the
+                // answer IS the button, so there's no reach for the far one.
+                if (isSelected && !submitting) { onSubmit(); return; }
+                onSelect(value);
+              }}
               style={{
                 animationDelay: `${90 + i * 60}ms`,
                 width: "100%",
@@ -528,6 +535,27 @@ export function McqHeroPanel({
                 >
                   {opt}
                 </Text>
+                {isSelected && !multiSelect && !graded && !checking && (
+                  <Box
+                    aria-hidden
+                    style={{
+                      flexShrink: 0,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 3,
+                      padding: "3px 9px",
+                      borderRadius: 999,
+                      background: "var(--mantine-color-lavender-1)",
+                      color: "var(--mantine-color-lavender-7)",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    Check
+                    <IconArrowRight size={13} stroke={2.4} />
+                  </Box>
+                )}
               </Group>
             </UnstyledButton>
           );
@@ -561,7 +589,8 @@ export function McqHeroPanel({
         <Stack align="center" gap={2} mt={compact ? 4 : 8} style={{ flexShrink: 0 }}>
           <PetPlayground
             height={compact ? 88 : 108}
-            count={3}
+            count={1}
+            species="cat"
             style={{ width: 300, maxWidth: "100%" }}
           />
           <Group justify="center" gap={8}>
@@ -583,12 +612,13 @@ export function McqHeroPanel({
       ) : null}
       </Box>
 
-      {/* A single cat roams the empty floor below the question while you think —
-          click to toss a ball and it'll chase. Desktop Learn only (that's where
-          the free space is); it yields to the feedback area once you answer. */}
+      {/* A single cat roams the whole empty area below the question while you
+          think — wandering in 2D (not one straight line), click to toss a ball
+          and it'll chase. Desktop Learn only (that's where the free space is);
+          it yields to the feedback area once you answer. */}
       {!graded && !isTest && !compact && (
-        <Box style={{ flex: 1, minHeight: 96, display: "flex", alignItems: "flex-end", width: "100%" }}>
-          <PetPlayground count={1} height={104} style={{ width: "100%" }} />
+        <Box style={{ flex: 1, minHeight: 150, width: "100%" }}>
+          <PetPlayground count={1} species="cat" wander height="100%" style={{ width: "100%" }} />
         </Box>
       )}
 
