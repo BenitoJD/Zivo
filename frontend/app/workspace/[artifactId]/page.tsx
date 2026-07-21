@@ -21,7 +21,7 @@ import { useDisclosure, useMediaQuery } from "@mantine/hooks";
 import { IconFileText, IconMessageCircle, IconNotebook } from "@tabler/icons-react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import { apiFetchBytes, apiGet, apiPost, apiUrl, ensureGuestSession, isArtifactId } from "@/lib/api/client";
+import { apiFetchBytes, apiGet, apiPost, apiPostSSE, apiUrl, ensureGuestSession, isArtifactId } from "@/lib/api/client";
 import {
   queryKeys,
   useArtifactPagesQuery,
@@ -73,7 +73,6 @@ import {
   sanitizeMcqStem,
   type ArtifactMeta,
   type AssertionPayload,
-  type McqGradeResponse,
   type McqState,
   type PagesInfo,
 } from "@/lib/types";
@@ -545,45 +544,83 @@ export default function WorkspaceArtifactPage({
     const hasSelection = isMulti ? multiSelected.length > 0 : selected !== null;
     if (!queue?.current_assertion_id || !hasSelection || submitting) return;
     setSubmitting(true);
+    setFeedback(null);
+    const answeredId = queue.current_assertion_id;
+    const answeredSelection = isMulti ? (multiSelected[0] ?? -1) : Number(selected);
+    // Verdict-first stream: the outcome (index compare + stored explanation) lands
+    // in ~200ms and reveals immediately; the LLM coaching follows as a second event.
+    let gotVerdict = false;
+    let verdictExplanation = "";
     try {
-      const res = await apiPost<McqGradeResponse>("/api/mcq/grade", {
-        assertion_id: queue.current_assertion_id,
-        // choice_index carries the (first) chosen option for both paths; multi
-        // items also send the full chosen set via choice_indices.
-        choice_index: isMulti ? (multiSelected[0] ?? -1) : Number(selected),
-        ...(isMulti ? { choice_indices: multiSelected } : {}),
-        mode,
-      });
-      const correct = Boolean(res.correct);
-      const correctIndex = res.correct_index ?? (isMulti ? (multiSelected[0] ?? 0) : Number(selected));
-      const correctIndices = res.correct_indices;
-      const gradedFeedback = res.feedback ?? (correct ? "Correct!" : "Try again.");
-      setFeedback(gradedFeedback);
-      setGradeState({ correct, correctIndex, correctIndices });
-      // Record this answer so the learner can step back to review it later. Keep the
-      // latest grade per question (learn-mode retries re-grade the same assertion).
-      const answeredId = queue.current_assertion_id;
-      const answeredSelection = isMulti ? (multiSelected[0] ?? -1) : Number(selected);
-      setAnsweredHistory((h) => {
-        // Preserve the FIRST-attempt result across Learn-mode retries — the report
-        // card grades you on the first try, not the eventual retry success.
-        const prior = h.find((c) => c.assertionId === answeredId);
-        return [
-          ...h.filter((c) => c.assertionId !== answeredId),
-          {
-            assertionId: answeredId,
-            stem,
-            options: [...options],
-            selectedIndex: answeredSelection,
-            gradeState: { correct, correctIndex, correctIndices },
-            feedback: gradedFeedback,
-            concept: currentConcept,
-            firstTryCorrect: prior ? prior.firstTryCorrect : correct,
+      await apiPostSSE(
+        "/api/mcq/grade/stream",
+        {
+          assertion_id: answeredId,
+          // choice_index carries the (first) chosen option for both paths; multi
+          // items also send the full chosen set via choice_indices.
+          choice_index: isMulti ? (multiSelected[0] ?? -1) : Number(selected),
+          ...(isMulti ? { choice_indices: multiSelected } : {}),
+          mode,
+        },
+        {
+          onEvent: (event, data) => {
+            if (event === "verdict") {
+              let v: { correct?: boolean; correct_index?: number; correct_indices?: number[]; explanation?: string };
+              try {
+                v = JSON.parse(data);
+              } catch {
+                return;
+              }
+              gotVerdict = true;
+              verdictExplanation = v.explanation ?? "";
+              const correct = Boolean(v.correct);
+              const correctIndex = v.correct_index ?? (isMulti ? (multiSelected[0] ?? 0) : Number(selected));
+              const correctIndices = v.correct_indices;
+              // Reveal the outcome now — coaching is still on its way.
+              setGradeState({ correct, correctIndex, correctIndices });
+              setSubmitting(false);
+              // Record the answer immediately (coaching text is patched in below).
+              setAnsweredHistory((h) => {
+                // Preserve the FIRST-attempt result across Learn-mode retries — the
+                // report card grades you on the first try, not the eventual retry.
+                const prior = h.find((c) => c.assertionId === answeredId);
+                return [
+                  ...h.filter((c) => c.assertionId !== answeredId),
+                  {
+                    assertionId: answeredId,
+                    stem,
+                    options: [...options],
+                    selectedIndex: answeredSelection,
+                    gradeState: { correct, correctIndex, correctIndices },
+                    feedback: verdictExplanation,
+                    concept: currentConcept,
+                    firstTryCorrect: prior ? prior.firstTryCorrect : correct,
+                  },
+                ];
+              });
+            } else if (event === "feedback") {
+              let f: { feedback?: string };
+              try {
+                f = JSON.parse(data);
+              } catch {
+                return;
+              }
+              const text = (f.feedback || "").trim() || verdictExplanation;
+              if (!text) return;
+              setFeedback(text);
+              setAnsweredHistory((h) =>
+                h.map((c) => (c.assertionId === answeredId ? { ...c, feedback: text } : c)),
+              );
+            }
           },
-        ];
-      });
+        },
+      );
+      // Stream ended without ever producing coaching — fall back so the "writing…"
+      // affordance resolves instead of hanging.
+      setFeedback((prev) => prev ?? (verdictExplanation || "Answer recorded."));
     } catch {
-      setFeedback("Could not grade answer — try again.");
+      if (!gotVerdict) setFeedback("Could not grade answer — try again.");
+      else setFeedback((prev) => prev ?? (verdictExplanation || "Answer recorded."));
     } finally {
       setSubmitting(false);
     }

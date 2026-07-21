@@ -328,20 +328,10 @@ def _persist_option_feedback(
         logger.debug("option-feedback warm-up write failed", exc_info=True)
 
 
-def grade_mcq(
-    db: Session,
-    assertion_id: uuid.UUID,
-    choice_index: int,
-    *,
-    choice_indices: list[int] | None = None,
-) -> dict[str, Any]:
-    """Sync wrapper for API — loads assertion payload from intel.
-
-    Handles single-best-answer (choice_index) and multi-select (choice_indices);
-    a multi item is identified by correct_indices in the stored payload.
-    """
-    import asyncio
+def load_grade_payload(db: Session, assertion_id: uuid.UUID) -> dict[str, Any] | None:
+    """Load one assertion's payload, or None if it's gone."""
     import json
+
     from sqlalchemy import text
 
     row = db.execute(
@@ -349,45 +339,99 @@ def grade_mcq(
         {"id": assertion_id},
     ).first()
     if not row:
-        return {"correct": False, "feedback": "Question not found"}
-    payload = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+        return None
+    return row[0] if isinstance(row[0], dict) else json.loads(row[0])
+
+
+def _normalized_correct_indices(payload: dict[str, Any]) -> list[int] | None:
+    ci = payload.get("correct_indices")
+    if isinstance(ci, list) and len(ci) >= 2:
+        return [int(i) for i in ci]
+    return None
+
+
+def grade_verdict(
+    payload: dict[str, Any], choice_index: int, choice_indices: list[int] | None = None
+) -> dict[str, Any]:
+    """Instant, LLM-free verdict from the stored payload.
+
+    This is everything the UI needs to reveal the outcome immediately — the LLM
+    coaching (``grade_feedback``) is resolved separately and arrives after.
+    """
+    correct_index = int(payload.get("correct_index", 0))
+    correct_indices = _normalized_correct_indices(payload)
+    if correct_indices:
+        is_correct = set(choice_indices or []) == set(correct_indices)
+    else:
+        is_correct = int(choice_index) == correct_index
+    out: dict[str, Any] = {
+        "correct": bool(is_correct),
+        "correct_index": correct_index,
+        "explanation": sanitize_mcq_explanation(payload.get("explanation") or ""),
+    }
+    if correct_indices:
+        out["correct_indices"] = sorted(correct_indices)
+    return out
+
+
+async def grade_feedback(
+    db: Session,
+    assertion_id: uuid.UUID,
+    payload: dict[str, Any],
+    *,
+    choice_index: int,
+    choice_indices: list[int] | None = None,
+) -> str:
+    """Selection-aware coaching: instant precomputed hit, else live gen + warm-back."""
     options = payload.get("options") or payload.get("choices") or []
     correct_index = int(payload.get("correct_index", 0))
-    correct_indices = payload.get("correct_indices")
-    if not (isinstance(correct_indices, list) and len(correct_indices) >= 2):
-        correct_indices = None
+    correct_indices = _normalized_correct_indices(payload)
     option_feedback = payload.get("option_feedback")
     if not isinstance(option_feedback, dict):
         option_feedback = None
-    result = asyncio.run(
-        grade_mcq_answer(
-            db,
-            question=payload.get("question") or payload.get("stem") or "",
-            options=options,
-            correct_index=correct_index,
-            selected_index=choice_index,
-            explanation=payload.get("explanation") or "",
-            aspect_label=payload.get("primary_concept") or payload.get("primary_concept_key") or "",
-            correct_indices=[int(i) for i in correct_indices] if correct_indices else None,
-            selected_indices=choice_indices,
-            option_feedback=option_feedback,
-        )
+
+    result = await grade_mcq_answer(
+        db,
+        question=payload.get("question") or payload.get("stem") or "",
+        options=options,
+        correct_index=correct_index,
+        selected_index=choice_index,
+        explanation=payload.get("explanation") or "",
+        aspect_label=payload.get("primary_concept") or payload.get("primary_concept_key") or "",
+        correct_indices=correct_indices,
+        selected_indices=choice_indices,
+        option_feedback=option_feedback,
     )
     # Lazy backfill: a fresh single-answer live generation is written back into the
-    # assertion's option_feedback map so the next learner to pick this option gets
-    # it instantly. Best-effort — a failed warm-up never affects this grade.
+    # assertion's option_feedback map so the next learner to pick this option gets it
+    # instantly. Best-effort — a failed warm-up never affects this grade.
     if (
         result.get("feedback_source") == "llm"
         and not correct_indices
         and 0 <= int(choice_index) < len(options)
     ):
         _persist_option_feedback(db, assertion_id, int(choice_index), str(result.get("feedback") or ""))
+    return str(result.get("feedback") or "")
 
-    out = {
-        "correct": bool(result.get("is_correct")),
-        "feedback": result.get("feedback"),
-        "correct_index": correct_index,
-    }
-    if correct_indices:
-        out["correct_indices"] = sorted(int(i) for i in correct_indices)
+
+def grade_mcq(
+    db: Session,
+    assertion_id: uuid.UUID,
+    choice_index: int,
+    *,
+    choice_indices: list[int] | None = None,
+) -> dict[str, Any]:
+    """Combined verdict + feedback (JSON endpoint / practice). Verdict-first
+    streaming composes ``grade_verdict`` + ``grade_feedback`` directly instead.
+    """
+    import asyncio
+
+    payload = load_grade_payload(db, assertion_id)
+    if payload is None:
+        return {"correct": False, "feedback": "Question not found", "correct_index": 0}
+    out = grade_verdict(payload, choice_index, choice_indices)
+    out.pop("explanation", None)  # JSON grade response never carried this field
+    out["feedback"] = asyncio.run(
+        grade_feedback(db, assertion_id, payload, choice_index=choice_index, choice_indices=choice_indices)
+    )
     return out

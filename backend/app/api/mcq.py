@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from sse_starlette.sse import EventSourceResponse
 
 from app.config import get_settings
-from app.db import get_db
-from app.graphs.mcq_graph import grade_mcq
+from app.db import SessionLocal, get_db
+from app.graphs.mcq_graph import grade_feedback, grade_mcq, grade_verdict, load_grade_payload
 from app.models import Account
 from app.services.answer_signal import record_answer_signal, resolve_subject_entity
 from app.services.auth import get_optional_user, require_csrf_or_guest
@@ -20,6 +24,7 @@ from app.services.guest_session import guest_session_for_read
 from app.services.question_pool import record_answer, save_confirmed_answer
 from app.services.rate_limit import rate_limit_dependency
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -74,21 +79,21 @@ def acknowledge(
     return {"ok": True}
 
 
-@router.post("/grade", dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)])
-def grade(
+def _record_graded_answer(
+    db: Session,
     body: GradeIn,
-    db: Session = Depends(get_db),
-    user: Account | None = Depends(get_optional_user),
-    guest_id: str | None = Depends(guest_session_for_read),
-) -> dict:
-    _require_actor(user, guest_id)
-    artifact_id = _resolve_assertion_artifact(db, body.assertion_id, user, guest_id)
-    result = grade_mcq(db, body.assertion_id, body.choice_index, choice_indices=body.choice_indices)
+    *,
+    artifact_id: uuid.UUID,
+    correct: bool,
+    user: Account | None,
+    guest_id: str | None,
+) -> None:
+    """Persist the answer event for calibration + review history (idempotent).
 
-    # Record the answer event for calibration — idempotently (a retry/replay does not
-    # double-count). Logged-in users resolve to their account entity; anonymous guests
-    # to a stable per-guest entity, so their answers still feed the moat. Calibration
-    # (Elo) runs only on a genuinely new event and only when enabled.
+    Depends only on the verdict (``correct``), never on the coaching feedback — so
+    it can run the instant the verdict is known, before any LLM work. A retry/replay
+    does not double-count; Elo calibration runs only on a genuinely new event.
+    """
     subject_entity_id = resolve_subject_entity(db, user, guest_id)
     learner_ability: float | None = None
     item_difficulty: float | None = None
@@ -97,7 +102,7 @@ def grade(
             db,
             subject_entity_id=subject_entity_id,
             assertion_id=body.assertion_id,
-            correct=bool(result.get("correct")),
+            correct=correct,
             choice_index=body.choice_index,
             latency_ms=body.latency_ms,
             confidence=body.confidence,
@@ -115,12 +120,97 @@ def grade(
         artifact_id,
         body.assertion_id,
         choice_index=body.choice_index,
-        correct=bool(result.get("correct")),
+        correct=correct,
         learner_ability=learner_ability,
         item_difficulty=item_difficulty,
     )
     record_answer(db, artifact_id, body.assertion_id)
 
+
+@router.post("/grade", dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)])
+def grade(
+    body: GradeIn,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    _require_actor(user, guest_id)
+    artifact_id = _resolve_assertion_artifact(db, body.assertion_id, user, guest_id)
+    result = grade_mcq(db, body.assertion_id, body.choice_index, choice_indices=body.choice_indices)
+    _record_graded_answer(
+        db, body, artifact_id=artifact_id, correct=bool(result.get("correct")), user=user, guest_id=guest_id
+    )
     return result
+
+
+def _sse(event: str, data: dict[str, Any]) -> dict[str, str]:
+    return {"event": event, "data": json.dumps(data)}
+
+
+@router.post(
+    "/grade/stream",
+    dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)],
+)
+async def grade_stream(
+    body: GradeIn,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> EventSourceResponse:
+    """Verdict-first grading: the outcome streams in ~instantly (a pure index
+    compare + stored explanation), the LLM coaching follows a moment later.
+
+    Access + existence are checked up front so a real 401/403/404 is returned
+    before the 200 stream opens.
+    """
+    _require_actor(user, guest_id)
+    artifact_id = _resolve_assertion_artifact(db, body.assertion_id, user, guest_id)
+
+    async def event_generator() -> Any:
+        # Request-scoped db can close before the generator finishes; use a dedicated
+        # session for the verdict write + feedback resolution.
+        stream_db = SessionLocal()
+        try:
+            payload = load_grade_payload(stream_db, body.assertion_id)
+            if payload is None:
+                yield _sse("error", {"message": "Question not found"})
+                return
+
+            verdict = grade_verdict(payload, body.choice_index, body.choice_indices)
+            # Record the answer + emit the verdict BEFORE any LLM work, so the outcome
+            # is committed and revealed even if the learner leaves mid-coaching.
+            try:
+                _record_graded_answer(
+                    stream_db,
+                    body,
+                    artifact_id=artifact_id,
+                    correct=bool(verdict["correct"]),
+                    user=user,
+                    guest_id=guest_id,
+                )
+            except Exception:
+                logger.exception("grade answer-record failed")
+            yield _sse("verdict", verdict)
+
+            try:
+                feedback = await grade_feedback(
+                    stream_db,
+                    body.assertion_id,
+                    payload,
+                    choice_index=body.choice_index,
+                    choice_indices=body.choice_indices,
+                )
+            except Exception:
+                logger.exception("grade feedback failed")
+                feedback = verdict.get("explanation") or ""
+            yield _sse("feedback", {"feedback": feedback})
+            yield _sse("done", {})
+        finally:
+            stream_db.close()
+
+    return EventSourceResponse(
+        event_generator(),
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache, no-transform"},
+    )
 
 

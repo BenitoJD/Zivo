@@ -175,6 +175,23 @@ def test_generate_option_feedback_parses_map() -> None:
     assert out == {"0": "A is the trap.", "1": "B is right and here is why."}
 
 
+def test_grade_verdict_is_pure_and_instant() -> None:
+    """The verdict-first payload: correct + correct_index + explanation, no LLM/DB."""
+    from app.graphs.mcq_graph import grade_verdict
+
+    single = {"options": ["a", "b", "c"], "correct_index": 1, "explanation": "Because b."}
+    assert grade_verdict(single, 1)["correct"] is True
+    wrong = grade_verdict(single, 2)
+    assert wrong["correct"] is False
+    assert wrong["correct_index"] == 1
+    assert wrong["explanation"] == "Because b."
+
+    multi = {"options": ["a", "b", "c"], "correct_index": 0, "correct_indices": [0, 2]}
+    assert grade_verdict(multi, 0, [0, 2])["correct"] is True   # exact set
+    assert grade_verdict(multi, 0, [0])["correct"] is False     # partial
+    assert grade_verdict(multi, 0, [0, 2])["correct_indices"] == [0, 2]
+
+
 def test_generate_option_feedback_partial_map_rejected() -> None:
     """A map that doesn't cover every option is dropped (no silent half-coaching)."""
     from app.services import option_feedback as of

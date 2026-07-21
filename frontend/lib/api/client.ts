@@ -471,9 +471,12 @@ function parseSseEventBlock(part: string): { event: string; data: string } | nul
 }
 
 export type ChatSseHandlers = {
-  onChunk: (text: string) => void;
+  onChunk?: (text: string) => void;
   /** Backend emits `status` before retrieval / first token (e.g. phase: "thinking"). */
   onStatus?: (phase: string) => void;
+  /** Raw per-event hook — fires for EVERY SSE event (used for non-chat streams
+   *  like verdict-first grading: "verdict" / "feedback" / "done"). */
+  onEvent?: (event: string, data: string) => void;
 };
 
 export type ApiPostSSEOptions = {
@@ -490,7 +493,7 @@ export async function apiPostSSE(
     typeof onChunkOrHandlers === "function"
       ? { onChunk: onChunkOrHandlers }
       : onChunkOrHandlers;
-  const { onChunk, onStatus } = handlers;
+  const { onChunk, onStatus, onEvent } = handlers;
   const res = await fetchWithTimeout(
     `${API_BASE}${path}`,
     {
@@ -528,6 +531,7 @@ export async function apiPostSSE(
       const parsed = parseSseEventBlock(part);
       if (!parsed) continue;
       const { event, data } = parsed;
+      onEvent?.(event, data);
       if (event === "status") {
         try {
           const payload = JSON.parse(data) as { phase?: string };
@@ -538,9 +542,9 @@ export async function apiPostSSE(
       } else if (event === "token") {
         try {
           const payload = JSON.parse(data) as { text?: string };
-          if (payload.text) onChunk(payload.text);
+          if (payload.text) onChunk?.(payload.text);
         } catch {
-          onChunk(data);
+          onChunk?.(data);
         }
       } else if (event === "error") {
         try {

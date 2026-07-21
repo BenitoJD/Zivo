@@ -6,6 +6,7 @@ import {
   Button,
   Center,
   Group,
+  Loader,
   Stack,
   Text,
   ThemeIcon,
@@ -535,6 +536,15 @@ export function McqHeroPanel({
           compact={compact}
           isDark={isDark}
         />
+      ) : reveal && !isTest ? (
+        // Verdict is already shown; the coaching is still streaming in. A calm
+        // "writing" line beats a spinner — the outcome is what mattered and it's here.
+        <Group justify="center" gap={8} mt={compact ? 8 : 12} style={{ flexShrink: 0 }}>
+          <Loader size={13} color="lavender" type="dots" />
+          <Text fz="sm" c="dimmed" fw={500}>
+            Writing your feedback…
+          </Text>
+        </Group>
       ) : graded && isTest ? (
         <Group justify="center" gap={8} mt={compact ? 8 : 12} style={{ flexShrink: 0 }}>
           <ThemeIcon size={22} radius="xl" variant="light" color="forest">
