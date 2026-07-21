@@ -28,7 +28,6 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.models import Document
 from app.repositories.intel import _concept_id, _source_id
 from app.services.code_execution import DEFAULT_LANGUAGE_ID, LANGUAGES, run_tests
 from app.services.llm_router import acomplete_chat
