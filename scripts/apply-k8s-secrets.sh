@@ -18,5 +18,19 @@ kubectl -n zivo create secret generic zivo-secrets \
   --from-literal=MINIO_BUCKET="$MINIO_BUCKET" \
   --from-literal=MINIO_SECURE="${MINIO_SECURE:-false}" \
   --from-literal=APP_ENV="${APP_ENV:-production}" \
-  --from-literal=CORS_ORIGINS="${CORS_ORIGINS:-}"
+  --from-literal=CORS_ORIGINS="${CORS_ORIGINS:-}" \
+  --from-literal=SECRET_KEY="${SECRET_KEY:-}" \
+  --from-literal=CSRF_SECRET="${CSRF_SECRET:-}" \
+  --from-literal=LITELLM_MODEL="${LITELLM_MODEL:-openai/deepseek-v4-flash}" \
+  --from-literal=LLM_POOL_ENABLED="${LLM_POOL_ENABLED:-true}" \
+  --from-literal=DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-}" \
+  --from-literal=DEEPSEEK_API_BASE="${DEEPSEEK_API_BASE:-https://api.deepseek.com/v1}" \
+  --from-literal=ZAI_API_KEY="${ZAI_API_KEY:-}" \
+  --from-literal=ZAI_API_BASE="${ZAI_API_BASE:-}" \
+  --from-literal=STEPFUN_API_KEY="${STEPFUN_API_KEY:-}" \
+  --from-literal=STEPFUN_API_BASE="${STEPFUN_API_BASE:-}" \
+  --from-literal=OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" \
+  --from-literal=OPENROUTER_API_BASE="${OPENROUTER_API_BASE:-}" \
+  --from-literal=OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
+  --from-literal=OPENAI_API_BASE="${OPENAI_API_BASE:-}"
 echo "zivo-secrets updated"

@@ -381,6 +381,46 @@ def ensure_registry_providers(db: Session, settings: Settings | None = None) -> 
     if before == 0:
         dirty = True
 
+    deepseek = _upsert_provider(
+        db,
+        slug="deepseek",
+        display_name="DeepSeek",
+        litellm_prefix="openai",
+        api_base_url=settings.deepseek_api_base.rstrip("/") or None,
+        api_key=settings.deepseek_api_key or None,
+    )
+    before_ds = (
+        db.query(LlmModel)
+        .filter(LlmModel.provider_id == deepseek.id, LlmModel.slug == "deepseek-v4-flash")
+        .count()
+    )
+    _upsert_model(
+        db,
+        provider=deepseek,
+        slug="deepseek-v4-flash",
+        litellm_model="openai/deepseek-v4-flash",
+        display_name="DeepSeek V4 Flash",
+        kind=LlmModelKind.chat,
+        sort_order=4,
+        max_input_tokens=128_000,
+        max_output_tokens=8_192,
+        update_fields=True,
+    )
+    if before_ds == 0:
+        dirty = True
+    deepseek_model = (
+        db.query(LlmModel)
+        .filter(LlmModel.provider_id == deepseek.id, LlmModel.slug == "deepseek-v4-flash")
+        .first()
+    )
+    # When a DeepSeek key is configured, pin deepseek-v4-flash as the default chat
+    # model (and thus the pinned generation model). Runs every boot, so it tracks
+    # key presence without a manual admin step — and takes priority over Step Fun.
+    if settings.deepseek_api_key and deepseek_model and not deepseek_model.is_default:
+        _clear_defaults_for_kind(db, LlmModelKind.chat)
+        deepseek_model.is_default = True
+        dirty = True
+
     stepfun = _upsert_provider(
         db,
         slug="stepfun",
@@ -447,10 +487,15 @@ def ensure_registry_providers(db: Session, settings: Settings | None = None) -> 
         if changed:
             stepfun_model.meta = meta or None
             dirty = True
-    # When a Step Fun key is configured, pin step-3.5-flash as the default chat
-    # model (and thus the pinned generation model) on existing DBs too. This
-    # runs on every boot, so it tracks key presence without a manual admin step.
-    if settings.stepfun_api_key and stepfun_model and not stepfun_model.is_default:
+    # When a Step Fun key is configured (and DeepSeek isn't — DeepSeek is the
+    # primary), pin step-3.5-flash as the default chat model on existing DBs too.
+    # Runs on every boot, so it tracks key presence without a manual admin step.
+    if (
+        settings.stepfun_api_key
+        and not settings.deepseek_api_key
+        and stepfun_model
+        and not stepfun_model.is_default
+    ):
         _clear_defaults_for_kind(db, LlmModelKind.chat)
         stepfun_model.is_default = True
         dirty = True
@@ -531,6 +576,16 @@ def refresh_llm_registry_from_env(
 
     if ensure_registry_providers(db, settings):
         dirty = True
+
+    if settings.deepseek_api_key or settings.deepseek_api_base:
+        provider = db.query(LlmProvider).filter(LlmProvider.slug == "deepseek").first()
+        if provider:
+            if settings.deepseek_api_key and (force_keys or not provider.api_key):
+                provider.api_key = settings.deepseek_api_key
+                dirty = True
+            if settings.deepseek_api_base and (force_keys or not provider.api_base_url):
+                provider.api_base_url = settings.deepseek_api_base.rstrip("/")
+                dirty = True
 
     if settings.zai_api_key or settings.zai_api_base:
         provider = db.query(LlmProvider).filter(LlmProvider.slug == "zai").first()
@@ -750,6 +805,29 @@ def bootstrap_llm_registry_from_env(db: Session, settings: Settings | None = Non
             meta=GLM_THINKING_DISABLED_META,
         )
 
+        deepseek = _upsert_provider(
+            db,
+            slug="deepseek",
+            display_name="DeepSeek",
+            litellm_prefix="openai",
+            api_base_url=settings.deepseek_api_base.rstrip("/") or None,
+            api_key=settings.deepseek_api_key or None,
+        )
+        # deepseek-v4-flash is the pinned default generation model when a key is
+        # configured — fast, cheap, automatic server-side prefix caching.
+        _upsert_model(
+            db,
+            provider=deepseek,
+            slug="deepseek-v4-flash",
+            litellm_model="openai/deepseek-v4-flash",
+            display_name="DeepSeek V4 Flash",
+            kind=LlmModelKind.chat,
+            is_default=bool(settings.deepseek_api_key),
+            sort_order=4,
+            max_input_tokens=128_000,
+            max_output_tokens=8_192,
+        )
+
         stepfun = _upsert_provider(
             db,
             slug="stepfun",
@@ -758,9 +836,9 @@ def bootstrap_llm_registry_from_env(db: Session, settings: Settings | None = Non
             api_base_url=settings.stepfun_api_base.rstrip("/") or None,
             api_key=settings.stepfun_api_key or None,
         )
-        # step-3.5-flash becomes the pinned default generation model when a key
-        # is configured — fast, ideal for high-volume MCQ cook.
-        stepfun_is_default = bool(settings.stepfun_api_key)
+        # step-3.5-flash is the pinned default only when DeepSeek (the primary)
+        # has no key configured.
+        stepfun_is_default = bool(settings.stepfun_api_key) and not settings.deepseek_api_key
         _upsert_model(
             db,
             provider=stepfun,

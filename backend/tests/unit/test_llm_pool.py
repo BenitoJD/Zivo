@@ -26,6 +26,7 @@ def _chat_model(
     provider_slug: str = "openai",
     api_key: str = "key",
     sort_order: int = 0,
+    is_default: bool = False,
 ) -> ResolvedLlmModel:
     provider = LlmProvider(
         id=uuid.uuid4(),
@@ -45,6 +46,7 @@ def _chat_model(
         kind=LlmModelKind.chat.value,
         sort_order=sort_order,
         is_enabled=True,
+        is_default=is_default,
     )
     return ResolvedLlmModel(record=model, provider=provider)
 
@@ -65,7 +67,8 @@ def test_is_failover_eligible_detects_rate_limits() -> None:
     assert is_failover_eligible(RuntimeError("validation error")) is False
 
 
-def test_iter_chat_model_attempts_round_robin(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_iter_chat_model_attempts_default_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pinned default takes every call (cache-hot); the pool is failover only."""
     pool = [
         _chat_model(slug="mimo", litellm_model="openai/mimo-v2.5", sort_order=10),
         _chat_model(
@@ -73,6 +76,7 @@ def test_iter_chat_model_attempts_round_robin(monkeypatch: pytest.MonkeyPatch) -
             litellm_model="openrouter/openrouter/free",
             provider_slug="openrouter",
             sort_order=12,
+            is_default=True,
         ),
         _chat_model(slug="glm", litellm_model="openai/glm-4.7", provider_slug="zai", sort_order=15),
     ]
@@ -80,19 +84,16 @@ def test_iter_chat_model_attempts_round_robin(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr("app.services.llm_pool.get_settings", lambda: Settings(llm_pool_enabled=True))
     monkeypatch.setattr("app.services.llm_pool.list_pool_chat_models", lambda *_a, **_k: pool)
 
+    expected = [
+        "openrouter/openrouter/free",
+        "openai/glm-4.7",
+        "openai/mimo-v2.5",
+    ]
     first = [m.litellm_model for m in iter_chat_model_attempts(db)]
     second = [m.litellm_model for m in iter_chat_model_attempts(db)]
 
-    assert first == [
-        "openai/mimo-v2.5",
-        "openrouter/openrouter/free",
-        "openai/glm-4.7",
-    ]
-    assert second == [
-        "openrouter/openrouter/free",
-        "openai/glm-4.7",
-        "openai/mimo-v2.5",
-    ]
+    assert first == expected
+    assert second == expected  # stable — no rotation between calls
 
 
 def test_iter_chat_model_attempts_empty_pool_raises() -> None:

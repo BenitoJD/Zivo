@@ -1,8 +1,11 @@
 """Provider-specific prompt-prefix cache breakpoints.
 
 Anthropic requires explicit ``cache_control`` on message blocks; OpenAI-compatible
-providers (MiMo, Z.AI) cache stable leading prefixes automatically when message
-ordering is stable across calls.
+providers (DeepSeek, MiMo, Z.AI) cache stable leading prefixes automatically when
+message ordering is stable across calls — DeepSeek in particular needs NO request
+opt-in and reports hits via ``usage.prompt_cache_hit_tokens`` (picked up by
+``llm_router._extract_usage``), so the correct behaviour for it is the untouched
+passthrough below.
 """
 
 from __future__ import annotations

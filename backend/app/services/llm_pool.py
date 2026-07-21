@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import threading
 import uuid
 from collections.abc import Iterator
 
@@ -16,8 +15,6 @@ from app.services.llm_registry import ResolvedLlmModel, configure_litellm
 
 logger = logging.getLogger(__name__)
 
-_pool_lock = threading.Lock()
-_pool_cursor = 0
 _pool_enabled_override: bool | None = None
 
 
@@ -100,7 +97,13 @@ def iter_chat_model_attempts(
     model_id: uuid.UUID | None = None,
     require_vision: bool = False,
 ) -> Iterator[ResolvedLlmModel]:
-    """Yield models to try — explicit pick, or round-robin across the pool."""
+    """Yield models to try — explicit pick, or default-first with pool failover.
+
+    Every call starts at the pinned default (falling back to pool order) instead
+    of round-robining: one provider takes all traffic, so its server-side prompt
+    prefix cache stays hot (DeepSeek et al. bill cache hits at a fraction of the
+    uncached rate). The rest of the pool remains as failover only.
+    """
     if model_id is not None:
         from app.services.llm_registry import resolve_chat_model
 
@@ -117,11 +120,7 @@ def iter_chat_model_attempts(
     if not pool:
         raise HTTPException(status_code=503, detail="No chat model configured")
 
-    global _pool_cursor
-    with _pool_lock:
-        start = _pool_cursor % len(pool)
-        _pool_cursor = (_pool_cursor + 1) % len(pool)
-
+    start = next((i for i, m in enumerate(pool) if m.record.is_default), 0)
     for offset in range(len(pool)):
         yield pool[(start + offset) % len(pool)]
 
