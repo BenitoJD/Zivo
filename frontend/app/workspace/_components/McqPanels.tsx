@@ -25,6 +25,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { GenerationStages } from "@/app/workspace/_components/GenerationStages";
+import { PetPlayground } from "@/app/_components/pets/PetPlayground";
 import { mcqOptionChrome, McqFeedbackCard } from "@/app/_components/mcq/McqCard";
 import { normalizeMcqOptions, type McqState } from "@/lib/types";
 import { learnWaitStatus } from "@/lib/learnStatus";
@@ -537,14 +538,22 @@ export function McqHeroPanel({
           isDark={isDark}
         />
       ) : reveal && !isTest ? (
-        // Verdict is already shown; the coaching is still streaming in. A calm
-        // "writing" line beats a spinner — the outcome is what mattered and it's here.
-        <Group justify="center" gap={8} mt={compact ? 8 : 12} style={{ flexShrink: 0 }}>
-          <Loader size={13} color="lavender" type="dots" />
-          <Text fz="sm" c="dimmed" fw={500}>
-            Writing your feedback…
-          </Text>
-        </Group>
+        // Verdict is already shown; the coaching is still streaming in. Fill the
+        // wait with the pixel cats (click to toss a ball — they'll chase it) so the
+        // few seconds feel playful, not idle. Swaps to the feedback card on arrival.
+        <Stack align="center" gap={2} mt={compact ? 4 : 8} style={{ flexShrink: 0 }}>
+          <PetPlayground
+            height={compact ? 88 : 108}
+            count={3}
+            style={{ width: 300, maxWidth: "100%" }}
+          />
+          <Group justify="center" gap={8}>
+            <Loader size={13} color="lavender" type="dots" />
+            <Text fz="sm" c="dimmed" fw={500}>
+              Writing your feedback…
+            </Text>
+          </Group>
+        </Stack>
       ) : graded && isTest ? (
         <Group justify="center" gap={8} mt={compact ? 8 : 12} style={{ flexShrink: 0 }}>
           <ThemeIcon size={22} radius="xl" variant="light" color="forest">
