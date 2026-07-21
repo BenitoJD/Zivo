@@ -387,7 +387,10 @@ def on_batch_completed(db: Session, document_id: uuid.UUID, *, page: int, saved:
 
             enqueue_coach_page(db, document_id=document_id, page=page, account_id=doc.account_id)
         except Exception:
-            logger.debug("coach enqueue failed", exc_info=True)
+            # Grading still works (verdict is instant; feedback falls back to the live
+            # path + lazy warm-back), so this never blocks generation — but warn, don't
+            # swallow: a silent debug-level failure here is what hid a stale-worker miss.
+            logger.warning("coach enqueue failed for doc=%s page=%s", document_id, page, exc_info=True)
     if current_page == page:
         _maybe_enqueue_initial_pool_remainder(db, doc, page=page)
 
