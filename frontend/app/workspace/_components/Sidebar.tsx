@@ -560,7 +560,7 @@ export function Sidebar({
       {/* Source list */}
       <Box style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
         <SidebarAnimatedLayer visible={!wide} reduceMotion={reduceMotion}>
-          <Box h="100%" w="100%" style={{ overflowY: "auto", overflowX: "hidden" }}>
+          <Box className="zv-noscrollbar" h="100%" w="100%" style={{ overflowY: "auto", overflowX: "hidden" }}>
             <Stack gap={6} align="center" w="100%" py={4}>
               {documents.length === 0 ? (
                 <MiniRailButton label="No sources yet" disabled>
@@ -589,9 +589,10 @@ export function Sidebar({
         <SidebarAnimatedLayer visible={wide} enterDelay={80} reduceMotion={reduceMotion}>
           <ScrollArea
             h="100%"
-            type={isMobile ? "never" : "auto"}
+            type={isMobile ? "never" : "scroll"}
             scrollbars="y"
-            offsetScrollbars={!isMobile}
+            scrollbarSize={8}
+            scrollHideDelay={600}
             px="xs"
             pt={isMobile ? "md" : "xs"}
           >
