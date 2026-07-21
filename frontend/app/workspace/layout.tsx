@@ -21,6 +21,7 @@ import {
 } from "@/app/workspace/_components/Sidebar";
 import { DeleteSourceModal } from "@/app/workspace/_components/DeleteSourceModal";
 import { AddSourceModal } from "@/app/workspace/_components/AddSourceModal";
+import { PomodoroWidget } from "@/app/workspace/_components/PomodoroWidget";
 import { sourceLabel } from "@/app/workspace/_components/Sidebar";
 import { SettingsModal } from "@/app/workspace/_components/SettingsModal";
 import { OnboardingGuide } from "@/app/workspace/_components/OnboardingGuide";
@@ -244,6 +245,8 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
         onClose={() => setAddSourceOpen(false)}
         onImported={(id) => router.push(`/workspace/${id}`)}
       />
+      {/* Floating study focus timer (desktop) — bottom-left launcher. */}
+      {mounted && !isMobile && <PomodoroWidget />}
       <DeleteSourceModal
         target={deleteTarget}
         onClose={() => setDeleteTarget(null)}
