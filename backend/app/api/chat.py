@@ -479,20 +479,16 @@ async def chat_stream(
                         asyncio.to_thread(_learn_context_for_chat),
                     )
                 citations = retrieved.get("citations", [])
+                # Prefix-cache discipline (this is what makes provider prompt caching
+                # hit): the leading [system, ...history] must be byte-stable across
+                # turns. So the system prompt is never mutated per-turn, and the
+                # retrieved context (which changes every turn) rides in the FINAL
+                # user message — not as a mid-list message before the history.
                 system = get_prompt(stream_db, "tutor_system")
-                if _looks_like_quiz(request_message):
-                    system = system + "\n\n" + get_prompt(stream_db, "mcq_format")
                 messages = [{"role": "system", "content": system}]
-                context_block = retrieved.get("context_block") or ""
-                if context_block:
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": "Document excerpts (pinned for this session):\n\n" + context_block,
-                        }
-                    )
                 messages.extend(retrieved.get("messages") or prior_messages)
 
+                context_block = retrieved.get("context_block") or ""
                 user_content = build_user_message(
                     request_message,
                     doc,
@@ -520,8 +516,19 @@ async def chat_stream(
                 )
                 if guardrail_applies:
                     trailer_parts.append(_MCQ_ANSWER_GUARDRAIL)
+                # Quiz formatting rides the final turn too (was appended to the
+                # system prompt, which flipped the prefix's first bytes per turn).
+                if _looks_like_quiz(request_message):
+                    trailer_parts.append(get_prompt(stream_db, "mcq_format"))
                 if trailer_parts:
                     user_content = user_content + "\n\n" + "\n\n".join(trailer_parts)
+                if context_block:
+                    user_content = (
+                        "Document excerpts (retrieved for this turn):\n\n"
+                        + context_block
+                        + "\n\n---\n\n"
+                        + user_content
+                    )
                 messages.append({"role": "user", "content": user_content})
 
                 cache_eligible = _cache_eligible(
