@@ -9,7 +9,6 @@ import {
   NavLink,
   Progress,
   ScrollArea,
-  SegmentedControl,
   Stack,
   Text,
   Tooltip,
@@ -33,10 +32,10 @@ import {
   IconMessage2,
   IconMoon,
   IconNotebook,
+  IconPlus,
   IconSettings,
   IconSun,
   IconTrash,
-  IconUpload,
 } from "@tabler/icons-react";
 import { BrandMark } from "@/app/_components/BrandMark";
 import type { SourceDocument } from "@/lib/types";
@@ -138,16 +137,17 @@ function MiniRailButton({
         alignItems: "center",
         justifyContent: "center",
         flexShrink: 0,
-        border: emphasized ? "1px solid var(--mantine-color-default-border)" : "none",
+        border: emphasized ? "1px solid var(--mantine-color-lavender-2)" : "none",
         borderRadius: "var(--mantine-radius-md)",
         background: active
           ? "var(--mantine-color-lavender-1)"
           : emphasized
-            ? "var(--mantine-color-default)"
+            ? "var(--mantine-color-lavender-1)"
             : "transparent",
         cursor: disabled ? "default" : "pointer",
         padding: 0,
-        color: active ? "var(--mantine-color-lavender-7)" : "var(--mantine-color-dimmed)",
+        color:
+          active || emphasized ? "var(--mantine-color-lavender-7)" : "var(--mantine-color-dimmed)",
         opacity: disabled ? 0.45 : 1,
       }}
       aria-label={label}
@@ -224,14 +224,16 @@ export function sourceLabel(filename: string) {
   return filename.replace(/\.[^.]+$/, "");
 }
 
-/** Quiet status signal — a colored dot + short label, instead of raw status text. */
+/**
+ * Status only while there is something to say — a ready source stays quiet.
+ * (A list where every row shouts "Ready" is a list saying nothing.)
+ */
 function sourceStatusMeta(status: SourceDocument["status"], progress: number) {
   if (status === "indexing")
     return { dot: "var(--mantine-color-lavender-5)", label: `Indexing ${progress}%`, pulse: true };
   if (status === "pending")
     return { dot: "var(--mantine-color-gray-5)", label: "Choose pages", pulse: false };
-  if (status === "ready" || status === "indexed")
-    return { dot: "var(--mantine-color-sage-5)", label: "Ready", pulse: false };
+  if (status === "ready" || status === "indexed") return null;
   return { dot: "var(--mantine-color-gray-5)", label: status, pulse: false };
 }
 
@@ -262,20 +264,30 @@ function SourceRow({
     >
       <span className="zivo-source-chip" aria-hidden>
         <IconFileText size={16} stroke={1.7} />
+        {meta && (
+          <span
+            className={meta.pulse ? "zivo-chip-dot zivo-chip-dot-pulse" : "zivo-chip-dot"}
+            style={{ background: meta.dot }}
+          />
+        )}
       </span>
       <span className="zivo-source-body">
         <Text size="sm" fw={500} truncate className="zivo-source-title">
           {label}
         </Text>
-        <span className="zivo-source-status">
-          <span
-            className={meta.pulse ? "zivo-source-dot zivo-source-dot-pulse" : "zivo-source-dot"}
-            style={{ background: meta.dot }}
-          />
-          <Text size="xs" c="dimmed" truncate>
+        {meta && (
+          <Text size="xs" c="dimmed" truncate className="zivo-source-statusline">
             {meta.label}
           </Text>
-        </span>
+        )}
+        {doc.status === "indexing" && (
+          <span className="zivo-source-track" aria-hidden>
+            <span
+              className="zivo-source-fill"
+              style={{ width: `${Math.max(4, Math.min(100, doc.index_progress))}%` }}
+            />
+          </span>
+        )}
       </span>
       <Tooltip label="Delete source" position="right" withArrow openDelay={300}>
         <span
@@ -346,28 +358,35 @@ export function Sidebar({
   return (
     <>
       <style>{`
-        /* Source row — Wispr-calm: tight, single line, tinted glyph chip, hover-reveal delete. */
+        /* Source row — Wispr-calm: one quiet line per ready source, tinted glyph chip,
+           hover-reveal delete. Status appears only while something is happening. */
         .zivo-source-row {
           position: relative;
           width: 100%;
           display: flex;
           align-items: center;
           gap: 10px;
-          padding: 8px 10px;
+          padding: 7px 10px;
+          min-height: 46px;
           border-radius: 12px;
           border: 1px solid transparent;
           transition: background 140ms ease, border-color 140ms ease;
         }
         .zivo-source-row:hover { background: var(--mantine-color-default-hover); }
+        .zivo-source-row:focus-visible {
+          outline: 2px solid var(--mantine-color-lavender-4);
+          outline-offset: -1px;
+        }
         .zivo-source-row[data-active] {
           background: var(--mantine-color-lavender-0);
           border-color: var(--mantine-color-lavender-2);
         }
         .zivo-source-chip {
+          position: relative;
           flex-shrink: 0;
           width: 32px;
           height: 32px;
-          border-radius: 9px;
+          border-radius: 10px;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -380,12 +399,35 @@ export function Sidebar({
           background: var(--mantine-color-lavender-1);
           color: var(--mantine-color-lavender-7);
         }
+        /* Busy signal lives on the chip's corner, ringed by the page so it reads as a badge. */
+        .zivo-chip-dot {
+          position: absolute;
+          right: -2px;
+          top: -2px;
+          width: 9px;
+          height: 9px;
+          border-radius: 999px;
+          box-shadow: 0 0 0 2px var(--mantine-color-body);
+        }
+        .zivo-chip-dot-pulse { animation: zivo-dot-pulse 1.6s ease-in-out infinite; }
+        @keyframes zivo-dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
         .zivo-source-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; text-align: left; }
         .zivo-source-row[data-active] .zivo-source-title { color: var(--mantine-color-lavender-8); }
-        .zivo-source-status { display: flex; align-items: center; gap: 6px; min-width: 0; }
-        .zivo-source-dot { flex-shrink: 0; width: 6px; height: 6px; border-radius: 999px; }
-        .zivo-source-dot-pulse { animation: zivo-dot-pulse 1.6s ease-in-out infinite; }
-        @keyframes zivo-dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+        .zivo-source-statusline { line-height: 1.3; }
+        .zivo-source-track {
+          height: 3px;
+          margin-top: 3px;
+          border-radius: 999px;
+          background: var(--mantine-color-default-hover);
+          overflow: hidden;
+        }
+        .zivo-source-fill {
+          display: block;
+          height: 100%;
+          border-radius: 999px;
+          background: var(--mantine-color-lavender-5);
+          transition: width 400ms ease;
+        }
         .zivo-source-del {
           position: absolute;
           right: 8px;
@@ -403,29 +445,85 @@ export function Sidebar({
           transition: opacity 120ms ease, background 140ms ease, color 140ms ease;
           cursor: pointer;
         }
-        .zivo-source-row:hover .zivo-source-del { opacity: 1; }
+        .zivo-source-row:hover .zivo-source-del,
+        .zivo-source-row:focus-visible .zivo-source-del { opacity: 1; }
+        @media (hover: none) { .zivo-source-del { opacity: 1; } }
         .zivo-source-del:hover { background: var(--mantine-color-terracotta-0); color: var(--mantine-color-terracotta-6); }
 
-        /* Add source — Wispr soft lavender pill (ink text), not a heavy saturated fill. */
-        .zivo-add-source {
-          background: #EFDBFB !important;
-          color: var(--mantine-color-text) !important;
-          border: 1px solid #E1C9F5 !important;
-          box-shadow: none !important;
-          font-weight: 600 !important;
-          transition: background 160ms ease, transform 140ms ease, border-color 160ms ease !important;
+        /* Section header count — a soft pill beside the label, not a stray number. */
+        .zivo-count-pill {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-width: 18px;
+          height: 17px;
+          padding: 0 5px;
+          border-radius: 999px;
+          background: var(--mantine-color-default-hover);
+          color: var(--mantine-color-dimmed);
+          font-size: 10.5px;
+          font-weight: 600;
+          font-variant-numeric: tabular-nums;
         }
-        .zivo-add-source:hover { background: #E8D0F8 !important; transform: translateY(-1px); }
-        .zivo-add-source:active { transform: translateY(0); }
+
+        /* Add source — the sidebar's one hero: a soft lavender gradient pill with an
+           inner top highlight, lifting gently on hover. Calm, tactile, unmistakable. */
+        .zivo-add-source {
+          background: linear-gradient(180deg, #F3E4FC 0%, #E9D2F9 100%) !important;
+          color: #3A2455 !important;
+          border: 1px solid #DFC5F2 !important;
+          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), 0 1px 2px rgba(55, 34, 89, 0.06) !important;
+          font-weight: 600 !important;
+          transition: background 160ms ease, transform 140ms ease, box-shadow 160ms ease !important;
+        }
+        .zivo-add-source:hover {
+          background: linear-gradient(180deg, #EFDBFB 0%, #E3C7F7 100%) !important;
+          transform: translateY(-1px);
+          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), 0 3px 10px rgba(55, 34, 89, 0.12) !important;
+        }
+        .zivo-add-source:active { transform: translateY(0); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4), 0 1px 2px rgba(55, 34, 89, 0.06) !important; }
         [data-mantine-color-scheme="dark"] .zivo-add-source {
-          background: var(--mantine-color-lavender-2) !important;
+          background: linear-gradient(180deg, var(--mantine-color-lavender-3) 0%, var(--mantine-color-lavender-2) 100%) !important;
           border-color: var(--mantine-color-lavender-3) !important;
           color: var(--mantine-color-lavender-9) !important;
+          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 1px 2px rgba(0, 0, 0, 0.25) !important;
         }
-        [data-mantine-color-scheme="dark"] .zivo-add-source:hover { background: var(--mantine-color-lavender-3) !important; }
+        [data-mantine-color-scheme="dark"] .zivo-add-source:hover {
+          background: linear-gradient(180deg, #4C4168 0%, var(--mantine-color-lavender-3) 100%) !important;
+          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 4px 14px rgba(0, 0, 0, 0.35) !important;
+        }
+
+        /* Footer utility bar — account chip on the left, quiet icon actions on the right. */
+        .zivo-account {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          min-width: 0;
+          flex: 1;
+          padding: 4px 10px 4px 4px;
+          border-radius: 999px;
+          transition: background 140ms ease;
+        }
+        .zivo-account:hover { background: var(--mantine-color-default-hover); }
+        .zivo-account:focus-visible { outline: 2px solid var(--mantine-color-lavender-4); }
+        .zivo-avatar {
+          flex-shrink: 0;
+          width: 26px;
+          height: 26px;
+          border-radius: 999px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: var(--mantine-color-lavender-1);
+          color: var(--mantine-color-lavender-7);
+          font-size: 12px;
+          font-weight: 700;
+          text-transform: uppercase;
+        }
         @media (prefers-reduced-motion: reduce) {
-          .zivo-add-source, .zivo-source-row, .zivo-source-chip, .zivo-source-del { transition: none !important; }
-          .zivo-source-dot-pulse { animation: none !important; }
+          .zivo-add-source, .zivo-source-row, .zivo-source-chip, .zivo-source-del,
+          .zivo-source-fill, .zivo-account { transition: none !important; }
+          .zivo-chip-dot-pulse { animation: none !important; }
         }
       `}</style>
       {/* Header row (desktop only) */}
@@ -497,15 +595,11 @@ export function Sidebar({
             px="xs"
             pt={isMobile ? "md" : "xs"}
           >
-            <Group justify="space-between" align="center" px="sm" mb={8} mt={2}>
+            <Group gap={7} align="center" px="sm" mb={8} mt={2}>
               <Text size="xs" tt="uppercase" fw={700} c="dimmed" lts={1.4} style={{ fontSize: 11 }}>
                 Sources
               </Text>
-              {documents.length > 0 && (
-                <Text size="xs" c="dimmed" fw={600} style={{ fontVariantNumeric: "tabular-nums", opacity: 0.7 }}>
-                  {documents.length}
-                </Text>
-              )}
+              {documents.length > 0 && <span className="zivo-count-pill">{documents.length}</span>}
             </Group>
             {documents.length === 0 ? (
               <Stack align="center" gap={6} px="md" py="lg" ta="center">
@@ -556,16 +650,16 @@ export function Sidebar({
         {wide ? (
           <Box p={isMobile ? "sm" : "md"} w="100%" pb={isMobile ? "calc(var(--mantine-spacing-sm) + env(safe-area-inset-bottom))" : undefined}>
             {username && (
-              <Stack gap="xs" mb={isMobile ? "sm" : "md"}>
+              <Stack gap={6} mb={isMobile ? "sm" : "md"} px={4}>
                 <Group justify="space-between">
-                  <Text size="xs" c="gray.5">
+                  <Text c="dimmed" fw={500} style={{ fontSize: 11 }}>
                     Storage
                   </Text>
-                  <Text size="xs" c="gray.6">
+                  <Text c="dimmed" fw={600} style={{ fontSize: 11, fontVariantNumeric: "tabular-nums" }}>
                     {storagePct}%
                   </Text>
                 </Group>
-                <Progress value={storagePct} size="sm" color="lavender" />
+                <Progress value={storagePct} size={4} radius="xl" color="lavender" />
               </Stack>
             )}
             {isAdmin && (
@@ -583,70 +677,51 @@ export function Sidebar({
               fullWidth
               size={isMobile ? "md" : "sm"}
               radius="xl"
-              leftSection={<IconUpload size={16} stroke={2} />}
+              leftSection={<IconPlus size={16} stroke={2.2} />}
               onClick={onAddSource}
               mb={isMobile ? "sm" : "md"}
               className="zivo-add-source"
             >
               Add source
             </Button>
-            <Stack gap={10} mt={4}>
-              <Group justify="space-between" align="center">
-                <Text size="xs" c="dimmed" fw={500} style={{ fontFamily: "var(--font-sans)" }}>
-                  Appearance
+            <Group gap={2} align="center" wrap="nowrap">
+              <UnstyledButton
+                className="zivo-account"
+                onClick={onSignIn}
+                aria-label={username ? `Account @${username}` : "Sign in"}
+              >
+                <span className="zivo-avatar" aria-hidden>
+                  {username ? username[0] : <IconLogin size={14} stroke={1.8} />}
+                </span>
+                <Text size="sm" fw={500} truncate>
+                  {username ? username : "Sign in"}
                 </Text>
-                <SegmentedControl
-                  size="xs"
-                  value={isDark ? "dark" : "light"}
-                  onChange={(value) => {
-                    if ((value === "dark") !== isDark) toggleColorScheme();
-                  }}
-                  data={[
-                    {
-                      value: "light",
-                      label: (
-                        <Center style={{ display: "flex", lineHeight: 1 }}>
-                          <IconSun size={14} stroke={2} />
-                        </Center>
-                      ),
-                    },
-                    {
-                      value: "dark",
-                      label: (
-                        <Center style={{ display: "flex", lineHeight: 1 }}>
-                          <IconMoon size={14} stroke={2} />
-                        </Center>
-                      ),
-                    },
-                  ]}
-                  aria-label={isDark ? "Dark mode on" : "Light mode on"}
-                />
-              </Group>
-              <Group gap={4} align="center" grow>
-                <Button
+              </UnstyledButton>
+              <Tooltip label={isDark ? "Light mode" : "Dark mode"} withArrow>
+                <ActionIcon
                   variant="subtle"
                   color="gray"
-                  size="xs"
-                  leftSection={<IconSettings size={15} stroke={1.7} />}
+                  size={34}
+                  radius="md"
+                  onClick={() => toggleColorScheme()}
+                  aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+                >
+                  {isDark ? <IconSun size={17} stroke={1.7} /> : <IconMoon size={17} stroke={1.7} />}
+                </ActionIcon>
+              </Tooltip>
+              <Tooltip label="Settings" withArrow>
+                <ActionIcon
+                  variant="subtle"
+                  color="gray"
+                  size={34}
+                  radius="md"
                   onClick={onOpenSettings}
-                  px="xs"
-                  styles={{ root: { height: 34, fontWeight: 500 }, label: { fontWeight: 500 } }}
+                  aria-label="Settings"
                 >
-                  Settings
-                </Button>
-                <Button
-                  variant="subtle"
-                  color="gray"
-                  size="xs"
-                  leftSection={<IconLogin size={15} stroke={1.7} />}
-                  onClick={onSignIn}
-                  px="xs"
-                  styles={{ root: { height: 34, fontWeight: 500 }, label: { fontWeight: 500 } }}
-                >
-                  {username ? `@${username}` : "Sign in"}
-                </Button>
-              </Group>
-            </Stack>
+                  <IconSettings size={17} stroke={1.7} />
+                </ActionIcon>
+              </Tooltip>
+            </Group>
           </Box>
         ) : (
           <Box pos="relative" mih={180} w="100%">
@@ -661,7 +736,7 @@ export function Sidebar({
                 <IconSettings size={18} stroke={1.5} />
               </MiniRailButton>
               <MiniRailButton label="Add source" emphasized onClick={onAddSource}>
-                <IconUpload size={18} stroke={1.5} />
+                <IconPlus size={18} stroke={2} />
               </MiniRailButton>
               <MiniRailButton label={username ? `@${username}` : "Sign in"} onClick={onSignIn}>
                 <IconLogin size={18} stroke={1.5} />
