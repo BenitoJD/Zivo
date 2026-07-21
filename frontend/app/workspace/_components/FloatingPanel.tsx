@@ -65,6 +65,11 @@ export function FloatingPanel({
   const [rect, setRect] = useState<Rect | null>(null);
   const [minimized, setMinimized] = useState(false);
   const [maximized, setMaximized] = useState(false);
+  // While actively dragging/resizing the panel must track the pointer 1:1 (no
+  // transition). At rest it gets an eased position transition so the sidebar
+  // collapse/expand — which nudges the panel to stay put — glides instead of
+  // stepping jerkily with each ResizeObserver tick.
+  const [interacting, setInteracting] = useState(false);
   const [z, setZ] = useState(() => nextZ());
   const restore = useRef<Rect | null>(null);
 
@@ -143,6 +148,7 @@ export function FloatingPanel({
       const sy = e.clientY;
       const s = rect;
       const { w: cw, h: ch } = bounds();
+      setInteracting(true);
       document.body.style.userSelect = "none";
       if (mode !== "move") document.body.style.cursor = `${mode}-resize`;
 
@@ -171,6 +177,7 @@ export function FloatingPanel({
         setRect({ x, y, w, h });
       };
       const up = () => {
+        setInteracting(false);
         document.body.style.userSelect = "";
         document.body.style.cursor = "";
         window.removeEventListener("pointermove", move);
@@ -230,6 +237,12 @@ export function FloatingPanel({
         border: "1px solid var(--mantine-color-default-border)",
         borderRadius: 14,
         boxShadow: "0 18px 50px rgba(35, 34, 32, 0.22), 0 2px 8px rgba(35, 34, 32, 0.08)",
+        // Eased glide at rest (smooths the sidebar-toggle reposition); none while
+        // the user is dragging/resizing so the pointer stays perfectly tracked.
+        transition: interacting
+          ? "none"
+          : "left 260ms cubic-bezier(0.32,0.72,0,1), top 260ms cubic-bezier(0.32,0.72,0,1)",
+        willChange: "left, top",
       }}
     >
       {/* Title bar — drag to move; double-click to maximize/restore. */}

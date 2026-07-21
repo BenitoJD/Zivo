@@ -85,11 +85,16 @@ function SidebarAnimatedLayer({
   children,
   enterDelay = 0,
   reduceMotion,
+  width,
 }: {
   visible: boolean;
   children: React.ReactNode;
   enterDelay?: number;
   reduceMotion: boolean;
+  /** Pin the layer to its final width (desktop) so its content stays laid out
+   *  while only the navbar clip animates — no per-frame reflow, so the expand
+   *  reads as a smooth reveal instead of a stuttering re-layout. */
+  width?: number;
 }) {
   const duration = reduceMotion ? 0 : SHELL_MS;
   const delay = reduceMotion ? 0 : enterDelay;
@@ -98,8 +103,10 @@ function SidebarAnimatedLayer({
     <Box
       style={{
         position: "absolute",
-        inset: 0,
-        width: "100%",
+        top: 0,
+        bottom: 0,
+        left: 0,
+        width: width ? `${width}px` : "100%",
         overflow: "hidden",
         opacity: visible ? 1 : 0,
         transition: visible
@@ -539,7 +546,7 @@ export function Sidebar({
       {/* Header row (desktop only) */}
       {!isMobile && (
         <Box pos="relative" h={52} w="100%">
-          <SidebarAnimatedLayer visible={!wide} reduceMotion={reduceMotion}>
+          <SidebarAnimatedLayer visible={!wide} reduceMotion={reduceMotion} width={isMobile ? undefined : SIDEBAR_MINI_WIDTH}>
             <Center h={52}>
               <Tooltip label="Expand sidebar" position="right" withArrow>
                 <UnstyledButton onClick={onToggleSidebar} aria-label="Expand sidebar" p={4}>
@@ -548,7 +555,7 @@ export function Sidebar({
               </Tooltip>
             </Center>
           </SidebarAnimatedLayer>
-          <SidebarAnimatedLayer visible={wide} enterDelay={60} reduceMotion={reduceMotion}>
+          <SidebarAnimatedLayer visible={wide} enterDelay={60} reduceMotion={reduceMotion} width={isMobile ? undefined : SIDEBAR_EXPANDED_WIDTH}>
             <Group px="md" h={52} justify="space-between" wrap="nowrap" gap="sm">
               <Group gap="sm" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
                 <BrandMark showWord={true} height={30} />
@@ -569,7 +576,7 @@ export function Sidebar({
 
       {/* Source list */}
       <Box style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
-        <SidebarAnimatedLayer visible={!wide} reduceMotion={reduceMotion}>
+        <SidebarAnimatedLayer visible={!wide} reduceMotion={reduceMotion} width={isMobile ? undefined : SIDEBAR_MINI_WIDTH}>
           <Box className="zv-noscrollbar" h="100%" w="100%" style={{ overflowY: "auto", overflowX: "hidden" }}>
             <Stack gap={6} align="center" w="100%" py={4}>
               {documents.length === 0 ? (
@@ -596,7 +603,7 @@ export function Sidebar({
           </Box>
         </SidebarAnimatedLayer>
 
-        <SidebarAnimatedLayer visible={wide} enterDelay={80} reduceMotion={reduceMotion}>
+        <SidebarAnimatedLayer visible={wide} enterDelay={80} reduceMotion={reduceMotion} width={isMobile ? undefined : SIDEBAR_EXPANDED_WIDTH}>
           <ScrollArea
             h="100%"
             type={isMobile ? "never" : "scroll"}

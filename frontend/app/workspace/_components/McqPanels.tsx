@@ -583,23 +583,14 @@ export function McqHeroPanel({
           </Text>
         </Box>
       ) : reveal && !isTest ? (
-        // Verdict is already shown; the coaching is still streaming in. Fill the
-        // wait with the pixel cats (click to toss a ball — they'll chase it) so the
-        // few seconds feel playful, not idle. Swaps to the feedback card on arrival.
-        <Stack align="center" gap={2} mt={compact ? 4 : 8} style={{ flexShrink: 0 }}>
-          <PetPlayground
-            height={compact ? 88 : 108}
-            count={1}
-            species="cat"
-            style={{ width: 300, maxWidth: "100%" }}
-          />
-          <Group justify="center" gap={8}>
-            <Loader size={13} color="lavender" type="dots" />
-            <Text fz="sm" c="dimmed" fw={500}>
-              Writing your feedback…
-            </Text>
-          </Group>
-        </Stack>
+        // Verdict already shown; coaching still streaming. Just a calm line — the
+        // persistent roaming cat below stays put (it no longer respawns per turn).
+        <Group justify="center" gap={8} mt={compact ? 8 : 12} style={{ flexShrink: 0 }}>
+          <Loader size={13} color="lavender" type="dots" />
+          <Text fz="sm" c="dimmed" fw={500}>
+            Writing your feedback…
+          </Text>
+        </Group>
       ) : graded && isTest ? (
         <Group justify="center" gap={8} mt={compact ? 8 : 12} style={{ flexShrink: 0 }}>
           <ThemeIcon size={22} radius="xl" variant="light" color="forest">
@@ -612,11 +603,12 @@ export function McqHeroPanel({
       ) : null}
       </Box>
 
-      {/* A single cat roams the whole empty area below the question while you
-          think — wandering in 2D (not one straight line), click to toss a ball
-          and it'll chase. Desktop Learn only (that's where the free space is);
-          it yields to the feedback area once you answer. */}
-      {!graded && !isTest && !compact && (
+      {/* One cat roams the whole empty area below the question, wandering in 2D
+          (not one straight line). It stays MOUNTED across the answer→next cycle
+          (the gate no longer depends on `graded`), so the same cat persists and
+          keeps roaming from where it was instead of respawning every turn.
+          Desktop Learn only — that's where the free space is. */}
+      {!isTest && !compact && (
         <Box style={{ flex: 1, minHeight: 150, width: "100%" }}>
           <PetPlayground count={1} species="cat" wander height="100%" style={{ width: "100%" }} />
         </Box>
