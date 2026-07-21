@@ -20,6 +20,7 @@ import {
   SHELL_EASE,
 } from "@/app/workspace/_components/Sidebar";
 import { DeleteSourceModal } from "@/app/workspace/_components/DeleteSourceModal";
+import { AddSourceModal } from "@/app/workspace/_components/AddSourceModal";
 import { sourceLabel } from "@/app/workspace/_components/Sidebar";
 import { SettingsModal } from "@/app/workspace/_components/SettingsModal";
 import { OnboardingGuide } from "@/app/workspace/_components/OnboardingGuide";
@@ -66,6 +67,12 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   const [deleteTarget, setDeleteTarget] = useState<SourceDocument | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [addSourceOpen, setAddSourceOpen] = useState(false);
+
+  function openAddSource() {
+    setAddSourceOpen(true);
+    if (isMobile) closeMobile();
+  }
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -121,7 +128,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <WorkspaceShellContext.Provider value={{ openAddSource: () => router.push("/workspace") }}>
+    <WorkspaceShellContext.Provider value={{ openAddSource }}>
       <StudyNavProvider>
       {/* On phones Mantine forces the navbar to 100% width, which stretches the nav
           rows into sparse empty space. Make it a proper drawer instead. */}
@@ -184,7 +191,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
                 variant="subtle"
                 color="gray"
                 aria-label="Add source"
-                onClick={() => router.push("/workspace")}
+                onClick={openAddSource}
                 w={34}
                 style={{ flexShrink: 0 }}
               >
@@ -207,10 +214,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
             pathname={pathname}
             onToggleSidebar={toggleSidebar}
             onNavigateSource={navigateSource}
-            onAddSource={() => {
-              router.push("/workspace");
-              if (isMobile) closeMobile();
-            }}
+            onAddSource={openAddSource}
             onSignIn={() => {
               router.push("/login");
               if (isMobile) closeMobile();
@@ -235,6 +239,11 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
       ) : null}
       </StudyNavProvider>
 
+      <AddSourceModal
+        opened={addSourceOpen}
+        onClose={() => setAddSourceOpen(false)}
+        onImported={(id) => router.push(`/workspace/${id}`)}
+      />
       <DeleteSourceModal
         target={deleteTarget}
         onClose={() => setDeleteTarget(null)}
