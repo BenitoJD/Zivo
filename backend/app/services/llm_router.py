@@ -345,8 +345,12 @@ async def acomplete_chat(
     log_tag: str = "complete",
     account_id: uuid.UUID | None = None,
     document_id: uuid.UUID | None = None,
+    strip_output: bool = True,
 ) -> str:
-    """LiteLLM completion without acquiring the process-wide slot (caller owns it)."""
+    """LiteLLM completion without acquiring the process-wide slot (caller owns it).
+
+    `strip_output` normalizes em/en dashes in the result; pass False when the output
+    must be verbatim (e.g. OCR transcription of a user's answer)."""
     import litellm
 
     litellm.drop_params = True  # drop provider-unsupported params (e.g. 'thinking') instead of erroring
@@ -380,7 +384,8 @@ async def acomplete_chat(
                 account_id=account_id,
                 document_id=document_id,
             )
-            return strip_dashes(response.choices[0].message.content or "")
+            content = response.choices[0].message.content or ""
+            return strip_dashes(content) if strip_output else content
         except Exception as exc:
             last_exc = exc
             # A hard-timeout (stalled provider) is failover-eligible: try the next
@@ -403,6 +408,7 @@ async def complete_chat(
     log_tag: str = "complete",
     account_id: uuid.UUID | None = None,
     document_id: uuid.UUID | None = None,
+    strip_output: bool = True,
 ) -> str:
     async with llm_slot_async():
         return await acomplete_chat(
@@ -413,4 +419,5 @@ async def complete_chat(
             log_tag=log_tag,
             account_id=account_id,
             document_id=document_id,
+            strip_output=strip_output,
         )

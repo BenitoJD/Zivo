@@ -385,6 +385,7 @@ async def _ocr_image(db: Session, image_document_id: uuid.UUID) -> str:
         require_vision=True,
         log_tag="mains_ocr",
         document_id=doc.id,
+        strip_output=False,  # transcription must be verbatim (keep the user's own dashes)
     )
     return (raw or "").strip()
 

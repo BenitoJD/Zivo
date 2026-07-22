@@ -292,6 +292,7 @@ export function PomodoroWidget() {
 
   return (
     <Box
+      onPointerDown={beginDrag}
       style={{
         position: "fixed",
         left: pos.x,
@@ -303,15 +304,12 @@ export function PomodoroWidget() {
         background: "var(--mantine-color-body)",
         border: "1px solid var(--mantine-color-default-border)",
         boxShadow: "0 18px 50px rgba(35,34,32,0.20), 0 2px 8px rgba(35,34,32,0.08)",
+        cursor: "grab",
+        touchAction: "none",
       }}
     >
-      <Group
-        justify="space-between"
-        mb={8}
-        wrap="nowrap"
-        onPointerDown={beginDrag}
-        style={{ cursor: "grab", touchAction: "none" }}
-      >
+      {/* Whole panel is a drag surface; interactive controls below stopPropagation. */}
+      <Group justify="space-between" mb={8} wrap="nowrap">
         <Group gap={7} wrap="nowrap">
           <IconClockHour4 size={16} stroke={1.8} style={{ color: `var(--mantine-color-${accent}-6)` }} />
           <Text size="sm" fw={600}>
@@ -357,7 +355,7 @@ export function PomodoroWidget() {
 
       <Group justify="center" gap={8} mb={10}>
         <Tooltip label="Reset" withArrow openDelay={400}>
-          <ActionIcon variant="subtle" color="gray" size={34} radius="xl" onClick={reset} aria-label="Reset">
+          <ActionIcon variant="subtle" color="gray" size={34} radius="xl" onPointerDown={(e) => e.stopPropagation()} onClick={reset} aria-label="Reset">
             <IconRotateClockwise size={16} stroke={1.8} />
           </ActionIcon>
         </Tooltip>
@@ -366,13 +364,14 @@ export function PomodoroWidget() {
           color={accent}
           size={44}
           radius="xl"
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={() => setRunning((r) => !r)}
           aria-label={running ? "Pause" : "Start"}
         >
           {running ? <IconPlayerPause size={20} stroke={2} /> : <IconPlayerPlay size={20} stroke={2} />}
         </ActionIcon>
         <Tooltip label="Skip to next" withArrow openDelay={400}>
-          <ActionIcon variant="subtle" color="gray" size={34} radius="xl" onClick={skip} aria-label="Skip">
+          <ActionIcon variant="subtle" color="gray" size={34} radius="xl" onPointerDown={(e) => e.stopPropagation()} onClick={skip} aria-label="Skip">
             <IconPlayerSkipForward size={16} stroke={1.8} />
           </ActionIcon>
         </Tooltip>
@@ -382,6 +381,7 @@ export function PomodoroWidget() {
         {PRESETS.map((p, i) => (
           <UnstyledButton
             key={p.label}
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={() => changePreset(i)}
             style={{
               padding: "3px 9px",
