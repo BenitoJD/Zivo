@@ -799,7 +799,7 @@ export default function WorkspaceArtifactPage({
         <Paper withBorder p={{ base: "lg", sm: "xl" }} maw={520} w="100%">
           <Stack gap="lg">
             <Stack gap="xs" align="center">
-              <PetPlayground height={130} count={3} style={{ width: 400, maxWidth: "100%" }} />
+              <PetPlayground height={130} count={1} wander style={{ width: 400, maxWidth: "100%" }} />
               <Text size="lg" fw={500} ta="center" style={{ letterSpacing: "-0.02em", fontFamily: "var(--font-serif), Georgia, serif" }}>
                 {stage.title}
               </Text>

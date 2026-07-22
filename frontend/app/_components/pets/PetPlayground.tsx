@@ -1,8 +1,14 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { useLocalStorage } from "@mantine/hooks";
 import { PetWorld, type PetWorldOptions } from "./engine";
 import "./pets.css";
+
+/** One preference gates every cat in the app (Learn, loading, generation waits…).
+ *  Off by default; toggled in Settings. Kept here so PetPlayground self-enforces
+ *  it — no usage can accidentally show a cat when the user turned them off. */
+export const CAT_ENABLED_KEY = "zivo-cat-enabled";
 
 /**
  * A little strip of pixel pets that walk, idle, jump and play while the user
@@ -28,13 +34,17 @@ export function PetPlayground({
   style?: React.CSSProperties;
 } & PetWorldOptions) {
   const ref = useRef<HTMLDivElement>(null);
+  const [enabled] = useLocalStorage({ key: CAT_ENABLED_KEY, defaultValue: false });
 
   useEffect(() => {
     const el = ref.current;
-    if (!el) return;
+    if (!el || !enabled) return;
     const world = new PetWorld(el, { count, scale, species, interactive, sound, wander });
     return () => world.dispose();
-  }, [count, scale, species, interactive, sound, wander]);
+  }, [enabled, count, scale, species, interactive, sound, wander]);
+
+  // Cats off → render nothing at all (no empty box), everywhere in the app.
+  if (!enabled) return null;
 
   return (
     <div

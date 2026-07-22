@@ -26,7 +26,7 @@ import {
 } from "@tabler/icons-react";
 import { GenerationStages } from "@/app/workspace/_components/GenerationStages";
 import { PetPlayground } from "@/app/_components/pets/PetPlayground";
-import { CAT_ENABLED_KEY } from "@/app/workspace/_components/SettingsModal";
+import { CAT_ENABLED_KEY } from "@/app/_components/pets/PetPlayground";
 import { mcqOptionChrome, McqFeedbackCard } from "@/app/_components/mcq/McqCard";
 import { normalizeMcqOptions, type McqState } from "@/lib/types";
 import { learnWaitStatus } from "@/lib/learnStatus";
