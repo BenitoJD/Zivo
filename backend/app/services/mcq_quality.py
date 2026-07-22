@@ -593,7 +593,11 @@ def generate_quality_mcq(
 # distractors). 5 is safely within the reliable range. For budgets > 5, call
 # this multiple times — prompt caching makes the repeat calls cheap.
 BATCH_MCQ_CAP = 5
-CRITIC_SAMPLE_RATE = float(os.getenv("ZIVO_CRITIC_SAMPLE_RATE", "0.25"))
+# The critic is the cheapest, highest-leverage quality gate and prompt caching makes
+# the repeated page context nearly free — so critique EVERY item by default, not a
+# 25% sample. (Evaluation is the moat; don't skip it to save a few tokens.) Still an
+# env knob for cost tuning.
+CRITIC_SAMPLE_RATE = float(os.getenv("ZIVO_CRITIC_SAMPLE_RATE", "1.0"))
 
 
 def _draft_score(draft: dict[str, Any]) -> tuple[int, int, float]:

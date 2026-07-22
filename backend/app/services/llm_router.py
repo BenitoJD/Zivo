@@ -99,6 +99,10 @@ STRUCTURED_LOG_TAGS = frozenset(
         "summarize_doc",
         "summarize_rollup",
         "grade_mcq",
+        # Grading + transcription are judged, not authored — pin deterministic (temp 0)
+        # for consistent, reproducible marks. (mains_gen stays warm for question variety.)
+        "mains_grade",
+        "mains_ocr",
     }
 )
 
@@ -121,6 +125,9 @@ LOG_TAG_MAX_TOKENS: dict[str, int] = {
     "coach_mcq": int(os.getenv("ZIVO_COACH_MAX_TOKENS", "1200")),
     "chat": CHAT_DEFAULT_MAX_TOKENS,
     "complete": CHAT_DEFAULT_MAX_TOKENS,
+    "mains_gen": 1400,
+    "mains_grade": 1800,
+    "mains_ocr": 3000,
 }
 
 

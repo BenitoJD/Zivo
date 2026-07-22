@@ -46,6 +46,16 @@ AXES: tuple[tuple[str, str], ...] = (
 )
 AXIS_MAX = 5
 
+# Behavioral anchors per axis — the grader scores against observable descriptors, not a
+# vague 0-5 Likert (anchored analytic rubrics beat holistic scoring on reliability).
+_AXIS_ANCHORS = {
+    "directive": "Did the answer DO what the directive demanded (e.g. 'critically examine' needs a weighed judgement, not mere description)? 0 = ignores it, 2-3 = partly, 5 = fully meets the demand.",
+    "structure": "Intro that frames (not restates the question), a logically ordered body, and a conclusion that adds a verdict/way-forward. 0 = formless, 5 = builds a clear argument.",
+    "coverage": "How much of the question's FULL demand and its relevant dimensions are addressed. 0 = one-track/off-topic, 5 = every part + multiple relevant dimensions.",
+    "substantiation": "Are claims backed with examples, data, reports, articles, or cases (not bare assertion)? 0 = unsupported, 5 = well-evidenced throughout.",
+    "presentation": "Legibility, headings, crisp expression, near the word limit. Score expression only; do NOT heavily penalise a content-strong answer here.",
+}
+
 _STRICTNESS_GUIDE = {
     "exam": (
         "Mark like a hard real examiner: no benefit of the doubt, reward only what is clearly and "
@@ -67,9 +77,19 @@ _GEN_SYSTEM = (
     "over recall, plus a hidden marking scheme. Reply with STRICT JSON only, no markdown, no preamble."
 )
 _GRADE_SYSTEM = (
-    "You are an experienced examiner grading a descriptive exam answer against a marking scheme. "
-    "You judge the SAME facts regardless of severity — only the generosity of partial credit and the "
-    "tone change with the grading severity. Reply with STRICT JSON only, no markdown, no preamble."
+    "You are an experienced examiner grading a descriptive exam answer with an ANALYTIC rubric, "
+    "reference-guided against a hidden marking scheme. Follow these principles strictly:\n"
+    "- EVIDENCE BEFORE VERDICT: award a scheme point ONLY if the answer genuinely USES it in an "
+    "argument (not merely names the keyword); you must be able to quote the phrase that earns it.\n"
+    "- SUBSTANCE, NOT LENGTH: a longer answer is not better; padding, repetition, and vague "
+    "generalities earn nothing. Score density of correct, relevant points.\n"
+    "- ACCURACY CAP: factual errors or fabricated content lower the mark below an honest partial.\n"
+    "- DIRECTIVE GATE: if the answer ignores the question's directive, the directive axis cannot "
+    "exceed 1 no matter how rich the content.\n"
+    "- The mark must reflect the covered scheme points plus answer quality — never a number picked "
+    "from nowhere. You judge the SAME facts regardless of severity; only the generosity of partial "
+    "credit and the tone change with the grading severity.\n"
+    "Reply with STRICT JSON only, no markdown, no preamble."
 )
 
 
@@ -404,17 +424,22 @@ async def _grade(
     points = scheme.get("model_points") or []
     pts_txt = "\n".join(f"- ({int(p.get('marks') or 0)}m) {p.get('point','')}" for p in points) or "- (use your judgement)"
     guide = _STRICTNESS_GUIDE.get(strictness, _STRICTNESS_GUIDE[DEFAULT_STRICTNESS])
+    anchors_txt = "\n".join(f"- {key} ({label}): {_AXIS_ANCHORS[key]}" for key, label in AXES)
     user = (
         f"GRADING SEVERITY: {guide}\n\n"
         f"QUESTION (directive '{directive}', out of {marks_max} marks):\n{question}\n\n"
-        f"HIDDEN MARKING SCHEME (key points and their marks):\n{pts_txt}\n\n"
+        f"HIDDEN MARKING SCHEME — award each point's marks ONLY if the answer genuinely USES it in an "
+        f"argument (not just names it):\n{pts_txt}\n\n"
+        f"AXES — score each 0..{AXIS_MAX} against its anchor:\n{anchors_txt}\n\n"
         f"CANDIDATE'S ANSWER:\n{truncate_to_tokens(answer, SUMMARIZE_SINGLE_SHOT_MAX_TOKENS)}\n\n"
-        f"Grade it. Award an integer mark out of {marks_max}. Score each axis from 0 to {AXIS_MAX} "
-        "(directive-adherence, structure intro/body/conclusion, coverage of the demand, substantiation "
-        "with examples/data/reports, presentation/legibility). For each scheme point say whether the "
-        "answer covered it. Give at most 3 'keep doing' and 3 'improve' bullets, one examiner one-liner, "
-        "and up to 4 highlights each quoting a SHORT phrase from the answer with a kind "
-        "(strong/weak/error) and a brief note.\n"
+        f"Grade it. First decide, per scheme point, whether it is genuinely covered (be ready to quote "
+        f"the phrase). Then award an integer mark out of {marks_max} that reflects the covered scheme "
+        "points plus answer quality — do NOT invent a number unmoored from the scheme, never reward "
+        "length or repetition, and let wrong/fabricated content lower it. Score each axis against its "
+        "anchor (directive axis <= 1 if the directive is ignored). Give at most 3 'keep doing' and 3 "
+        "'improve' bullets (specific and actionable), one terse examiner one-liner, and up to 4 "
+        "highlights each quoting a SHORT phrase from the answer with a kind (strong/weak/error) and a "
+        "brief note.\n"
         'Return JSON: {"marks":n,'
         '"axes":{"directive":n,"structure":n,"coverage":n,"substantiation":n,"presentation":n},'
         '"axis_notes":{"directive":"...","structure":"...","coverage":"...","substantiation":"...","presentation":"..."},'
@@ -427,14 +452,14 @@ async def _grade(
         log_tag="mains_grade",
         document_id=document_id,
     )
-    return _shape_result(extract_json_obj(raw), scheme)
+    return _shape_result(extract_json_obj(raw), scheme, strictness)
 
 
 # ---------------------------------------------------------------------------
 # shaping / clamping
 # ---------------------------------------------------------------------------
 
-def _shape_result(data: dict[str, Any], scheme: dict) -> dict[str, Any]:
+def _shape_result(data: dict[str, Any], scheme: dict, strictness: str = DEFAULT_STRICTNESS) -> dict[str, Any]:
     marks_max = int(scheme.get("marks_max") or 10)
     marks = _clamp_int(data.get("marks"), 0, marks_max)
     axis_scores = data.get("axes") or {}
@@ -466,7 +491,7 @@ def _shape_result(data: dict[str, Any], scheme: dict) -> dict[str, Any]:
     return {
         "marks": marks,
         "marks_max": marks_max,
-        "band": _band(marks, marks_max),
+        "band": _band(marks, marks_max, strictness),
         "axes": axes,
         "scheme_hits": scheme_hits,
         "keep_doing": _str_list(data.get("keep_doing"))[:3],
@@ -495,13 +520,20 @@ def _unreadable_result(scheme: dict) -> dict[str, Any]:
     }
 
 
-def _band(marks: int, marks_max: int) -> str:
+def _band(marks: int, marks_max: int, strictness: str = DEFAULT_STRICTNESS) -> str:
     pct = (marks / marks_max * 100) if marks_max else 0
-    if pct >= 70:
+    # Strictness-calibrated cutoffs: an "exam" 70% and a "gentle" 70% shouldn't wear the
+    # same label. Exam sets a hard bar (top band rare, mirroring real exam marking).
+    hi, mid, lo = {
+        "exam": (75, 60, 42),
+        "coaching": (70, 55, 40),
+        "gentle": (62, 48, 33),
+    }.get(strictness, (70, 55, 40))
+    if pct >= hi:
         return "Excellent"
-    if pct >= 55:
+    if pct >= mid:
         return "Good"
-    if pct >= 40:
+    if pct >= lo:
         return "Average"
     return "Needs work"
 
