@@ -81,6 +81,11 @@ class Settings(BaseSettings):
     # strong default for the critic + answer-key verifier. Empty = use the default
     # for everything. Match is by the model's display name (case-insensitive).
     draft_model_name: str = ""
+    # Pin the vision model used for reading handwritten/typed answer images (Mains
+    # mode) and other image tasks. Empty = auto-route to the enabled vision-capable
+    # model via require_vision=True. Match is by display name (case-insensitive),
+    # same as draft_model_name. Plug-and-play: point OCR at any vision model here.
+    vision_model_name: str = ""
     # Self-improving loop: a periodic job retires items that real learners almost
     # never get right (likely broken — wrong key / ambiguous), from intel.measurement.
     # Reversible (sets assertion status), conservative thresholds below.

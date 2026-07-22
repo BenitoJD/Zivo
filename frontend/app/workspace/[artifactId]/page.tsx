@@ -38,6 +38,7 @@ import { FlashcardsView } from "@/app/workspace/_components/FlashcardsView";
 import { MemoryPalaceView } from "@/app/workspace/_components/MemoryPalaceView";
 import { QuizBuilderView } from "@/app/workspace/_components/QuizBuilderView";
 import { InterviewView } from "@/app/workspace/_components/InterviewView";
+import { MainsView } from "@/app/workspace/_components/MainsView";
 import { CodingView } from "@/app/workspace/_components/CodingView";
 import { ResumeView } from "@/app/workspace/_components/ResumeView";
 import { PdfReader } from "@/app/workspace/_components/PdfReader";
@@ -901,6 +902,8 @@ export default function WorkspaceArtifactPage({
             <QuizBuilderView artifactId={artifact.id} compact={isCompact} />
           ) : mode === "interview" ? (
             <InterviewView artifactId={artifact.id} compact={isCompact} />
+          ) : mode === "mains" ? (
+            <MainsView artifactId={artifact.id} compact={isCompact} />
           ) : mode === "coding" ? (
             <CodingView artifactId={artifact.id} compact={isCompact} />
           ) : mode === "resume" ? (

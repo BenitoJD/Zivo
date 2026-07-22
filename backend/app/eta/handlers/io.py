@@ -167,6 +167,28 @@ def quiz_generate(payload: dict) -> dict:
     return {"document_id": str(document_id), "questions": len(questions)}
 
 
+@eta(name="mains.generate", workload=JobWorkload.io)
+def mains_generate(payload: dict) -> dict:
+    """Generate a Mains descriptive question + hidden marking scheme for a document."""
+    from app.services.mains import run_mains_generation
+
+    document_id = UUID(payload["document_id"])
+    with SessionLocal() as db:
+        run_mains_generation(db, document_id)
+    return {"document_id": str(document_id)}
+
+
+@eta(name="mains.grade", workload=JobWorkload.io)
+def mains_grade(payload: dict) -> dict:
+    """Grade a submitted Mains answer — vision-LLM OCR for photos, then examiner scoring."""
+    from app.services.mains import run_mains_grading
+
+    document_id = UUID(payload["document_id"])
+    with SessionLocal() as db:
+        run_mains_grading(db, document_id)
+    return {"document_id": str(document_id)}
+
+
 @eta(name="coach.mcq_page", workload=JobWorkload.io)
 def coach_mcq_page(payload: dict) -> dict:
     """Precompute per-option feedback for a page's MCQs (off the answer path).

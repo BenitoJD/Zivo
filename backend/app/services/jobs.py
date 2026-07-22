@@ -261,3 +261,23 @@ def enqueue_coach_page(
         payload={"document_id": str(document_id), "page_number": int(page)},
         account_id=account_id,
     )
+
+
+def enqueue_mains_generate(db: Session, document_id: uuid.UUID) -> Job:
+    """Generate a Mains descriptive question + hidden marking scheme (off the request path)."""
+    return enqueue_job(
+        db,
+        name="mains.generate",
+        workload=JobWorkload.io,
+        payload={"document_id": str(document_id)},
+    )
+
+
+def enqueue_mains_grade(db: Session, document_id: uuid.UUID) -> Job:
+    """Grade a submitted Mains answer (vision-LLM OCR for photos + examiner scoring)."""
+    return enqueue_job(
+        db,
+        name="mains.grade",
+        workload=JobWorkload.io,
+        payload={"document_id": str(document_id)},
+    )

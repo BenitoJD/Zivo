@@ -36,6 +36,7 @@ import {
   IconSettings,
   IconSun,
   IconTrash,
+  IconWriting,
 } from "@tabler/icons-react";
 import { BrandMark } from "@/app/_components/BrandMark";
 import type { SourceDocument } from "@/lib/types";
@@ -68,6 +69,7 @@ const MODE_GROUPS: {
       { value: "interview", label: "Interview", icon: IconBriefcase, color: "yellow" },
       { value: "coding", label: "Coding", icon: IconCode, color: "forest" },
       { value: "resume", label: "Resume", icon: IconFileCv, color: "red" },
+      { value: "mains", label: "Mains", icon: IconWriting, color: "blue" },
     ],
   },
 ];

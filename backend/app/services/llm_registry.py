@@ -144,6 +144,29 @@ def draft_chat_model_id(db: Session) -> uuid.UUID | None:
     return model.id if model else None
 
 
+def vision_chat_model_id(db: Session) -> uuid.UUID | None:
+    """The vision model to use for reading answer images (Mains OCR), if pinned.
+
+    Plug-and-play: set `vision_model_name` (env/settings) to any enabled
+    vision-capable model's display name to pin OCR to it. Returns None when unset
+    or unmatched, so callers fall back to `require_vision=True` auto-routing (the
+    enabled default vision model). Mirrors `draft_model_name`.
+    """
+    name = (get_settings().vision_model_name or "").strip()
+    if not name:
+        return None
+    model = (
+        _enabled_chat_query(db)
+        .filter(
+            func.lower(LlmModel.display_name) == name.lower(),
+            LlmModel.supports_image_input.is_(True),
+        )
+        .order_by(LlmModel.sort_order)
+        .first()
+    )
+    return model.id if model else None
+
+
 def configure_litellm(provider: LlmProvider) -> dict[str, str]:
     """Return per-request LiteLLM kwargs for a provider (no os.environ mutation)."""
     kwargs: dict[str, str] = {}

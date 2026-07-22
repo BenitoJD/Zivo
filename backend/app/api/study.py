@@ -17,6 +17,7 @@ from app.services.guest_session import guest_session_for_read
 from app.services.rate_limit import rate_limit_dependency
 from app.api.access import require_document, require_ready_document
 from app.services import interview as interview_service
+from app.services import mains as mains_service
 from app.services.memory_palace import ensure_palace
 from app.services.quiz import ensure_quiz, load_quiz
 from app.services.study_artifacts import NOTE_KINDS, ensure_flashcards, ensure_notes
@@ -183,6 +184,70 @@ def reset_interview(
     """Discard the current interview so a new category can be picked."""
     require_document(db, artifact_id, user, guest_id)
     return interview_service.reset_interview(db, artifact_id)
+
+
+# --------------------------------------------------- mains mode (descriptive answer grading)
+class MainsStartIn(BaseModel):
+    strictness: str = Field(default="coaching")  # exam | coaching | gentle
+    marks_max: int = Field(default=10, ge=1, le=20)
+
+
+class MainsAnswerIn(BaseModel):
+    # Typed answers send text; handwritten answers upload a photo (as a source) and
+    # send its document id, which the vision LLM reads on the worker.
+    text: str = Field(default="", max_length=50000)
+    image_document_id: uuid.UUID | None = None
+
+
+@router.get("/{artifact_id}/mains")
+def get_mains(
+    artifact_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """Current Mains state — poll while status is generating/grading.
+
+    Returns {status: missing|indexing|generating|awaiting_answer|grading|ready|failed,
+    question, directive, marks_max, strictness, input_kind, answer, result}. The marking
+    scheme is hidden until `result` (which carries the revealed scheme_hits)."""
+    doc = require_ready_document(db, artifact_id, user, guest_id)
+    if doc is None:
+        return {"status": "indexing", "question": "", "marks_max": 10, "result": None}
+    return mains_service.load_mains(db, artifact_id)
+
+
+@router.post("/{artifact_id}/mains/start", dependencies=[Depends(require_csrf_or_guest)])
+def start_mains(
+    artifact_id: uuid.UUID,
+    body: MainsStartIn,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """Generate a fresh descriptive question + hidden marking scheme (runs on the io worker)."""
+    require_ready_document(db, artifact_id, user, guest_id)
+    return mains_service.start_mains(
+        db, artifact_id, strictness=body.strictness, marks_max=body.marks_max
+    )
+
+
+@router.post("/{artifact_id}/mains/answer", dependencies=[Depends(require_csrf_or_guest)])
+def answer_mains(
+    artifact_id: uuid.UUID,
+    body: MainsAnswerIn,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """Submit the answer (typed and/or an uploaded photo) and enqueue examiner grading."""
+    require_document(db, artifact_id, user, guest_id)
+    try:
+        return mains_service.submit_mains_answer(
+            db, artifact_id, text_answer=body.text, image_document_id=body.image_document_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 class RunCodeIn(BaseModel):

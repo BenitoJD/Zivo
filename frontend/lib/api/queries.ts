@@ -27,6 +27,7 @@ export const queryKeys = {
   quiz: (id: string, config: string) => ["quiz", id, config] as const,
   studyReport: (id: string) => ["study-report", id] as const,
   interview: (id: string) => ["interview", id] as const,
+  mains: (id: string) => ["mains", id] as const,
   resume: (id: string) => ["resume", id] as const,
   codingWorkspace: (id: string) => ["coding", "workspace", id] as const,
   codingProblem: (id: string) => ["coding", "problem", id] as const,
@@ -97,6 +98,13 @@ const pollWhileBuilding = (ms = 3000) => (query: { state: { data?: { status?: st
 /** Poll every `ms` only while a query is in the "indexing" status, else stop. */
 const pollWhileIndexing = (ms = 3000) => (query: { state: { data?: { status?: string } } }) =>
   query.state.data?.status === "indexing" ? ms : false;
+
+/** Mains: poll only while a question is generating or an answer is being graded.
+ * Stops at "awaiting_answer" (user's turn), "ready", "failed", and "missing" (setup). */
+const pollWhileMainsBusy = (ms = 2500) => (query: { state: { data?: { status?: string } } }) => {
+  const s = query.state.data?.status;
+  return s === "generating" || s === "grading" || s === "indexing" ? ms : false;
+};
 
 // NOTE: poll callbacks must NEVER gate the interval on `document.visibilityState`.
 // Returning `false` tells React Query to STOP the timer (not pause it); with the
@@ -312,6 +320,56 @@ export function useInterviewLanguagesQuery(artifactId: string, enabled = true) {
     enabled: enabled && Boolean(artifactId),
     staleTime: Infinity,
   });
+}
+
+// -------------------------------------------------------------- mains mode
+export type MainsStrictness = "exam" | "coaching" | "gentle";
+export type MainsAxis = { key: string; label: string; score: number; max: number; comment: string };
+export type MainsSchemeHit = { point: string; marks: number; hit: boolean };
+export type MainsHighlight = { quote: string; kind: "strong" | "weak" | "error"; comment: string };
+export type MainsResult = {
+  marks: number;
+  marks_max: number;
+  band: string;
+  axes: MainsAxis[];
+  scheme_hits: MainsSchemeHit[];
+  keep_doing: string[];
+  improve: string[];
+  examiner_note: string;
+  highlights: MainsHighlight[];
+};
+export type MainsState = {
+  status: "missing" | "indexing" | "generating" | "awaiting_answer" | "grading" | "ready" | "failed";
+  question: string;
+  directive: string;
+  marks_max: number;
+  strictness: MainsStrictness;
+  input_kind?: "typed" | "handwritten" | null;
+  answer?: string;
+  result?: MainsResult | null;
+  error?: string | null;
+};
+
+export function useMainsQuery(artifactId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.mains(artifactId),
+    queryFn: () => apiGet<MainsState>(`/api/artifacts/${artifactId}/mains`),
+    enabled: enabled && Boolean(artifactId),
+    refetchInterval: pollWhileMainsBusy(),
+  });
+}
+
+/** start (new question) + answer both return the fresh state — write it into the cache;
+ * the poll then flips generating/grading → awaiting_answer/ready. */
+export function useMainsActions(artifactId: string) {
+  const qc = useQueryClient();
+  const put = (state: MainsState) => qc.setQueryData(queryKeys.mains(artifactId), state);
+  return {
+    start: async (strictness: MainsStrictness, marks_max: number) =>
+      put(await apiPost<MainsState>(`/api/artifacts/${artifactId}/mains/start`, { strictness, marks_max })),
+    answer: async (payload: { text?: string; image_document_id?: string }) =>
+      put(await apiPost<MainsState>(`/api/artifacts/${artifactId}/mains/answer`, payload)),
+  };
 }
 
 // -------------------------------------------------------------- coding practice
