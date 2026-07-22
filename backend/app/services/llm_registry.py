@@ -361,9 +361,14 @@ def _upsert_model(
 
 
 def _clear_defaults_for_kind(db: Session, kind: LlmModelKind) -> None:
+    # synchronize_session="fetch" (NOT False): also clear is_default on rows already
+    # loaded/dirtied in this session. With False, a model set is_default=True earlier in
+    # the same transaction (e.g. the DeepSeek block) stays True in-session, so a later
+    # default switch flushes TWO is_default=True rows and hits uq_llm_models_default_per_kind,
+    # aborting the whole registry bootstrap (which then never sets vision_only/keys either).
     db.query(LlmModel).filter(LlmModel.kind == kind.value, LlmModel.is_default.is_(True)).update(
         {"is_default": False},
-        synchronize_session=False,
+        synchronize_session="fetch",
     )
 
 
@@ -736,7 +741,9 @@ def sync_default_chat_model_from_env(db: Session, settings: Settings | None = No
             .filter(LlmModel.kind == LlmModelKind.chat, LlmModel.slug == slug)
             .first()
         )
-    if not model or not model.is_enabled:
+    # A vision-only model must never become the TEXT default, even if LITELLM_MODEL
+    # points at it — it's for require_vision calls only (OCR/images).
+    if not model or not model.is_enabled or model.vision_only:
         return False
 
     current_default = (
