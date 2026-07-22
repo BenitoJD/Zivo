@@ -15,6 +15,7 @@ import {
   IconAdjustmentsHorizontal,
   IconAlignCenter,
   IconAlignLeft,
+  IconAlignRight,
   IconBook,
   IconBriefcase,
   IconBuildingMonument,
@@ -65,8 +66,8 @@ const ALL_MODES = MODE_GROUPS.flatMap((g) => g.modes);
  * the mode badge + progress, the compact (mobile) mode dropdown
  * (CompactModeSelect), and the Adaptive/Classic chooser menu.
  */
-/** Where the study column sits on a wide screen: hard against the rail, or centred. */
-export type StudyAlign = "left" | "center";
+/** Where the study column sits on a wide screen. */
+export type StudyAlign = "left" | "center" | "right";
 
 export function StudyMetaBar({
   questionIndex,
@@ -191,6 +192,7 @@ export function StudyMetaBar({
           [
             ["left", IconAlignLeft, "Pin to the left"],
             ["center", IconAlignCenter, "Centre the column"],
+            ["right", IconAlignRight, "Pin to the right"],
           ] as const
         ).map(([value, Icon, label]) => {
           const active = align === value;

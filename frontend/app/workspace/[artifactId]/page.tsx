@@ -874,7 +874,9 @@ export default function WorkspaceArtifactPage({
     ? suggestNextPageRange(completedRange, pageCount)
     : null;
 
-  const leftPinned = !isCompact && studyAlign === "left";
+  // Both edges carry a floating trigger (SOURCE on the left, Zivo on the right), so a
+  // pinned column has to leave room for one or it slides underneath.
+  const pinned = isCompact ? null : studyAlign === "left" ? "left" : studyAlign === "right" ? "right" : null;
   const questionColumn = (
     <Box flex={1} mih={0} h="100%" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <StudyMetaBar
@@ -913,13 +915,15 @@ export default function WorkspaceArtifactPage({
           px={4}
           style={{
             // Phones always centre (the column already fills the width); on desktop the
-            // learner chooses, and the choice is remembered across sessions. Pinned
-            // left still has to clear the floating "SOURCE" edge trigger, which is
-            // absolutely positioned over the left of the study area - without this the
-            // first option card slides underneath it.
-            ...(leftPinned
+            // learner chooses, and the choice is remembered across sessions. The 48px
+            // keeps a pinned column clear of that edge's floating trigger, which is
+            // absolutely positioned over the study area - without it the option cards
+            // slide underneath.
+            ...(pinned === "left"
               ? { marginLeft: 48, marginRight: 0 }
-              : { marginInline: "auto" }),
+              : pinned === "right"
+                ? { marginLeft: "auto", marginRight: 48 }
+                : { marginInline: "auto" }),
             flex: 1,
             maxHeight: "100%",
             overflowY: "auto",
