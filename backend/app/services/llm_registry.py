@@ -578,10 +578,23 @@ def ensure_registry_providers(db: Session, settings: Settings | None = None) -> 
             sort_order=10,
             max_input_tokens=128_000,
             max_output_tokens=8_192,
+            supports_image_input=True,
             update_fields=True,
-            is_enabled=False,
         )
         if before == 0:
+            dirty = True
+        # MiMo v2.5 (Xiaomi) reads images — it's the vision model for Mains OCR.
+        # update_fields never touches is_enabled/supports_image_input on an existing
+        # row, so force them here so live DBs light up vision on boot; the self-healing
+        # pass below re-disables it if the openai provider ends up without a key.
+        mimo = (
+            db.query(LlmModel)
+            .filter(LlmModel.provider_id == openai.id, LlmModel.slug == "mimo-v2.5")
+            .first()
+        )
+        if mimo and (not mimo.supports_image_input or not mimo.is_enabled):
+            mimo.supports_image_input = True
+            mimo.is_enabled = True
             dirty = True
 
     return dirty
@@ -800,7 +813,10 @@ def bootstrap_llm_registry_from_env(db: Session, settings: Settings | None = Non
             display_name="MiMo v2.5",
             kind=LlmModelKind.chat,
             is_default=False,
-            is_enabled=False,
+            # MiMo v2.5 reads images — the vision model for Mains OCR. Enabled when a
+            # key is configured; require_vision routing then selects it.
+            is_enabled=bool(settings.openai_api_key),
+            supports_image_input=True,
             sort_order=10,
             max_input_tokens=128_000,
             max_output_tokens=8_192,

@@ -202,7 +202,10 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
           </Group>
         </AppShell.Header>
 
-        <AppShell.Navbar className="zv-mobile-drawer" p={{ base: "sm", sm: "md" }}>
+        {/* Horizontal padding lives on the inner sections, not the navbar: the
+            collapsed 64px rail pins its layers to the full width, so navbar side
+            padding would shove the icons right and clip them. Keep only vertical. */}
+        <AppShell.Navbar className="zv-mobile-drawer" px={0} py={{ base: "sm", sm: "md" }}>
           <Sidebar
             documents={documents}
             artifactId={artifactId}

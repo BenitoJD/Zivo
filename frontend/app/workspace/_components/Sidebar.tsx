@@ -612,7 +612,7 @@ export function Sidebar({
             scrollbars="y"
             scrollbarSize={8}
             scrollHideDelay={600}
-            px="xs"
+            px="sm"
             pt={isMobile ? "md" : "xs"}
           >
             <Group gap={7} align="center" px="sm" mb={8} mt={2}>

@@ -158,7 +158,22 @@ export function StudyReportCard({
             </Text>
             <Group gap={6}>
               {strong.map((t) => (
-                <Badge key={t.name} variant="light" color="sage" radius="sm" tt="none">
+                <Badge
+                  key={t.name}
+                  radius="sm"
+                  tt="none"
+                  styles={{
+                    // Explicit high-contrast sage so the chips read clearly in both
+                    // light and dark (Mantine's `variant="light"` auto text-shade is
+                    // washed out on the report surface — see the inverted dark scale).
+                    root: {
+                      background: "var(--mantine-color-sage-2)",
+                      color: "var(--mantine-color-sage-9)",
+                      border: "1px solid var(--mantine-color-sage-4)",
+                      fontWeight: 600,
+                    },
+                  }}
+                >
                   {t.name}
                 </Badge>
               ))}
