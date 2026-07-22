@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef } from "react";
 import {
   ActionIcon,
   Box,
@@ -274,11 +275,21 @@ function SourceRow({
 }) {
   const label = sourceLabel(doc.filename);
   const meta = sourceStatusMeta(doc.status, doc.index_progress);
+  const titleRef = useRef<HTMLParagraphElement>(null);
+  // On hover, slide a truncated name to reveal its hidden end ("run" it), back on leave.
+  const revealTitle = (on: boolean) => {
+    const el = titleRef.current;
+    if (!el) return;
+    const overflow = el.scrollWidth - el.clientWidth;
+    el.style.textIndent = on && overflow > 1 ? `-${overflow}px` : "0px";
+  };
   return (
     <UnstyledButton
       className="zivo-source-row"
       data-active={active || undefined}
       onClick={onNavigate}
+      onMouseEnter={() => revealTitle(true)}
+      onMouseLeave={() => revealTitle(false)}
       aria-label={label}
     >
       <span className="zivo-source-chip" aria-hidden>
@@ -291,7 +302,14 @@ function SourceRow({
         )}
       </span>
       <span className="zivo-source-body">
-        <Text size="sm" fw={500} truncate className="zivo-source-title">
+        <Text
+          ref={titleRef}
+          size="sm"
+          fw={500}
+          truncate
+          className="zivo-source-title"
+          style={{ transition: "text-indent 1.6s ease" }}
+        >
           {label}
         </Text>
         {meta && (
