@@ -6,7 +6,6 @@ import {
   Button,
   Center,
   Group,
-  Loader,
   Paper,
   Stack,
   Text,
@@ -33,6 +32,40 @@ import { normalizeMcqOptions, type McqState } from "@/lib/types";
 import { learnWaitStatus } from "@/lib/learnStatus";
 import { type AnsweredCard } from "@/app/workspace/_components/studyLayout";
 import { useIsDark } from "@/lib/useIsDark";
+
+/** Rotating status while the coaching feedback streams in — the message changes
+ *  every ~1.3s (no static "…" spinner), so the wait feels alive. */
+const FEEDBACK_WRITING_MESSAGES = [
+  "Reading your answer",
+  "Weighing your choice",
+  "Checking the reasoning",
+  "Finding the key idea",
+  "Writing your feedback",
+  "Almost there",
+];
+
+function FeedbackWritingStatus({ compact }: { compact?: boolean }) {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(
+      () => setI((v) => (v + 1) % FEEDBACK_WRITING_MESSAGES.length),
+      1300,
+    );
+    return () => window.clearInterval(id);
+  }, []);
+  return (
+    <Group justify="center" mt={compact ? 8 : 12} style={{ flexShrink: 0, minHeight: 22 }}>
+      <style>{`
+        @keyframes zv-fb-rotate { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+        .zv-fb-rotate { animation: zv-fb-rotate 320ms cubic-bezier(0.32,0.72,0,1) both; }
+        @media (prefers-reduced-motion: reduce) { .zv-fb-rotate { animation: none !important; } }
+      `}</style>
+      <Text key={i} className="zv-fb-rotate" fz="sm" c="dimmed" fw={500}>
+        {FEEDBACK_WRITING_MESSAGES[i]}
+      </Text>
+    </Group>
+  );
+}
 
 /**
  * MCQ panels (extracted from the workspace page monolith): the hero question card
@@ -596,14 +629,9 @@ export function McqHeroPanel({
           </Text>
         </Box>
       ) : reveal && !isTest ? (
-        // Verdict already shown; coaching still streaming. Just a calm line — the
-        // persistent roaming cat below stays put (it no longer respawns per turn).
-        <Group justify="center" gap={8} mt={compact ? 8 : 12} style={{ flexShrink: 0 }}>
-          <Loader size={13} color="lavender" type="dots" />
-          <Text fz="sm" c="dimmed" fw={500}>
-            Writing your feedback…
-          </Text>
-        </Group>
+        // Verdict already shown; coaching still streaming. A rotating status (no dots
+        // spinner) — the persistent roaming cat below stays put (no respawn per turn).
+        <FeedbackWritingStatus compact={compact} />
       ) : graded && isTest ? (
         <Group justify="center" gap={8} mt={compact ? 8 : 12} style={{ flexShrink: 0 }}>
           <ThemeIcon size={22} radius="xl" variant="light" color="forest">
