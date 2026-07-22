@@ -271,6 +271,19 @@ export function McqHeroPanel({
       // reach for the mouse. A focused button/link keeps its native activation so
       // we never double-fire.
       if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+        // Arrowing leaves focus ON an option, so this is now the common case. Drive
+        // the option's own click handler and preventDefault to suppress the native
+        // activation, rather than relying on that native activation to fire at all -
+        // one click either way, and Enter behaves the same however you got here.
+        const focusedOption = (document.activeElement as HTMLElement | null)?.closest<HTMLButtonElement>(
+          "[data-mcq-option]",
+        );
+        if (focusedOption) {
+          if (optionsLocked || checking) return;
+          e.preventDefault();
+          focusedOption.click();
+          return;
+        }
         if (tag === "BUTTON" || tag === "A") return;
         if (graded) {
           e.preventDefault();
@@ -281,7 +294,40 @@ export function McqHeroPanel({
         }
         return;
       }
+      // Arrows step through the options. We move real DOM focus rather than keeping
+      // a separate cursor in state: the options are <button>s, so Enter/Space then
+      // activates the focused one natively (which is what makes this work for
+      // select-all-that-apply, where arrowing must not toggle anything by itself).
+      const dir =
+        e.key === "ArrowDown" || e.key === "ArrowRight"
+          ? 1
+          : e.key === "ArrowUp" || e.key === "ArrowLeft"
+            ? -1
+            : 0;
+      if (dir !== 0) {
+        if (optionsLocked || checking) return;
+        const nodes = Array.from(
+          document.querySelectorAll<HTMLButtonElement>("[data-mcq-option]"),
+        );
+        if (nodes.length === 0) return;
+        e.preventDefault();
+        const focused = nodes.indexOf(document.activeElement as HTMLButtonElement);
+        // Start from whatever is focused, else the current answer, else "before the
+        // first" so Down lands on A and Up wraps to the last option.
+        const from =
+          focused >= 0 ? focused : !multiSelect && selected !== null ? Number(selected) : -1;
+        const next = (from + dir + nodes.length) % nodes.length;
+        nodes[next]?.focus();
+        // Single-answer questions select as you move (a radio group). Multi-select
+        // only moves focus - toggling every option you pass over would be destructive.
+        if (!multiSelect) onSelect(String(next));
+        return;
+      }
       const k = e.key.toLowerCase();
+      // Guard the single-character shape first: `"abcdef".indexOf("")` is 0, so any
+      // keydown carrying an empty key (IME composition, some soft keyboards,
+      // synthetic events) silently answered option A.
+      if (k.length !== 1) return;
       let idx = "abcdef".indexOf(k);
       if (idx < 0 && /[1-9]/.test(k)) idx = Number(k) - 1;
       if (idx >= 0 && idx < safeOptions.length && !optionsLocked) {
@@ -292,7 +338,7 @@ export function McqHeroPanel({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [waiting, graded, hasSelection, submitting, optionsLocked, safeOptions.length, multiSelect, onSelect, onToggle, onSubmit, onContinue]);
+  }, [waiting, graded, hasSelection, submitting, optionsLocked, checking, selected, safeOptions.length, multiSelect, onSelect, onToggle, onSubmit, onContinue]);
 
   if (waiting) {
     // Determinate progress during generation: turn the vague spinner into a
@@ -440,6 +486,10 @@ export function McqHeroPanel({
         }
         .mcq-opt:not(:disabled):hover { transform: translateY(-2px); box-shadow: var(--mantine-shadow-paper); border-color: var(--mantine-color-lavender-4) !important; }
         .mcq-opt:not(:disabled):active { transform: translateY(0); }
+        /* UnstyledButton strips the default ring, so arrow-key focus would be
+           invisible - which matters most for select-all, where moving focus is the
+           only feedback until you toggle. */
+        .mcq-opt:focus-visible { outline: 2px solid var(--mantine-color-lavender-5); outline-offset: 2px; }
         /* Checking: the chosen option breathes while the grade comes back. */
         @keyframes mcq-check-pulse {
           0%, 100% { box-shadow: 0 0 0 0 rgba(124, 109, 242, 0.0); }
@@ -531,6 +581,9 @@ export function McqHeroPanel({
             <UnstyledButton
               key={value}
               className={isChecking ? "mcq-opt mcq-opt-checking" : "mcq-opt"}
+              // Arrow-key navigation targets these by attribute. Only the interactive
+              // panel carries it - the read-only review view renders its own options.
+              data-mcq-option={i}
               disabled={optionsLocked || checking}
               onClick={() => {
                 if (optionsLocked || checking) return;
@@ -739,7 +792,7 @@ export function McqHeroPanel({
           <Text size="xs" c="dimmed" ta="center" style={{ opacity: 0.85 }}>
             {showNextQuestion
               ? "Press Enter for the next question"
-              : "Press A-D to choose · Enter to check"}
+              : "Press A-D or arrows to choose · Enter to check"}
           </Text>
         ) : null}
       </Stack>
