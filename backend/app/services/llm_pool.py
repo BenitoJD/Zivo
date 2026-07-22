@@ -54,14 +54,13 @@ def list_pool_chat_models(
     )
     if require_vision:
         query = query.filter(LlmModel.supports_image_input.is_(True))
+    else:
+        # Vision-only models never serve ordinary text or text failover — a metered
+        # vision model is billed for vision alone.
+        query = query.filter(LlmModel.vision_only.is_(False))
 
     out: list[ResolvedLlmModel] = []
     for model in query.all():
-        # Vision-only models (meta.vision_only) never serve ordinary text or text
-        # failover — kept out of the pool for non-vision calls so a metered vision
-        # model is billed for vision alone. (Stored in meta to avoid a schema change.)
-        if not require_vision and (model.meta or {}).get("vision_only"):
-            continue
         if _provider_ready(model.provider):
             out.append(ResolvedLlmModel(record=model, provider=model.provider))
     return out

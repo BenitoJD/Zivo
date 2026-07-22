@@ -77,18 +77,17 @@ def resolve_chat_model(
     query = _enabled_chat_query(db)
     if require_vision:
         query = query.filter(LlmModel.supports_image_input.is_(True))
-
-    def _text_ok(m: LlmModel) -> bool:
-        # Vision-only models (meta.vision_only) are never a text default/fallback.
-        return require_vision or not (m.meta or {}).get("vision_only")
+    else:
+        # Vision-only models are never a text default/fallback.
+        query = query.filter(LlmModel.vision_only.is_(False))
 
     default = query.filter(LlmModel.is_default.is_(True)).order_by(LlmModel.sort_order).first()
-    if default and _text_ok(default):
+    if default:
         return ResolvedLlmModel(record=default, provider=default.provider)
 
-    for fallback in query.order_by(LlmModel.sort_order, LlmModel.display_name).all():
-        if _text_ok(fallback):
-            return ResolvedLlmModel(record=fallback, provider=fallback.provider)
+    fallback = query.order_by(LlmModel.sort_order, LlmModel.display_name).first()
+    if fallback:
+        return ResolvedLlmModel(record=fallback, provider=fallback.provider)
 
     raise HTTPException(status_code=503, detail="No chat model configured")
 
@@ -310,6 +309,7 @@ def _upsert_model(
     kind: LlmModelKind,
     is_default: bool = False,
     supports_image_input: bool = False,
+    vision_only: bool = False,
     supports_streaming: bool = True,
     max_input_tokens: int | None = None,
     max_output_tokens: int | None = None,
@@ -347,6 +347,7 @@ def _upsert_model(
         is_enabled=is_enabled if is_enabled is not None else True,
         is_default=is_default,
         supports_image_input=supports_image_input,
+        vision_only=vision_only,
         supports_streaming=supports_streaming,
         max_input_tokens=max_input_tokens,
         max_output_tokens=max_output_tokens,
@@ -583,29 +584,25 @@ def ensure_registry_providers(db: Session, settings: Settings | None = None) -> 
             max_input_tokens=128_000,
             max_output_tokens=8_192,
             supports_image_input=True,
-            meta={"vision_only": True},
+            vision_only=True,
             update_fields=True,
         )
         if before == 0:
             dirty = True
         # MiMo v2.5 (Xiaomi) reads images — it's the VISION-ONLY model for Mains OCR
         # (kept out of the text pool so the metered plan is billed for vision alone).
-        # update_fields never touches is_enabled/supports_image_input on an existing row,
-        # so force them + the meta.vision_only flag here so live DBs light up on boot;
-        # self-healing re-disables it below if the openai provider ends up without a key.
+        # update_fields never touches these bool flags on an existing row, so force them
+        # here so live DBs light up on boot; self-healing re-disables it below if the
+        # openai provider ends up without a key.
         mimo = (
             db.query(LlmModel)
             .filter(LlmModel.provider_id == openai.id, LlmModel.slug == "mimo-v2.5")
             .first()
         )
-        if mimo and (
-            not mimo.supports_image_input
-            or not mimo.is_enabled
-            or not (mimo.meta or {}).get("vision_only")
-        ):
+        if mimo and (not mimo.supports_image_input or not mimo.is_enabled or not mimo.vision_only):
             mimo.supports_image_input = True
             mimo.is_enabled = True
-            mimo.meta = {**(mimo.meta or {}), "vision_only": True}
+            mimo.vision_only = True
             dirty = True
 
     return dirty
@@ -828,7 +825,7 @@ def bootstrap_llm_registry_from_env(db: Session, settings: Settings | None = Non
             # text). Enabled when a key is configured; require_vision routing selects it.
             is_enabled=bool(settings.openai_api_key),
             supports_image_input=True,
-            meta={"vision_only": True},
+            vision_only=True,
             sort_order=10,
             max_input_tokens=128_000,
             max_output_tokens=8_192,

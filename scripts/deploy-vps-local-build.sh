@@ -86,6 +86,20 @@ if [[ -d ./infra/k8s/charts/pgbouncer ]]; then
   fi
 fi
 
+# Run additive schema migrations BEFORE rolling the app, so new pods boot against a
+# schema that already has the columns/tables their code reads (e.g. a new ORM column
+# is SELECTed on boot). Migrations MUST stay additive + backward-compatible: the still
+# -running old pods keep working against the new schema during the rolling update.
+# (Image was built + pushed above, so the alembic job can pull this TAG.)
+kubectl -n "$NS" delete job alembic-migrate --ignore-not-found=true
+helm upgrade --install db-schema ./infra/k8s/charts/db-schema -n "$NS" \
+  -f infra/k8s/environments/prod/backend-release-values.yaml \
+  --set image.tag="${TAG}" \
+  --set image.repository="ghcr.io/${OWNER}/zivo-api" \
+  --set namespace="$NS" \
+  --set jobName=alembic-migrate \
+  --wait --timeout 15m
+
 # Note: code execution (Judge0) runs on a dedicated box, not in this cluster — see
 # infra/judge0/. The API reaches it via JUDGE0_URL (set in the api chart values).
 
@@ -114,16 +128,6 @@ helm upgrade --install zivo-web ./infra/k8s/charts/web -n "$NS" \
   -f infra/k8s/environments/prod/web-values.yaml \
   --set image.tag="${TAG}" --wait --timeout 10m
 rollout_wait deployment zivo-web 10m
-
-# Additive migrations only — run after new API/workers are live.
-kubectl -n "$NS" delete job alembic-migrate --ignore-not-found=true
-helm upgrade --install db-schema ./infra/k8s/charts/db-schema -n "$NS" \
-  -f infra/k8s/environments/prod/backend-release-values.yaml \
-  --set image.tag="${TAG}" \
-  --set image.repository="ghcr.io/${OWNER}/zivo-api" \
-  --set namespace="$NS" \
-  --set jobName=alembic-migrate \
-  --wait --timeout 15m
 
 kubectl -n "$NS" get pods -o wide
 echo "Done: ${TAG}"

@@ -49,6 +49,9 @@ class LlmModel(Base):
     kind: Mapped[str] = mapped_column(String(32), default=LlmModelKind.chat, index=True)
     supports_text_input: Mapped[bool] = mapped_column(Boolean, default=True)
     supports_image_input: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Vision-only: selectable ONLY for require_vision calls (OCR/images), kept out of
+    # the text pool so a metered vision model never serves ordinary text or failover.
+    vision_only: Mapped[bool] = mapped_column(Boolean, default=False)
     supports_text_output: Mapped[bool] = mapped_column(Boolean, default=True)
     supports_streaming: Mapped[bool] = mapped_column(Boolean, default=True)
     supports_tools: Mapped[bool] = mapped_column(Boolean, default=False)
