@@ -100,9 +100,20 @@ def is_rag_window_ready(db: Session, document_id: uuid.UUID, doc: Document | Non
     if not doc:
         return False
     meta = doc.meta or {}
-    if meta.get("rag_window_ready"):
-        return True
     target = get_rag_window(doc)
+    # The saved window is only rewritten when an ingest actually runs, so the learner
+    # can walk past it (current page 10, window still [4..9]). Judging readiness
+    # against that stale target - or against the sticky `rag_window_ready` flag it
+    # was saved with - deadlocks the learn loop: page triage defers because the
+    # current page has no chunks, while this reports "ready" so ensure_question_pool
+    # never enqueues the ingest that would create them, and generation_pending stays
+    # true forever (the UI sits at "Planning the quiz"). When the current page has
+    # escaped the saved window, re-derive the window the learner needs NOW.
+    current = int((get_progress(doc) or {}).get("current_page") or 0)
+    if current > 0 and current not in set(target):
+        target = chat_rag_window(current, selected_page_list(doc))
+    elif meta.get("rag_window_ready"):
+        return True
     if not target:
         return True
     indexed = indexed_pages_for_document(db, document_id)
