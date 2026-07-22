@@ -7,6 +7,7 @@ import {
   Center,
   Group,
   Loader,
+  Paper,
   Stack,
   Text,
   ThemeIcon,
@@ -278,7 +279,7 @@ export function McqHeroPanel({
     const CIRC = 2 * Math.PI * R;
     const center = RING / 2;
     return (
-      <Center h="100%" py={compact ? "md" : "lg"}>
+      <Center h="100%" px="sm" py={compact ? "md" : "lg"}>
         <style>{`
           @keyframes zivo-ring-spin { to { transform: rotate(360deg); } }
           @keyframes zivo-blob-a { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(9px,-11px) scale(1.16); } }
@@ -291,7 +292,15 @@ export function McqHeroPanel({
             .zivo-blob, .zivo-ring-spin, .zivo-bob, .zivo-load-copy { animation: none !important; }
           }
         `}</style>
-        <Stack align="center" gap={compact ? "md" : "lg"} maw={340}>
+        <Paper
+          withBorder
+          radius="xl"
+          p={compact ? "lg" : "xl"}
+          w="100%"
+          maw={compact ? 380 : 440}
+          style={{ background: "var(--mantine-color-body)" }}
+        >
+        <Stack align="center" gap={compact ? "md" : "lg"}>
           <Box pos="relative" w={RING} h={RING} style={{ display: "grid", placeItems: "center" }}>
             {/* Colorful aurora — three soft brand-tinted blobs drifting behind the ring */}
             <Box className="zivo-blob" pos="absolute" style={{ inset: -6, borderRadius: "50%", filter: "blur(22px)", background: "radial-gradient(60% 60% at 30% 30%, var(--mantine-color-lavender-4), transparent 70%)", opacity: 0.55, animation: "zivo-blob-a 4.5s ease-in-out infinite" }} />
@@ -370,6 +379,7 @@ export function McqHeroPanel({
             </Stack>
           ) : null}
         </Stack>
+        </Paper>
       </Center>
     );
   }
