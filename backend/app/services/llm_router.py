@@ -300,6 +300,18 @@ async def _stream_chat_impl(
     raise RuntimeError("stream_chat_completion exhausted model pool without result")
 
 
+# The product voice uses NO em/en dashes in generated text — they read as
+# "AI-written" and the user asked for none. Normalize them to a plain hyphen at the
+# single LLM output boundary, so every generated question / answer / comment / chat
+# token is clean regardless of what any individual prompt asks for. Each is a single
+# Unicode char, so per-token streaming replacement is safe.
+_DASH_TABLE = {0x2014: "-", 0x2013: "-", 0x2015: "-", 0x2012: "-"}
+
+
+def strip_dashes(text: str) -> str:
+    return text.translate(_DASH_TABLE) if text else text
+
+
 async def stream_chat_completion(
     messages: list[dict],
     db: Session,
@@ -321,7 +333,7 @@ async def stream_chat_completion(
             account_id=account_id,
             document_id=document_id,
         ):
-            yield chunk
+            yield strip_dashes(chunk)
 
 
 async def acomplete_chat(
@@ -368,7 +380,7 @@ async def acomplete_chat(
                 account_id=account_id,
                 document_id=document_id,
             )
-            return response.choices[0].message.content or ""
+            return strip_dashes(response.choices[0].message.content or "")
         except Exception as exc:
             last_exc = exc
             # A hard-timeout (stalled provider) is failover-eligible: try the next

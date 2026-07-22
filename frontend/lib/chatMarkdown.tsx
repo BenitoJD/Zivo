@@ -314,9 +314,27 @@ export function AssistantMarkdown({
         </ReactMarkdown>
       </Box>
       {streaming && content ? (
-        <Text span size="sm" c="dimmed" component="span">
-          ▍
-        </Text>
+        <>
+          <style>{`
+            @keyframes zv-stream-dot { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.7); } }
+            @media (prefers-reduced-motion: reduce) { .zv-stream-dot { animation: none !important; } }
+          `}</style>
+          <Box
+            component="span"
+            className="zv-stream-dot"
+            aria-hidden
+            style={{
+              display: "inline-block",
+              width: 9,
+              height: 9,
+              marginLeft: 4,
+              borderRadius: "50%",
+              background: "var(--mantine-color-text)",
+              verticalAlign: "middle",
+              animation: "zv-stream-dot 1s ease-in-out infinite",
+            }}
+          />
+        </>
       ) : null}
     </Stack>
   );
