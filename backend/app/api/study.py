@@ -242,6 +242,11 @@ def answer_mains(
 ) -> dict:
     """Submit the answer (typed and/or an uploaded photo) and enqueue examiner grading."""
     require_document(db, artifact_id, user, guest_id)
+    # The answer photo is a separately-supplied document id — access-check it here (the
+    # io worker's OCR has no user/guest context), else a caller could OCR/read any
+    # image document cross-tenant (IDOR).
+    if body.image_document_id is not None:
+        require_document(db, body.image_document_id, user, guest_id)
     try:
         return mains_service.submit_mains_answer(
             db, artifact_id, text_answer=body.text, image_document_id=body.image_document_id

@@ -257,6 +257,7 @@ export function MainsView({ artifactId, compact = false }: { artifactId: string;
   const [timerOn, setTimerOn] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [revising, setRevising] = useState(false); // "go back" to re-answer the same question
+  const [tab, setTab] = useState<string | null>("type"); // which answer input is active
   const [busy, setBusy] = useState(false);
 
   const [typed, setTyped] = useState("");
@@ -310,7 +311,9 @@ export function MainsView({ artifactId, compact = false }: { artifactId: string;
 
   const doSubmit = () =>
     run(async () => {
-      await answer(imageId ? { image_document_id: imageId } : { text: typed.trim() });
+      // Submit whichever input the ACTIVE tab holds — never let a stray photo override
+      // typed work (or vice-versa) just because both fields happen to be populated.
+      await answer(tab === "photo" ? { image_document_id: imageId! } : { text: typed.trim() });
       setRevising(false); // grading → result (not back into the answer screen)
     });
 
@@ -436,7 +439,7 @@ export function MainsView({ artifactId, compact = false }: { artifactId: string;
   }
 
   // ---- awaiting_answer (or "revise") : the question + answer input ----
-  const canSubmit = imageId !== null || typed.trim().length > 0;
+  const canSubmit = tab === "photo" ? imageId !== null : typed.trim().length > 0;
   return (
     <Stack gap="lg" pb="xl">
       <Group justify="space-between" wrap="nowrap">
@@ -464,7 +467,7 @@ export function MainsView({ artifactId, compact = false }: { artifactId: string;
         </Text>
       </Paper>
 
-      <Tabs defaultValue="type" variant="pills" color="blue">
+      <Tabs value={tab} onChange={setTab} variant="pills" color="blue">
         <Tabs.List mb="sm">
           <Tabs.Tab value="type" leftSection={<IconKeyboard size={15} />}>Type</Tabs.Tab>
           <Tabs.Tab value="photo" leftSection={<IconPhoto size={15} />}>Upload photo</Tabs.Tab>

@@ -247,9 +247,15 @@ export function McqHeroPanel({
     },
     statusTick,
   );
-  useInterval(() => {
-    if (waiting) setStatusTick((t) => t + 1);
-  }, 1200);
+  // autoInvoke — without it Mantine's useInterval never starts, so the wait-status
+  // copy never rotated. The `if (waiting)` guard keeps it a no-op while idle.
+  useInterval(
+    () => {
+      if (waiting) setStatusTick((t) => t + 1);
+    },
+    1200,
+    { autoInvoke: true },
+  );
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset the loading-message rotation tick when the message changes
     setStatusTick(0);

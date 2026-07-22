@@ -121,6 +121,7 @@ def default_chat_model_id(db: Session) -> uuid.UUID | None:
     """
     model = (
         _enabled_chat_query(db)
+        .filter(LlmModel.vision_only.is_(False))  # never pin text generation to a vision-only model
         .order_by(LlmModel.is_default.desc(), LlmModel.sort_order, LlmModel.display_name)
         .first()
     )
@@ -141,6 +142,7 @@ def draft_chat_model_id(db: Session) -> uuid.UUID | None:
     model = (
         _enabled_chat_query(db)
         .filter(func.lower(LlmModel.display_name) == name.lower())
+        .filter(LlmModel.vision_only.is_(False))  # drafting is text — never a vision-only model
         .order_by(LlmModel.sort_order)
         .first()
     )
@@ -225,7 +227,7 @@ def set_chat_model_enabled(db: Session, model_id: uuid.UUID, *, enabled: bool) -
         model.is_default = False
         replacement = (
             _enabled_chat_query(db)
-            .filter(LlmModel.id != model_id)
+            .filter(LlmModel.id != model_id, LlmModel.vision_only.is_(False))
             .order_by(LlmModel.sort_order, LlmModel.display_name)
             .first()
         )

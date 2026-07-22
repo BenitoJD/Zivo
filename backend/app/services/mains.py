@@ -330,6 +330,9 @@ def run_mains_grading(db: Session, document_id: uuid.UUID) -> None:
         )
     except Exception:
         logger.exception("mains grading failed for %s", document_id)
+        # The question + scheme are still valid — revert to awaiting_answer (not the
+        # terminal "failed", which routes the UI to the regenerate-only setup screen) so
+        # the user can just resubmit. "failed" is reserved for generation failure.
         _save(
             db,
             document_id,
@@ -338,7 +341,7 @@ def run_mains_grading(db: Session, document_id: uuid.UUID) -> None:
             answer=row["answer"] or "",
             result={},
             config=config,
-            status="failed",
+            status="awaiting_answer",
             error="grading_failed",
         )
 
@@ -421,8 +424,11 @@ async def _grade(
 ) -> dict[str, Any]:
     marks_max = int(scheme.get("marks_max") or 10)
     directive = scheme.get("directive", "")
-    points = scheme.get("model_points") or []
-    pts_txt = "\n".join(f"- ({int(p.get('marks') or 0)}m) {p.get('point','')}" for p in points) or "- (use your judgement)"
+    points = [p for p in (scheme.get("model_points") or []) if str(p.get("point", "")).strip()]
+    pts_txt = (
+        "\n".join(f"{i + 1}. ({int(p.get('marks') or 0)}m) {p.get('point', '')}" for i, p in enumerate(points))
+        or "(use your judgement)"
+    )
     guide = _STRICTNESS_GUIDE.get(strictness, _STRICTNESS_GUIDE[DEFAULT_STRICTNESS])
     anchors_txt = "\n".join(f"- {key} ({label}): {_AXIS_ANCHORS[key]}" for key, label in AXES)
     user = (
@@ -432,8 +438,9 @@ async def _grade(
         f"argument (not just names it):\n{pts_txt}\n\n"
         f"AXES — score each 0..{AXIS_MAX} against its anchor:\n{anchors_txt}\n\n"
         f"CANDIDATE'S ANSWER:\n{truncate_to_tokens(answer, SUMMARIZE_SINGLE_SHOT_MAX_TOKENS)}\n\n"
-        f"Grade it. First decide, per scheme point, whether it is genuinely covered (be ready to quote "
-        f"the phrase). Then award an integer mark out of {marks_max} that reflects the covered scheme "
+        f"Grade it. First decide, per NUMBERED scheme point, whether it is genuinely covered (be ready "
+        f"to quote the phrase) — report each by its number in scheme_hits. Then award an integer mark "
+        f"out of {marks_max} that reflects the covered scheme "
         "points plus answer quality — do NOT invent a number unmoored from the scheme, never reward "
         "length or repetition, and let wrong/fabricated content lower it. Score each axis against its "
         "anchor (directive axis <= 1 if the directive is ignored). Give at most 3 'keep doing' and 3 "
@@ -443,7 +450,7 @@ async def _grade(
         'Return JSON: {"marks":n,'
         '"axes":{"directive":n,"structure":n,"coverage":n,"substantiation":n,"presentation":n},'
         '"axis_notes":{"directive":"...","structure":"...","coverage":"...","substantiation":"...","presentation":"..."},'
-        '"scheme_hits":[{"point":"...","hit":true}],"keep_doing":["..."],"improve":["..."],'
+        '"scheme_hits":[{"index":1,"hit":true}],"keep_doing":["..."],"improve":["..."],'
         '"examiner_note":"...","highlights":[{"quote":"...","kind":"strong","comment":"..."}]}'
     )
     raw = await complete_chat(
@@ -452,7 +459,13 @@ async def _grade(
         log_tag="mains_grade",
         document_id=document_id,
     )
-    return _shape_result(extract_json_obj(raw), scheme, strictness)
+    parsed = extract_json_obj(raw)
+    # extract_json_obj returns {} on ANY parse failure — don't shape that into a
+    # confident-looking 0/10. A real grade always carries "marks"; else fail (the
+    # caller reverts to awaiting_answer so the user can resubmit).
+    if "marks" not in parsed:
+        raise ValueError("unparseable grade output")
+    return _shape_result(parsed, scheme, strictness)
 
 
 # ---------------------------------------------------------------------------
@@ -462,8 +475,8 @@ async def _grade(
 def _shape_result(data: dict[str, Any], scheme: dict, strictness: str = DEFAULT_STRICTNESS) -> dict[str, Any]:
     marks_max = int(scheme.get("marks_max") or 10)
     marks = _clamp_int(data.get("marks"), 0, marks_max)
-    axis_scores = data.get("axes") or {}
-    axis_notes = data.get("axis_notes") or {}
+    axis_scores = data.get("axes") if isinstance(data.get("axes"), dict) else {}
+    axis_notes = data.get("axis_notes") if isinstance(data.get("axis_notes"), dict) else {}
     axes = [
         {
             "key": key,
@@ -474,19 +487,21 @@ def _shape_result(data: dict[str, Any], scheme: dict, strictness: str = DEFAULT_
         }
         for key, label in AXES
     ]
-    hits_in = {
-        str(h.get("point", "")).strip().lower(): bool(h.get("hit"))
+    # Match scheme hits by the 1-based index the grader returns (see _grade prompt).
+    # Exact-text matching failed whenever the model paraphrased a point → all "missed".
+    hits_by_index = {
+        int(h["index"]): bool(h.get("hit"))
         for h in (data.get("scheme_hits") or [])
-        if isinstance(h, dict)
+        if isinstance(h, dict) and isinstance(h.get("index"), (int, float))
     }
+    points = [p for p in (scheme.get("model_points") or []) if str(p.get("point", "")).strip()]
     scheme_hits = [
         {
             "point": str(p.get("point", "")).strip(),
             "marks": int(p.get("marks") or 0),
-            "hit": hits_in.get(str(p.get("point", "")).strip().lower(), False),
+            "hit": hits_by_index.get(i + 1, False),
         }
-        for p in (scheme.get("model_points") or [])
-        if str(p.get("point", "")).strip()
+        for i, p in enumerate(points)
     ]
     return {
         "marks": marks,
