@@ -24,6 +24,7 @@ export const queryKeys = {
   flashcards: (id: string) => ["flashcards", id] as const,
   memoryPalace: (id: string, setting: string) => ["memory-palace", id, setting] as const,
   savedNotes: (id: string) => ["saved-notes", id] as const,
+  brainstormIdeas: (id: string) => ["brainstorm-ideas", id] as const,
   quiz: (id: string, config: string) => ["quiz", id, config] as const,
   studyReport: (id: string) => ["study-report", id] as const,
   interview: (id: string) => ["interview", id] as const,
@@ -183,6 +184,61 @@ export function useSavedNotesActions(artifactId: string) {
     },
     remove: async (noteId: string) => {
       await apiDelete(`/api/artifacts/${artifactId}/saved-notes/${noteId}`);
+      void invalidate();
+    },
+  };
+}
+
+/** One kept brainstorm idea. `children` are ideas branched off it (the mind-map edge). */
+export type BrainstormIdea = {
+  id: string;
+  parent_id: string | null;
+  text: string;
+  angle: string;
+  created_at: string | null;
+  children: BrainstormIdea[];
+};
+
+/** The kept-idea tree. The mind map draws it; the board flattens it. */
+export function useBrainstormIdeasQuery(artifactId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.brainstormIdeas(artifactId),
+    queryFn: () =>
+      apiGet<{ tree: BrainstormIdea[] }>(`/api/artifacts/${artifactId}/brainstorm-ideas`),
+    enabled: enabled && Boolean(artifactId),
+    staleTime: 10_000,
+  });
+}
+
+/** Flatten the idea tree to a newest-first list — the board ordering. */
+export function flattenIdeas(tree: BrainstormIdea[]): BrainstormIdea[] {
+  const out: BrainstormIdea[] = [];
+  const walk = (nodes: BrainstormIdea[]) => {
+    for (const n of nodes) {
+      out.push(n);
+      walk(n.children ?? []);
+    }
+  };
+  walk(tree);
+  return out.sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
+}
+
+/** Brainstorm idea mutations (keep / delete) with cache invalidation. */
+export function useBrainstormActions(artifactId: string) {
+  const qc = useQueryClient();
+  const invalidate = () =>
+    qc.invalidateQueries({ queryKey: queryKeys.brainstormIdeas(artifactId) });
+  return {
+    keep: async (text: string, angle = "", parentId: string | null = null) => {
+      const idea = await apiPost<BrainstormIdea>(
+        `/api/artifacts/${artifactId}/brainstorm-ideas`,
+        { text, angle, parent_id: parentId },
+      );
+      void invalidate();
+      return idea;
+    },
+    remove: async (ideaId: string) => {
+      await apiDelete(`/api/artifacts/${artifactId}/brainstorm-ideas/${ideaId}`);
       void invalidate();
     },
   };
@@ -590,9 +646,13 @@ export function useAssertionQuery(assertionId: string | null | undefined) {
   });
 }
 
-/** Read / Learn / Test each get their own conversation; other modes share "general". */
+/** Read / Learn / Test / Brainstorm each get their own conversation; other modes
+ *  share "general". Mirrors `_CHAT_SURFACES` in backend/app/api/chat.py — a mode
+ *  added to one and not the other silently merges into "general". */
 export function chatSurfaceForMode(mode: string): string {
-  return mode === "read" || mode === "learn" || mode === "test" ? mode : "general";
+  return mode === "read" || mode === "learn" || mode === "test" || mode === "brainstorm"
+    ? mode
+    : "general";
 }
 
 export function useChatMessagesQuery(artifactId: string, mode: string, enabled = true) {

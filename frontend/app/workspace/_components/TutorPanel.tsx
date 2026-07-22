@@ -21,12 +21,14 @@ import {
   IconNotebook,
   IconPencil,
   IconPlayerStop,
+  IconPlus,
   IconRefresh,
   IconTrash,
 } from "@tabler/icons-react";
 import { ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import { BrandMark } from "@/app/_components/BrandMark";
 import { AssistantMarkdown, MessageCopyAction } from "@/lib/chatMarkdown";
+import { splitAngles } from "@/lib/angles";
 import { useIsDark } from "@/lib/useIsDark";
 
 /**
@@ -54,6 +56,8 @@ export function TutorPanel({
   suggestions = CHAT_SUGGESTIONS,
   emptyHint = "Questions about this page, the source, or how to think through the answer.",
   showHeader = false,
+  onExploreAngle,
+  onKeepAngle,
 }: {
   messages: { role: string; content: string }[];
   input: string;
@@ -71,6 +75,11 @@ export function TutorPanel({
   emptyHint?: string;
   /** Show a branded top bar - for surfaces (Read, mobile) that have no rail header. */
   showHeader?: boolean;
+  /** Brainstorm only: send an angle as the next turn. Passing either angle handler
+   *  turns on the ANGLES chip rendering; other modes never see it. */
+  onExploreAngle?: (angle: string) => void;
+  /** Brainstorm only: keep an angle on the idea board. */
+  onKeepAngle?: (angle: string) => void;
 }) {
   const isDark = useIsDark();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -218,6 +227,8 @@ export function TutorPanel({
                         ? () => onSaveNote(m.content)
                         : undefined
                     }
+                    onExploreAngle={onExploreAngle}
+                    onKeepAngle={onKeepAngle}
                   />
                 ))}
               </Stack>
@@ -382,6 +393,15 @@ export const READ_CHAT_SUGGESTIONS = [
   "Give me an example",
 ];
 
+// Openers for Brainstorm mode. Deliberately not "explain X" - each one asks the
+// learner to take a position, because a blank box is where brainstorming dies.
+export const BRAINSTORM_SUGGESTIONS = [
+  "What's the biggest tension in this material?",
+  "What is this the same shape as?",
+  "Where does this stop working?",
+  "What would break if the opposite were true?",
+];
+
 /**
  * The brand heart, alive while the assistant thinks - a gentle beat with a soft glow
  * ring breathing outward. Replaces the old "..." dots for a more premium wait state.
@@ -486,6 +506,8 @@ function ChatMessage({
   onRegenerate,
   onEdit,
   onSaveNote,
+  onExploreAngle,
+  onKeepAngle,
 }: {
   message: { role: string; content: string };
   isUser: boolean;
@@ -496,6 +518,8 @@ function ChatMessage({
   onRegenerate?: () => void;
   onEdit?: () => void;
   onSaveNote?: () => void;
+  onExploreAngle?: (angle: string) => void;
+  onKeepAngle?: (angle: string) => void;
 }) {
   const { hovered, ref } = useHover();
   const actionsEnabled =
@@ -535,6 +559,13 @@ function ChatMessage({
   }
 
   const isThinking = thinking || (streaming && !message.content);
+  // Brainstorm replies carry a trailing ANGLES block. Split it off so the prose
+  // renders as normal markdown and the angles become chips; other modes pass no
+  // angle handlers, so nothing is parsed and nothing changes for them.
+  const anglesEnabled = Boolean(onExploreAngle || onKeepAngle);
+  const { prose, angles } = anglesEnabled
+    ? splitAngles(message.content)
+    : { prose: message.content, angles: [] as string[] };
   return (
     <Group ref={ref} className="chat-msg" align="flex-start" gap="sm" wrap="nowrap" maw="100%">
       {isThinking ? <ThinkingHeart size={28} /> : <AssistantLogo size={28} />}
@@ -544,11 +575,48 @@ function ChatMessage({
             Thinking…
           </Text>
         ) : (
-          <AssistantMarkdown
-            content={message.content}
-            isDark={isDark}
-            streaming={streaming}
-          />
+          <AssistantMarkdown content={prose} isDark={isDark} streaming={streaming} />
+        )}
+        {/* Held back until the stream settles - half-written angles would flicker. */}
+        {!streaming && angles.length > 0 && (
+          <Stack gap={6} mt="xs">
+            {angles.map((angle) => (
+              <Group key={angle} gap={6} wrap="nowrap" align="center">
+                <Button
+                  variant="light"
+                  color="sage"
+                  radius="xl"
+                  size="compact-xs"
+                  styles={{
+                    root: {
+                      flex: 1,
+                      minWidth: 0,
+                      // Angles routinely wrap to two lines; compact-xs pins a fixed
+                      // height, so the label spilled out and collided with the next chip.
+                      height: "auto",
+                      paddingTop: 5,
+                      paddingBottom: 5,
+                      // The sage scale is inverted in dark mode (high shade = bright on
+                      // ink), so `variant="light"` alone resolves to a DARK green label
+                      // on a dark chip - measured at 1.19:1. -8/-7 is the readable tone
+                      // in each scheme (11.75:1 on dark).
+                      color: "light-dark(var(--mantine-color-sage-8), var(--mantine-color-sage-7))",
+                    },
+                    label: { whiteSpace: "normal", textAlign: "left", lineHeight: 1.4 },
+                  }}
+                  onClick={() => onExploreAngle?.(angle)}
+                  disabled={!onExploreAngle}
+                >
+                  {angle}
+                </Button>
+                {onKeepAngle && (
+                  <ChatIconAction label="Keep on the idea board" onClick={() => onKeepAngle(angle)}>
+                    <IconPlus size={15} stroke={1.8} />
+                  </ChatIconAction>
+                )}
+              </Group>
+            ))}
+          </Stack>
         )}
         <MessageActionRail visible={showActions} enabled={actionsEnabled}>
           <MessageCopyAction value={message.content} label="Copy message" />

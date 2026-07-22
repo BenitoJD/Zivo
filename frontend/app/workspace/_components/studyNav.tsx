@@ -7,6 +7,7 @@ export type StudyMode =
   | "learn"
   | "test"
   | "explain"
+  | "brainstorm"
   | "notes"
   | "cards"
   | "palace"

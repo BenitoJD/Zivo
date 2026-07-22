@@ -356,7 +356,10 @@ export function PdfReader({
             display: "flex",
             alignItems: "center",
             gap: 2,
-            background: "var(--mantine-color-body)",
+            // gray-0 is the "lifted paper / card" surface in BOTH schemes (#FFFFFF
+            // light, #22211F dark). It was `--mantine-color-body`, which in dark mode
+            // is #1A1917 - the exact page background - so the control disappeared.
+            background: "var(--mantine-color-gray-0)",
           }}
         >
           <Tooltip label="Zoom out" withArrow openDelay={400}>
@@ -368,6 +371,10 @@ export function PdfReader({
               onClick={() => zoomBy(-ZOOM_STEP)}
               disabled={zoom <= ZOOM_MIN}
               aria-label="Zoom out"
+              // The gray scale is inverted for dark mode (high = light text), and
+              // `variant="subtle"` resolves to a LOW shade - i.e. dark glyphs on ink.
+              // gray.8 is the readable text tone in both schemes.
+              c="gray.8"
             >
               <IconMinus size={18} stroke={2} />
             </ActionIcon>
@@ -381,6 +388,7 @@ export function PdfReader({
               onClick={() => setZoom(1)}
               disabled={zoom === 1}
               aria-label="Reset zoom to 100%"
+              c="gray.8"
               style={{ minWidth: 52, fontVariantNumeric: "tabular-nums" }}
             >
               {Math.round(zoom * 100)}%
@@ -395,6 +403,7 @@ export function PdfReader({
               onClick={() => zoomBy(ZOOM_STEP)}
               disabled={zoom >= ZOOM_MAX}
               aria-label="Zoom in"
+              c="gray.8"
             >
               <IconPlus size={18} stroke={2} />
             </ActionIcon>

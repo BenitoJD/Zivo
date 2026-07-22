@@ -17,7 +17,7 @@ import {
   Text,
   Title,
 } from "@mantine/core";
-import { useDisclosure, useMediaQuery } from "@mantine/hooks";
+import { useDisclosure, useLocalStorage, useMediaQuery } from "@mantine/hooks";
 import { IconFileText, IconMessageCircle, IconNotebook } from "@tabler/icons-react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { PDFDocumentProxy } from "pdfjs-dist";
@@ -27,11 +27,13 @@ import {
   useArtifactPagesQuery,
   useArtifactQuery,
   useAssertionQuery,
+  useBrainstormActions,
   useSavedNotesQuery,
   useSavedNotesActions,
   useStudyReportQuery,
 } from "@/lib/api/queries";
 import { ZIVO_ASSISTANT_NAME } from "@/lib/brand";
+import { BrainstormView } from "@/app/workspace/_components/BrainstormView";
 import { ExplainView } from "@/app/workspace/_components/ExplainView";
 import { NotesView } from "@/app/workspace/_components/NotesView";
 import { FlashcardsView } from "@/app/workspace/_components/FlashcardsView";
@@ -42,7 +44,11 @@ import { MainsView } from "@/app/workspace/_components/MainsView";
 import { CodingView } from "@/app/workspace/_components/CodingView";
 import { ResumeView } from "@/app/workspace/_components/ResumeView";
 import { PdfReader } from "@/app/workspace/_components/PdfReader";
-import { TutorPanel, READ_CHAT_SUGGESTIONS } from "@/app/workspace/_components/TutorPanel";
+import {
+  TutorPanel,
+  READ_CHAT_SUGGESTIONS,
+  BRAINSTORM_SUGGESTIONS,
+} from "@/app/workspace/_components/TutorPanel";
 import { useStudyNav } from "@/app/workspace/_components/studyNav";
 import { useTutorChat } from "@/app/workspace/_components/useTutorChat";
 import { McqHeroPanel, McqReviewView } from "@/app/workspace/_components/McqPanels";
@@ -51,7 +57,7 @@ import { StudyEdgeTrigger } from "@/app/workspace/_components/StudyRails";
 import { FloatingPanel } from "@/app/workspace/_components/FloatingPanel";
 import { StudyMobileShell } from "@/app/workspace/_components/StudyMobileShell";
 import { SelectionQuote } from "@/app/workspace/_components/SelectionQuote";
-import { StudyMetaBar } from "@/app/workspace/_components/StudyMetaBar";
+import { StudyMetaBar, type StudyAlign } from "@/app/workspace/_components/StudyMetaBar";
 import {
   suggestNextPageRange,
   TestResultsScreen,
@@ -142,6 +148,13 @@ export default function WorkspaceArtifactPage({
   // shell can jump to the tutor tab (desktop just opens the floating panel).
   const [mobileTutorFocus, setMobileTutorFocus] = useState(0);
 
+  // Study-column alignment (desktop): centred, or pinned left beside the source panel.
+  const [studyAlign, setStudyAlign] = useLocalStorage<StudyAlign>({
+    key: "zv-study-align",
+    defaultValue: "center",
+    getInitialValueInEffect: false,
+  });
+
   // Tutor chat (per-mode conversation: hydrate, stream, regenerate, clear, plus
   // Read-mode Study-Buddy quote/ask/save) lives in its own hook.
   const {
@@ -168,6 +181,21 @@ export default function WorkspaceArtifactPage({
     savedNotesActions,
     onSavedNote: () => setReaderNotesOpen(true),
   });
+
+  // Brainstorm turns the same tutor panel into the ideation partner: the ANGLES each
+  // reply ends with become chips you can explore (send as the next turn) or keep (pin
+  // to the idea board). Spread into every TutorPanel so desktop and mobile match.
+  const brainstormActions = useBrainstormActions(artifactId);
+  const brainstormChatProps =
+    mode === "brainstorm"
+      ? {
+          suggestions: BRAINSTORM_SUGGESTIONS,
+          emptyHint:
+            "Think out loud about this source. Every reply ends with three angles you could pull.",
+          onExploreAngle: (angle: string) => askBuddy(angle),
+          onKeepAngle: (angle: string) => void brainstormActions.keep(angle),
+        }
+      : {};
 
   const selectedRange = artifact?.meta?.selected_range;
   const studyRangeKey = selectedRange
@@ -846,6 +874,7 @@ export default function WorkspaceArtifactPage({
     ? suggestNextPageRange(completedRange, pageCount)
     : null;
 
+  const leftPinned = !isCompact && studyAlign === "left";
   const questionColumn = (
     <Box flex={1} mih={0} h="100%" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <StudyMetaBar
@@ -858,6 +887,8 @@ export default function WorkspaceArtifactPage({
         compact={isCompact}
         studyMode={queue?.study_mode}
         onStudyModeChange={(m) => void setStudyMode(m)}
+        align={studyAlign}
+        onAlignChange={setStudyAlign}
       />
       <Box
         flex={1}
@@ -878,10 +909,17 @@ export default function WorkspaceArtifactPage({
         <Box
           maw={760}
           w="100%"
-          mx="auto"
           mih={0}
           px={4}
           style={{
+            // Phones always centre (the column already fills the width); on desktop the
+            // learner chooses, and the choice is remembered across sessions. Pinned
+            // left still has to clear the floating "SOURCE" edge trigger, which is
+            // absolutely positioned over the left of the study area - without this the
+            // first option card slides underneath it.
+            ...(leftPinned
+              ? { marginLeft: 48, marginRight: 0 }
+              : { marginInline: "auto" }),
             flex: 1,
             maxHeight: "100%",
             overflowY: "auto",
@@ -890,7 +928,9 @@ export default function WorkspaceArtifactPage({
             scrollbarGutter: "stable",
           }}
         >
-          {mode === "explain" ? (
+          {mode === "brainstorm" ? (
+            <BrainstormView artifactId={artifact.id} compact={isCompact} />
+          ) : mode === "explain" ? (
             <ExplainView artifactId={artifact.id} compact={isCompact} />
           ) : mode === "notes" ? (
             <NotesView artifactId={artifact.id} compact={isCompact} />
@@ -1262,6 +1302,7 @@ export default function WorkspaceArtifactPage({
                 onRegenerate={regenerateChat}
                 onEditUser={editChatFromUser}
                 onClear={() => void clearChat()}
+                {...brainstormChatProps}
               />
             </FloatingPanel>
           </Box>
@@ -1296,6 +1337,7 @@ export default function WorkspaceArtifactPage({
               onEditUser={editChatFromUser}
               onClear={() => void clearChat()}
               showHeader
+              {...brainstormChatProps}
             />
           )}
         />

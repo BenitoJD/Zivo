@@ -12,6 +12,7 @@ from app.services.retrieval_gate import needs_retrieval
 from app.services.token_budget import CHAT_INPUT_MAX_TOKENS, truncate_to_tokens
 
 _CHAT_CONTEXT_MAX_TOKENS = CHAT_INPUT_MAX_TOKENS
+_BRAINSTORM_CHUNK_SAMPLE = 24
 
 
 class ChatState(TypedDict, total=False):
@@ -73,6 +74,37 @@ def retrieve_context(state: ChatState, *, db: Session) -> dict[str, Any]:
     }
 
 
+def _brainstorm_context(db: Session, document_id: uuid.UUID) -> str:
+    """Whole-source breadth instead of top-k depth — the Brainstorm context block.
+
+    Ordinary chat retrieval answers "what does the source say here", so it fetches the
+    few chunks nearest the query. Brainstorming needs the opposite: to connect chapter 2
+    to chapter 9 it has to see the shape of the whole source, and top-k can only
+    recombine the passage it just read. So we send the topic outline (already built for
+    Explain) plus chunks sampled evenly across the document rather than the first N.
+    """
+    from app.services.chunks import load_document_chunk_texts
+    from app.services.topics import load_outline
+
+    parts: list[str] = []
+    topics = (load_outline(db, document_id) or {}).get("topics") or []
+    if topics:
+        lines = "\n".join(
+            f"- {t.get('title', '')}: {t.get('summary', '')}".rstrip(": ") for t in topics
+        )
+        parts.append(f"The full topic map of this source:\n{lines}")
+
+    chunks = load_document_chunk_texts(db, document_id)
+    if chunks:
+        # Evenly spaced, so the sample spans beginning to end instead of stopping
+        # wherever the token budget runs out (which would be the first chapter only).
+        step = max(1, len(chunks) // _BRAINSTORM_CHUNK_SAMPLE)
+        sample = chunks[::step][:_BRAINSTORM_CHUNK_SAMPLE]
+        parts.append("Passages sampled across the source:\n\n" + "\n\n".join(sample))
+
+    return truncate_to_tokens("\n\n".join(parts), _CHAT_CONTEXT_MAX_TOKENS)
+
+
 def run_retrieve(
     db: Session,
     *,
@@ -97,6 +129,14 @@ def run_retrieve(
             "citations": [],
             "messages": list(prior_messages),
             "context_block": "",
+            "context_note": "",
+        }
+    if str(scope.get("mode") or "").lower() == "brainstorm" and document_ids:
+        return {
+            "retrieved_chunks": [],
+            "citations": [],
+            "messages": list(prior_messages),
+            "context_block": _brainstorm_context(db, document_ids[0]),
             "context_note": "",
         }
     state: ChatState = {

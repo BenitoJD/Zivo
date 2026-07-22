@@ -13,6 +13,8 @@ import {
 } from "@mantine/core";
 import {
   IconAdjustmentsHorizontal,
+  IconAlignCenter,
+  IconAlignLeft,
   IconBook,
   IconBriefcase,
   IconBuildingMonument,
@@ -63,6 +65,9 @@ const ALL_MODES = MODE_GROUPS.flatMap((g) => g.modes);
  * the mode badge + progress, the compact (mobile) mode dropdown
  * (CompactModeSelect), and the Adaptive/Classic chooser menu.
  */
+/** Where the study column sits on a wide screen: hard against the rail, or centred. */
+export type StudyAlign = "left" | "center";
+
 export function StudyMetaBar({
   questionIndex,
   questionTotal,
@@ -73,6 +78,8 @@ export function StudyMetaBar({
   compact = false,
   studyMode,
   onStudyModeChange,
+  align = "center",
+  onAlignChange,
 }: {
   questionIndex: number;
   questionTotal: number;
@@ -84,6 +91,10 @@ export function StudyMetaBar({
   compact?: boolean;
   studyMode?: "adaptive" | "classic";
   onStudyModeChange?: (mode: "adaptive" | "classic") => void;
+  /** Current study-column alignment. Desktop only - phones are always centred. */
+  align?: StudyAlign;
+  /** Omit to hide the alignment toggle entirely (e.g. Read, which owns its layout). */
+  onAlignChange?: (align: StudyAlign) => void;
 }) {
   const showBar = showProgress && questionTotal > 0;
   const pct = showBar ? Math.min(100, Math.round((questionIndex / questionTotal) * 100)) : 0;
@@ -170,6 +181,46 @@ export function StudyMetaBar({
       </Menu>
     ) : null;
 
+  // Wide screens leave a lot of empty space to the right of a 760px column. Pinning
+  // it left puts the question next to the source panel instead of across a gap.
+  // Desktop only: on a phone the column already fills the width.
+  const alignControl =
+    onAlignChange && !compact ? (
+      <Group gap={2} wrap="nowrap" style={{ flexShrink: 0 }}>
+        {(
+          [
+            ["left", IconAlignLeft, "Pin to the left"],
+            ["center", IconAlignCenter, "Centre the column"],
+          ] as const
+        ).map(([value, Icon, label]) => {
+          const active = align === value;
+          return (
+            <Tooltip key={value} label={label} withArrow openDelay={400}>
+              <UnstyledButton
+                aria-label={label}
+                aria-pressed={active}
+                onClick={() => onAlignChange(value)}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  padding: 6,
+                  borderRadius: 999,
+                  background: active ? "var(--mantine-color-gray-2)" : "transparent",
+                  // gray.8 is the readable text tone in BOTH schemes - the gray scale
+                  // is inverted for dark mode, so a low shade would vanish on ink.
+                  color: active
+                    ? "var(--mantine-color-gray-8)"
+                    : "var(--mantine-color-dimmed)",
+                }}
+              >
+                <Icon size={15} stroke={1.8} />
+              </UnstyledButton>
+            </Tooltip>
+          );
+        })}
+      </Group>
+    ) : null;
+
   const progress = !showBar ? null : (
     <Group gap={compact ? 8 : 12} wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
       {page ? (
@@ -240,7 +291,7 @@ export function StudyMetaBar({
   // Desktop/tablet: the sidebar owns mode switching, so the top bar carries the
   // mode identity + question progress + the Adaptive/Classic chooser - and nothing
   // at all in modes that have none (e.g. Read), so the content starts cleanly.
-  if (!progress && !modeBadge && !studyModeControl) return null;
+  if (!progress && !modeBadge && !studyModeControl && !alignControl) return null;
   return (
     <Group
       px={{ base: "sm", sm: "md", lg: "lg" }}
@@ -255,7 +306,10 @@ export function StudyMetaBar({
         {modeBadge}
         {progress}
       </Group>
-      {studyModeControl}
+      <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
+        {studyModeControl}
+        {alignControl}
+      </Group>
     </Group>
   );
 }

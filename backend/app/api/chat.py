@@ -211,12 +211,15 @@ def _artifact_ref(doc: Document) -> tuple[uuid.UUID, datetime]:
     return doc.artifact_id or doc.id, doc.artifact_captured_at or doc.created_at
 
 
-_CHAT_SURFACES = {"read", "learn", "test"}
+_CHAT_SURFACES = {"read", "learn", "test", "brainstorm"}
 
 
 def _chat_surface(mode: str | None) -> str:
-    """The conversation surface for a study mode — keeps Read / Learn / Test chats
-    fully separate; anything else shares a neutral 'general' thread."""
+    """The conversation surface for a study mode — keeps Read / Learn / Test /
+    Brainstorm chats fully separate; anything else shares a neutral 'general' thread.
+
+    Mirrored by ``chatSurfaceForMode`` in frontend/lib/api/queries.ts — a mode added
+    to one and not the other silently merges into 'general'."""
     m = (mode or "").strip().lower()
     return m if m in _CHAT_SURFACES else "general"
 
@@ -412,11 +415,15 @@ async def chat_stream(
                     yield _stream_error_event("Document not found.")
                     return
                 scope = normalize_chat_scope(request_scope, doc)
-                read_mode = str(request_scope.get("mode") or "").lower() == "read"
+                mode = str(request_scope.get("mode") or "").lower()
+                read_mode = mode == "read"
+                brainstorm_mode = mode == "brainstorm"
                 scope["mode"] = "read" if read_mode else (request_scope.get("mode") or None)
                 # Read-mode chat is about the document, not the Learn loop — keep its
-                # page/question signal out of the scope entirely.
-                if not read_mode:
+                # page/question signal out of the scope entirely. Brainstorm is the
+                # same: it ranges over the whole source, so pinning it to the Learn
+                # queue's current question would collapse it back into tutoring.
+                if not read_mode and not brainstorm_mode:
                     scope.update(
                         learn_scope_fields(
                             stream_db,
@@ -463,6 +470,8 @@ async def chat_stream(
                             )
 
                     def _learn_context_for_chat() -> str | None:
+                        if brainstorm_mode:
+                            return None
                         with SessionLocal() as learn_db:
                             learn_doc = learn_db.get(Document, document_id)
                             if not learn_doc:
@@ -484,7 +493,11 @@ async def chat_stream(
                 # turns. So the system prompt is never mutated per-turn, and the
                 # retrieved context (which changes every turn) rides in the FINAL
                 # user message — not as a mid-list message before the history.
-                system = get_prompt(stream_db, "tutor_system")
+                # Per-surface system prompt. Still byte-stable *within* a surface, so
+                # prefix caching keeps hitting; brainstorm just gets a different prefix.
+                system = get_prompt(
+                    stream_db, "brainstorm_system" if brainstorm_mode else "tutor_system"
+                )
                 messages = [{"role": "system", "content": system}]
                 messages.extend(retrieved.get("messages") or prior_messages)
 
@@ -531,7 +544,10 @@ async def chat_stream(
                     )
                 messages.append({"role": "user", "content": user_content})
 
-                cache_eligible = _cache_eligible(
+                # Brainstorm never serves the semantic response cache. Two near-identical
+                # prompts returning the identical stored answer is fine for a tutor and
+                # fatal for ideation — the point is that asking again gives you new angles.
+                cache_eligible = not brainstorm_mode and _cache_eligible(
                     include_image=include_image,
                     selection_text=scope.get("selection_text"),
                     has_citations=bool(citations),

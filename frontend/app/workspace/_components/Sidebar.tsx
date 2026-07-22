@@ -38,6 +38,7 @@ import {
   IconSun,
   IconTrash,
   IconWriting,
+  IconBrain,
 } from "@tabler/icons-react";
 import { BrandMark } from "@/app/_components/BrandMark";
 import type { SourceDocument } from "@/lib/types";
@@ -57,6 +58,7 @@ const MODE_GROUPS: {
       { value: "read", label: "Read", icon: IconBook2, color: "indigo" },
       { value: "learn", label: "Learn", icon: IconBulb, color: "orange" },
       { value: "test", label: "Test", icon: IconClipboardList, color: "grape" },
+      { value: "brainstorm", label: "Brainstorm", icon: IconBrain, color: "sage" },
     ],
   },
   {

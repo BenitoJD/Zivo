@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import Account
+from app.services import brainstorm as brainstorm_service
 from app.services import saved_notes as saved_notes_service
 from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.services.guest_session import guest_session_for_read
@@ -117,6 +118,88 @@ def create_saved_note(
     """Save an answer (and the passage it came from) as a note linked to this source."""
     require_document(db, artifact_id, user, guest_id)
     return saved_notes_service.add_note(db, artifact_id, content=body.content, quote=body.quote)
+
+
+# --------------------------------------------------- brainstorm mode (kept ideas)
+class SaveIdeaIn(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    angle: str = Field(default="", max_length=120)
+    parent_id: uuid.UUID | None = None
+
+
+@router.get("/{artifact_id}/brainstorm-ideas")
+def get_brainstorm_ideas(
+    artifact_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """Ideas kept from brainstorming this source, as a tree.
+
+    One nested shape serves both renderings: the mind map draws it directly, the
+    idea board flattens it. Returns {tree: [{id,text,angle,children:[…]}]}.
+    """
+    require_document(db, artifact_id, user, guest_id)
+    ideas = brainstorm_service.list_ideas(db, artifact_id)
+    return {"tree": brainstorm_service.build_tree(ideas)}
+
+
+@router.post("/{artifact_id}/brainstorm-ideas", dependencies=[Depends(require_csrf_or_guest)])
+def create_brainstorm_idea(
+    artifact_id: uuid.UUID,
+    body: SaveIdeaIn,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """Keep one idea. `parent_id` branches it off an existing idea (a mind-map edge)."""
+    require_document(db, artifact_id, user, guest_id)
+    try:
+        return brainstorm_service.add_idea(
+            db,
+            artifact_id,
+            idea_text=body.text,
+            angle=body.angle,
+            parent_id=body.parent_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete(
+    "/{artifact_id}/brainstorm-ideas/{idea_id}",
+    status_code=204,
+    dependencies=[Depends(require_csrf_or_guest)],
+)
+def delete_brainstorm_idea(
+    artifact_id: uuid.UUID,
+    idea_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+):
+    """Delete an idea and everything branched off it."""
+    require_document(db, artifact_id, user, guest_id)
+    brainstorm_service.delete_idea(db, artifact_id, idea_id)
+
+
+@router.get("/{artifact_id}/brainstorm-ideas/export.md")
+def export_brainstorm_ideas(
+    artifact_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> Response:
+    """The idea tree as nested markdown — the download target for "Export"."""
+    doc = require_document(db, artifact_id, user, guest_id)
+    ideas = brainstorm_service.list_ideas(db, artifact_id)
+    title = (doc.filename or "").rsplit(".", 1)[0]
+    body = brainstorm_service.to_markdown(title, ideas)
+    return Response(
+        content=body,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="brainstorm.md"'},
+    )
 
 
 # --------------------------------------------------- interview mode (mock interview)
