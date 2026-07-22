@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { ActionIcon, Box, Group, Text, Tooltip, UnstyledButton } from "@mantine/core";
 import {
   IconChevronRight,
@@ -29,6 +29,8 @@ const PRESETS: Preset[] = [
 ];
 const LONG_BREAK_EVERY = 4;
 const STORAGE_KEY = "zivo-pomodoro-v1";
+const POS_KEY = "zivo-pomodoro-pos-v1";
+const PANEL_W = 232;
 
 function phaseSeconds(preset: Preset, phase: Phase): number {
   return (phase === "focus" ? preset.focus : phase === "break" ? preset.break : preset.long) * 60;
@@ -74,6 +76,80 @@ export function PomodoroWidget() {
   const [running, setRunning] = useState(false);
   const [completed, setCompleted] = useState(0); // focus rounds finished
   const preset = PRESETS[presetIdx];
+
+  // --- Draggable, position-persisted placement -------------------------------
+  // Fixed to the viewport (independent of the sidebar), so expanding the sidebar
+  // never nudges it. The user drags it anywhere and it remembers where it was.
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = localStorage.getItem(POS_KEY);
+      if (raw) {
+        const p = JSON.parse(raw);
+        if (typeof p?.x === "number" && typeof p?.y === "number") return p;
+      }
+    } catch {
+      /* ignore */
+    }
+    // Default: bottom-right, so it never overlaps the left sidebar.
+    return { x: window.innerWidth - PANEL_W - 16, y: window.innerHeight - 320 };
+  });
+  const posRef = useRef(pos);
+  posRef.current = pos;
+  const movedRef = useRef(false);
+
+  const clampPos = useCallback(
+    (p: { x: number; y: number }) => {
+      if (typeof window === "undefined") return p;
+      const w = open ? PANEL_W : 40;
+      const h = open ? 300 : 40;
+      return {
+        x: Math.max(8, Math.min(p.x, window.innerWidth - w - 8)),
+        y: Math.max(8, Math.min(p.y, window.innerHeight - h - 8)),
+      };
+    },
+    [open],
+  );
+
+  // Keep it on-screen when the window resizes or the panel opens/closes.
+  useEffect(() => {
+    const reclamp = () => setPos((p) => (p ? clampPos(p) : p));
+    reclamp();
+    window.addEventListener("resize", reclamp);
+    return () => window.removeEventListener("resize", reclamp);
+  }, [clampPos]);
+
+  // Drag from the launcher or the panel header. A <4px move counts as a click
+  // (so tapping the launcher still opens it); anything more is a drag.
+  const beginDrag = useCallback(
+    (e: ReactPointerEvent) => {
+      e.preventDefault();
+      const start = { x: e.clientX, y: e.clientY };
+      const origin = posRef.current ?? { x: 16, y: 16 };
+      movedRef.current = false;
+      const onMove = (ev: PointerEvent) => {
+        const dx = ev.clientX - start.x;
+        const dy = ev.clientY - start.y;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) movedRef.current = true;
+        setPos(clampPos({ x: origin.x + dx, y: origin.y + dy }));
+      };
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        const p = posRef.current;
+        if (p) {
+          try {
+            localStorage.setItem(POS_KEY, JSON.stringify(p));
+          } catch {
+            /* ignore */
+          }
+        }
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
+    [clampPos],
+  );
 
   // Restore persisted config (not the live countdown — a stale timer shouldn't
   // resume mid-count after a reload).
@@ -184,21 +260,28 @@ export function PomodoroWidget() {
     [C, progress],
   );
 
+  if (!pos) return null;
+
   if (!open) {
     return (
-      <Tooltip label="Focus timer" position="right" withArrow>
+      <Tooltip label="Focus timer · drag to move" position="right" withArrow>
         <ActionIcon
-          onClick={() => setOpen(true)}
+          onPointerDown={beginDrag}
+          onClick={() => {
+            if (!movedRef.current) setOpen(true);
+          }}
           variant="default"
           size={40}
           radius="xl"
           aria-label="Open focus timer"
           style={{
             position: "fixed",
-            left: 14,
-            bottom: 14,
+            left: pos.x,
+            top: pos.y,
             zIndex: 130,
             boxShadow: "0 6px 20px rgba(35,34,32,0.14)",
+            touchAction: "none",
+            cursor: "grab",
           }}
         >
           <IconClockHour4 size={20} stroke={1.7} />
@@ -211,10 +294,10 @@ export function PomodoroWidget() {
     <Box
       style={{
         position: "fixed",
-        left: 14,
-        bottom: 14,
+        left: pos.x,
+        top: pos.y,
         zIndex: 130,
-        width: 232,
+        width: PANEL_W,
         padding: 14,
         borderRadius: 18,
         background: "var(--mantine-color-body)",
@@ -222,14 +305,28 @@ export function PomodoroWidget() {
         boxShadow: "0 18px 50px rgba(35,34,32,0.20), 0 2px 8px rgba(35,34,32,0.08)",
       }}
     >
-      <Group justify="space-between" mb={8} wrap="nowrap">
+      <Group
+        justify="space-between"
+        mb={8}
+        wrap="nowrap"
+        onPointerDown={beginDrag}
+        style={{ cursor: "grab", touchAction: "none" }}
+      >
         <Group gap={7} wrap="nowrap">
           <IconClockHour4 size={16} stroke={1.8} style={{ color: `var(--mantine-color-${accent}-6)` }} />
           <Text size="sm" fw={600}>
             {label}
           </Text>
         </Group>
-        <ActionIcon variant="subtle" color="gray" size="sm" radius="md" onClick={() => setOpen(false)} aria-label="Hide focus timer">
+        <ActionIcon
+          variant="subtle"
+          color="gray"
+          size="sm"
+          radius="md"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => setOpen(false)}
+          aria-label="Hide focus timer"
+        >
           <IconChevronRight size={16} stroke={2} />
         </ActionIcon>
       </Group>
