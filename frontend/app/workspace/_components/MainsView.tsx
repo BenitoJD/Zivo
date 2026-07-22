@@ -23,6 +23,7 @@ import {
 import { notifications } from "@mantine/notifications";
 import {
   IconAlertTriangle,
+  IconArrowLeft,
   IconArrowRight,
   IconCheck,
   IconClock,
@@ -135,12 +136,14 @@ function ResultView({
   result,
   strictness,
   onRestart,
+  onRevise,
   busy,
   compact,
 }: {
   result: MainsResult;
   strictness: MainsStrictness;
   onRestart: () => void;
+  onRevise: () => void;
   busy: boolean;
   compact: boolean;
 }) {
@@ -233,9 +236,14 @@ function ResultView({
         </Paper>
       ) : null}
 
-      <Button variant="light" color="blue" radius="xl" leftSection={<IconRefresh size={16} />} loading={busy} onClick={onRestart}>
-        New question ({strictness})
-      </Button>
+      <Group gap="sm" mt={2}>
+        <Button variant="default" radius="xl" leftSection={<IconArrowLeft size={16} />} disabled={busy} onClick={onRevise}>
+          Revise answer
+        </Button>
+        <Button variant="light" color="blue" radius="xl" leftSection={<IconRefresh size={16} />} loading={busy} onClick={onRestart}>
+          New question ({strictness})
+        </Button>
+      </Group>
     </Stack>
   );
 }
@@ -248,6 +256,7 @@ export function MainsView({ artifactId, compact = false }: { artifactId: string;
   const [marksMax, setMarksMax] = useState(10);
   const [timerOn, setTimerOn] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const [revising, setRevising] = useState(false); // "go back" to re-answer the same question
   const [busy, setBusy] = useState(false);
 
   const [typed, setTyped] = useState("");
@@ -293,13 +302,17 @@ export function MainsView({ artifactId, compact = false }: { artifactId: string;
     run(async () => {
       await start(strictness, marksMax);
       setRestarting(false);
+      setRevising(false);
       setTyped("");
       setImageId(null);
       setImageName(null);
     });
 
   const doSubmit = () =>
-    run(() => answer(imageId ? { image_document_id: imageId } : { text: typed.trim() }));
+    run(async () => {
+      await answer(imageId ? { image_document_id: imageId } : { text: typed.trim() });
+      setRevising(false); // grading → result (not back into the answer screen)
+    });
 
   async function handlePhoto(file: File | null) {
     if (!file) return;
@@ -347,8 +360,22 @@ export function MainsView({ artifactId, compact = false }: { artifactId: string;
   if (data.status === "grading") {
     return <MainsWait title="Marking your answer" detail="Reading it, checking it against the scheme, and writing examiner comments." pct={72} compact={compact} />;
   }
-  if (data.status === "ready" && data.result) {
-    return <ResultView result={data.result} strictness={strictness} busy={busy} compact={compact} onRestart={() => setRestarting(true)} />;
+  if (data.status === "ready" && data.result && !restarting && !revising) {
+    return (
+      <ResultView
+        result={data.result}
+        strictness={strictness}
+        busy={busy}
+        compact={compact}
+        onRestart={() => setRestarting(true)}
+        onRevise={() => {
+          setTyped(data.answer ?? "");
+          setImageId(null);
+          setImageName(null);
+          setRevising(true);
+        }}
+      />
+    );
   }
 
   // ---- setup screen (missing, failed, or "new question") ----
@@ -408,12 +435,18 @@ export function MainsView({ artifactId, compact = false }: { artifactId: string;
     );
   }
 
-  // ---- awaiting_answer: the question + answer input ----
+  // ---- awaiting_answer (or "revise") : the question + answer input ----
   const canSubmit = imageId !== null || typed.trim().length > 0;
   return (
     <Stack gap="lg" pb="xl">
       <Group justify="space-between" wrap="nowrap">
-        {heading}
+        {revising ? (
+          <Button variant="subtle" color="gray" size="xs" leftSection={<IconArrowLeft size={14} />} onClick={() => setRevising(false)}>
+            Back to results
+          </Button>
+        ) : (
+          heading
+        )}
         {secsLeft !== null ? (
           <Badge size="lg" variant="light" color={secsLeft === 0 ? "terracotta" : "blue"} leftSection={<IconClock size={14} />}>
             {secsLeft === 0 ? "Time's up" : fmt(secsLeft)}
@@ -479,7 +512,7 @@ export function MainsView({ artifactId, compact = false }: { artifactId: string;
           New question
         </Button>
         <Button color="blue" radius="xl" rightSection={<IconArrowRight size={16} />} disabled={!canSubmit} loading={busy} onClick={doSubmit}>
-          Submit for marking
+          {revising ? "Resubmit for marking" : "Submit for marking"}
         </Button>
       </Group>
     </Stack>
