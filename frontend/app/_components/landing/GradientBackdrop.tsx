@@ -15,7 +15,7 @@ import { useReducedMotion } from "framer-motion";
 export function GradientBackdrop({
   intensity = 1,
 }: {
-  /** Multiplier on blob opacity — dial down for secondary sections. */
+  /** Multiplier on blob opacity - dial down for secondary sections. */
   intensity?: number;
 }) {
   const reduce = useReducedMotion();
@@ -69,7 +69,7 @@ export function GradientBackdrop({
           will-change: transform;
           /* Multiply so overlapping pastels deepen into richer tints on the warm
              page instead of alpha-stacking into a blown-out white hotspot. Kept
-             very faint so the page reads as near-uniform cream — no edge color shift. */
+             very faint so the page reads as near-uniform cream - no edge color shift. */
           mix-blend-mode: multiply;
         }
         .zivo-blob-1 {
@@ -111,7 +111,7 @@ export function GradientBackdrop({
         @media (prefers-reduced-motion: reduce) {
           .zivo-blob { animation: none !important; }
         }
-        /* In dark mode the pastels read as harsh glows — calm them right down.
+        /* In dark mode the pastels read as harsh glows - calm them right down.
            Screen blend keeps them as a soft additive glow without the white blowout. */
         [data-mantine-color-scheme="dark"] .zivo-blob {
           opacity: 0.4;

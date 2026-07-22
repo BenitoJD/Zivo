@@ -10,7 +10,7 @@ import { PetPlayground } from "@/app/_components/pets/PetPlayground";
  * (Explain, Notes, Flashcards, Memory Palace, Quiz Builder). Centered visual +
  * serif title + dimmed body + optional action, in Calm Paper styling.
  *
- * For a *generating* state pass `pet` — it shows the bobbing sprout character so
+ * For a *generating* state pass `pet` - it shows the bobbing sprout character so
  * the wait feels alive (the zero-perceived-wait north star). For errors/empty,
  * pass `icon` (e.g. an alert); the sparkles fallback shows if both are omitted.
  */

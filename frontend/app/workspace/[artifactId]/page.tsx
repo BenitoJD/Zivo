@@ -118,7 +118,7 @@ export default function WorkspaceArtifactPage({
   // and which option indices are currently ticked.
   const [isMulti, setIsMulti] = useState(false);
   const [multiSelected, setMultiSelected] = useState<number[]>([]);
-  // The concept the current question tests — captured per question for the report card.
+  // The concept the current question tests - captured per question for the report card.
   const [currentConcept, setCurrentConcept] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [gradeState, setGradeState] = useState<{ correct: boolean; correctIndex: number; correctIndices?: number[] } | null>(null);
@@ -200,7 +200,7 @@ export default function WorkspaceArtifactPage({
   const artifactQuery = useArtifactQuery(artifactId, !invalidArtifactId);
   const pagesQuery = useArtifactPagesQuery(artifactId, !invalidArtifactId);
   const assertionQuery = useAssertionQuery(queue?.current_assertion_id);
-  // Persistent report card — only fetched once a range is complete.
+  // Persistent report card - only fetched once a range is complete.
   const studyReportQuery = useStudyReportQuery(
     artifactId,
     Boolean(queue?.document_complete) && !invalidArtifactId,
@@ -226,7 +226,7 @@ export default function WorkspaceArtifactPage({
   // Explicit indexing → ready poll. A freshly-uploaded PDF first settles the
   // artifact query on status "pending" (awaiting page selection); React Query
   // does not reliably (re)arm a refetchInterval that was previously false once
-  // the status transitions to "indexing" after the learner confirms pages — so
+  // the status transitions to "indexing" after the learner confirms pages - so
   // the full-screen "indexing N%" loader would freeze at its last sampled value
   // until a manual refresh. Own the poll here so it always runs while indexing
   // and stops the instant the document is ready.
@@ -240,7 +240,7 @@ export default function WorkspaceArtifactPage({
         setArtifact(data);
         queryClient.setQueryData(queryKeys.artifact(artifactId), data);
       } catch {
-        /* transient — keep polling */
+        /* transient - keep polling */
       }
     };
     const id = window.setInterval(() => void poll(), 2500);
@@ -262,7 +262,7 @@ export default function WorkspaceArtifactPage({
   useEffect(() => {
     if (invalidArtifactId || !artifact || !isPdf) return;
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- async PDF document load — inherently an effect
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async PDF document load - inherently an effect
     setPdfError(null);
     const cached = getCachedPdfDocument(artifactId);
     if (cached) {
@@ -314,7 +314,7 @@ export default function WorkspaceArtifactPage({
 
   const queueStreamRef = useRef<EventSource | null>(null);
   // Tracks whether the live SSE queue stream is connected. The fallback poll
-  // below runs ONLY while the stream is down — a healthy stream already pushes
+  // below runs ONLY while the stream is down - a healthy stream already pushes
   // every queue update, so polling on top of it would just double-fetch.
   const [streamConnected, setStreamConnected] = useState(false);
 
@@ -482,7 +482,7 @@ export default function WorkspaceArtifactPage({
 
   async function setStudyMode(nextMode: "adaptive" | "classic") {
     if (queue?.study_mode === nextMode) return;
-    // Optimistic — the change applies to the next question, no regeneration.
+    // Optimistic - the change applies to the next question, no regeneration.
     setQueue((q) => (q ? { ...q, study_mode: nextMode } : q));
     try {
       await apiPost(`/api/artifacts/${artifactId}/study-mode`, { mode: nextMode });
@@ -577,12 +577,12 @@ export default function WorkspaceArtifactPage({
               const correct = Boolean(v.correct);
               const correctIndex = v.correct_index ?? (isMulti ? (multiSelected[0] ?? 0) : Number(selected));
               const correctIndices = v.correct_indices;
-              // Reveal the outcome now — coaching is still on its way.
+              // Reveal the outcome now - coaching is still on its way.
               setGradeState({ correct, correctIndex, correctIndices });
               setSubmitting(false);
               // Record the answer immediately (coaching text is patched in below).
               setAnsweredHistory((h) => {
-                // Preserve the FIRST-attempt result across Learn-mode retries — the
+                // Preserve the FIRST-attempt result across Learn-mode retries - the
                 // report card grades you on the first try, not the eventual retry.
                 const prior = h.find((c) => c.assertionId === answeredId);
                 return [
@@ -616,11 +616,11 @@ export default function WorkspaceArtifactPage({
           },
         },
       );
-      // Stream ended without ever producing coaching — fall back so the "writing…"
+      // Stream ended without ever producing coaching - fall back so the "writing…"
       // affordance resolves instead of hanging.
       setFeedback((prev) => prev ?? (verdictExplanation || "Answer recorded."));
     } catch {
-      if (!gotVerdict) setFeedback("Could not grade answer — try again.");
+      if (!gotVerdict) setFeedback("Could not grade answer - try again.");
       else setFeedback((prev) => prev ?? (verdictExplanation || "Answer recorded."));
     } finally {
       setSubmitting(false);
@@ -779,7 +779,7 @@ export default function WorkspaceArtifactPage({
               Indexing failed
             </Title>
             <Text c="dimmed" ta="center" lh={1.6}>
-              We could not finish preparing pages {selectedRange?.from}–{selectedRange?.to}. Try a smaller
+              We could not finish preparing pages {selectedRange?.from}-{selectedRange?.to}. Try a smaller
               range or upload the file again.
             </Text>
             <Button variant="default" onClick={() => window.location.reload()}>
@@ -868,7 +868,7 @@ export default function WorkspaceArtifactPage({
           display: "flex",
           flexDirection: "column",
           // Top-anchored (not centered) so revealing the explanation grows the card
-          // downward instead of re-centering the whole panel — no layout jump.
+          // downward instead of re-centering the whole panel - no layout jump.
           overflow: "hidden",
           justifyContent: "flex-start",
           paddingTop: "clamp(8px, 2vh, 20px)",
@@ -914,7 +914,7 @@ export default function WorkspaceArtifactPage({
                 Nothing to quiz here
               </Text>
               <Text c="dimmed" maw={420}>
-                This material doesn&rsquo;t contain testable content — it looks like a cover
+                This material doesn&rsquo;t contain testable content - it looks like a cover
                 page, contents, or reference list. Choose different pages to study.
               </Text>
               <Button variant="light" color="lavender" radius="xl" mt="xs" onClick={openReselectPages}>
@@ -952,7 +952,7 @@ export default function WorkspaceArtifactPage({
               generating={Boolean(queue?.generation_pending)}
             />
           ) : reviewIndex !== null && answeredHistory[reviewIndex] ? (
-          // Reviewing a previously-answered question — read-only, with the learner's
+          // Reviewing a previously-answered question - read-only, with the learner's
           // choice + the correct answer + explanation, and step controls.
           <Box style={{ height: "100%", minHeight: 0, width: "100%", overflow: "hidden" }}>
           <McqReviewView
@@ -968,7 +968,7 @@ export default function WorkspaceArtifactPage({
           />
           </Box>
           ) : (
-          // Fill the whole study area — the question is its own page: the stem stays
+          // Fill the whole study area - the question is its own page: the stem stays
           // sticky at the top while options + explanation scroll beneath it.
           <Box style={{ height: "100%", minHeight: 0, width: "100%", overflow: "hidden" }}>
           <SelectionQuote
@@ -1025,7 +1025,7 @@ export default function WorkspaceArtifactPage({
         my={{ base: "calc(-1 * var(--mantine-spacing-xs))", sm: "calc(-1 * var(--mantine-spacing-md))" }}
         style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}
       >
-        {/* Desktop 3-pane: the top was empty wasted space — float "Saved notes" into
+        {/* Desktop 3-pane: the top was empty wasted space - float "Saved notes" into
             the corner so the reader + buddy use the full height. */}
         {!stacked && (
           <Button

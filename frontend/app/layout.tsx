@@ -88,7 +88,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
                 background: var(--mantine-color-lavender-1);
                 color: var(--mantine-color-lavender-9);
               }
-              /* Custom scrollbars — slim, calm, and inset so the thumb floats as a
+              /* Custom scrollbars - slim, calm, and inset so the thumb floats as a
                  soft pill instead of a hard edge-to-edge bar (Calm Paper). */
               * {
                 scrollbar-width: thin;
@@ -133,7 +133,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
                 background-size: 200% 100%;
                 animation: paper-shimmer 1.8s infinite linear;
               }
-              /* Landing reveal — one-shot fade-up on mount (see _components/landing/motion.tsx). */
+              /* Landing reveal - one-shot fade-up on mount (see _components/landing/motion.tsx). */
               @keyframes zivo-reveal-in {
                 from { opacity: 0; transform: translateY(20px); }
                 to { opacity: 1; transform: none; }

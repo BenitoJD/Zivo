@@ -24,7 +24,7 @@ export function AuthSplitLayout({
   return (
     <Box bg="var(--mantine-color-body)" style={{ minHeight: "100dvh" }}>
       <Group align="stretch" wrap="nowrap" gap={0} style={{ minHeight: "100dvh" }}>
-        {/* Editorial brand panel — intentionally always dark (a fixed dark
+        {/* Editorial brand panel - intentionally always dark (a fixed dark
             surface, like a book endpaper), regardless of color scheme. We pin
             literal values because the app's `gray` scale is inverted in dark
             mode: `gray.9` would flip to white and the light text below would
@@ -50,7 +50,7 @@ export function AuthSplitLayout({
             }}
           />
           <Stack justify="space-between" style={{ minHeight: "100dvh", position: "relative", zIndex: 1 }} gap={0}>
-            {/* The brand panel is always dark, so pin the lockup to cream — otherwise
+            {/* The brand panel is always dark, so pin the lockup to cream - otherwise
                 it inherits the (dark) theme text color and vanishes in light mode. */}
             <BrandMark height={28} color="#FAF9F6" />
             <Stack gap={20} maw={480}>

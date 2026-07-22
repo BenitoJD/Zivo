@@ -15,12 +15,12 @@ import {
  * Reveals are now PURE CSS (a one-shot fade-up animation on mount with `both`
  * fill). Earlier IntersectionObserver / framer `whileInView` approaches kept
  * leaving below-the-fold sections stuck invisible inside the landing's inner
- * scroll container — CSS animation can never get stuck, so content is always
+ * scroll container - CSS animation can never get stuck, so content is always
  * visible. The keyframes (`zivo-reveal-in`) live in the root layout's global
  * style. Reduced-motion is honoured there too.
  */
 
-/** Brand spring easing — array form for framer `ease` used by a few sections. */
+/** Brand spring easing - array form for framer `ease` used by a few sections. */
 export const EASE = [0.32, 0.72, 0, 1] as const;
 
 /** A single fade-up reveal. `delay` (ms) staggers it within a <Stagger>. */
@@ -46,7 +46,7 @@ export function Reveal({
   );
 }
 
-/** Stagger container — gives each <Reveal> child an incremental delay to cascade. */
+/** Stagger container - gives each <Reveal> child an incremental delay to cascade. */
 export function Stagger({
   children,
   className,

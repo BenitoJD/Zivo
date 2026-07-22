@@ -33,7 +33,7 @@ import { useIsDark } from "@/lib/useIsDark";
  * Tutor chat panel + its message UI (extracted from the workspace page monolith).
  * The branded assistant chat used across Learn/Test/Read surfaces: streaming
  * messages, thinking heart, per-message actions (copy / edit / save-note /
- * regenerate), and the composer. Stateless — the page owns messages + handlers.
+ * regenerate), and the composer. Stateless - the page owns messages + handlers.
  */
 function AssistantLogo({ size }: { size: number }) {
   return <BrandMark showWord={false} height={size} />;
@@ -69,7 +69,7 @@ export function TutorPanel({
   onClear?: () => void;
   suggestions?: string[];
   emptyHint?: string;
-  /** Show a branded top bar — for surfaces (Read, mobile) that have no rail header. */
+  /** Show a branded top bar - for surfaces (Read, mobile) that have no rail header. */
   showHeader?: boolean;
 }) {
   const isDark = useIsDark();
@@ -298,7 +298,7 @@ export function TutorPanel({
               value={input}
               onChange={(e) => onInputChange(e.currentTarget.value)}
               // Let the learner compose (and quote) freely while context finishes
-              // preparing — only sending waits on `contextReady` (see canSend).
+              // preparing - only sending waits on `contextReady` (see canSend).
               disabled={busy}
               styles={{
                 input: {
@@ -383,7 +383,7 @@ export const READ_CHAT_SUGGESTIONS = [
 ];
 
 /**
- * The brand heart, alive while the assistant thinks — a gentle beat with a soft glow
+ * The brand heart, alive while the assistant thinks - a gentle beat with a soft glow
  * ring breathing outward. Replaces the old "..." dots for a more premium wait state.
  */
 function ThinkingHeart({ size = 28 }: { size?: number }) {

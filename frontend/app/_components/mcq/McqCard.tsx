@@ -56,7 +56,7 @@ export function mcqOptionChrome(isDark: boolean, state: McqOptionVisualState) {
     chipColor = chipInk;
     borderWidth = 2;
   } else if (isSelected) {
-    // A decisive, on-brand selection — a present lavender tint and a saturated
+    // A decisive, on-brand selection - a present lavender tint and a saturated
     // brand-primary outline, not the near-white wash it had before.
     border = isDark ? "var(--mantine-color-lavender-5)" : "var(--mantine-color-lavender-6)";
     background = isDark ? "var(--mantine-color-lavender-1)" : "var(--mantine-color-lavender-1)";
@@ -81,7 +81,7 @@ export function McqFeedbackCard({
 }) {
   // The explanation is the payoff after answering. Premium treatment: a self-
   // contained card with a tinted status header (icon + verdict) and a clean,
-  // readable body — left-aligned prose, generous line-height.
+  // readable body - left-aligned prose, generous line-height.
   const paragraphs = feedback
     .split("\n\n")
     .map((p) => p.trim())

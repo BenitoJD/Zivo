@@ -6,7 +6,7 @@ import { Reveal } from "./motion";
 
 /**
  * One editorial deep-dive: prose left, a calm mini chat-mock right. Adds depth
- * beyond the card grid — the Linear/Vercel "feature spotlight" rhythm.
+ * beyond the card grid - the Linear/Vercel "feature spotlight" rhythm.
  */
 export function Spotlight() {
   return (
@@ -61,7 +61,7 @@ export function Spotlight() {
               <Text size="md" c="gray.6" lh={1.7}>
                 Every reply is grounded in the exact pages you uploaded. Ask
                 &ldquo;why?&rdquo; or &ldquo;explain that again&rdquo; in plain
-                language — Zivo cites the passage, not a guess. So you learn what
+                language - Zivo cites the passage, not a guess. So you learn what
                 the material actually says.
               </Text>
             </Reveal>
@@ -80,7 +80,7 @@ export function Spotlight() {
                   <ChatBubble role="user" text="Why is price equal to marginal revenue here?" />
                   <ChatBubble
                     role="tutor"
-                    text="Because each extra unit sells at the market price, so the revenue from one more unit equals that price — see page 12."
+                    text="Because each extra unit sells at the market price, so the revenue from one more unit equals that price - see page 12."
                   />
                 </Stack>
               </Paper>

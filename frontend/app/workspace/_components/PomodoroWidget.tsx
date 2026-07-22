@@ -42,7 +42,7 @@ function fmt(total: number): string {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-/** Two soft sine blips via Web Audio — a phase-change cue with no asset/copyright. */
+/** Two soft sine blips via Web Audio - a phase-change cue with no asset/copyright. */
 function chime(up: boolean) {
   try {
     const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -151,7 +151,7 @@ export function PomodoroWidget() {
     [clampPos],
   );
 
-  // Restore persisted config (not the live countdown — a stale timer shouldn't
+  // Restore persisted config (not the live countdown - a stale timer shouldn't
   // resume mid-count after a reload).
   useEffect(() => {
     try {
@@ -214,7 +214,7 @@ export function PomodoroWidget() {
       deadlineRef.current = Date.now() + nextSecs * 1000;
     }, 250);
     return () => window.clearInterval(id);
-    // remaining intentionally omitted — the deadline captures it; re-subscribing
+    // remaining intentionally omitted - the deadline captures it; re-subscribing
     // every tick would reset the interval.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running, phase, preset, nextPhase]);

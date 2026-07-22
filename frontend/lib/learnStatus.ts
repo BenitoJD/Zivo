@@ -1,4 +1,4 @@
-/** Learn-mode wait copy — describe real background work, not vague placeholders. */
+/** Learn-mode wait copy - describe real background work, not vague placeholders. */
 
 import { indexingStage } from "@/lib/constants";
 
@@ -17,7 +17,7 @@ export type LearnWaitContext = {
 export type LearnWaitStatus = {
   title: string;
   detail: string;
-  /** Stable key — reset rotation when this changes */
+  /** Stable key - reset rotation when this changes */
   rotateKey: string;
 };
 
@@ -59,7 +59,7 @@ export function learnWaitStatus(ctx: LearnWaitContext, tick: number): LearnWaitS
     if (generated === 0) {
       return {
         title: "Writing your first question",
-        detail: "One question first — more follow while you study",
+        detail: "One question first - more follow while you study",
         rotateKey: "gen-first",
       };
     }

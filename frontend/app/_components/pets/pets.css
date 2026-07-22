@@ -1,4 +1,4 @@
-/* Pixel-pet engine styles — ported from LucasHJin/obsidian-pets (MIT).
+/* Pixel-pet engine styles - ported from LucasHJin/obsidian-pets (MIT).
    Scoped under .zv-pet-world so they never leak into the rest of the app. */
 
 .zv-pet-world {
@@ -53,7 +53,7 @@
   opacity: 1;
 }
 
-/* Soft contact shadow beneath the paws — sits just under the feet line so it
+/* Soft contact shadow beneath the paws - sits just under the feet line so it
    grounds the pet without covering the sprite. */
 .zv-pet-shadow {
   position: absolute;

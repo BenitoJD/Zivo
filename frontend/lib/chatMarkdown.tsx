@@ -247,7 +247,7 @@ function markdownComponents(isDark: boolean): Components {
 // streamed updates to ~50ms. This must be a THROTTLE (flush at most *and at
 // least* every 50ms), not a debounce: tokens arrive faster than 50ms apart, so
 // a debounce that resets its timer on every token would never fire until the
-// stream stopped — making the whole answer appear in one go instead of
+// stream stopped - making the whole answer appear in one go instead of
 // streaming word-by-word.
 const STREAM_FLUSH_MS = 50;
 

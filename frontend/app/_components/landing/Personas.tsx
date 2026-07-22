@@ -27,7 +27,7 @@ const PERSONAS: Persona[] = [
     id: "students",
     tab: "Students",
     icon: IconSchool,
-    source: "Biology 101 — Cellular Respiration (lecture PDF)",
+    source: "Biology 101 - Cellular Respiration (lecture PDF)",
     question: "Where in the cell does the citric acid cycle take place?",
     options: ["Cytoplasm", "Mitochondrial matrix", "Cell membrane", "Nucleus"],
     answer: 1,
@@ -36,7 +36,7 @@ const PERSONAS: Persona[] = [
     id: "exam",
     tab: "Exam prep",
     icon: IconCertificate,
-    source: "MCAT — Amino Acids & Proteins (review sheet)",
+    source: "MCAT - Amino Acids & Proteins (review sheet)",
     question: "Which amino acid is most likely buried in a protein's hydrophobic core?",
     options: ["Lysine", "Glutamate", "Leucine", "Serine"],
     answer: 2,
@@ -45,10 +45,10 @@ const PERSONAS: Persona[] = [
     id: "professionals",
     tab: "Professionals",
     icon: IconBriefcase,
-    source: "Onboarding deck — Q3 Security & Compliance policy",
+    source: "Onboarding deck - Q3 Security & Compliance policy",
     question: "When must a data-access request be escalated to the security team?",
     options: [
-      "Never — managers approve all access",
+      "Never - managers approve all access",
       "Only for external contractors",
       "Whenever it touches customer PII",
       "Only during audits",
@@ -59,7 +59,7 @@ const PERSONAS: Persona[] = [
     id: "researchers",
     tab: "Researchers",
     icon: IconFlask,
-    source: "Paper — Attention Is All You Need (uploaded PDF)",
+    source: "Paper - Attention Is All You Need (uploaded PDF)",
     question: "What problem does multi-head attention primarily address?",
     options: [
       "Vanishing gradients in RNNs",
@@ -72,7 +72,7 @@ const PERSONAS: Persona[] = [
 ];
 
 /**
- * Wispr-Flow-style "Made for the way you work" — an interactive tab switcher.
+ * Wispr-Flow-style "Made for the way you work" - an interactive tab switcher.
  * Pick a persona and the panel morphs to show a real, source-grounded sample
  * question for that audience. Mirrors Wispr's "select one to see it in action".
  */

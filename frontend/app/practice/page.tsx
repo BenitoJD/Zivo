@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Practice library hub — search-first entry into the Wikidata concept graph.
+ * Practice library hub - search-first entry into the Wikidata concept graph.
  *
  * Public (no auth). A guest session is bootstrapped so on-demand generation and
  * answer recording work for anonymous visitors. Mirrors the landing-page pattern:
@@ -89,7 +89,7 @@ export default function PracticeHubPage() {
               in the world.
             </Title>
             <Text size="lg" c="gray.6" lh={1.6} maw={560}>
-              Search any concept — from photosynthesis to Bebop — and practice AI-generated
+              Search any concept - from photosynthesis to Bebop - and practice AI-generated
               questions instantly. No sign-up needed.
             </Text>
           </Stack>

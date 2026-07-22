@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Public coding problem solve page — one LeetCode-style problem, anonymous.
+ * Public coding problem solve page - one LeetCode-style problem, anonymous.
  *
  * Reuses the shared CodeEditor (same component as the workspace Coding study
  * mode). A guest session is bootstrapped so submits record against a guest

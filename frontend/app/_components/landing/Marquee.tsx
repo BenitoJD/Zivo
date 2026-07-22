@@ -60,13 +60,13 @@ function Chip({ item }: { item: (typeof ITEMS)[number] }) {
 }
 
 // The 6 source types repeated so a single row is always wider than the viewport
-// (even on ultra-wide screens) — otherwise the loop scrolls past the content and
+// (even on ultra-wide screens) - otherwise the loop scrolls past the content and
 // leaves empty space on the right before it repeats.
 const ROW_REPEAT = 4;
 
 /** One marquee row (items repeated to fill the width). Duplicated for the loop.
  *  paddingRight gives the trailing gap so the seam between the two rows matches
- *  the inter-chip gap exactly — and translateX(-50%) lands one full row over. */
+ *  the inter-chip gap exactly - and translateX(-50%) lands one full row over. */
 function MarqueeRow() {
   return (
     <Box
@@ -89,7 +89,7 @@ function MarqueeRow() {
 }
 
 /**
- * Infinite "works with" strip — premium pill chips with colored source-type tiles,
+ * Infinite "works with" strip - premium pill chips with colored source-type tiles,
  * scrolling seamlessly. Pauses on hover; renders statically under reduced-motion.
  */
 export function Marquee() {
@@ -135,7 +135,7 @@ export function Marquee() {
       <Box
         style={{
           overflow: "hidden",
-          // Wide edge fade so chips dissolve well before the edge — the loop seam
+          // Wide edge fade so chips dissolve well before the edge - the loop seam
           // (and the duplicated row) is never visible.
           WebkitMaskImage:
             "linear-gradient(to right, transparent 0%, #000 16%, #000 84%, transparent 100%)",

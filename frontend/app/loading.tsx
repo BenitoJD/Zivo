@@ -3,7 +3,7 @@ import { BrandMark } from "@/app/_components/BrandMark";
 import { PetPlayground } from "@/app/_components/pets/PetPlayground";
 
 /**
- * Route-level loading state. A calm paper skeleton — used by Next.js while a
+ * Route-level loading state. A calm paper skeleton - used by Next.js while a
  * route segment is fetching.
  */
 export default function Loading() {

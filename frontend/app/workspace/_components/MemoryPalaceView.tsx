@@ -33,7 +33,7 @@ import { GenerateGate, useGenStarted } from "./GenerateGate";
 import { WaitState } from "./WaitState";
 
 /**
- * Memory Palace mode — Anthony Metivier's Magnetic Memory Method.
+ * Memory Palace mode - Anthony Metivier's Magnetic Memory Method.
  * Turns the source into a journey through a place you know: each stop anchors a fact
  * with a vivid multisensory mnemonic (Walk), then Recall Rehearsal drills it forwards,
  * shuffled, and backwards so each item gets primacy + recency. Additive to MCQ.
@@ -61,7 +61,7 @@ export function MemoryPalaceView({
       <GenerateGate
         icon={<IconBuildingCastle size={28} />}
         title="Build a memory palace"
-        description="Build a memory palace — a vivid journey of mnemonic stations."
+        description="Build a memory palace - a vivid journey of mnemonic stations."
         actionLabel="Build palace"
         onStart={start}
         compact={compact}
@@ -307,7 +307,7 @@ function Rehearse({
             </ThemeIcon>
             <Text ff="var(--font-serif)" fz={24} fw={500}>You walked the whole palace</Text>
             <Text c="dimmed">
-              Every stop is locked in. Come back later and rehearse it shuffled — recalling
+              Every stop is locked in. Come back later and rehearse it shuffled - recalling
               out of order is what moves it into long-term memory.
             </Text>
             <Button variant="light" color="lavender" radius="xl" onClick={() => setMode("shuffle")}>
@@ -383,7 +383,7 @@ function Rehearse({
           </Paper>
           <Group gap={6} justify="center" c="dimmed">
             <IconArrowsShuffle size={13} />
-            <Text fz="xs">Tip: rehearse shuffled and backwards — out-of-order recall builds durable memory.</Text>
+            <Text fz="xs">Tip: rehearse shuffled and backwards - out-of-order recall builds durable memory.</Text>
           </Group>
         </>
       )}

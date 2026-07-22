@@ -42,7 +42,7 @@ const QUESTIONS: Question[] = [
       { letter: "C", text: "Queue", correct: true },
       { letter: "D", text: "Heap", correct: false },
     ],
-    explanation: "A queue removes in the same order it inserted — first in, first out.",
+    explanation: "A queue removes in the same order it inserted - first in, first out.",
   },
 ];
 
@@ -168,7 +168,7 @@ export function ProductMock() {
         </Stack>
 
         {/* The explanation's space is reserved at all times so revealing it fades the
-            text in WITHOUT growing the card — no page jump. */}
+            text in WITHOUT growing the card - no page jump. */}
         <Box style={{ minHeight: "2.8em", display: "flex", alignItems: "flex-start", justifyContent: "center" }}>
           <Text
             size="xs"

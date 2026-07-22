@@ -30,7 +30,7 @@ const StudyNavContext = createContext<StudyNavValue | null>(null);
 /**
  * Lifts the study-mode selection up to the workspace layout so the *global*
  * left sidebar (which lives beside, not inside, the artifact page) can host the
- * mode navigator below the source list — one rail instead of two.
+ * mode navigator below the source list - one rail instead of two.
  */
 export function StudyNavProvider({ children }: { children: React.ReactNode }) {
   const [active, setActive] = useState(false);

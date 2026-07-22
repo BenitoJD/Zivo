@@ -8,7 +8,7 @@ export default function SignupPage() {
     <AuthSplitLayout
       eyebrow="Start studying"
       quote="“The important thing is not to stop questioning. Curiosity has its own reason for existing.”"
-      attribution="— Albert Einstein"
+      attribution="- Albert Einstein"
     >
       <AuthForm mode="signup" />
     </AuthSplitLayout>

@@ -107,7 +107,7 @@ function releaseRenderSlot(): void {
   next?.();
 }
 
-// pdf.js VerbosityLevel.ERRORS — silences benign warn()s like "Optional content group
+// pdf.js VerbosityLevel.ERRORS - silences benign warn()s like "Optional content group
 // not found: NNNR" that real-world PDFs emit during rendering.
 const PDF_VERBOSITY_ERRORS = 0;
 

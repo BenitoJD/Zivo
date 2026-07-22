@@ -22,7 +22,7 @@ import { Reveal } from "./motion";
 /**
  * Wispr-Flow's "Write faster in all your apps, on any device" section, adapted
  * for Zivo: a dark showcase panel with a device mock running the study UI,
- * orbited by an arc of source-type icons (PDF, YouTube, slides, repos, notes…) —
+ * orbited by an arc of source-type icons (PDF, YouTube, slides, repos, notes…) -
  * "drop in any source, get questions." The panel is intentionally dark in BOTH
  * colour schemes (echoing Wispr's dark band) so colours are pinned literally.
  */
@@ -47,7 +47,7 @@ const VISUAL = 480;
 export function SourceOrbit() {
   const reduce = useReducedMotion();
   // The orbit visual is laid out at a fixed 480px (icons sit at a fixed radius).
-  // On narrow screens that overflowed and got clipped — so scale the whole visual
+  // On narrow screens that overflowed and got clipped - so scale the whole visual
   // down proportionally to the space available, keeping every icon on-screen.
   const orbitWrapRef = useRef<HTMLDivElement>(null);
   const [orbitScale, setOrbitScale] = useState(1);
@@ -79,7 +79,7 @@ export function SourceOrbit() {
           gap={32}
           p={{ base: 24, md: 56 }}
         >
-          {/* Left — copy */}
+          {/* Left - copy */}
           <Stack gap={22} maw={440} style={{ flex: "1 1 320px" }}>
             <Reveal>
               <Group gap={8} wrap="wrap">
@@ -121,7 +121,7 @@ export function SourceOrbit() {
             <Reveal>
               <Text size="lg" lh={1.6} style={{ color: "#A8A296" }}>
                 Drop in a PDF, a lecture recording, a YouTube link, a repo, or your
-                own notes. Zivo reads it and turns it into exam-ready questions —
+                own notes. Zivo reads it and turns it into exam-ready questions -
                 everywhere you study.
               </Text>
             </Reveal>
@@ -138,7 +138,7 @@ export function SourceOrbit() {
             </Reveal>
           </Stack>
 
-          {/* Right — device + orbiting source icons, scaled to fit any width */}
+          {/* Right - device + orbiting source icons, scaled to fit any width */}
           <Box
             ref={orbitWrapRef}
             style={{

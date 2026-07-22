@@ -96,7 +96,7 @@ export function SettingsModal({ opened, onClose, username, onReplayOnboarding }:
     const stored = localStorage.getItem("zivo-mcq-count");
     return stored ? parseInt(stored, 10) || 5 : 5;
   });
-  // Live (Mantine broadcasts to every PetPlayground) — flip and the cats appear
+  // Live (Mantine broadcasts to every PetPlayground) - flip and the cats appear
   // or vanish app-wide at once, no Save needed.
   const [catEnabled, setCatEnabled] = useLocalStorage({ key: CAT_ENABLED_KEY, defaultValue: false });
 
@@ -128,7 +128,7 @@ export function SettingsModal({ opened, onClose, username, onReplayOnboarding }:
       }}
     >
       <Stack gap="md" pb={4}>
-        {/* Profile — a soft gradient banner with a monogram avatar. */}
+        {/* Profile - a soft gradient banner with a monogram avatar. */}
         <Paper
           radius="lg"
           p="md"
@@ -168,7 +168,7 @@ export function SettingsModal({ opened, onClose, username, onReplayOnboarding }:
           </Group>
         </Paper>
 
-        {/* Grouped settings — one calm card, hairline-separated rows. */}
+        {/* Grouped settings - one calm card, hairline-separated rows. */}
         <Paper radius="lg" p={0} withBorder style={{ overflow: "hidden", background: "var(--mantine-color-body)" }}>
           <SettingRow
             icon={<IconBook size={18} stroke={1.7} />}
@@ -246,7 +246,7 @@ export function SettingsModal({ opened, onClose, username, onReplayOnboarding }:
           />
         </Paper>
 
-        {/* Replay onboarding — its own quiet row. */}
+        {/* Replay onboarding - its own quiet row. */}
         <Paper radius="lg" withBorder style={{ overflow: "hidden", background: "var(--mantine-color-body)" }}>
           <SettingRow
             icon={<IconSparkles size={18} stroke={1.7} />}

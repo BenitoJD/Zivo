@@ -41,8 +41,8 @@ import {
 /**
  * Page-selection screen (extracted from the workspace page monolith): the
  * pre-study picker where the learner chooses which pages to study. The redesign
- * is a clean three-band layout — header, scrollable thumbnail grid, and a solid
- * in-flow action bar — that adapts from phones to desktops via flex-wrap and
+ * is a clean three-band layout - header, scrollable thumbnail grid, and a solid
+ * in-flow action bar - that adapts from phones to desktops via flex-wrap and
  * container-measured columns (no fragile breakpoint math). Shared as
  * PageSelectionBody by the in-session "change study range" overlay, which
  * supplies its own header.
@@ -197,7 +197,7 @@ function SelectionHeader({
         Choose pages to study
       </Title>
       <Text size="sm" c="dimmed" mt={2} lh={1.5}>
-        Tap a page or drag the range — {pageCount} {pageCount === 1 ? "page" : "pages"} in this source.
+        Tap a page or drag the range - {pageCount} {pageCount === 1 ? "page" : "pages"} in this source.
       </Text>
     </Box>
   );
@@ -298,7 +298,7 @@ export function PageSelectionBody({
   );
 }
 
-/** Fast common selections — far quicker than nudging the slider, especially on phones. */
+/** Fast common selections - far quicker than nudging the slider, especially on phones. */
 function QuickPresets({
   pageCount,
   selectedPages,
@@ -398,7 +398,7 @@ function SelectionActionBar({
     input: {
       // Pin to the theme-aware text token (NOT a hardcoded palette stop): the
       // app remaps both `dark` and `gray` to one warm NEUTRAL ramp, so e.g.
-      // gray-1 is near-white in BOTH schemes — hardcoding it left the page
+      // gray-1 is near-white in BOTH schemes - hardcoding it left the page
       // number invisible on the dark action bar. Let the default themed input
       // supply the background; --mantine-color-text always contrasts it.
       color: "var(--mantine-color-text)",
@@ -703,7 +703,7 @@ function PageThumbnailCell({
 
   useEffect(() => {
     if (!compact) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- async PDF page-aspect load — inherently an effect
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- async PDF page-aspect load - inherently an effect
       setFrameWidth(thumbWidth);
       return;
     }

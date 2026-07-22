@@ -6,7 +6,7 @@ import { IconArrowRight, IconBook2 } from "@tabler/icons-react";
 import { Reveal } from "./motion";
 
 /**
- * Closing call-to-action on the dark ink panel — the one intentional dark
+ * Closing call-to-action on the dark ink panel - the one intentional dark
  * surface on the landing, echoing AuthSplitLayout's brand panel. Frosted icon
  * tile + serif headline + single primary (white) button.
  */

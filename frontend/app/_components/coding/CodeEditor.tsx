@@ -30,12 +30,12 @@ import {
 } from "@/lib/api/queries";
 
 /**
- * Shared LeetCode-style coding editor — statement panel, language select, code
+ * Shared LeetCode-style coding editor - statement panel, language select, code
  * Textarea, Run (debug against custom stdin), and Submit (grade against hidden
  * tests). Used by the workspace Coding study mode and the public sampler.
  *
  * Props:
- * - problem: the public problem payload (sample tests only — hidden tests never
+ * - problem: the public problem payload (sample tests only - hidden tests never
  *   leave the server).
  * - onSubmitted: optional callback after a successful submit (e.g. to refresh
  *   the workspace list's per-problem status).
@@ -171,7 +171,7 @@ export function CodeEditor({
           <Textarea
             value={stdin}
             onChange={(e) => setStdin(e.currentTarget.value)}
-            placeholder="Custom stdin (optional — used by Run, not Submit)"
+            placeholder="Custom stdin (optional - used by Run, not Submit)"
             autosize
             minRows={2}
             maxRows={6}

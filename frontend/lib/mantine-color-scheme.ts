@@ -8,7 +8,7 @@ export function readColorSchemeFromCookie(value: string | undefined): MantineCol
 }
 
 /**
- * Inline script for app/layout.tsx — runs before React hydrates.
+ * Inline script for app/layout.tsx - runs before React hydrates.
  * Cookie + localStorage stay aligned so SSR and client agree on scheme.
  */
 export const MANTINE_COLOR_SCHEME_SCRIPT = `try {
@@ -25,7 +25,7 @@ export const MANTINE_COLOR_SCHEME_SCRIPT = `try {
     var fromCookie = _readCookie("${MANTINE_COLOR_SCHEME_COOKIE}");
     var fromStorage = window.localStorage.getItem("mantine-color-scheme-value");
     var preference = fromCookie || fromStorage || "light";
-    // Light is the default for everyone — dark only when the user explicitly
+    // Light is the default for everyone - dark only when the user explicitly
     // picked it. "auto" (OS preference) is deliberately not honored.
     var colorScheme = preference === "dark" ? "dark" : "light";
     document.documentElement.setAttribute("data-mantine-color-scheme", colorScheme);
@@ -54,7 +54,7 @@ export function setSsrColorScheme(scheme: MantineColorScheme): void {
   ssrColorScheme = scheme;
 }
 
-/** Scheme for theme resolvers — cookie/SSR on server, DOM attribute on client. */
+/** Scheme for theme resolvers - cookie/SSR on server, DOM attribute on client. */
 export function resolveColorScheme(): MantineColorScheme {
   if (typeof document !== "undefined") {
     const scheme = document.documentElement.getAttribute("data-mantine-color-scheme");

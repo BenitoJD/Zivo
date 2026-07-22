@@ -50,7 +50,7 @@ const SCORE_LABELS: Record<keyof InterviewScores, string> = {
 const scoreColor = (pct: number) => (pct >= 67 ? "sage" : pct >= 50 ? "lavender" : "terracotta");
 
 /**
- * Interview Mode — a live, multi-round mock interview from the learner's resume. Pick a
+ * Interview Mode - a live, multi-round mock interview from the learner's resume. Pick a
  * target company category, then answer one question at a time (MCQ or typed); each answer
  * is evaluated before the next question, ending in a per-round + overall report.
  */
@@ -138,8 +138,8 @@ export function InterviewView({ artifactId, compact = false }: { artifactId: str
           <Text ff="var(--font-serif)" fz={compact ? 20 : 26} fw={500}>Mock interview</Text>
         </Group>
         <Text c="dimmed" fz="sm">
-          We’ll interview you from your resume, one question at a time — MCQs plus system design,
-          technical and behavioural rounds — and score each answer. Who are you targeting?
+          We’ll interview you from your resume, one question at a time - MCQs plus system design,
+          technical and behavioural rounds - and score each answer. Who are you targeting?
         </Text>
         <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
           {cats.map(([value, meta]) => (
@@ -309,7 +309,7 @@ export function InterviewView({ artifactId, compact = false }: { artifactId: str
           <Textarea
             value={typed}
             onChange={(e) => setTyped(e.currentTarget.value)}
-            placeholder="Type your answer — think out loud, structure it, and cover the trade-offs."
+            placeholder="Type your answer - think out loud, structure it, and cover the trade-offs."
             autosize
             minRows={5}
             radius="md"

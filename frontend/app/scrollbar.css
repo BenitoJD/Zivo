@@ -1,5 +1,5 @@
 /*
- * Calm Paper scrollbars — quiet by design. A thin, transparent track with a faint
+ * Calm Paper scrollbars - quiet by design. A thin, transparent track with a faint
  * translucent-grey thumb that's barely there at rest and only firms a little on
  * hover. A neutral grey at low alpha reads as subtle on both the warm-paper light
  * theme and the dark theme, so the bar never competes with the content.
@@ -49,7 +49,7 @@
   display: none;
 }
 
-/* A gentle "scroll down" nudge — a chevron that breathes downward. */
+/* A gentle "scroll down" nudge - a chevron that breathes downward. */
 @keyframes zv-scroll-cue {
   0%,
   100% {

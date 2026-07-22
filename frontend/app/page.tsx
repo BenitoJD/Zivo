@@ -18,7 +18,7 @@ import { Footer } from "@/app/_components/landing/Footer";
 
 /**
  * Public landing page. Owns a 100dvh vertical scroll container because the root
- * <body> is locked to 100dvh/overflow:hidden by the workspace AppShell — so this
+ * <body> is locked to 100dvh/overflow:hidden by the workspace AppShell - so this
  * page must scroll its own viewport. Sections are composed from collocated
  * components under app/_components/landing/.
  */

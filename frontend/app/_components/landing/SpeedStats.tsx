@@ -18,7 +18,7 @@ const BARS: Bar[] = [
 ];
 
 /**
- * Wispr-Flow-style stat band — their "4x faster than typing" with the animated
+ * Wispr-Flow-style stat band - their "4x faster than typing" with the animated
  * Keyboard-vs-Flow bars, reframed for Zivo: passive re-reading vs. active recall.
  * Bars grow from zero when scrolled into view (the satisfying Wispr reveal).
  */

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Concept page — detail for a single Wikidata concept + auto-generation trigger.
+ * Concept page - detail for a single Wikidata concept + auto-generation trigger.
  *
  * When a visitor lands on a concept with zero questions, we fire on-demand
  * generation (fetch Wikipedia → run the generator) and poll until questions

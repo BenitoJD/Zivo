@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Public coding practice sampler — browse LeetCode-style problems across all
+ * Public coding practice sampler - browse LeetCode-style problems across all
  * sources (no login required). Anonymous visitors get a guest session so their
  * submits still record a measurement (against a guest entity).
  *

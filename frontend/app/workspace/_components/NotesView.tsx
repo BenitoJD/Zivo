@@ -25,7 +25,7 @@ import { GenerateGate, useGenStarted } from "./GenerateGate";
 import { WaitState } from "./WaitState";
 
 /**
- * Notes mode — Scribely-style. Turns a source into one cohesive, beautifully structured
+ * Notes mode - Scribely-style. Turns a source into one cohesive, beautifully structured
  * study document (Markdown), with a Notes / Cheat-sheet toggle and PDF/PNG/Copy export.
  * Additive to MCQ; reuses the chat Markdown renderer for consistent Calm Paper styling.
  */
@@ -41,7 +41,7 @@ export function NotesView({
   const sheetRef = useRef<HTMLDivElement>(null);
   const [exporting, setExporting] = useState<null | "pdf" | "png">(null);
 
-  // Each kind (notes / cheatsheet) is gated and remembered independently — the
+  // Each kind (notes / cheatsheet) is gated and remembered independently - the
   // hook is keyed by mode, so toggling reads the right per-kind flag.
   const mode = kind === "cheatsheet" ? "cheatsheet" : "notes";
   const [started, start] = useGenStarted(artifactId, mode);
@@ -155,7 +155,7 @@ export function NotesView({
         <WaitState
           pet
           title={kind === "cheatsheet" ? "Building your cheat sheet" : "Writing your study notes"}
-          body="Reading the whole source and laying it out clearly — this takes a few moments…"
+          body="Reading the whole source and laying it out clearly - this takes a few moments…"
         />
       </Stack>
     );

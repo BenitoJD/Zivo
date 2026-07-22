@@ -8,7 +8,7 @@ export default function LoginPage() {
     <AuthSplitLayout
       eyebrow="Welcome back"
       quote="“The cure for boredom is curiosity. The cure for curiosity is reading.”"
-      attribution="— Ellen Parr"
+      attribution="- Ellen Parr"
     >
       <AuthForm mode="login" />
     </AuthSplitLayout>

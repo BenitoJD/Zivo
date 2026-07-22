@@ -78,7 +78,7 @@ const MODE_GROUPS: {
 export const SIDEBAR_MINI_WIDTH = 64;
 export const SIDEBAR_EXPANDED_WIDTH = 280;
 export const SHELL_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
-// A touch longer than a snap — the rail glides open and pushes the page with it,
+// A touch longer than a snap - the rail glides open and pushes the page with it,
 // settling on the brand ease for a buttery, Apple-like expand.
 export const SHELL_MS = 340;
 const MINI_RAIL_ICON_SIZE = 42;
@@ -95,7 +95,7 @@ function SidebarAnimatedLayer({
   enterDelay?: number;
   reduceMotion: boolean;
   /** Pin the layer to its final width (desktop) so its content stays laid out
-   *  while only the navbar clip animates — no per-frame reflow, so the expand
+   *  while only the navbar clip animates - no per-frame reflow, so the expand
    *  reads as a smooth reveal instead of a stuttering re-layout. */
   width?: number;
 }) {
@@ -180,7 +180,7 @@ function MiniRailButton({
   );
 }
 
-/** Mini (collapsed) mode navigator — a column of mode icons under the source icons. */
+/** Mini (collapsed) mode navigator - a column of mode icons under the source icons. */
 function MiniModeNav({ mode, onChange }: { mode: StudyMode; onChange: (m: StudyMode) => void }) {
   return (
     <Stack gap={6} align="center" w="100%" pt={6} mt={2} style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}>
@@ -193,7 +193,7 @@ function MiniModeNav({ mode, onChange }: { mode: StudyMode; onChange: (m: StudyM
   );
 }
 
-/** Expanded mode navigator — grouped, labelled rows, placed below the source list. */
+/** Expanded mode navigator - grouped, labelled rows, placed below the source list. */
 function ExpandedModeNav({ mode, onChange }: { mode: StudyMode; onChange: (m: StudyMode) => void }) {
   return (
     <Box mt="sm" pt="sm" style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}>
@@ -245,7 +245,7 @@ export function sourceLabel(filename: string) {
 }
 
 /**
- * Status only while there is something to say — a ready source stays quiet.
+ * Status only while there is something to say - a ready source stays quiet.
  * (A list where every row shouts "Ready" is a list saying nothing.)
  */
 function sourceStatusMeta(status: SourceDocument["status"], progress: number) {
@@ -258,7 +258,7 @@ function sourceStatusMeta(status: SourceDocument["status"], progress: number) {
 }
 
 /**
- * A single source in the expanded rail — Wispr-calm: a tight, single-line row with
+ * A single source in the expanded rail - Wispr-calm: a tight, single-line row with
  * a tinted glyph chip, a truncated title, and a quiet status dot. The active row
  * lifts onto a soft lavender surface; the delete affordance stays hidden until hover.
  */
@@ -395,7 +395,7 @@ export function Sidebar({
   return (
     <>
       <style>{`
-        /* Source row — Wispr-calm: one quiet line per ready source, tinted glyph chip,
+        /* Source row - Wispr-calm: one quiet line per ready source, tinted glyph chip,
            hover-reveal delete. Status appears only while something is happening. */
         .zivo-source-row {
           position: relative;
@@ -487,7 +487,7 @@ export function Sidebar({
         @media (hover: none) { .zivo-source-del { opacity: 1; } }
         .zivo-source-del:hover { background: var(--mantine-color-terracotta-0); color: var(--mantine-color-terracotta-6); }
 
-        /* Section header count — a soft pill beside the label, not a stray number. */
+        /* Section header count - a soft pill beside the label, not a stray number. */
         .zivo-count-pill {
           display: inline-flex;
           align-items: center;
@@ -503,7 +503,7 @@ export function Sidebar({
           font-variant-numeric: tabular-nums;
         }
 
-        /* Add source — the sidebar's one hero: a soft lavender gradient pill with an
+        /* Add source - the sidebar's one hero: a soft lavender gradient pill with an
            inner top highlight, lifting gently on hover. Calm, tactile, unmistakable. */
         .zivo-add-source {
           background: linear-gradient(180deg, #F3E4FC 0%, #E9D2F9 100%) !important;
@@ -530,7 +530,7 @@ export function Sidebar({
           box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 4px 14px rgba(0, 0, 0, 0.35) !important;
         }
 
-        /* Footer utility bar — account chip on the left, quiet icon actions on the right. */
+        /* Footer utility bar - account chip on the left, quiet icon actions on the right. */
         .zivo-account {
           display: flex;
           align-items: center;

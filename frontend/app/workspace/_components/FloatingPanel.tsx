@@ -67,7 +67,7 @@ export function FloatingPanel({
   const [maximized, setMaximized] = useState(false);
   // While actively dragging/resizing the panel must track the pointer 1:1 (no
   // transition). At rest it gets an eased position transition so the sidebar
-  // collapse/expand — which nudges the panel to stay put — glides instead of
+  // collapse/expand - which nudges the panel to stay put - glides instead of
   // stepping jerkily with each ResizeObserver tick.
   const [interacting, setInteracting] = useState(false);
   const [z, setZ] = useState(() => nextZ());
@@ -98,7 +98,7 @@ export function FloatingPanel({
       next = { x: defaultSide === "left" ? MARGIN : Math.max(MARGIN, cw - w - MARGIN), y: MARGIN, w, h };
     }
     // One-time geometry init measured from the live container (an external
-    // system), not derived render state — the effect is the right place.
+    // system), not derived render state - the effect is the right place.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setRect(next);
   }, [open, rect, storageKey, defaultSide, bounds]);
@@ -245,7 +245,7 @@ export function FloatingPanel({
         willChange: "left, top",
       }}
     >
-      {/* Title bar — drag to move; double-click to maximize/restore. */}
+      {/* Title bar - drag to move; double-click to maximize/restore. */}
       <Group
         h={HEADER_H}
         px={10}

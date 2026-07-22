@@ -18,10 +18,10 @@ export const PANEL_MS = 280;
 
 // --- responsive breakpoints --------------------------------------------------
 // Desktop 3-pane only ≥992px (62em); below that the clean single-column mobile
-// shell is used — the cramped 3-pane didn't fit small tablets / large phones.
+// shell is used - the cramped 3-pane didn't fit small tablets / large phones.
 export const STUDY_DESKTOP_BP = "(min-width: 62em)";
 export const STUDY_COMPACT_BP = "(max-width: 47.99em)";
-/** Tablet range (768–991px): desktop study shell, but Source/Tutor ride as floating slide-over panels. */
+/** Tablet range (768-991px): desktop study shell, but Source/Tutor ride as floating slide-over panels. */
 export const STUDY_OVERLAY_BP = "(max-width: 61.99em)";
 
 // --- thumbnail grid ----------------------------------------------------------
@@ -84,11 +84,11 @@ export function formatSelectionSummary(selectedPages: number[], pageCount: numbe
   const first = selectedPages[0];
   const last = selectedPages[selectedPages.length - 1];
   const contiguous = selectedPages.length === last - first + 1;
-  if (contiguous) return `${selectedPages.length} pages selected · ${first}–${last}`;
+  if (contiguous) return `${selectedPages.length} pages selected · ${first}-${last}`;
   return `${selectedPages.length} pages selected`;
 }
 
-/** A question the learner has already answered — kept client-side so they can step
+/** A question the learner has already answered - kept client-side so they can step
  *  back and review any prior answer (with the choice they made + the explanation). */
 export type AnsweredCard = {
   assertionId: string;
@@ -97,7 +97,7 @@ export type AnsweredCard = {
   selectedIndex: number;
   gradeState: { correct: boolean; correctIndex: number; correctIndices?: number[] };
   feedback: string | null;
-  /** The concept/topic this question tested — for the end-of-study report card. */
+  /** The concept/topic this question tested - for the end-of-study report card. */
   concept?: string | null;
   /** Whether the FIRST attempt was correct (Learn lets you retry; the report card
    *  needs the first try to surface genuinely weak topics, not post-retry success). */

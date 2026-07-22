@@ -165,7 +165,7 @@ export function StudyReportCard({
                   styles={{
                     // Explicit high-contrast sage so the chips read clearly in both
                     // light and dark (Mantine's `variant="light"` auto text-shade is
-                    // washed out on the report surface — see the inverted dark scale).
+                    // washed out on the report surface - see the inverted dark scale).
                     root: {
                       background: "var(--mantine-color-sage-2)",
                       color: "var(--mantine-color-sage-9)",
@@ -211,7 +211,7 @@ export function suggestNextPageRange(
   };
 }
 
-/** Summative score screen shown at the end of a Test — the payoff Learn never shows. */
+/** Summative score screen shown at the end of a Test - the payoff Learn never shows. */
 export function TestResultsScreen({
   correct,
   total,
@@ -327,13 +327,13 @@ export function DocumentCompleteScreen({
   const pageLabel =
     completedFrom === completedTo
       ? `Page ${completedFrom}`
-      : `Pages ${completedFrom}–${completedTo}`;
+      : `Pages ${completedFrom}-${completedTo}`;
 
   return (
     <Center py={compact ? "lg" : "xl"} px="md" h="100%">
       <Stack align="center" gap={compact ? "lg" : "xl"} maw={440}>
         <Stack align="center" gap="xs">
-          {/* Filled gradient emblem — the old `variant="light"` sage tile was
+          {/* Filled gradient emblem - the old `variant="light"` sage tile was
               near-invisible on the dark study background. */}
           <ThemeIcon
             size={56}
@@ -367,7 +367,7 @@ export function DocumentCompleteScreen({
               Suggested next
             </Text>
             <Text size="lg" fw={600} style={{ letterSpacing: "-0.02em" }}>
-              Pages {nextFrom}–{nextTo}
+              Pages {nextFrom}-{nextTo}
             </Text>
           </Paper>
         )}
@@ -431,7 +431,7 @@ export function StudyRangeReselectOverlay({
     completedRange && completedRange.from === completedRange.to
       ? `page ${completedRange.from}`
       : completedRange
-        ? `pages ${completedRange.from}–${completedRange.to}`
+        ? `pages ${completedRange.from}-${completedRange.to}`
         : "your last selection";
 
   return (
@@ -458,7 +458,7 @@ export function StudyRangeReselectOverlay({
         // A DEFINITE, viewport-bounded height (not just a min) so the inner
         // thumbnail grid's flex scroll container has something to scroll within.
         // Previously the Paper grew taller than the screen and the grid couldn't
-        // scroll at all — pages past the fold were unreachable.
+        // scroll at all - pages past the fold were unreachable.
         h={isCompact ? "92dvh" : "min(88vh, 760px)"}
         mah={isCompact ? "92dvh" : "min(88vh, 760px)"}
         onClick={(e) => e.stopPropagation()}
@@ -525,7 +525,7 @@ export function PageCompleteInterstitial({
   generating?: boolean;
 }) {
   // A celebratory beat between pages: a gradient ring draws itself, a checkmark
-  // traces in, sparkles drift up, and "Well done" rises — then animated dots while
+  // traces in, sparkles drift up, and "Well done" rises - then animated dots while
   // the next question loads. On-brand (lavender→sage, serif) and centered on screen.
   const ring = compact ? 104 : 124;
   const r = ring / 2 - 9;

@@ -40,7 +40,7 @@ export function markGenStarted(artifactId: string, mode: string) {
 /**
  * Read the per-source+mode "already generated" flag reactively. Uses
  * useSyncExternalStore so it's SSR-safe (server renders `false`, no hydration
- * mismatch) and updates when markGenStarted runs — without a setState-in-effect.
+ * mismatch) and updates when markGenStarted runs - without a setState-in-effect.
  * Returns the flag plus a `start()` that marks it.
  */
 export function useGenStarted(artifactId: string, mode: string): [boolean, () => void] {
@@ -65,7 +65,7 @@ export function useGenStarted(artifactId: string, mode: string): [boolean, () =>
 }
 
 /**
- * GenerateGate — a calm confirmation step shown before a study tool generates.
+ * GenerateGate - a calm confirmation step shown before a study tool generates.
  *
  * The AI study tools (Explain, Notes, Flashcards, Memory Palace) are expensive to
  * produce, so instead of auto-generating the moment a mode opens, we show this short

@@ -4,7 +4,7 @@ import { Box, Container, Stack, Text, Title } from "@mantine/core";
 import { Reveal } from "./motion";
 
 /**
- * Honest, premium "ethos" band — no fabricated testimonials. A large serif
+ * Honest, premium "ethos" band - no fabricated testimonials. A large serif
  * statement on why questions matter (ties to the product vision), plus a quiet
  * audience line. This is the calm counterpart to Wispr Flow's testimonial wall.
  */
@@ -37,7 +37,7 @@ export function Ethos() {
         <Reveal>
           <Text size="lg" c="gray.6" lh={1.7} maw={620}>
             You can re-read a chapter ten times and still not know what you
-            don&apos;t know. A good question exposes that in seconds — and a good
+            don&apos;t know. A good question exposes that in seconds - and a good
             explanation closes the gap. Zivo exists to make that loop effortless,
             on anything you want to truly understand.
           </Text>

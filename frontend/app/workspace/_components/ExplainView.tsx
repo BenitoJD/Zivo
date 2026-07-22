@@ -26,7 +26,7 @@ import { GenerateGate, useGenStarted } from "./GenerateGate";
 import { WaitState } from "./WaitState";
 
 /**
- * Explain mode — a plain-language tour of a document's topics. Additive to MCQ:
+ * Explain mode - a plain-language tour of a document's topics. Additive to MCQ:
  * the LLM maps the whole source into topics; opening one shows a high-level,
  * step-by-step explanation grounded in the source. Calm Paper styling throughout.
  */

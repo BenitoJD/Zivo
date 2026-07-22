@@ -48,7 +48,7 @@ const STEPS = [
   },
   {
     title: "3. Chat with Your Source Tutor",
-    body: "Got something wrong? Ask follow-up questions in plain language. The tutor answers solely using your uploaded material—no guessing.",
+    body: "Got something wrong? Ask follow-up questions in plain language. The tutor answers solely using your uploaded material-no guessing.",
     icon: IconMessageCircle,
     color: "lavender",
   },

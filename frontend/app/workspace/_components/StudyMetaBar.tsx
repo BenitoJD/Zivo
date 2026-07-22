@@ -89,7 +89,7 @@ export function StudyMetaBar({
   const pct = showBar ? Math.min(100, Math.round((questionIndex / questionTotal) * 100)) : 0;
   const segmented = showBar && questionTotal <= 16;
   const isTestMode = mode === "test";
-  // Test wears the brand's deep green; Learn keeps lavender — a constant, glanceable
+  // Test wears the brand's deep green; Learn keeps lavender - a constant, glanceable
   // signal that the two are different study contexts.
   const barAccent = isTestMode ? "forest" : "lavender";
   const modeBadge =
@@ -183,7 +183,7 @@ export function StudyMetaBar({
         </Text>
       ) : null}
       <Tooltip
-        label={`Question ${questionIndex} of ${questionTotal}. The total is sized to this page — roughly one question per distinct idea worth testing.`}
+        label={`Question ${questionIndex} of ${questionTotal}. The total is sized to this page - roughly one question per distinct idea worth testing.`}
         position="bottom"
         withArrow
         multiline
@@ -238,7 +238,7 @@ export function StudyMetaBar({
   }
 
   // Desktop/tablet: the sidebar owns mode switching, so the top bar carries the
-  // mode identity + question progress + the Adaptive/Classic chooser — and nothing
+  // mode identity + question progress + the Adaptive/Classic chooser - and nothing
   // at all in modes that have none (e.g. Read), so the content starts cleanly.
   if (!progress && !modeBadge && !studyModeControl) return null;
   return (

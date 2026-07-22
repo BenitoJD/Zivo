@@ -4,7 +4,7 @@ import { Box, Container, Stack, Text } from "@mantine/core";
 import { useReducedMotion } from "framer-motion";
 
 /**
- * Wispr-Flow-style social-proof strip — "Used by ... everywhere". We don't ship
+ * Wispr-Flow-style social-proof strip - "Used by ... everywhere". We don't ship
  * fabricated company logos; instead this is an honest marquee of the exams and
  * fields learners prep for, rendered as muted wordmarks that scroll seamlessly.
  */

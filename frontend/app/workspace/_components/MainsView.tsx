@@ -205,7 +205,7 @@ function ResultView({
         </Group>
       ) : null}
 
-      {/* highlights — quoted phrases from the answer */}
+      {/* highlights - quoted phrases from the answer */}
       {result.highlights.length ? (
         <Stack gap={6} w="100%" maw={560}>
           <Text fz="xs" fw={700} tt="uppercase" c="dimmed" style={{ letterSpacing: 0.4 }}>On your answer</Text>
@@ -311,7 +311,7 @@ export function MainsView({ artifactId, compact = false }: { artifactId: string;
 
   const doSubmit = () =>
     run(async () => {
-      // Submit whichever input the ACTIVE tab holds — never let a stray photo override
+      // Submit whichever input the ACTIVE tab holds - never let a stray photo override
       // typed work (or vice-versa) just because both fields happen to be populated.
       await answer(tab === "photo" ? { image_document_id: imageId! } : { text: typed.trim() });
       setRevising(false); // grading → result (not back into the answer screen)
@@ -389,13 +389,13 @@ export function MainsView({ artifactId, compact = false }: { artifactId: string;
         {failed ? (
           <Alert color="terracotta" variant="light" icon={<IconAlertTriangle size={16} />}>
             {data.error === "generation_failed"
-              ? "We couldn't set a question from this source — try again, or pick a different source."
+              ? "We couldn't set a question from this source - try again, or pick a different source."
               : "Grading didn't finish. Set a fresh question and try again."}
           </Alert>
         ) : null}
         <Text c="dimmed" fz="sm" maw={520}>
           Zivo sets you an exam-style descriptive question from this source, you write a full answer (typed or a photo of
-          your handwriting), and you get it back marked like an examiner — with a score, per-axis feedback, and the
+          your handwriting), and you get it back marked like an examiner - with a score, per-axis feedback, and the
           marking scheme revealed.
         </Text>
 
@@ -477,7 +477,7 @@ export function MainsView({ artifactId, compact = false }: { artifactId: string;
           <Textarea
             value={typed}
             onChange={(e) => setTyped(e.currentTarget.value)}
-            placeholder="Write your full answer — introduction, body with dimensions and examples, then a conclusion with a verdict."
+            placeholder="Write your full answer - introduction, body with dimensions and examples, then a conclusion with a verdict."
             autosize
             minRows={7}
             radius="md"

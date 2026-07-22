@@ -40,7 +40,7 @@ import { useIsDark } from "@/lib/useIsDark";
 /**
  * Study source panel (extracted from the workspace page monolith): the in-session
  * PDF viewer with zoom toolbar (PdfReaderToolbar) and the canvas render stage
- * (SourceStage) — the "source" pane of the 3-pane study view.
+ * (SourceStage) - the "source" pane of the 3-pane study view.
  */
 export function StudySourcePanel({
   filename,
@@ -524,7 +524,7 @@ function SourceStage({
           </Title>
           {pageRange && (
             <Text size="sm" c="dimmed" ta="center">
-              Pages {pageRange.from}–{pageRange.to}
+              Pages {pageRange.from}-{pageRange.to}
             </Text>
           )}
           <Text size="sm" c="dimmed" ta="center" lh={1.6}>

@@ -5,8 +5,8 @@ import { IconCheck } from "@tabler/icons-react";
 
 /**
  * Plain-language progress for the question-generation wait. Instead of a vague
- * spinner, it shows the three real steps — read the pages, decide how many
- * questions (the "budget"), write them — and which one is happening now, so a
+ * spinner, it shows the three real steps - read the pages, decide how many
+ * questions (the "budget"), write them - and which one is happening now, so a
  * first-time user (or a 10-year-old) understands what's taking the few seconds.
  */
 export function GenerationStages({
@@ -64,7 +64,7 @@ export function GenerationStages({
           : s2 === "active"
             ? "Counting the distinct ideas worth testing here"
             : budget > 0
-              ? `Found ${budget} ideas worth testing — that sets your quiz size`
+              ? `Found ${budget} ideas worth testing - that sets your quiz size`
               : "Done",
     },
     {
@@ -140,7 +140,7 @@ export function GenerationStages({
         );
       })}
       <Text fz="xs" c="dimmed" ta="center" mt={compact ? "sm" : "md"} style={{ opacity: 0.85, lineHeight: 1.5 }}>
-        Zivo&rsquo;s AI reads your pages and writes fresh questions — that&rsquo;s the short wait.
+        Zivo&rsquo;s AI reads your pages and writes fresh questions - that&rsquo;s the short wait.
       </Text>
     </Stack>
   );

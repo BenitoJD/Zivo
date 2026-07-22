@@ -49,7 +49,7 @@ export function humanizeApiFailure(status: number, message: string): string {
   if (trimmed && !/^internal server error$/i.test(trimmed)) {
     return trimmed;
   }
-  if (status === 409) return trimmed || "Not ready yet — try again shortly.";
+  if (status === 409) return trimmed || "Not ready yet - try again shortly.";
   if (status === 429) return trimmed || "Message limit reached.";
   if (status >= 500 || status === 502 || status === 503 || status === 504) {
     return "Could not reach the tutor service. Try again in a moment.";
@@ -118,7 +118,7 @@ export async function ensureGuestSession(): Promise<void> {
         const guest = (await res.json()) as { csrf_token?: string };
         if (guest.csrf_token) setCsrfToken(guest.csrf_token);
       } catch {
-        /* non-JSON body — nothing to capture */
+        /* non-JSON body - nothing to capture */
       }
     } else if (res.status !== 401) {
       await res.text();
@@ -474,7 +474,7 @@ export type ChatSseHandlers = {
   onChunk?: (text: string) => void;
   /** Backend emits `status` before retrieval / first token (e.g. phase: "thinking"). */
   onStatus?: (phase: string) => void;
-  /** Raw per-event hook — fires for EVERY SSE event (used for non-chat streams
+  /** Raw per-event hook - fires for EVERY SSE event (used for non-chat streams
    *  like verdict-first grading: "verdict" / "feedback" / "done"). */
   onEvent?: (event: string, data: string) => void;
 };

@@ -6,18 +6,18 @@ import { useReducedMotion } from "framer-motion";
 import { useMediaQuery } from "@mantine/hooks";
 
 /**
- * The hero "generation" animation — Zivo turning a source into study questions.
+ * The hero "generation" animation - Zivo turning a source into study questions.
  *
  * Visual story, left → right (desktop) / top → bottom (mobile):
  *   1. Faint, messy SOURCE text streams in on a curved path (the raw material).
- *   2. It collapses into a calm PROCESSING CORE — a glassy waveform pill ringed
+ *   2. It collapses into a calm PROCESSING CORE - a glassy waveform pill ringed
  *      by soft concentric pulses, with cycling status badges narrating the work.
  *   3. Crisp generated QUESTIONS stream out on a deep-green ribbon (the result).
  *
  * Built as one SVG scene so text-on-path + the waveform stay crisp at any size.
  * Two geometry variants share one render path: a wide desktop scene and a
  * compact, reflowed mobile scene (narrower viewBox, gentler bleed) so it lives
- * on phones too — scaled and re-laid-out, never just shrunk.
+ * on phones too - scaled and re-laid-out, never just shrunk.
  *
  * Motion is GPU-friendly (SVG attribute/transform animations, opacity) with
  * spring-ish `keySplines` easing for an intentional, Apple-calm feel. The whole
@@ -26,7 +26,7 @@ import { useMediaQuery } from "@mantine/hooks";
  * static composition under prefers-reduced-motion.
  */
 
-// Long looping marquee strings — built once at module load, not per render.
+// Long looping marquee strings - built once at module load, not per render.
 const SOURCE_SPEECH_TEXT = Array(36)
   .fill(
     "Umm, this biology PDF on cellular respiration... glycolysis yields 2 ATP... wait, where do carbon bonds break? what is the citric acid cycle... acetyl CoA... the electron transport chain makes NADH... I need this for the exam... it happens in the mitochondria... oxygen is the final electron acceptor... ",
@@ -69,7 +69,7 @@ type Geometry = {
   questionFont: number;
 };
 
-// Wide desktop scene — a clean, mostly-horizontal flow with gentle curvature.
+// Wide desktop scene - a clean, mostly-horizontal flow with gentle curvature.
 const DESKTOP: Geometry = {
   vb: "0 0 1000 320",
   ratio: 320 / 1000,
@@ -87,9 +87,9 @@ const DESKTOP: Geometry = {
   questionFont: 16,
 };
 
-// Compact mobile scene — taller, with the flow folded so it reads top→bottom
+// Compact mobile scene - taller, with the flow folded so it reads top→bottom
 // through the core. Narrower viewBox keeps everything inside the box (no bleed
-// that would cause horizontal scroll on a ~360–430px phone).
+// that would cause horizontal scroll on a ~360-430px phone).
 const MOBILE: Geometry = {
   vb: "0 0 380 300",
   ratio: 300 / 380,
@@ -131,7 +131,7 @@ const WAVE_BARS = [
 
 export function GenerationAnimation() {
   const reduce = useReducedMotion();
-  // 47.99em ≈ 768px — Mantine's `sm` boundary. Below this we use the compact,
+  // 47.99em ≈ 768px - Mantine's `sm` boundary. Below this we use the compact,
   // reflowed scene instead of hiding the animation.
   const isMobile = useMediaQuery("(max-width: 47.99em)");
   // Avoid a hydration flash: only commit to a geometry once the media query has
@@ -141,7 +141,7 @@ export function GenerationAnimation() {
   const svgRef = useRef<SVGSVGElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
 
-  // Pause the whole SVG timeline when it scrolls offscreen — cheap and keeps a
+  // Pause the whole SVG timeline when it scrolls offscreen - cheap and keeps a
   // mid laptop idle when the hero isn't in view.
   useEffect(() => {
     if (reduce) return;
@@ -155,7 +155,7 @@ export function GenerationAnimation() {
           if (entry.isIntersecting) svg.unpauseAnimations();
           else svg.pauseAnimations();
         } catch {
-          /* unpause/pause not supported — harmless */
+          /* unpause/pause not supported - harmless */
         }
       },
       { rootMargin: "120px" },
@@ -182,7 +182,7 @@ export function GenerationAnimation() {
         // horizontal scroll or overlap the hero copy.
         overflow: "hidden",
         // A whisper of mask at the edges so streaming text dissolves rather than
-        // hard-clipping — the Apple "fade into the void" detail.
+        // hard-clipping - the Apple "fade into the void" detail.
         WebkitMaskImage:
           "linear-gradient(to right, transparent 0, #000 7%, #000 93%, transparent 100%)",
         maskImage:
@@ -200,7 +200,7 @@ export function GenerationAnimation() {
         style={{ display: "block", overflow: "visible" }}
       >
         <defs>
-          {/* Soft green glow under the question ribbon — the "result" feels lit. */}
+          {/* Soft green glow under the question ribbon - the "result" feels lit. */}
           <linearGradient id="zivoRibbon" x1="0" y1="0" x2="1" y2="0">
             <stop offset="0" stopColor="#034F46" />
             <stop offset="1" stopColor="#0E3B2E" />
@@ -234,7 +234,7 @@ export function GenerationAnimation() {
         {/* The deep-green question ribbon (drawn first, text rides on top). */}
         <use href="#zivoQuestionCurve" />
 
-        {/* Raw source speech — a faint whisper of messy input flowing in. */}
+        {/* Raw source speech - a faint whisper of messy input flowing in. */}
         <text
           dominantBaseline="central"
           style={{
@@ -259,7 +259,7 @@ export function GenerationAnimation() {
           </textPath>
         </text>
 
-        {/* Polished questions — crisp white text on the ribbon. */}
+        {/* Polished questions - crisp white text on the ribbon. */}
         <text
           dominantBaseline="central"
           style={{
@@ -286,7 +286,7 @@ export function GenerationAnimation() {
 
         {/* ----- Processing core ----- */}
         <g transform={`translate(${g.core.x} ${g.core.y})`}>
-          {/* Concentric pulse rings — calm, spring-eased breathing outward. */}
+          {/* Concentric pulse rings - calm, spring-eased breathing outward. */}
           {!reduce &&
             [0, 1, 2].map((i) => (
               <circle
@@ -322,7 +322,7 @@ export function GenerationAnimation() {
               </circle>
             ))}
 
-          {/* Cycling status badges — Zivo narrating its work, popping in/out. */}
+          {/* Cycling status badges - Zivo narrating its work, popping in/out. */}
           <g transform={`translate(0 ${g.badgeY})`}>
             {reduce ? (
               <StaticBadge phrase={PHRASES[3]} />

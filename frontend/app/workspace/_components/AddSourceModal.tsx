@@ -3,7 +3,7 @@
 import { Modal } from "@mantine/core";
 import { SourceImportDeck } from "@/app/workspace/_components/SourceImportDeck";
 
-/** Sidebar "Add source" popup — the full import deck, reachable from anywhere. */
+/** Sidebar "Add source" popup - the full import deck, reachable from anywhere. */
 export function AddSourceModal({
   opened,
   onClose,

@@ -95,7 +95,7 @@ export function LandingNav() {
           pt={{ base: "sm", md: condensed ? "xs" : "md" }}
           pb={{ base: "sm", md: condensed ? "xs" : "md" }}
         >
-          {/* Wispr-style floating rounded "paper" bar — a softly-lifted warm cream
+          {/* Wispr-style floating rounded "paper" bar - a softly-lifted warm cream
               pill with a hairline border at rest (the fill is barely lighter than the
               page, so there's no white seam), condensing into a frosted bar on scroll. */}
           <Box
@@ -210,7 +210,7 @@ export function LandingNav() {
       </Box>
 
       <style>{`
-        /* Wispr "Download for macOS" — soft lavender pill with subtle border. */
+        /* Wispr "Download for macOS" - soft lavender pill with subtle border. */
         .nav-cta-button {
           background-color: #EFDBFB !important;
           color: var(--mantine-color-text) !important;

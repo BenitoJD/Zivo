@@ -26,14 +26,14 @@ import { CodeEditor } from "@/app/_components/coding/CodeEditor";
 import { WaitState } from "@/app/workspace/_components/WaitState";
 
 /**
- * Coding study mode — LeetCode-style practice problems generated from this
+ * Coding study mode - LeetCode-style practice problems generated from this
  * source. Lists every coding assertion for the artifact with per-problem
  * solved/attempted status; selecting one opens the shared CodeEditor.
  *
  * Empty state is the *indexing* wait: coding problems appear only after page
  * triage flags a page as programmable and the generate.coding job runs the
  * verify gate (the LLM's reference solution must pass every hidden test). On a
- * non-programming source this stays empty permanently — that's correct.
+ * non-programming source this stays empty permanently - that's correct.
  */
 export function CodingView({ artifactId, compact = false }: { artifactId: string; compact?: boolean }) {
   const { data, isError } = useCodingWorkspaceQuery(artifactId);
@@ -64,7 +64,7 @@ export function CodingView({ artifactId, compact = false }: { artifactId: string
         <Text ff="var(--font-serif)" fz={compact ? 22 : 28} fw={500}>No coding problems yet</Text>
         <Text c="dimmed">
           Zivo writes coding challenges from pages about programming, algorithms, or data
-          structures. If this source covers those topics, problems will appear here shortly —
+          structures. If this source covers those topics, problems will appear here shortly -
           otherwise this material is better suited to MCQs.
         </Text>
       </Stack>

@@ -6,7 +6,7 @@
  * `notifications.show(...)` call sites get the look with no per-site changes.
  */
 
-/* Stack container — sit just inside the top-right corner, comfortable width.
+/* Stack container - sit just inside the top-right corner, comfortable width.
  * pointer-events: none is critical: the container spans a tall region but is
  * empty most of the time, so it must never intercept clicks meant for the page
  * beneath it (only the individual cards below opt back into pointer events). */
@@ -29,7 +29,7 @@
   }
 }
 
-/* The notification card — frosted vibrancy material. */
+/* The notification card - frosted vibrancy material. */
 .mantine-Notification-root {
   position: relative;
   pointer-events: auto;
@@ -46,7 +46,7 @@
   animation: zivo-notif-in 440ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-/* Remove Mantine's default boxy colored left accent — Apple cards don't use one. */
+/* Remove Mantine's default boxy colored left accent - Apple cards don't use one. */
 .mantine-Notification-root::before {
   display: none !important;
 }

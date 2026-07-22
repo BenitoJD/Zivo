@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Practice run page — answer MCQs for a concept, anonymously.
+ * Practice run page - answer MCQs for a concept, anonymously.
  *
  * Loads a batch of questions for the concept, renders them one at a time via the
  * shared McqCard, grades against /api/mcq/grade (guest cookie works as-is), and
@@ -70,7 +70,7 @@ export default function PracticeRunPage({ params }: { params: Promise<{ qid: str
     try {
       const data = await apiGet<QuestionsResponse>(`/api/practice/concepts/${qid}/questions?limit=20`);
       if (data.items.length === 0) {
-        // Concept is empty — bounce back to the concept page which triggers generation.
+        // Concept is empty - bounce back to the concept page which triggers generation.
         router.replace(`/practice/c/${qid}`);
         return;
       }
@@ -112,11 +112,11 @@ export default function PracticeRunPage({ params }: { params: Promise<{ qid: str
       });
       const correct = Boolean(res.correct);
       const correctIndex = res.correct_index ?? (isMulti ? (multiSelected[0] ?? 0) : Number(selected));
-      setFeedback(res.feedback ?? (correct ? "Correct!" : "Not quite — see the explanation."));
+      setFeedback(res.feedback ?? (correct ? "Correct!" : "Not quite - see the explanation."));
       setGradeState({ correct, correctIndex, correctIndices: res.correct_indices });
       setScore((s) => ({ correct: s.correct + (correct ? 1 : 0), answered: s.answered + 1 }));
     } catch {
-      setFeedback("Could not grade your answer — please try again.");
+      setFeedback("Could not grade your answer - please try again.");
     } finally {
       setSubmitting(false);
     }

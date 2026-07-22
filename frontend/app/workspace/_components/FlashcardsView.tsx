@@ -22,7 +22,7 @@ import { GenerateGate, useGenStarted } from "./GenerateGate";
 import { WaitState } from "./WaitState";
 
 /**
- * Flashcards mode — Scribely-style active recall. A flip-card deck generated from the
+ * Flashcards mode - Scribely-style active recall. A flip-card deck generated from the
  * source: tap to reveal the answer, arrow through the deck. Additive to MCQ.
  */
 export function FlashcardsView({
@@ -74,7 +74,7 @@ export function FlashcardsView({
       <WaitState
         pet
         title="Making your flashcards"
-        body="Pulling the key facts into active-recall cards — this takes a few moments…"
+        body="Pulling the key facts into active-recall cards - this takes a few moments…"
       />
     );
   }

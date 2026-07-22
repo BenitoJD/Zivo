@@ -41,7 +41,7 @@ const scoreColor = (pct: number) => (pct >= 67 ? "sage" : pct >= 40 ? "lavender"
 const border = "var(--app-border, var(--mantine-color-gray-2))";
 
 /**
- * Resume suite (jobbie-style) — ATS score/checklist, AI optimizer, and a docx builder, all on
+ * Resume suite (jobbie-style) - ATS score/checklist, AI optimizer, and a docx builder, all on
  * an uploaded resume. Reuses the resume the app already ingested; the AI extracts a structured
  * resume that pre-fills the builder.
  */
@@ -234,7 +234,7 @@ function BuildTab({ artifactId }: { artifactId: string }) {
 
   return (
     <Stack gap="md">
-      <Text c="dimmed" fz="sm">Pre-filled from your uploaded resume — edit anything, pick a template, and download a clean .docx.</Text>
+      <Text c="dimmed" fz="sm">Pre-filled from your uploaded resume - edit anything, pick a template, and download a clean .docx.</Text>
       <Group grow>
         <TextInput label="Name" value={form.name ?? ""} onChange={(e) => set("name", e.currentTarget.value)} radius="md" />
         <TextInput label="Title" value={form.title ?? ""} onChange={(e) => set("title", e.currentTarget.value)} radius="md" />

@@ -71,7 +71,7 @@ export default function WorkspaceIndexPage() {
         justifyContent: "center",
       }}
     >
-      {/* Ambient interactive light glow — position fed via --zx/--zy CSS vars. */}
+      {/* Ambient interactive light glow - position fed via --zx/--zy CSS vars. */}
       <Box
         ref={glowRef}
         style={{
@@ -120,7 +120,7 @@ export default function WorkspaceIndexPage() {
           </Text>
         </Stack>
 
-        {/* Main interaction deck — shared with the sidebar Add-source modal. */}
+        {/* Main interaction deck - shared with the sidebar Add-source modal. */}
         <SourceImportDeck onImported={(id) => router.push(`/workspace/${id}`)} />
 
         {/* Workflow steps timeline */}

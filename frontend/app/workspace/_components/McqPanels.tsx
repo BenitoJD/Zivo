@@ -33,7 +33,7 @@ import { learnWaitStatus } from "@/lib/learnStatus";
 import { type AnsweredCard } from "@/app/workspace/_components/studyLayout";
 import { useIsDark } from "@/lib/useIsDark";
 
-/** Rotating status while the coaching feedback streams in — the message changes
+/** Rotating status while the coaching feedback streams in - the message changes
  *  every ~1.3s (no static "…" spinner), so the wait feels alive. */
 const FEEDBACK_WRITING_MESSAGES = [
   "Reading your answer",
@@ -69,8 +69,8 @@ function FeedbackWritingStatus({ compact }: { compact?: boolean }) {
 
 /**
  * MCQ panels (extracted from the workspace page monolith): the hero question card
- * (McqHeroPanel) — stem, options, checking/grading states, the waiting/generation
- * UI, keyboard control — and the step-back review of already-answered questions
+ * (McqHeroPanel) - stem, options, checking/grading states, the waiting/generation
+ * UI, keyboard control - and the step-back review of already-answered questions
  * (McqReviewView).
  */
 
@@ -187,7 +187,7 @@ export function McqHeroPanel({
   onRetry?: () => void;
 }) {
   const isDark = useIsDark();
-  // Roaming study cat — opt-in (off by default); toggled in Settings and applied live.
+  // Roaming study cat - opt-in (off by default); toggled in Settings and applied live.
   const [catEnabled] = useLocalStorage({ key: CAT_ENABLED_KEY, defaultValue: false });
   const safeOptions = normalizeMcqOptions(options);
   const graded = gradeState !== null;
@@ -199,7 +199,7 @@ export function McqHeroPanel({
   const hasSelection = multiSelect ? multiChosen.length > 0 : selected !== null;
   // Learn vs Test, the core distinction: Learn reveals the answer + explanation
   // right away (and lets you retry); Test records your choice silently and grades
-  // everything at the very end — no peeking. `reveal` gates every "show the answer"
+  // everything at the very end - no peeking. `reveal` gates every "show the answer"
   // affordance so the two modes genuinely feel different.
   const isTest = mode === "test";
   const reveal = graded && !isTest;
@@ -247,7 +247,7 @@ export function McqHeroPanel({
     },
     statusTick,
   );
-  // autoInvoke — without it Mantine's useInterval never starts, so the wait-status
+  // autoInvoke - without it Mantine's useInterval never starts, so the wait-status
   // copy never rotated. The `if (waiting)` guard keeps it a no-op while idle.
   useInterval(
     () => {
@@ -261,13 +261,13 @@ export function McqHeroPanel({
     setStatusTick(0);
   }, [waitStatus.rotateKey]);
 
-  // Keyboard: A–D (or 1–4) to pick an option, Enter to check / advance.
+  // Keyboard: A-D (or 1-4) to pick an option, Enter to check / advance.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (waiting) return;
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
-      // Enter OR Space advances / checks — whichever hand is on the keyboard, no
+      // Enter OR Space advances / checks - whichever hand is on the keyboard, no
       // reach for the mouse. A focused button/link keeps its native activation so
       // we never double-fire.
       if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
@@ -341,7 +341,7 @@ export function McqHeroPanel({
         >
         <Stack align="center" gap={compact ? "md" : "lg"}>
           <Box pos="relative" w={RING} h={RING} style={{ display: "grid", placeItems: "center" }}>
-            {/* Colorful aurora — three soft brand-tinted blobs drifting behind the ring */}
+            {/* Colorful aurora - three soft brand-tinted blobs drifting behind the ring */}
             <Box className="zivo-blob" pos="absolute" style={{ inset: -6, borderRadius: "50%", filter: "blur(22px)", background: "radial-gradient(60% 60% at 30% 30%, var(--mantine-color-lavender-4), transparent 70%)", opacity: 0.55, animation: "zivo-blob-a 4.5s ease-in-out infinite" }} />
             <Box className="zivo-blob" pos="absolute" style={{ inset: -6, borderRadius: "50%", filter: "blur(22px)", background: "radial-gradient(55% 55% at 72% 42%, var(--mantine-color-sage-4), transparent 70%)", opacity: 0.5, animation: "zivo-blob-b 5.4s ease-in-out infinite" }} />
             <Box className="zivo-blob" pos="absolute" style={{ inset: -6, borderRadius: "50%", filter: "blur(22px)", background: "radial-gradient(55% 55% at 50% 76%, var(--mantine-color-terracotta-3), transparent 70%)", opacity: 0.45, animation: "zivo-blob-c 5s ease-in-out infinite" }} />
@@ -430,7 +430,7 @@ export function McqHeroPanel({
           from { opacity: 0; transform: translateY(14px) scale(0.99); filter: blur(4px); }
           to { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
         }
-        /* Premium "focus-pull" entrance on every question swap. Pure CSS keyframes —
+        /* Premium "focus-pull" entrance on every question swap. Pure CSS keyframes -
            reliable across SSR/strict-mode (framer AnimatePresence stalls here). The
            title leads; options cascade in via per-item animation-delay below. */
         .mcq-q { animation: mcq-rise 460ms cubic-bezier(0.32,0.72,0,1) both; }
@@ -455,7 +455,7 @@ export function McqHeroPanel({
 
       {/* Centered, scrollable content region. The card height is fixed by the
           parent (clamp), so showing feedback or a longer stem reflows WITHIN
-          this region instead of resizing the card — the footer below never
+          this region instead of resizing the card - the footer below never
           moves and the page no longer jumps. ScrollHintArea hides the scrollbar
           and shows a fade + chevron when there's more below. */}
       <ScrollHintArea>
@@ -513,7 +513,7 @@ export function McqHeroPanel({
         {safeOptions.map((opt, i) => {
           const value = String(i);
           const isSelected = multiSelect ? multiChosen.includes(i) : selected === value;
-          // Test mode never reveals correctness per-question — the chosen option just
+          // Test mode never reveals correctness per-question - the chosen option just
           // shows as "answered" (its selected tint), graded silently for the end.
           const correctSet = gradeState?.correctIndices;
           const isCorrectOption = reveal && (
@@ -535,7 +535,7 @@ export function McqHeroPanel({
               onClick={() => {
                 if (optionsLocked || checking) return;
                 if (multiSelect) { onToggle?.(i); return; }
-                // Second click on the already-selected option checks it — the
+                // Second click on the already-selected option checks it - the
                 // answer IS the button, so there's no reach for the far one.
                 if (isSelected && !submitting) { onSubmit(); return; }
                 onSelect(value);
@@ -615,7 +615,7 @@ export function McqHeroPanel({
       </Stack>
 
       {reveal && feedback ? (
-        // Click the feedback (or press Enter / Space) to continue — the target is
+        // Click the feedback (or press Enter / Space) to continue - the target is
         // right where your eyes already are, no reach for the bottom button. A
         // text-selection guard means highlighting a phrase never advances.
         <Box
@@ -636,7 +636,7 @@ export function McqHeroPanel({
         </Box>
       ) : reveal && !isTest ? (
         // Verdict already shown; coaching still streaming. A rotating status (no dots
-        // spinner) — the persistent roaming cat below stays put (no respawn per turn).
+        // spinner) - the persistent roaming cat below stays put (no respawn per turn).
         <FeedbackWritingStatus compact={compact} />
       ) : graded && isTest ? (
         <Group justify="center" gap={8} mt={compact ? 8 : 12} style={{ flexShrink: 0 }}>
@@ -644,7 +644,7 @@ export function McqHeroPanel({
             <IconCheck size={13} stroke={2.4} />
           </ThemeIcon>
           <Text fz="sm" c="dimmed" fw={500}>
-            Answer recorded — you&rsquo;ll see your score at the end
+            Answer recorded - you&rsquo;ll see your score at the end
           </Text>
         </Group>
       ) : null}
@@ -654,14 +654,14 @@ export function McqHeroPanel({
           (not one straight line). It stays MOUNTED across the answer→next cycle
           (the gate no longer depends on `graded`), so the same cat persists and
           keeps roaming from where it was instead of respawning every turn.
-          Desktop Learn only — that's where the free space is. */}
+          Desktop Learn only - that's where the free space is. */}
       {catEnabled && !isTest && !compact && (
         <Box style={{ flex: 1, minHeight: 150, width: "100%" }}>
           <PetPlayground count={1} species="cat" wander height="100%" style={{ width: "100%" }} />
         </Box>
       )}
 
-      {/* Anchored to the bottom of the question area — turns the old dead space into a
+      {/* Anchored to the bottom of the question area - turns the old dead space into a
           calm, mode-defining strip (and the live test tally). */}
       <Center style={{ marginTop: "auto", paddingTop: compact ? 14 : 22, flexShrink: 0 }}>
         <Box
@@ -739,7 +739,7 @@ export function McqHeroPanel({
           <Text size="xs" c="dimmed" ta="center" style={{ opacity: 0.85 }}>
             {showNextQuestion
               ? "Press Enter for the next question"
-              : "Press A–D to choose · Enter to check"}
+              : "Press A-D to choose · Enter to check"}
           </Text>
         ) : null}
       </Stack>

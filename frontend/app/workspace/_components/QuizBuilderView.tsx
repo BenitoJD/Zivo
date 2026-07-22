@@ -28,12 +28,12 @@ import { apiFetchBytes } from "@/lib/api/client";
 import { useQuizQuery, type QuizConfig, type QuizQuestion } from "@/lib/api/queries";
 import { WaitState } from "./WaitState";
 
-// MCQ-style variants — all single-best-answer, same payload as "mcq" (options +
+// MCQ-style variants - all single-best-answer, same payload as "mcq" (options +
 // answer_index), so they render with the MCQ branch of QuestionCard.
 const MCQ_STYLE_TYPES: { value: string; label: string }[] = [
   { value: "mcq", label: "Multiple choice" },
   { value: "mcq_negative", label: "Negative (EXCEPT)" },
-  { value: "assertion_reason", label: "Assertion–Reason" },
+  { value: "assertion_reason", label: "Assertion-Reason" },
   { value: "scenario", label: "Scenario" },
   { value: "cloze", label: "Fill-in (cloze)" },
 ];
@@ -51,7 +51,7 @@ const SINGLE_ANSWER_MCQ = new Set(["mcq", "mcq_negative", "assertion_reason", "s
 const LETTERS = "ABCDEFGH";
 
 /**
- * Question Generator — turn any source into a worksheet/quiz. Pick the question types,
+ * Question Generator - turn any source into a worksheet/quiz. Pick the question types,
  * count and difficulty; the AI writes a question set with an answer key, previewable as
  * a teacher (answers) or student version and exportable to Word / PDF / Markdown / text.
  */
@@ -111,7 +111,7 @@ export function QuizBuilderView({ artifactId, compact = false }: { artifactId: s
           <ThemeIcon variant="light" color="lavender" radius="xl" size="md"><IconListCheck size={16} /></ThemeIcon>
           <Text ff="var(--font-serif)" fz={compact ? 18 : 22} fw={500}>Generate a worksheet</Text>
         </Group>
-        <Text c="dimmed" fz="sm" mb="md">Pick the question types, then generate a quiz from this source — with an answer key, ready to export.</Text>
+        <Text c="dimmed" fz="sm" mb="md">Pick the question types, then generate a quiz from this source - with an answer key, ready to export.</Text>
 
         <Checkbox.Group value={draftTypes} onChange={setDraftTypes} label="Question types">
           <Text fz="xs" fw={600} c="lavender.6" tt="uppercase" mt="xs" mb={6} style={{ letterSpacing: 0.4 }}>
@@ -202,7 +202,7 @@ function QuestionCard({ n, q, showAnswers, compact }: { n: number; q: QuizQuesti
       ) : null}
 
       {q.type === "truefalse" ? (
-        <Text fz="sm" c="dimmed">True / False{showAnswers ? ` — Answer: ${q.answer ? "True" : "False"}` : ""}</Text>
+        <Text fz="sm" c="dimmed">True / False{showAnswers ? ` - Answer: ${q.answer ? "True" : "False"}` : ""}</Text>
       ) : null}
 
       {q.type === "matching" && q.pairs ? (
@@ -236,7 +236,7 @@ function toMarkdown(qs: QuizQuestion[], withAnswers: boolean): string {
     lines.push(`**${i + 1}. ${q.prompt}**`);
     if (q.options) q.options.forEach((o, oi) => lines.push(`   - ${LETTERS[oi]}. ${o}`));
     if (q.type === "truefalse") lines.push("   - True / False");
-    if (q.type === "matching") (q.pairs ?? []).forEach((p, pi) => lines.push(`   - ${pi + 1}. ${p.left} — ${LETTERS[pi]}. ${p.right}`));
+    if (q.type === "matching") (q.pairs ?? []).forEach((p, pi) => lines.push(`   - ${pi + 1}. ${p.left} - ${LETTERS[pi]}. ${p.right}`));
     if (withAnswers) {
       lines.push(`   - _Answer:_ ${answerLine(q)}`);
       if (q.explanation) lines.push(`   - _${q.explanation}_`);
@@ -264,12 +264,12 @@ function toHtml(qs: QuizQuestion[], withAnswers: boolean): string {
       let inner = `<div><strong>${esc(q.prompt)}</strong></div>`;
       if (q.options) inner += q.options.map((o, oi) => `<div class="op">${LETTERS[oi]}. ${esc(o)}</div>`).join("");
       if (q.type === "truefalse") inner += `<div class="op">True / False</div>`;
-      if (q.type === "matching") inner += (q.pairs ?? []).map((p, pi) => `<div class="op">${pi + 1}. ${esc(p.left)} — ${LETTERS[pi]}. ${esc(p.right)}</div>`).join("");
-      if (withAnswers) inner += `<div class="ans">Answer: ${esc(answerLine(q))}${q.explanation ? " — " + esc(q.explanation) : ""}</div>`;
+      if (q.type === "matching") inner += (q.pairs ?? []).map((p, pi) => `<div class="op">${pi + 1}. ${esc(p.left)} - ${LETTERS[pi]}. ${esc(p.right)}</div>`).join("");
+      if (withAnswers) inner += `<div class="ans">Answer: ${esc(answerLine(q))}${q.explanation ? " - " + esc(q.explanation) : ""}</div>`;
       return `<li>${inner}</li>`;
     })
     .join("");
-  return `<h1>Quiz${withAnswers ? " — Answer key" : ""}</h1><ol>${items}</ol>`;
+  return `<h1>Quiz${withAnswers ? " - Answer key" : ""}</h1><ol>${items}</ol>`;
 }
 function triggerDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);

@@ -248,7 +248,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
         onClose={() => setAddSourceOpen(false)}
         onImported={(id) => router.push(`/workspace/${id}`)}
       />
-      {/* Floating study focus timer (desktop) — bottom-left launcher. */}
+      {/* Floating study focus timer (desktop) - bottom-left launcher. */}
       {mounted && !isMobile && <PomodoroWidget />}
       <DeleteSourceModal
         target={deleteTarget}

@@ -6,11 +6,11 @@ import { Reveal } from "./motion";
 const FAQS: { q: string; a: string }[] = [
   {
     q: "What can I upload?",
-    a: "Anything you study from — PDFs (textbooks, papers, lecture notes), slide decks, articles, your own notes, and even GitHub repositories. Zivo reads the material and gets it ready for questions.",
+    a: "Anything you study from - PDFs (textbooks, papers, lecture notes), slide decks, articles, your own notes, and even GitHub repositories. Zivo reads the material and gets it ready for questions.",
   },
   {
     q: "How accurate are the questions and explanations?",
-    a: "Questions are scoped exactly to the pages you choose, and the tutor answers only from your uploaded source — so it won't invent facts from the open internet. As with any AI tool, treat answers as a study aid and verify against your material when it matters.",
+    a: "Questions are scoped exactly to the pages you choose, and the tutor answers only from your uploaded source - so it won't invent facts from the open internet. As with any AI tool, treat answers as a study aid and verify against your material when it matters.",
   },
   {
     q: "Who is Zivo for?",
@@ -18,7 +18,7 @@ const FAQS: { q: string; a: string }[] = [
   },
   {
     q: "Is it free to start?",
-    a: "Yes. You can upload a source and start studying in under a minute — no credit card required to begin.",
+    a: "Yes. You can upload a source and start studying in under a minute - no credit card required to begin.",
   },
   {
     q: "Does my uploaded material stay private?",

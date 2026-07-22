@@ -7,12 +7,12 @@ import "./pets.css";
 
 /** One preference gates every cat in the app (Learn, loading, generation waits…).
  *  Off by default; toggled in Settings. Kept here so PetPlayground self-enforces
- *  it — no usage can accidentally show a cat when the user turned them off. */
+ *  it - no usage can accidentally show a cat when the user turned them off. */
 export const CAT_ENABLED_KEY = "zivo-cat-enabled";
 
 /**
  * A little strip of pixel pets that walk, idle, jump and play while the user
- * waits. Click anywhere inside to toss a ball — the cats chase it. Honors
+ * waits. Click anywhere inside to toss a ball - the cats chase it. Honors
  * prefers-reduced-motion (skips animation). Drop it into any loading surface.
  *
  * Self-cleaning: the PetWorld is torn down on unmount, so it's safe to mount

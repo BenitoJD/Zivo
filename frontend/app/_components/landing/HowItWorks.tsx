@@ -22,7 +22,7 @@ const STEPS: Step[] = [
     icon: IconListCheck,
     num: "02",
     title: "Get questions that test",
-    body: "Pick the pages you care about. Get exam-style multiple-choice questions, each one tied to a real concept — with explanations.",
+    body: "Pick the pages you care about. Get exam-style multiple-choice questions, each one tied to a real concept - with explanations.",
   },
   {
     icon: IconMessages,

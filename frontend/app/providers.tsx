@@ -26,59 +26,59 @@ import {
 } from "@/lib/mantine-color-scheme";
 
 /**
- * Calm Paper — a light-first, book-like study aesthetic.
+ * Calm Paper - a light-first, book-like study aesthetic.
  * Warm paper surfaces, ink text, restrained color, generous air, tactile cards.
  */
 
-/** Neutral paper/ink scale — warm oat to deep ink (not cold grey). */
+/** Neutral paper/ink scale - warm oat to deep ink (not cold grey). */
 const NEUTRAL_PALETTE = [
-  "#FFFFFF", // 0 — lifted paper (cards)
-  "#FAF9F6", // 1 — page (app background)
-  "#F3EFE6", // 2 — hover
-  "#E7E2D6", // 3 — hairline border
-  "#D9D3C4", // 4 — stronger border
-  "#A8A296", // 5 — dimmed text
-  "#6B675E", // 6 — secondary text
-  "#46433D", // 7 — strong muted
-  "#232220", // 8 — ink text
-  "#1A1917", // 9 — deepest ink
+  "#FFFFFF", // 0 - lifted paper (cards)
+  "#FAF9F6", // 1 - page (app background)
+  "#F3EFE6", // 2 - hover
+  "#E7E2D6", // 3 - hairline border
+  "#D9D3C4", // 4 - stronger border
+  "#A8A296", // 5 - dimmed text
+  "#6B675E", // 6 - secondary text
+  "#46433D", // 7 - strong muted
+  "#232220", // 8 - ink text
+  "#1A1917", // 9 - deepest ink
 ] as const;
 
-/** Brand forest/teal accent — inspired by Wispr Flow (034F46). */
+/** Brand forest/teal accent - inspired by Wispr Flow (034F46). */
 const FOREST_PALETTE = [
-  "#F2F7F6", // 0 — lightest tint
+  "#F2F7F6", // 0 - lightest tint
   "#E4ECEB", // 1
   "#C5D8D6", // 2
   "#A5C1BD", // 3
   "#7FA39E", // 4
   "#56817B", // 5
   "#2E5E58", // 6
-  "#034F46", // 7 — primary forest teal
+  "#034F46", // 7 - primary forest teal
   "#023D36", // 8
-  "#012622", // 9 — deepest forest ink
+  "#012622", // 9 - deepest forest ink
 ] as const;
 
-/** Brand lavender accent — kept as a reference fallback. */
+/** Brand lavender accent - kept as a reference fallback. */
 const LAVENDER_PALETTE = [
   "#F7F4FB", // 0
   "#EFE9F6", // 1
   "#E1D6EF", // 2
-  "#CDBBDD", // 3 — light tint for subtle backgrounds
+  "#CDBBDD", // 3 - light tint for subtle backgrounds
   "#B3A1CC", // 4
   "#947CB8", // 5
-  "#7B5DA6", // 6 — light-scheme primary
-  "#644791", // 7 — dark-scheme primary
+  "#7B5DA6", // 6 - light-scheme primary
+  "#644791", // 7 - dark-scheme primary
   "#4E3774", // 8
   "#372259", // 9
 ] as const;
 
-/** Sage green — "correct / success" feedback, calm not loud. */
+/** Sage green - "correct / success" feedback, calm not loud. */
 const SAGE_PALETTE = [
   "#F1F6EF", "#E3EEDF", "#CBDDC4", "#A8C9A0", "#82AE79",
   "#5F9156", "#4B7A43", "#3A6034", "#2C4A28", "#1F3520",
 ] as const;
 
-/** Terracotta — "wrong / error" feedback, warm not alarming. */
+/** Terracotta - "wrong / error" feedback, warm not alarming. */
 const TERRACOTTA_PALETTE = [
   "#FBF1ED", "#F4DFD3", "#E8C2AE", "#D69B7D", "#C57454",
   "#AE5634", "#90432A", "#73341F", "#582716", "#3E1B0E",
@@ -92,7 +92,7 @@ const variantColorResolver: VariantColorsResolver = (input) => {
 
   // Ghost gray buttons (subtle/light/transparent/default) get their label color from
   // low gray shades. Our gray scale is INVERTED for dark mode (low = dark), so Mantine
-  // computes dark-on-dark labels — which is why "Settings", "Sign in", "Upload file",
+  // computes dark-on-dark labels - which is why "Settings", "Sign in", "Upload file",
   // etc. went invisible at night. Force a readable, scheme-aware label for gray ghosts.
   if (
     (colorName === "gray" || colorName === "dark") &&
@@ -116,7 +116,7 @@ const variantColorResolver: VariantColorsResolver = (input) => {
   if (!isLightColor(surface, input.theme.luminanceThreshold ?? 0.3)) return resolved;
 
   // The button surface is light, so its label must be dark ink for contrast.
-  // Use a literal ink rather than gray-9 / black tokens — those are inverted to
+  // Use a literal ink rather than gray-9 / black tokens - those are inverted to
   // near-white in dark mode, which is exactly what made dark-mode buttons unreadable.
   const onLightSurface = "#1A1917";
 
@@ -167,7 +167,7 @@ const theme = mergeMantineTheme(
       xl: "1.85",
     },
     shadows: {
-      // Soft "paper lift" — calm, not Material-heavy.
+      // Soft "paper lift" - calm, not Material-heavy.
       paper: "0 1px 2px rgba(35, 34, 32, 0.04), 0 4px 16px rgba(35, 34, 32, 0.05)",
       "paper-lg": "0 2px 6px rgba(35, 34, 32, 0.06), 0 12px 36px rgba(35, 34, 32, 0.08)",
     },
@@ -286,7 +286,7 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
     "--zivo-tooltip-bg": "#232220",
     "--zivo-tooltip-fg": "#FCFBEF",
 
-    // Neutral gray scale overrides for light mode — warm ivory page, warm-white cards.
+    // Neutral gray scale overrides for light mode - warm ivory page, warm-white cards.
     "--mantine-color-gray-0": "#FFFEFA",
     "--mantine-color-gray-1": "#FCFBEF",
     "--mantine-color-gray-2": "#F3EFE6",
@@ -339,7 +339,7 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
 
     // Mantine SURFACE scale for dark mode. Unlike `gray` (which the app inverts so
     // high indices read as light TEXT), `dark.N` is used by Mantine internals AND
-    // the app's `isDark ? "dark.7"` surfaces as real backgrounds — so it must run
+    // the app's `isDark ? "dark.7"` surfaces as real backgrounds - so it must run
     // normal: low = light, high = deep ink. This is what fixes pale inputs/panels.
     "--mantine-color-dark-0": "#C9C7BE",
     "--mantine-color-dark-1": "#A8A296",
@@ -353,7 +353,7 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
     "--mantine-color-dark-9": "#141310",
     "--mantine-color-default": "#232220",
 
-    // Forest accent — dark-mode remap. The light scale's low shades (#F2F7F6…)
+    // Forest accent - dark-mode remap. The light scale's low shades (#F2F7F6…)
     // are near-white and were glowing as bright patches on the dark page. In dark
     // mode the low shades become deep green-tinted SURFACES, and the high shades
     // BRIGHTEN so accent text / icons keep contrast on ink. Solid-green buttons
@@ -369,7 +369,7 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
     "--mantine-color-forest-8": "#CBE0DC",
     "--mantine-color-forest-9": "#E4ECEB",
 
-    // Lavender (primary) — dark-mode remap, same approach as forest: low shades
+    // Lavender (primary) - dark-mode remap, same approach as forest: low shades
     // become deep lavender-tinted surfaces/borders, high shades brighten so
     // accent text and primary buttons keep contrast on ink.
     "--mantine-color-lavender-0": "#1E1A2A",  // deep tint surface
@@ -383,7 +383,7 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
     "--mantine-color-lavender-8": "#DDD2F2",
     "--mantine-color-lavender-9": "#EFE9F8",
 
-    // Sage — dark-mode remap (feedback + correct-option surfaces)
+    // Sage - dark-mode remap (feedback + correct-option surfaces)
     "--mantine-color-sage-0": "#1A2B1F",
     "--mantine-color-sage-1": "#243628",
     "--mantine-color-sage-2": "#2E4535",
@@ -395,7 +395,7 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
     "--mantine-color-sage-8": "#DDEAD6",
     "--mantine-color-sage-9": "#EEF5EB",
 
-    // Terracotta — dark-mode remap (wrong-option + error feedback)
+    // Terracotta - dark-mode remap (wrong-option + error feedback)
     "--mantine-color-terracotta-0": "#2B1A14",
     "--mantine-color-terracotta-1": "#3A2319",
     "--mantine-color-terracotta-2": "#4A2E22",

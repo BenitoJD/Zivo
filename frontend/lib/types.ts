@@ -67,7 +67,7 @@ export type AssertionPayload = {
   choices?: string[] | unknown;
   sequence?: number;
   primary_concept?: string;
-  /** Present only for multi-select items — its length (≥2) marks the item multi. */
+  /** Present only for multi-select items - its length (≥2) marks the item multi. */
   correct_indices?: number[];
 };
 
@@ -82,7 +82,7 @@ const LEADING_META_PATTERNS = [
 ];
 
 function stripDocumentMeta(text: string): string {
-  // Collapse horizontal whitespace but PRESERVE newlines — statement-based,
+  // Collapse horizontal whitespace but PRESERVE newlines - statement-based,
   // matching, ordering, and code stems carry meaningful line breaks the UI
   // renders (white-space: pre-line). Mirrors the backend sanitizer.
   let cleaned = String(text || "")
@@ -113,7 +113,7 @@ function capitalizeFirst(text: string): string {
   return text;
 }
 
-/** Strip leading A)/B. prefixes — the UI renders letter labels. */
+/** Strip leading A)/B. prefixes - the UI renders letter labels. */
 function sanitizeMcqOption(text: string): string {
   return String(text || "")
     .trim()

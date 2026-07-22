@@ -86,7 +86,7 @@ export function useTutorChat({
     };
   }, []);
 
-  // Core streamer — assumes chatMessages already ends with the user turn + an empty
+  // Core streamer - assumes chatMessages already ends with the user turn + an empty
   // assistant placeholder to fill. Shared by send, regenerate, and edit-and-resend.
   async function runAssistant(userMsg: string) {
     setChatBusy(true);
@@ -96,7 +96,7 @@ export function useTutorChat({
     try {
       await ensureGuestSession();
       // Scope the chat to the CURRENT mode. In Read mode the buddy is about the
-      // document the user is reading — never the Learn queue's current page — so
+      // document the user is reading - never the Learn queue's current page - so
       // it must not pin the learn page/question.
       const scope: Record<string, unknown> = { mode };
       if (mode !== "read") {
@@ -154,7 +154,7 @@ export function useTutorChat({
       const raw = e instanceof Error && e.message ? e.message : null;
       const timedOut = raw && /timed out|aborted/i.test(raw);
       const detail = timedOut
-        ? `${ZIVO_ASSISTANT_NAME} is still waking up — try again in a moment.`
+        ? `${ZIVO_ASSISTANT_NAME} is still waking up - try again in a moment.`
         : raw && raw !== "empty response"
           ? humanizeApiFailure(0, raw)
           : `${ZIVO_ASSISTANT_NAME} could not reply right now. Try again in a moment.`;
@@ -193,7 +193,7 @@ export function useTutorChat({
     try {
       await apiPost(`/api/chat/threads/${artifactId}/clear?surface=${chatSurface}`, {});
     } catch {
-      /* best-effort — the panel is already cleared locally */
+      /* best-effort - the panel is already cleared locally */
     }
     void queryClient.invalidateQueries({ queryKey: queryKeys.chatMessages(artifactId, chatSurface) });
   }

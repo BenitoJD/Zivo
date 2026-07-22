@@ -22,7 +22,7 @@ const PLATFORMS = [
 
 /**
  * Wispr-Flow-style hero. A soft animated mesh-gradient sits behind a big, bold
- * sans headline (not serif — Wispr's signature), a lavender-green pill CTA, a
+ * sans headline (not serif - Wispr's signature), a lavender-green pill CTA, a
  * platform availability row, and the product mock as the hero visual.
  */
 export function Hero() {
@@ -70,7 +70,7 @@ export function Hero() {
             </Text>
           </Box>
 
-          {/* Serif display headline — Wispr's two-weight treatment: a muted
+          {/* Serif display headline - Wispr's two-weight treatment: a muted
               lighter first clause, then a bolder emphasised line. */}
           <Box
             component="h1"
@@ -100,7 +100,7 @@ export function Hero() {
             style={{ margin: "0 auto", fontSize: "clamp(1.05rem, 2vw, 1.3rem)" }}
           >
             Upload anything and get exam-style questions scoped to exactly what you
-            read — with a tutor that knows your source. Measure and improve
+            read - with a tutor that knows your source. Measure and improve
             understanding, one question at a time.
           </Text>
 
@@ -114,7 +114,7 @@ export function Hero() {
                 className="hero-cta-primary"
                 w={{ base: "100%", xs: "auto" }}
               >
-                Start studying — it&apos;s free
+                Start studying - it&apos;s free
               </Button>
               <Button
                 size="lg"
@@ -154,7 +154,7 @@ export function Hero() {
       </Container>
 
       <style>{`
-        /* Wispr "Download for macOS" — soft lavender pill (matches the nav CTA). */
+        /* Wispr "Download for macOS" - soft lavender pill (matches the nav CTA). */
         .hero-cta-primary {
           background-color: #E9DDF5 !important;
           color: var(--mantine-color-text) !important;

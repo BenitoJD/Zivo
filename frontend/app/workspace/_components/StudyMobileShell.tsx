@@ -7,7 +7,7 @@ import { ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 
 /**
  * Mobile study shell (extracted from the workspace page monolith): the single-
- * column layout below the desktop breakpoint — a Question/Source/Tutor bottom tab
+ * column layout below the desktop breakpoint - a Question/Source/Tutor bottom tab
  * bar that swaps the three panels (StudyMobilePanel) so each gets the full screen.
  */
 type StudyMobileTab = "question" | "source" | "tutor";

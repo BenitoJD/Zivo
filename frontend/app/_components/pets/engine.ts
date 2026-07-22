@@ -1,5 +1,5 @@
 /**
- * Pixel-pet engine — a framework-agnostic port of LucasHJin/obsidian-pets
+ * Pixel-pet engine - a framework-agnostic port of LucasHJin/obsidian-pets
  * (MIT, itself based on tonybaloney/vscode-pets). Sprite-sheet characters that
  * walk, idle, jump, sleep and play inside any container element. Obsidian-only
  * APIs (createDiv / setCssProps / activeWindow / bundler PNG imports) have been
@@ -176,7 +176,7 @@ class Ball {
     this.y = Math.random() * (rect.height * 0.15 - this.radius * 2) + this.radius;
     this.vx = (Math.random() - 0.5) * 15;
     this.vy = (Math.random() - 0.5) * 8;
-    // Position before first paint — otherwise the ball flashes at (0,0).
+    // Position before first paint - otherwise the ball flashes at (0,0).
     setVars(this.ballEl, { "--x": `${this.x - 5}px`, "--y": `${this.y - 5}px` });
 
     this.update = this.update.bind(this);
@@ -296,7 +296,7 @@ class Pet {
   protected createPetElement(): HTMLElement {
     const el = makeDiv(this.container, this.wander ? "zv-pet zv-pet--wander" : "zv-pet");
     // The element is centered on (--left, --top) then scaled, so put the feet
-    // line (drawn at row 31 of the 32px frame) exactly on the ground line —
+    // line (drawn at row 31 of the 32px frame) exactly on the ground line -
     // otherwise the scaled bottom half hangs below it and gets clipped by the
     // container's overflow:hidden. When wandering there is no ground line, so
     // the pet floats freely at its current 2D position.
@@ -309,7 +309,7 @@ class Pet {
       "--scale": `${this.scale}`,
       "--heart-url": `url(${HEART_URL})`,
     });
-    // Soft ground shadow that travels with the pet — grounds it so it reads
+    // Soft ground shadow that travels with the pet - grounds it so it reads
     // as standing on a surface rather than floating.
     makeDiv(el, "zv-pet-shadow");
     this.tooltipEl = makeDiv(el, "zv-pet-name-tooltip");
@@ -511,7 +511,7 @@ class Cat extends Pet {
       if (a === "die" || a === "run" || a === "fly") continue;
       if (a === "idle" || a === "idle2") ACTIONS.push(a, a, a);
       else if (a === "jump" || a === "jump2") ACTIONS.push(a, a);
-      else ACTIONS.push(a); // sit / sleep / liking — rare
+      else ACTIONS.push(a); // sit / sleep / liking - rare
     }
     while (!this.isDestroyed) {
       if (this.chasingBall) {
@@ -621,7 +621,7 @@ function shuffle<T>(arr: T[]): T[] {
 /* --------------------------- pet roster ---------------------------- */
 
 // Colorful, light-on-their-feet cats picked so the strip reads bright and
-// varied on a pale loading screen — the near-black variants (black-cat,
+// varied on a pale loading screen - the near-black variants (black-cat,
 // batman-black, demon, vampire, witch) are intentionally left out so no pet
 // shows up as a dark blob. The full set still lives in /pet-assets if needed.
 const CAT_TYPES = [
@@ -648,7 +648,7 @@ export type PetWorldOptions = {
   species?: Species;
   interactive?: boolean;
   sound?: boolean;
-  /** Vertical ground line as a fraction of container height (0–1). */
+  /** Vertical ground line as a fraction of container height (0-1). */
   groundFraction?: number;
   /** Roam the whole 2D area instead of walking one horizontal ground line. */
   wander?: boolean;
@@ -656,7 +656,7 @@ export type PetWorldOptions = {
 
 // App-wide singleton: only ONE PetWorld may be alive at a time, so the user
 // never sees pets from two overlapping mounts (e.g. a loading screen fading into
-// the next). The newest mount wins — it disposes any predecessor.
+// the next). The newest mount wins - it disposes any predecessor.
 let activeWorld: PetWorld | null = null;
 
 /**

@@ -28,7 +28,7 @@ const TAG_TO_TAB: Record<(typeof FORMATS)[number], DeckTab> = {
 };
 
 /**
- * The interactive "add a source" deck — file drop/picker + paste/URL/GitHub tabs.
+ * The interactive "add a source" deck - file drop/picker + paste/URL/GitHub tabs.
  * Shared by the /workspace landing page and the sidebar's Add-source modal so the
  * import logic lives in exactly one place. Calls `onImported` with the new
  * artifact id on success (the caller decides whether to navigate, close, etc.).
@@ -142,7 +142,7 @@ export function SourceImportDeck({ onImported }: { onImported: (id: string) => v
         title: "Import failed",
         message:
           e instanceof Error && e.message === "Sign in to add more documents"
-            ? "Guest limit reached — delete a source or sign in to add more."
+            ? "Guest limit reached - delete a source or sign in to add more."
             : e instanceof Error
               ? e.message
               : "Could not import.",

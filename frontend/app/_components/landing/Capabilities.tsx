@@ -15,12 +15,12 @@ const FEATURES: Feature[] = [
   {
     icon: IconUpload,
     title: "Upload anything",
-    body: "A textbook chapter, lecture slides, an article, your own notes — even a GitHub repo. Zivo reads it and gets to work.",
+    body: "A textbook chapter, lecture slides, an article, your own notes - even a GitHub repo. Zivo reads it and gets to work.",
   },
   {
     icon: IconBulb,
     title: "Questions that test",
-    body: "Exam-style multiple choice, scoped exactly to the pages you chose. No vague prompts — each one targets a real concept.",
+    body: "Exam-style multiple choice, scoped exactly to the pages you chose. No vague prompts - each one targets a real concept.",
   },
   {
     icon: IconMessageCircle,

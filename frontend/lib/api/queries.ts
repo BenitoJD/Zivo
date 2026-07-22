@@ -43,7 +43,7 @@ export type StudyReport = {
 };
 
 /** Persistent end-of-study report (first-attempt accuracy per concept), aggregated
- *  server-side from immutable answer measurements — survives reloads. */
+ *  server-side from immutable answer measurements - survives reloads. */
 export function useStudyReportQuery(artifactId: string, enabled = true) {
   return useQuery({
     queryKey: queryKeys.studyReport(artifactId),
@@ -111,7 +111,7 @@ const pollWhileMainsBusy = (ms = 2500) => (query: { state: { data?: { status?: s
 // global `refetchOnWindowFocus: false`, nothing re-triggers a fetch when the tab
 // regains focus, so polling wedges and the result only appears after a manual
 // refresh (the "stuck at 40%" bug). React Query already pauses interval refetches
-// in the background and resumes them on focus — let it. Just return the interval
+// in the background and resumes them on focus - let it. Just return the interval
 // while work is pending.
 
 export function useNotesQuery(artifactId: string, kind: NoteKind = "notes", enabled = true) {
@@ -190,7 +190,7 @@ export function useSavedNotesActions(artifactId: string) {
 
 export type QuizQuestion = {
   // mcq_negative / assertion_reason / scenario / cloze are single-best-answer MCQ
-  // variants — same payload shape as "mcq" (options + answer_index).
+  // variants - same payload shape as "mcq" (options + answer_index).
   type:
     | "mcq"
     | "multi"
@@ -297,7 +297,7 @@ export function useInterviewQuery(artifactId: string, enabled = true) {
   });
 }
 
-/** start / answer / reset all return the full new state — write it straight into the cache. */
+/** start / answer / reset all return the full new state - write it straight into the cache. */
 export function useInterviewActions(artifactId: string) {
   const qc = useQueryClient();
   const put = (state: InterviewState) => qc.setQueryData(queryKeys.interview(artifactId), state);
@@ -359,7 +359,7 @@ export function useMainsQuery(artifactId: string, enabled = true) {
   });
 }
 
-/** start (new question) + answer both return the fresh state — write it into the cache;
+/** start (new question) + answer both return the fresh state - write it into the cache;
  * the poll then flips generating/grading → awaiting_answer/ready. */
 export function useMainsActions(artifactId: string) {
   const qc = useQueryClient();
@@ -528,7 +528,7 @@ export function useTopicExplanationQuery(artifactId: string, topicKey: string | 
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       if (!status || status === "ready" || status === "failed") return false;
-      return 3000; // outline still building — keep trying
+      return 3000; // outline still building - keep trying
     },
   });
 }
@@ -548,7 +548,7 @@ export function useSessionQuery(enabled = true) {
     queryKey: queryKeys.session,
     queryFn: async () => {
       const session = await apiGet<AuthSession>("/api/auth/session");
-      // Only adopt a real token — never overwrite the guest CSRF with null when the
+      // Only adopt a real token - never overwrite the guest CSRF with null when the
       // visitor is anonymous (the endpoint now returns 200 with a null token).
       if (session.csrf_token) setCsrfToken(session.csrf_token);
       return session;

@@ -48,7 +48,7 @@ const ZOOM_STEP = 0.25;
 const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
 
 /**
- * Read mode — a focused reader for the source with a real, selectable text layer.
+ * Read mode - a focused reader for the source with a real, selectable text layer.
  * Select any passage and a popover lets you quote it to the study buddy, ask it to
  * explain/simplify, or save it as a note. PDFs render visually (canvas + pdf.js text
  * layer); non-PDF sources render their extracted text (also selectable).
@@ -165,7 +165,7 @@ export function PdfReader({
         return;
       }
       if (pointers.current.size > 0) return;
-      // All fingers up. A pinch consumes the gesture — never treat its final
+      // All fingers up. A pinch consumes the gesture - never treat its final
       // lift as a tap.
       const wasPinch = pinchHappened.current;
       pinchHappened.current = false;
@@ -340,7 +340,7 @@ export function PdfReader({
         </Box>
       </Box>
 
-      {/* Zoom controls — handy on desktop, essential on touch (pair with pinch /
+      {/* Zoom controls - handy on desktop, essential on touch (pair with pinch /
           double-tap). Sit out of the way at the bottom-right of the reader. */}
       {zoomable && fitWidth > 0 ? (
         <Paper
@@ -565,7 +565,7 @@ function ThumbnailRail({
   const pages = useMemo(() => Array.from({ length: pageCount }, (_, i) => i + 1), [pageCount]);
 
   // Keep the active tile visible as the reader scrolls (but don't fight the user's
-  // own scrolling of the rail — nearest avoids large jumps).
+  // own scrolling of the rail - nearest avoids large jumps).
   useEffect(() => {
     const tile = activeTileRef.current;
     if (!tile) return;
@@ -791,7 +791,7 @@ function PdfPage({
         }
         if (textDiv) await renderPdfTextLayer(pdfDoc, pageNumber, textDiv, width);
       } catch {
-        /* render race — ignore */
+        /* render race - ignore */
       }
     })();
   }, [visible, width, pdfDoc, pageNumber]);
@@ -864,7 +864,7 @@ function TextReader({ artifactId }: { artifactId: string }) {
 
 const TEXT_LAYER_CSS = `
 .zv-textlayer { overflow: hidden; opacity: 1; line-height: 1; text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0; z-index: 2; }
-/* Force every glyph fully transparent so only the crisp canvas shows — selecting
+/* Force every glyph fully transparent so only the crisp canvas shows - selecting
    then highlights cleanly instead of revealing a second, blurry copy of the text. */
 .zv-textlayer, .zv-textlayer * { color: transparent !important; }
 .zv-textlayer :is(span, br) { position: absolute; white-space: pre; cursor: text; transform-origin: 0 0; }
