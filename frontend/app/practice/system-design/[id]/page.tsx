@@ -353,6 +353,7 @@ export default function SystemDesignStudioPage({
             <MentorReport
               mentorSummary={mentorSummary}
               dimensions={dimensions}
+              weakConcepts={session?.weak_concepts ?? []}
               lesson={lesson}
               reference={reference}
               recommendedNextId={session?.recommended_next_id ?? null}
@@ -369,6 +370,7 @@ export default function SystemDesignStudioPage({
 function MentorReport({
   mentorSummary,
   dimensions,
+  weakConcepts,
   lesson,
   reference,
   recommendedNextId,
@@ -377,6 +379,7 @@ function MentorReport({
 }: {
   mentorSummary?: string;
   dimensions: SdDimension[];
+  weakConcepts: string[];
   lesson?: Partial<{ title: string; body: string; try_this: string }>;
   reference: string;
   recommendedNextId: string | null;
@@ -415,6 +418,15 @@ function MentorReport({
             </Group>
           ))}
         </Stack>
+        {weakConcepts.length ? (
+          <Group gap={6} mt="md">
+            {weakConcepts.map((w) => (
+              <Badge key={w} variant="light" color="gray" radius="sm" size="sm">
+                {w}
+              </Badge>
+            ))}
+          </Group>
+        ) : null}
       </Paper>
 
       {(lesson?.title || lesson?.body) && (

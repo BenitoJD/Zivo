@@ -818,22 +818,25 @@ async def submit_and_grade(
                     "note": str((found or {}).get("note") or "")[:280],
                 }
             )
+        # Fill gaps from heuristic so lesson shape always matches coding teach-gap.
+        fallback = _heuristic_grade(design_clean, concept_keys)
         weak = [str(w) for w in (data.get("weak_concepts") or []) if str(w)][:3]
         if not weak:
-            weak = concept_keys[:1] or ["requirements"]
+            weak = fallback["weak_concepts"]
         lesson = data.get("lesson") if isinstance(data.get("lesson"), dict) else {}
         graded = {
             "mentor_summary": str(data.get("mentor_summary") or "").strip()
-            or "Solid attempt — tighten the weakest dimension next.",
+            or fallback["mentor_summary"],
             "dimensions": dims,
             "weak_concepts": weak,
             "lesson": {
-                "title": str(lesson.get("title") or "Close the gap")[:120],
-                "body": str(lesson.get("body") or "")[:2000],
-                "try_this": str(lesson.get("try_this") or "")[:400],
+                "title": str(lesson.get("title") or fallback["lesson"]["title"])[:120],
+                "body": str(lesson.get("body") or fallback["lesson"]["body"])[:2000],
+                "try_this": str(lesson.get("try_this") or fallback["lesson"]["try_this"])[:400],
             },
         }
     except Exception:
+        # Best-effort LLM grade — heuristic keeps the mastery loop alive.
         graded = _heuristic_grade(design_clean, concept_keys)
 
     next_id = _pick_next_problem_id(db, concept_keys=graded["weak_concepts"], exclude=uuid.UUID(sess["problem_id"]))

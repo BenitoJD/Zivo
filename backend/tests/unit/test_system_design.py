@@ -134,3 +134,60 @@ def test_recommend_problem_returns_something() -> None:
         rec = recommend_problem(db, None, "guest123")
     assert rec is not None
     assert rec["id"] == pid
+
+
+def test_submit_fills_empty_llm_lesson_from_heuristic() -> None:
+    """Partial LLM JSON must still yield title/body/try_this (coding parity)."""
+    import asyncio
+    import json
+
+    from app.services.system_design import submit_and_grade
+
+    sid = uuid.uuid4()
+    pid = uuid.uuid4()
+    sess = {
+        "id": str(sid),
+        "problem_id": str(pid),
+        "status": "active",
+        "design": {
+            "requirements": "short links",
+            "apis": "POST /links",
+            "data": "kv",
+            "scale": "cache",
+            "blocks": ["Cache"],
+        },
+        "problem": {"title": "URL", "prompt": "p", "constraints": "", "concept_keys": ["caching"]},
+    }
+    db = MagicMock()
+
+    async def _run() -> dict:
+        with (
+            patch("app.services.system_design.save_design", return_value=sess),
+            patch(
+                "app.services.system_design.complete_chat",
+                return_value="{}",
+            ),
+            patch(
+                "app.services.system_design.extract_json_obj",
+                return_value={
+                    "mentor_summary": "Thin.",
+                    "dimensions": [],
+                    "weak_concepts": ["caching"],
+                    "lesson": {"title": "", "body": "", "try_this": ""},
+                },
+            ),
+            patch("app.services.system_design._pick_next_problem_id", return_value=None),
+            patch(
+                "app.services.system_design.get_session",
+                return_value={**sess, "status": "done", "lesson": {"title": "x"}},
+            ),
+        ):
+            return await submit_and_grade(db, sid, None, "guest1", sess["design"])
+
+    out = asyncio.run(_run())
+    update_params = db.execute.call_args_list[-1].args[1]
+    lesson = json.loads(update_params["lesson"])
+    assert lesson["title"]
+    assert lesson["body"]
+    assert lesson["try_this"]
+    assert out["status"] == "done"

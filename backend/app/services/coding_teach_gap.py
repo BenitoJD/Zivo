@@ -199,6 +199,7 @@ async def teach_after_submit(
             },
         }
     except Exception:
+        # Best-effort LLM teach — heuristic graded above stays the response.
         pass
 
     next_id = pick_next_coding_id(
