@@ -18,6 +18,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
+from app.services.chunk_map_cache import map_chunk_cached
 from app.services.chunks import load_document_chunk_texts
 from app.services.llm_json import extract_json_obj
 from app.services.llm_router import complete_chat
@@ -148,15 +149,15 @@ async def generate_memory_palace(
 
     async def _facts(text: str) -> str:
         async with sem:
-            excerpt = truncate_to_tokens(text, _CHUNK_MAP_MAX_TOKENS)
-            return await complete_chat(
-                [
-                    {"role": "system", "content": fact_system},
-                    {"role": "user", "content": f"SECTION:\n\n{excerpt}"},
-                ],
+            return await map_chunk_cached(
                 db,
+                text,
+                system=fact_system,
+                prompt_key="memory_facts_map:v1",
+                user_content="SECTION:\n\n{excerpt}",
                 log_tag="memory_palace_generate",
                 model_id=model_id,
+                max_input_tokens=_CHUNK_MAP_MAX_TOKENS,
             )
 
     partials = await asyncio.gather(*[_facts(t) for t in chunk_texts])

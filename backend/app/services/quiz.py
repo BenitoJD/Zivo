@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.graphs.quiz_graph import quiz_config_signature
 from app.services.artifact_store import ArtifactStore, coerce_jsonb, run_artifact_generation
+from app.services.source_fingerprint import is_artifact_stale, mark_artifact_fresh
 
 # `config` is a content-hash that identifies a quiz variant; it's written on every
 # upsert and compared on the read path so asking for a different mix regenerates.
@@ -48,7 +49,14 @@ def ensure_quiz(
     """Read path: return the quiz, (re)generating in the background when the config changes."""
     config = quiz_config_signature(types, count, difficulty)
     state = load_quiz(db, document_id)
-    if state["status"] in ("ready", "generating") and state["config"] == config:
+    fp_key = f"quiz:{config}"
+    if (
+        state["status"] == "ready"
+        and state["config"] == config
+        and not is_artifact_stale(db, document_id, fp_key)
+    ):
+        return state
+    if state["status"] == "generating" and state["config"] == config:
         return state
     from app.services.jobs import enqueue_quiz
 
@@ -65,7 +73,7 @@ def run_quiz_generation(
     from app.graphs.quiz_graph import generate_quiz
 
     config = quiz_config_signature(types, count, difficulty)
-    return run_artifact_generation(
+    result = run_artifact_generation(
         db,
         document_id,
         store=_QUIZ_STORE,
@@ -74,4 +82,8 @@ def run_quiz_generation(
         empty_error="no_questions_generated",
         key_and_extra={"config": config},
     )
+    if result:
+        mark_artifact_fresh(db, document_id, f"quiz:{config}")
+        db.commit()
+    return result
 

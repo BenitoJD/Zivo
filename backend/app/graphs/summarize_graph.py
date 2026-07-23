@@ -7,6 +7,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
+from app.services.chunk_map_cache import map_chunk_cached
 from app.services.chunks import load_document_chunk_texts
 from app.services.llm_router import complete_chat
 from app.services.prompts import get_prompt
@@ -28,18 +29,19 @@ _CHUNK_SUMMARY_CONCURRENCY = 6
 async def _summarize_chunk(
     db: Session, text: str, *, system: str, model_id: uuid.UUID | None
 ) -> str:
-    excerpt = truncate_to_tokens(text, _CHUNK_MAP_MAX_TOKENS)
-    messages = [
-        {"role": "system", "content": system},
-        {
-            "role": "user",
-            "content": (
-                "Summarize this excerpt in 2–4 sentences. Focus on testable facts and main ideas.\n\n"
-                f"{excerpt}"
-            ),
-        },
-    ]
-    return (await complete_chat(messages, db, log_tag="summarize_chunk", model_id=model_id)).strip()
+    return await map_chunk_cached(
+        db,
+        text,
+        system=system,
+        prompt_key="summarize_chunk:v1",
+        user_content=(
+            "Summarize this excerpt in 2–4 sentences. Focus on testable facts and main ideas.\n\n"
+            "{excerpt}"
+        ),
+        log_tag="summarize_chunk",
+        model_id=model_id,
+        max_input_tokens=_CHUNK_MAP_MAX_TOKENS,
+    )
 
 
 async def generate_whole_doc_summary(db: Session, document_id: uuid.UUID) -> str:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -223,6 +224,23 @@ def critique_mcq(
     prior_mcqs: list[dict[str, Any]] | None = None,
     model_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
+    from app.services.chunk_map_cache import content_hash_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
+
+    options = [str(o).strip() for o in (mcq.get("options") or []) if str(o).strip()]
+    stem = str(mcq.get("question") or mcq.get("stem") or "")
+    critic_key = content_hash_key(
+        "critic",
+        stem,
+        "|".join(options),
+        mcq.get("correct_index"),
+        hashlib.sha256((page_text or "").encode("utf-8", "ignore")).hexdigest()[:32],
+        model_id,
+    )
+    hit = cache_get(db, kind="critic_verdict", cache_key=critic_key)
+    if isinstance(hit, dict) and hit:
+        return hit
+
     excerpt = truncate_to_tokens(page_text, _PAGE_EXCERPT_MAX_TOKENS)
     aspect = target_aspect or {}
     angle = (aspect.get("cognitive_angle") or "").strip()
@@ -267,6 +285,7 @@ def critique_mcq(
             "flaws": [{"code": "ambiguous_unclear", "message": "Critic response unparseable"}],
             "rewrite_hints": "Regenerate with a clear stem, one best answer, and plausible distractors.",
         }
+    cache_put(db, kind="critic_verdict", cache_key=critic_key, value=parsed)
     return parsed
 
 
@@ -289,6 +308,9 @@ def verify_answer_key(
     do not reject a good item just because the verifier hiccuped — the critic and
     heuristics remain). It only rejects on a *confident* disagreement.
     """
+    from app.services.chunk_map_cache import verify_verdict_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
+
     options = [str(o).strip() for o in (mcq.get("options") or []) if str(o).strip()]
     # Multi-select ("select all that apply") items are verified against the full
     # correct SET, not a single index — the single-answer verifier would wrongly
@@ -305,6 +327,43 @@ def verify_answer_key(
     if len(options) < 2 or marked < 0 or marked >= len(options):
         return None  # structural problems are the heuristic gate's job
 
+    cache_key = verify_verdict_key(
+        stem=str(mcq.get("question") or mcq.get("stem") or ""),
+        options=options,
+        correct_index=marked,
+        page_text=page_text,
+        model_id=model_id,
+    )
+    hit = cache_get(db, kind="verify_verdict", cache_key=cache_key)
+    if isinstance(hit, dict):
+        if hit.get("ok") is True:
+            return None
+        flaw = hit.get("flaw")
+        return flaw if isinstance(flaw, dict) else None
+
+    result, decisive = _verify_answer_key_uncached(
+        db, mcq=mcq, options=options, marked=marked, page_text=page_text, model_id=model_id
+    )
+    if decisive:
+        cache_put(
+            db,
+            kind="verify_verdict",
+            cache_key=cache_key,
+            value={"ok": True} if result is None else {"ok": False, "flaw": result},
+        )
+    return result
+
+
+def _verify_answer_key_uncached(
+    db: Session,
+    *,
+    mcq: dict[str, Any],
+    options: list[str],
+    marked: int,
+    page_text: str,
+    model_id: uuid.UUID | None = None,
+) -> tuple[dict[str, str] | None, bool]:
+    """Return (flaw_or_None, decisive). decisive=False → do not cache (parse fail)."""
     excerpt = truncate_to_tokens(page_text, _PAGE_EXCERPT_MAX_TOKENS)
     options_block = "\n".join(f"{i}. {opt}" for i, opt in enumerate(options))
     system = get_prompt(db, "mcq_verify_system")
@@ -326,28 +385,31 @@ def verify_answer_key(
     )
     parsed = _parse_critic_json(raw)
     if not parsed:
-        return None  # verifier failed — don't punish the item
+        return None, False  # verifier failed — don't punish / don't cache
 
     if parsed.get("none_defensible") is True:
-        return {"code": "not_grounded", "message": "Verifier: no option is supported by the source"}
+        return {"code": "not_grounded", "message": "Verifier: no option is supported by the source"}, True
     if parsed.get("multiple_defensible") is True:
-        return {"code": "more_than_one_correct", "message": "Verifier: two or more options are defensible"}
+        return {
+            "code": "more_than_one_correct",
+            "message": "Verifier: two or more options are defensible",
+        }, True
     try:
         independent = int(parsed.get("answer_index"))
     except (TypeError, ValueError):
-        return None
+        return None, False
     # An out-of-range index is a malformed verifier reply, not a real
     # disagreement — don't reject a good item over it (stay conservative).
     if not (0 <= independent < len(options)):
-        return None
+        return None, False
     if independent != marked:
         return {
             "code": "wrong_answer_key",
             "message": (
                 f"Verifier independently chose option {independent}, not the marked {marked}"
             ),
-        }
-    return None
+        }, True
+    return None, True
 
 
 def _verify_answer_key_multi(
@@ -597,7 +659,7 @@ BATCH_MCQ_CAP = 5
 # the repeated page context nearly free — so critique EVERY item by default, not a
 # 25% sample. (Evaluation is the moat; don't skip it to save a few tokens.) Still an
 # env knob for cost tuning.
-CRITIC_SAMPLE_RATE = float(os.getenv("ZIVO_CRITIC_SAMPLE_RATE", "1.0"))
+CRITIC_SAMPLE_RATE = float(os.getenv("ZIVO_CRITIC_SAMPLE_RATE", "0.3"))
 
 
 def _draft_score(draft: dict[str, Any]) -> tuple[int, int, float]:
@@ -776,7 +838,13 @@ def generate_quality_mcq_batch(
     # so the 4 CPU workers share one cache and a restart doesn't re-pay the LLM.
     from app.services.generation_cache import batch_drafts_key, get as cache_get, put as cache_put
 
-    drafts_cache_key = batch_drafts_key(page_number, targets, prior_mcqs)
+    drafts_cache_key = batch_drafts_key(
+        page_number,
+        targets,
+        prior_mcqs,
+        model_id=draft_model_id,
+        content_type=content_type,
+    )
     drafts = cache_get(db, kind="batch_drafts", cache_key=drafts_cache_key)
     if drafts is None:
         drafts = _generate_batch_drafts(

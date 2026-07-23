@@ -73,6 +73,7 @@ def summarize_generate(payload: dict) -> dict:
     import asyncio
 
     from app.graphs.summarize_graph import generate_whole_doc_summary
+    from app.services.source_fingerprint import mark_artifact_fresh
 
     document_id = UUID(payload["document_id"])
     with SessionLocal() as db:
@@ -82,6 +83,7 @@ def summarize_generate(payload: dict) -> dict:
             meta = dict(doc.meta or {})
             meta["summary"] = summary
             doc.meta = meta
+            mark_artifact_fresh(db, document_id, "summary")
             db.commit()
     return {"document_id": str(document_id), "summary": summary}
 

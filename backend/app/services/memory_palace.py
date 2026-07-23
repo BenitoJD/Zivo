@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.services.artifact_store import ArtifactStore, coerce_jsonb, run_artifact_generation
+from app.services.source_fingerprint import is_artifact_stale, mark_artifact_fresh
 
 # `setting` is the learner's chosen place-name; it's written on every upsert and
 # compared on the read path so a new place regenerates the journey.
@@ -52,15 +53,22 @@ def ensure_palace(
     """
     state = load_palace(db, document_id)
     requested = (setting or "").strip()
+    fp_key = f"palace:{(requested or state.get('setting') or '').strip().lower()}"
 
     if requested:
-        if state["status"] == "ready" and (state["setting"] or "").strip().lower() == requested.lower():
+        if (
+            state["status"] == "ready"
+            and (state["setting"] or "").strip().lower() == requested.lower()
+            and not is_artifact_stale(db, document_id, fp_key)
+        ):
             return state
         if state["status"] == "generating" and (state["setting"] or "").strip().lower() == requested.lower():
             return state
         return _kick(db, document_id, requested)
 
-    if state["status"] in ("ready", "generating"):
+    if state["status"] == "ready" and not is_artifact_stale(db, document_id, fp_key):
+        return state
+    if state["status"] == "generating":
         return state
     return _kick(db, document_id, "")
 
@@ -78,7 +86,7 @@ def run_palace_generation(db: Session, document_id: uuid.UUID, setting: str = ""
     """Worker entry: build and persist the memory palace for a document."""
     from app.graphs.memory_palace_graph import generate_memory_palace
 
-    return run_artifact_generation(
+    result = run_artifact_generation(
         db,
         document_id,
         store=_PALACE_STORE,
@@ -87,3 +95,7 @@ def run_palace_generation(db: Session, document_id: uuid.UUID, setting: str = ""
         empty_error="no_palace_generated",
         key_and_extra={"setting": setting},
     )
+    if result and result.get("stations"):
+        mark_artifact_fresh(db, document_id, f"palace:{(setting or '').strip().lower()}")
+        db.commit()
+    return result

@@ -74,6 +74,9 @@ def purge_document(db: Session, doc: Document) -> str:
     db.query(LlmResponseCache).filter(LlmResponseCache.artifact_id == artifact_id).delete(
         synchronize_session=False
     )
+    from app.services.generation_cache import purge_for_document
+
+    purge_for_document(db, document_id)
     db.execute(
         text("DELETE FROM qb.artifact_workspace WHERE artifact_id = :artifact_id"),
         {"artifact_id": artifact_id},

@@ -63,8 +63,9 @@ class DocumentOut(BaseModel):
 
 
 class SummarizeOut(BaseModel):
-    job_id: uuid.UUID
+    job_id: uuid.UUID | None = None
     status: str
+    summary: str | None = None
 
 
 class ImportUrlIn(BaseModel):
@@ -332,6 +333,19 @@ def summarize_document(
         raise HTTPException(status_code=404, detail="Not found")
     if doc.status != "ready":
         raise HTTPException(status_code=409, detail="Document not ready")
+    from app.services.source_fingerprint import chunks_fingerprint, is_artifact_stale
+
+    meta = doc.meta if isinstance(doc.meta, dict) else {}
+    cached_summary = meta.get("summary")
+    if (
+        isinstance(cached_summary, str)
+        and cached_summary.strip()
+        and not is_artifact_stale(db, document_id, "summary")
+    ):
+        return {"job_id": None, "status": "ready", "summary": cached_summary}
+    # Bind fingerprint now so a concurrent re-index during the job still
+    # invalidates on next request if chunks change before mark_fresh.
+    _ = chunks_fingerprint(db, document_id)
     job = enqueue_summarize(db, doc.id, user.id)
     return {"job_id": job.id, "status": job.status}
 

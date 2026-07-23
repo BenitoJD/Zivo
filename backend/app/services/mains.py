@@ -388,6 +388,13 @@ async def _ocr_image(db: Session, image_document_id: uuid.UUID) -> str:
     doc = db.get(Document, image_document_id)
     if not doc or not is_image_document(doc):
         return ""
+    from app.services.chunk_map_cache import content_hash_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
+
+    ocr_key = content_hash_key("mains_ocr", doc.storage_key or str(doc.id))
+    hit = cache_get(db, kind="mains_ocr", cache_key=ocr_key)
+    if isinstance(hit, str) and hit.strip():
+        return hit
     content = build_user_message(
         "Transcribe this exam answer sheet to plain text, verbatim. Preserve paragraph and line "
         "breaks. Do NOT correct spelling/grammar, summarise, or add anything — output only the "
@@ -410,7 +417,10 @@ async def _ocr_image(db: Session, image_document_id: uuid.UUID) -> str:
         document_id=doc.id,
         strip_output=False,  # transcription must be verbatim (keep the user's own dashes)
     )
-    return (raw or "").strip()
+    out = (raw or "").strip()
+    if out:
+        cache_put(db, kind="mains_ocr", cache_key=ocr_key, value=out)
+    return out
 
 
 async def _grade(
@@ -431,6 +441,20 @@ async def _grade(
     )
     guide = _STRICTNESS_GUIDE.get(strictness, _STRICTNESS_GUIDE[DEFAULT_STRICTNESS])
     anchors_txt = "\n".join(f"- {key} ({label}): {_AXIS_ANCHORS[key]}" for key, label in AXES)
+    from app.services.chunk_map_cache import content_hash_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
+
+    grade_key = content_hash_key(
+        "mains_grade",
+        question,
+        truncate_to_tokens(answer, SUMMARIZE_SINGLE_SHOT_MAX_TOKENS),
+        strictness,
+        marks_max,
+        json.dumps(points, sort_keys=True, default=str),
+    )
+    hit = cache_get(db, kind="mains_grade", cache_key=grade_key)
+    if isinstance(hit, dict) and hit:
+        return hit
     user = (
         f"GRADING SEVERITY: {guide}\n\n"
         f"QUESTION (directive '{directive}', out of {marks_max} marks):\n{question}\n\n"
@@ -465,7 +489,9 @@ async def _grade(
     # caller reverts to awaiting_answer so the user can resubmit).
     if "marks" not in parsed:
         raise ValueError("unparseable grade output")
-    return _shape_result(parsed, scheme, strictness)
+    shaped = _shape_result(parsed, scheme, strictness)
+    cache_put(db, kind="mains_grade", cache_key=grade_key, value=shaped)
+    return shaped
 
 
 # ---------------------------------------------------------------------------

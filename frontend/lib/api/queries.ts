@@ -50,7 +50,7 @@ export function useStudyReportQuery(artifactId: string, enabled = true) {
     queryKey: queryKeys.studyReport(artifactId),
     queryFn: () => apiGet<StudyReport>(`/api/learn/${artifactId}/report`),
     enabled: enabled && Boolean(artifactId),
-    staleTime: 0,
+    staleTime: 30_000,
   });
 }
 
@@ -670,9 +670,10 @@ export function useChatMessagesQuery(artifactId: string, mode: string, enabled =
       ),
     enabled: enabled && Boolean(artifactId),
     retry: false,
+    staleTime: 60_000,
     // Drop a surface's cache when you leave it, so returning re-fetches fresh
     // (picks up messages sent in another surface meanwhile).
-    gcTime: 0,
+    gcTime: 60_000,
   });
 }
 

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -42,6 +43,39 @@ router = APIRouter()
 _HISTORY_LIMIT = 6
 _LIST_MESSAGES_LIMIT = 100
 _CHAT_BUSY_MESSAGE = "Tutor is busy. Try again."
+
+
+def _history_digest(prior: list[dict]) -> str:
+    """Fold prior user turns into the semantic-cache scope so follow-ups don't collide."""
+    h = hashlib.sha256()
+    for m in prior:
+        if (m.get("role") or "") != "user":
+            continue
+        h.update((m.get("content") or "")[:500].encode("utf-8", "ignore"))
+        h.update(b"\x1f")
+    return h.hexdigest()[:32]
+
+
+def _shrink_prior_messages(prior: list[dict]) -> list[dict]:
+    """Keep last 2 messages + one compressed earlier block (cuts input tokens)."""
+    if len(prior) <= 4:
+        return prior
+    tail = prior[-2:]
+    bits: list[str] = []
+    for m in prior[:-2]:
+        content = (m.get("content") or "").strip().replace("\n", " ")
+        if not content:
+            continue
+        role = m.get("role") or "?"
+        bits.append(f"{role}: {content[:180]}")
+    if not bits:
+        return tail
+    return [
+        {
+            "role": "user",
+            "content": "Earlier in this thread (compressed):\n" + "\n".join(bits),
+        }
+    ] + tail
 
 
 def _user_facing_chat_error(exc: BaseException) -> str:
@@ -105,16 +139,14 @@ def _cache_eligible(
     has_citations: bool,
     doc_count: int,
     has_history: bool,
+    conversational_followup: bool = False,
 ) -> bool:
     """Whether a semantic cache lookup/store is safe for this turn.
 
-    The cache matches a new message to a stored reply by embedding similarity
-    alone — it has no awareness of conversation history. So a follow-up like
-    "no, I meant the other thing" or "go deeper" can be answered with the
-    *original* cached reply, which is the main cause of the tutor "answering a
-    different question". Restrict cache hits to fresh, standalone first turns
-    with no prior history; once there's a back-and-forth, always call the model
-    so replies track what the learner actually said.
+    Cache matches by embedding similarity within a scope_hash that folds prior
+    user turns (``history_digest``). Conversational follow-ups ("go deeper",
+    "thanks") stay uncached — they need the live model. Standalone paraphrases
+    after history remain eligible when the digest matches.
     """
     if include_image:
         return False
@@ -124,7 +156,7 @@ def _cache_eligible(
         return False
     if doc_count != 1:
         return False
-    if has_history:
+    if has_history and conversational_followup:
         return False
     return True
 
@@ -387,16 +419,18 @@ def _prepare_chat_stream(
         history = (
             db.query(ChatMessage)
             .filter(ChatMessage.thread_id == thread.id)
-            .order_by(ChatMessage.created_at.asc())
+            .order_by(ChatMessage.created_at.desc())
             .limit(_HISTORY_LIMIT)
             .all()
         )
+        history = list(reversed(history))
         prior = [
             {"role": m.role, "content": m.content}
             for m in history
             if (m.content or "").strip()
             and not (m.role == "assistant" and _is_transient_assistant_error(m.content))
         ]
+        prior = _shrink_prior_messages(prior)
 
         db.add(ChatMessage(thread_id=thread.id, role="user", content=body.message))
         db.commit()
@@ -580,10 +614,14 @@ async def chat_stream(
                     has_citations=bool(citations),
                     doc_count=len(doc_ids),
                     has_history=has_history,
+                    conversational_followup=is_conversational_followup(request_message),
                 )
                 artifact_id, artifact_captured_at = _artifact_ref(doc)
                 cached: dict | None = None
                 query_embedding: list[float] | None = None
+                cache_scope = dict(scope)
+                if has_history:
+                    cache_scope["history_digest"] = _history_digest(prior_messages)
                 if cache_eligible:
                     query_embedding = await asyncio.to_thread(embed_query, request_message)
                     cached = await asyncio.to_thread(
@@ -591,12 +629,12 @@ async def chat_stream(
                         stream_db,
                         document_id=artifact_id,
                         artifact_captured_at=artifact_captured_at,
-                        scope=scope,
+                        scope=cache_scope,
                         query_embedding=query_embedding,
                     )
-                elif has_history:
+                elif has_history and is_conversational_followup(request_message):
                     logger.debug(
-                        "chat cache skipped: follow-up turn (has_history) doc=%s",
+                        "chat cache skipped: conversational follow-up doc=%s",
                         document_id,
                     )
             except Exception as exc:
@@ -653,7 +691,7 @@ async def chat_stream(
                         stream_db,
                         document_id=artifact_id,
                         artifact_captured_at=artifact_captured_at,
-                        scope=scope,
+                        scope=cache_scope,
                         query_embedding=query_embedding,
                         response_text=full,
                         citations=citations,

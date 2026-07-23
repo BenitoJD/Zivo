@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.services.artifact_store import ArtifactStore, coerce_jsonb, run_artifact_generation
+from app.services.source_fingerprint import is_artifact_stale, mark_artifact_fresh
 
 _OUTLINE_STORE = ArtifactStore(
     table="qb.document_topics",
@@ -46,9 +47,11 @@ def ensure_topics(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
     the request returns immediately with status 'generating' the first time.
     """
     state = load_outline(db, document_id)
-    if state["status"] in ("ready", "generating"):
+    if state["status"] == "ready" and not is_artifact_stale(db, document_id, "topics"):
         return state
-    # missing or failed → kick a background generation
+    if state["status"] == "generating":
+        return state
+    # missing, failed, or stale → kick a background generation
     from app.services.jobs import enqueue_topics
 
     _OUTLINE_STORE.set_status(db, document_id, "generating")
@@ -85,8 +88,14 @@ def ensure_explanation(
     returns immediately with status 'generating' the first time, avoiding ingress timeouts
     on slow LLM calls.
     """
+    fp_key = f"explain:{topic_key}"
     row = load_explanation_row(db, document_id, topic_key)
-    if row and row["status"] == "ready" and row["explanation"]:
+    if (
+        row
+        and row["status"] == "ready"
+        and row["explanation"]
+        and not is_artifact_stale(db, document_id, fp_key)
+    ):
         return row
     if row and row["status"] == "generating":
         return {"status": "generating", "explanation": None, "error": None}
@@ -104,7 +113,7 @@ def run_explanation(
     """Worker entry: generate and cache one plain-language topic explanation."""
     from app.graphs.topics_graph import explain_topic
 
-    return run_artifact_generation(
+    result = run_artifact_generation(
         db,
         document_id,
         store=_EXPLANATION_STORE,
@@ -113,13 +122,17 @@ def run_explanation(
         empty_error="empty_explanation",
         key_and_extra={"topic_key": topic_key},
     )
+    if isinstance(result, str) and result.strip():
+        mark_artifact_fresh(db, document_id, f"explain:{topic_key}")
+        db.commit()
+    return result
 
 
 def run_topics_generation(db: Session, document_id: uuid.UUID) -> list[dict[str, str]]:
     """Worker entry: build and persist the topic outline for a document."""
     from app.graphs.topics_graph import generate_topic_outline
 
-    return run_artifact_generation(
+    result = run_artifact_generation(
         db,
         document_id,
         store=_OUTLINE_STORE,
@@ -127,4 +140,8 @@ def run_topics_generation(db: Session, document_id: uuid.UUID) -> list[dict[str,
         is_complete=bool,
         empty_error="no_topics_found",
     )
+    if result:
+        mark_artifact_fresh(db, document_id, "topics")
+        db.commit()
+    return result
 

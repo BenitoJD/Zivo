@@ -15,6 +15,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
+from app.services.chunk_map_cache import map_chunk_cached
 from app.services.chunks import load_document_chunk_texts
 from app.services.llm_json import extract_json_array
 from app.services.llm_router import complete_chat
@@ -92,12 +93,15 @@ async def generate_flashcards(db: Session, document_id: uuid.UUID) -> list[dict[
 
     async def _map_one(text: str) -> list[dict[str, str]]:
         async with sem:
-            excerpt = truncate_to_tokens(text, _CHUNK_MAP_MAX_TOKENS)
-            raw = await complete_chat(
-                [{"role": "system", "content": system}, {"role": "user", "content": f"SECTION:\n\n{excerpt}"}],
+            raw = await map_chunk_cached(
                 db,
+                text,
+                system=system,
+                prompt_key="flashcards_map:v1",
+                user_content="SECTION:\n\n{excerpt}",
                 log_tag="flashcards_generate",
                 model_id=model_id,
+                max_input_tokens=_CHUNK_MAP_MAX_TOKENS,
             )
             return _parse_cards(raw)
 

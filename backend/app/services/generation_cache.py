@@ -121,12 +121,17 @@ def batch_drafts_key(
     page_number: int,
     targets: list[dict[str, Any]],
     prior_mcqs: list[dict[str, Any]] | None,
+    *,
+    model_id: uuid.UUID | None = None,
+    content_type: str | None = None,
+    prompt_version: str = "v1",
 ) -> str:
     """Deterministic key for a batch-draft cache entry.
 
     Page number + sorted aspect keys define the page-context intent; the prior
     MCQ digest is included so two batches with different "don't repeat these"
-    histories don't collide. Matches the semantics of the old _BatchDraftCache.
+    histories don't collide. Model / content_type / prompt_version bind the
+    entry so a model swap or prompt bump cannot serve stale drafts.
     """
     import hashlib
 
@@ -135,6 +140,12 @@ def batch_drafts_key(
     h.update(str(page_number).encode("ascii"))
     h.update(b"\x1f")
     h.update("\x1e".join(aspect_keys).encode("utf-8", "ignore"))
+    h.update(b"\x1f")
+    h.update(str(model_id or "").encode("ascii"))
+    h.update(b"\x1f")
+    h.update((content_type or "").encode("utf-8", "ignore"))
+    h.update(b"\x1f")
+    h.update((prompt_version or "v1").encode("ascii"))
     if prior_mcqs:
         prior_digest = hashlib.sha256(
             json.dumps(prior_mcqs, sort_keys=True, default=str).encode("utf-8")
@@ -146,3 +157,22 @@ def batch_drafts_key(
 
 def page_context_key(document_id: uuid.UUID, page_number: int) -> str:
     return f"ctx:{document_id}:{page_number}"
+
+
+def purge_for_document(db: Session, document_id: uuid.UUID) -> int:
+    """Drop generation_cache rows keyed to a document (page_context).
+
+    Content-hash keys (chunk_map, verify, triage, …) expire via TTL — they are
+    not document-scoped and may still help other docs with identical text.
+    """
+    result = db.execute(
+        text(
+            """
+            DELETE FROM qb.generation_cache
+            WHERE kind = 'page_context'
+              AND cache_key LIKE :prefix
+            """
+        ),
+        {"prefix": f"ctx:{document_id}:%"},
+    )
+    return int(result.rowcount or 0)

@@ -170,11 +170,22 @@ async def ensure_ats(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
 
 
 async def optimize(db: Session, document_id: uuid.UUID, job_description: str = "") -> dict[str, Any]:
-    """Rewrite bullets ATS-friendly, optionally aligned to a job description (live, not cached)."""
+    """Rewrite bullets ATS-friendly, optionally aligned to a job description."""
     resume = _resume_text(db, document_id)
     if not resume.strip():
         return {"summary": "", "bullets": [], "missing_keywords": [], "notes": "No resume text found."}
     jd = (job_description or "").strip()
+    from app.services.chunk_map_cache import content_hash_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
+
+    opt_key = content_hash_key(
+        "resume_opt",
+        truncate_to_tokens(resume, RESUME_MAX_TOKENS),
+        truncate_to_tokens(jd, 2000) if jd else "",
+    )
+    hit = cache_get(db, kind="resume_optimize", cache_key=opt_key)
+    if isinstance(hit, dict) and ("bullets" in hit or "summary" in hit):
+        return hit
     user = f"RESUME:\n{truncate_to_tokens(resume, RESUME_MAX_TOKENS)}"
     if jd:
         user += f"\n\nTARGET JOB DESCRIPTION:\n{truncate_to_tokens(jd, 2000)}"
@@ -184,7 +195,7 @@ async def optimize(db: Session, document_id: uuid.UUID, job_description: str = "
             db, log_tag="resume_optimize",
         )
         data = _parse_json_obj(raw)
-        return {
+        out = {
             "summary": str(data.get("summary") or ""),
             "bullets": [
                 {"original": str(b.get("original", "")), "improved": str(b.get("improved", ""))}
@@ -193,6 +204,8 @@ async def optimize(db: Session, document_id: uuid.UUID, job_description: str = "
             "missing_keywords": [str(k) for k in (data.get("missing_keywords") or [])][:20],
             "notes": str(data.get("notes") or ""),
         }
+        cache_put(db, kind="resume_optimize", cache_key=opt_key, value=out)
+        return out
     except Exception as exc:
         return {"summary": "", "bullets": [], "missing_keywords": [], "notes": f"Optimization unavailable: {exc}"}
 

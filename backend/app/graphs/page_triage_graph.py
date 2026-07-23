@@ -300,6 +300,23 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
     if cached is not None:
         return cached
 
+    from app.services.chunk_map_cache import triage_cache_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
+
+    db_key = triage_cache_key(page_text, page_number)
+    db_hit = cache_get(db, kind="page_triage", cache_key=db_key)
+    if isinstance(db_hit, dict) and db_hit:
+        _triage_cache.put(page_text, page_number, db_hit)
+        return dict(db_hit)
+
+    def _store(result: dict[str, Any]) -> dict[str, Any]:
+        _triage_cache.put(page_text, page_number, result)
+        try:
+            cache_put(db, kind="page_triage", cache_key=db_key, value=result)
+        except Exception:
+            logger.debug("page triage DB cache write failed", exc_info=True)
+        return result
+
     from app.config import get_settings
 
     allow_zero = get_settings().allow_zero_questions
@@ -310,9 +327,7 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
     # non-content material (empty/junk) without spending an LLM call. Legacy
     # behaviour (flag off) never reaches this and keeps the >=5 floor below.
     if allow_zero and (not excerpt or _looks_like_junk(excerpt)):
-        result = _non_content_result(rationale="Page has no coherent testable text.")
-        _triage_cache.put(page_text, page_number, result)
-        return result
+        return _store(_non_content_result(rationale="Page has no coherent testable text."))
 
     if excerpt:
         try:
@@ -361,25 +376,25 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
                     # nothing worth asking. This is a valid high-quality verdict.
                     budget = int(raw_yield or 0)
                     if content_type == "non_content" or usable is False or budget <= 0 or not aspects:
-                        result = _non_content_result(
-                            content_type=content_type or "non_content",
-                            rationale=rationale,
-                            programmable=programmable,
+                        return _store(
+                            _non_content_result(
+                                content_type=content_type or "non_content",
+                                rationale=rationale,
+                                programmable=programmable,
+                            )
                         )
-                        _triage_cache.put(page_text, page_number, result)
-                        return result
                     budget = max(1, min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, budget))
                     if budget < len(aspects):
                         budget = min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, len(aspects))
-                    result = _finalize_triage(
-                        aspects=aspects[:budget],
-                        budget=budget,
-                        rationale=rationale,
-                        content_type=content_type,
-                        programmable=programmable,
+                    return _store(
+                        _finalize_triage(
+                            aspects=aspects[:budget],
+                            budget=budget,
+                            rationale=rationale,
+                            content_type=content_type,
+                            programmable=programmable,
+                        )
                     )
-                    _triage_cache.put(page_text, page_number, result)
-                    return result
 
                 # Legacy path (flag off): no floor — honour the model's count of
                 # distinct testable ideas, capped only at the absolute max. The
@@ -387,18 +402,18 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
                 budget = int(raw_yield) if raw_yield is not None else INITIAL_BATCH_SIZE
                 budget = max(0, min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, budget))
                 if not aspects:
-                    return _fallback_triage(page_text, page_number)
+                    return _store(_fallback_triage(page_text, page_number))
                 if budget < len(aspects):
                     budget = min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, len(aspects))
-                result = _finalize_triage(
-                    aspects=aspects[:budget],
-                    budget=budget,
-                    rationale=rationale,
-                    content_type=content_type,
-                    programmable=programmable,
+                return _store(
+                    _finalize_triage(
+                        aspects=aspects[:budget],
+                        budget=budget,
+                        rationale=rationale,
+                        content_type=content_type,
+                        programmable=programmable,
+                    )
                 )
-                _triage_cache.put(page_text, page_number, result)
-                return result
         except Exception:
             # LLM triage failed — degrade to heuristic budgeting. Log it: if this
             # fires for every page, the moat's first stage is silently down.
@@ -407,6 +422,4 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
                 page_number,
                 exc_info=True,
             )
-    result = _fallback_triage(page_text, page_number)
-    _triage_cache.put(page_text, page_number, result)
-    return result
+    return _store(_fallback_triage(page_text, page_number))

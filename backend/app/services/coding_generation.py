@@ -175,6 +175,14 @@ def _generate_and_verify(db: Session, page_excerpt: str) -> dict[str, Any] | Non
 
 def _llm_generate(db: Session, page_excerpt: str) -> dict[str, Any] | None:
     """One LLM call → one parsed coding problem dict, or None on parse failure."""
+    from app.services.chunk_map_cache import content_hash_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
+
+    draft_key = content_hash_key("coding_draft", page_excerpt)
+    hit = cache_get(db, kind="coding_draft", cache_key=draft_key)
+    if isinstance(hit, dict) and hit.get("statement"):
+        return dict(hit)
+
     user = (
         f"SOURCE MATERIAL (a page the learner uploaded — apply its concept, do not copy):\n"
         f"{page_excerpt}\n\n"
@@ -195,7 +203,10 @@ def _llm_generate(db: Session, page_excerpt: str) -> dict[str, Any] | None:
     except Exception:
         logger.debug("coding generation: LLM call failed", exc_info=True)
         return None
-    return _parse_problem_json(raw)
+    problem = _parse_problem_json(raw)
+    if problem:
+        cache_put(db, kind="coding_draft", cache_key=draft_key, value=problem)
+    return problem
 
 
 def _parse_problem_json(raw: str) -> dict[str, Any] | None:

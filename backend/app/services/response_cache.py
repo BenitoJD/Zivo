@@ -44,6 +44,9 @@ def _scope_hash(artifact_id: uuid.UUID, scope: dict) -> str:
         "confirmed_choice_index": scope.get("confirmed_choice_index"),
         "answer_correct": scope.get("answer_correct"),
         "mentions": sorted(scope.get("mentions") or []),
+        # Prior user turns — follow-up paraphrases share a digest; different
+        # threads don't collide on embedding similarity alone.
+        "history_digest": scope.get("history_digest") or "",
     }
     raw = json.dumps(key, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode()).hexdigest()

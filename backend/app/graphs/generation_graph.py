@@ -27,7 +27,6 @@ from app.services.question_pool import (
     on_batch_completed,
     set_coverage_complete,
 )
-from app.services.embed import embed_texts
 from app.services.retrieval import fetch_chunks_for_page_range, search_chunks
 from app.services.token_budget import PAGE_INPUT_MAX_TOKENS, truncate_to_tokens
 
@@ -77,7 +76,10 @@ def _aspect_retrieval_hints(
 
     try:
         labels = [str(t.get("label") or t.get("key") or "") for t in targets]
-        vecs = embed_texts(labels)
+        # Per-label embed_query hits the process LRU (repeat aspects across batches).
+        from app.services.embed import embed_query
+
+        vecs = [embed_query(label) for label in labels if label.strip()]
         if not vecs:
             return ""
         dims = len(vecs[0])

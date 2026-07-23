@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.services.artifact_store import ArtifactStore, coerce_jsonb, run_artifact_generation
+from app.services.source_fingerprint import is_artifact_stale, mark_artifact_fresh
 
 NOTE_KINDS = ("notes", "cheatsheet")
 
@@ -46,7 +47,10 @@ def ensure_notes(db: Session, document_id: uuid.UUID, kind: str) -> dict[str, An
     if kind not in NOTE_KINDS:
         kind = "notes"
     state = load_notes(db, document_id, kind)
-    if state["status"] in ("ready", "generating"):
+    fp_key = f"notes:{kind}"
+    if state["status"] == "ready" and not is_artifact_stale(db, document_id, fp_key):
+        return state
+    if state["status"] == "generating":
         return state
     from app.services.jobs import enqueue_notes
 
@@ -62,7 +66,7 @@ def run_notes_generation(db: Session, document_id: uuid.UUID, kind: str) -> str:
 
     if kind not in NOTE_KINDS:
         kind = "notes"
-    return run_artifact_generation(
+    result = run_artifact_generation(
         db,
         document_id,
         store=_NOTES_STORE,
@@ -71,6 +75,10 @@ def run_notes_generation(db: Session, document_id: uuid.UUID, kind: str) -> str:
         empty_error="no_notes_generated",
         key_and_extra={"kind": kind},
     )
+    if isinstance(result, str) and result.strip():
+        mark_artifact_fresh(db, document_id, f"notes:{kind}")
+        db.commit()
+    return result
 
 
 # ----------------------------------------------------------------------- flashcards
@@ -84,7 +92,9 @@ def load_flashcards(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
 
 def ensure_flashcards(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
     state = load_flashcards(db, document_id)
-    if state["status"] in ("ready", "generating"):
+    if state["status"] == "ready" and not is_artifact_stale(db, document_id, "flashcards"):
+        return state
+    if state["status"] == "generating":
         return state
     from app.services.jobs import enqueue_flashcards
 
@@ -98,7 +108,7 @@ def run_flashcards_generation(db: Session, document_id: uuid.UUID) -> list[dict[
     """Worker entry: build and persist the flashcard deck for a document."""
     from app.graphs.flashcards_graph import generate_flashcards
 
-    return run_artifact_generation(
+    result = run_artifact_generation(
         db,
         document_id,
         store=_FLASHCARDS_STORE,
@@ -106,4 +116,7 @@ def run_flashcards_generation(db: Session, document_id: uuid.UUID) -> list[dict[
         is_complete=bool,
         empty_error="no_cards_generated",
     )
-
+    if result:
+        mark_artifact_fresh(db, document_id, "flashcards")
+        db.commit()
+    return result

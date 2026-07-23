@@ -316,6 +316,18 @@ async def _generate_question(
         f"CANDIDATE RESUME:\n{truncate_to_tokens(resume, RESUME_MAX_TOKENS) or '(resume unavailable)'}\n\n"
         f"Ask one {rnd['kind']} question. {rules}\nReturn JSON matching: {schema}"
     )
+    from app.services.chunk_map_cache import content_hash_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
+
+    resume_digest = content_hash_key("resume", truncate_to_tokens(resume, RESUME_MAX_TOKENS))
+    asked_digest = content_hash_key("asked", already)
+    gen_key = content_hash_key(
+        "interview_gen", category, rnd["name"], rnd["kind"], rnd["focus"], resume_digest, asked_digest
+    )
+    hit = cache_get(db, kind="interview_gen", cache_key=gen_key)
+    if isinstance(hit, dict) and hit.get("question"):
+        return hit
+
     raw = await complete_chat(
         [{"role": "system", "content": _GEN_SYSTEM}, {"role": "user", "content": user}],
         db, log_tag="interview_gen",
@@ -357,6 +369,8 @@ async def _generate_question(
             out["starter_code"] = (data.get("starter_code") or "").rstrip()
             out["tests"] = tests[:6]
             out["explanation"] = (data.get("explanation") or "").strip()
+    if out.get("question"):
+        cache_put(db, kind="interview_gen", cache_key=gen_key, value=out)
     return out
 
 
@@ -440,6 +454,20 @@ async def _evaluate(db: Session, current: dict, answer: Any) -> dict[str, Any]:
         f"Question: {current.get('question','')}\n\n"
         f"Candidate's answer:\n{answer_text}"
     )
+    from app.services.chunk_map_cache import content_hash_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
+
+    eval_key = content_hash_key(
+        "interview_eval",
+        current.get("question", ""),
+        answer_text,
+        current.get("round_name", ""),
+        current.get("focus", ""),
+    )
+    hit = cache_get(db, kind="interview_eval", cache_key=eval_key)
+    if isinstance(hit, dict) and hit.get("scores"):
+        turn.update({"scores": hit["scores"], "feedback": hit.get("feedback") or "Answer recorded."})
+        return turn
     try:
         raw = await complete_chat(
             [{"role": "system", "content": _EVAL_SYSTEM}, {"role": "user", "content": user}],
@@ -448,6 +476,7 @@ async def _evaluate(db: Session, current: dict, answer: Any) -> dict[str, Any]:
         data = _parse_json_obj(raw)
         scores = {d: _clamp_score(data.get("scores", {}).get(d)) for d in RUBRIC_DIMENSIONS}
         feedback = (data.get("feedback") or "").strip() or "Answer recorded."
+        cache_put(db, kind="interview_eval", cache_key=eval_key, value={"scores": scores, "feedback": feedback})
     except Exception:
         scores = {d: 2 for d in RUBRIC_DIMENSIONS}
         feedback = "Answer recorded (automatic scoring was unavailable for this one)."
