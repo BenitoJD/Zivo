@@ -237,6 +237,10 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
               router.push("/workspace/models");
               if (isMobile) closeMobile();
             }}
+            onOpenProgress={() => {
+              router.push("/workspace/progress");
+              if (isMobile) closeMobile();
+            }}
             onDeleteSource={(doc) => setDeleteTarget(doc)}
             onOpenSettings={() => setSettingsOpen(true)}
           />

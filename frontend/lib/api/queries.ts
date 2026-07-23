@@ -27,6 +27,8 @@ export const queryKeys = {
   brainstormIdeas: (id: string) => ["brainstorm-ideas", id] as const,
   quiz: (id: string, config: string) => ["quiz", id, config] as const,
   studyReport: (id: string) => ["study-report", id] as const,
+  progress: (artifactId?: string | null) =>
+    artifactId ? (["progress", artifactId] as const) : (["progress", "lifetime"] as const),
   interview: (id: string) => ["interview", id] as const,
   mains: (id: string) => ["mains", id] as const,
   resume: (id: string) => ["resume", id] as const,
@@ -48,8 +50,46 @@ export type StudyReport = {
 export function useStudyReportQuery(artifactId: string, enabled = true) {
   return useQuery({
     queryKey: queryKeys.studyReport(artifactId),
-    queryFn: () => apiGet<StudyReport>(`/api/learn/${artifactId}/report`),
+    queryFn: () => apiGet<StudyReport>(`/api/artifacts/${artifactId}/report`),
     enabled: enabled && Boolean(artifactId),
+    staleTime: 30_000,
+  });
+}
+
+export type LearnerProgress = {
+  first_attempt_only: boolean;
+  answers: {
+    total: number;
+    correct: number;
+    wrong: number;
+    accuracy: number | null;
+  };
+  today: { answered: number; correct: number; questions_asked: number };
+  questions_asked: number;
+  recent: { day: string; answered: number; correct: number; questions_asked: number }[];
+  sources: {
+    artifact_id: string;
+    title: string;
+    total: number;
+    correct: number;
+    wrong: number;
+    questions_asked: number;
+    last_answered_at: string | null;
+  }[];
+  topics: { concept: string; correct: number; total: number }[];
+  scoped_artifact_id: string | null;
+};
+
+/** Lifetime (or per-source) learning journal from measurements + tutor chat. */
+export function useLearnerProgressQuery(artifactId?: string | null, enabled = true) {
+  const scoped = artifactId || null;
+  return useQuery({
+    queryKey: queryKeys.progress(scoped),
+    queryFn: () =>
+      apiGet<LearnerProgress>(
+        scoped ? `/api/progress?artifact_id=${encodeURIComponent(scoped)}` : "/api/progress",
+      ),
+    enabled,
     staleTime: 30_000,
   });
 }

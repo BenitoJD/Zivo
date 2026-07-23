@@ -17,7 +17,8 @@ export type StudyMode =
   | "interview"
   | "resume"
   | "coding"
-  | "mains";
+  | "mains"
+  | "progress";
 
 type StudyNavValue = {
   /** True while an artifact study view is mounted (so the sidebar shows modes). */

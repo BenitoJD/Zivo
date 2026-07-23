@@ -14,6 +14,7 @@ from app.api import (
     mcq,
     models,
     practice,
+    progress,
     sources,
     study,
     topics,
@@ -38,3 +39,4 @@ api_router.include_router(mcq.router, prefix="/mcq", tags=["mcq"])
 api_router.include_router(models.router, prefix="/models", tags=["models"])
 api_router.include_router(practice.router, prefix="/practice", tags=["practice"])
 api_router.include_router(coding.router, prefix="/coding", tags=["coding"])
+api_router.include_router(progress.router, prefix="/progress", tags=["progress"])

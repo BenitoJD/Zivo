@@ -34,6 +34,7 @@ import {
   IconMoon,
   IconNotebook,
   IconPlus,
+  IconChartBar,
   IconSettings,
   IconSun,
   IconTrash,
@@ -58,6 +59,7 @@ const MODE_GROUPS: {
       { value: "read", label: "Read", icon: IconBook2, color: "indigo" },
       { value: "learn", label: "Learn", icon: IconBulb, color: "orange" },
       { value: "test", label: "Test", icon: IconClipboardList, color: "grape" },
+      { value: "progress", label: "Progress", icon: IconChartBar, color: "lavender" },
       { value: "brainstorm", label: "Brainstorm", icon: IconBrain, color: "sage" },
     ],
   },
@@ -366,6 +368,7 @@ export type SidebarProps = {
   onAddSource: () => void;
   onSignIn: () => void;
   onOpenModels: () => void;
+  onOpenProgress: () => void;
   onDeleteSource: (doc: SourceDocument) => void;
   onOpenSettings: () => void;
 };
@@ -385,6 +388,7 @@ export function Sidebar({
   onAddSource,
   onSignIn,
   onOpenModels,
+  onOpenProgress,
   onDeleteSource,
   onOpenSettings,
 }: SidebarProps) {
@@ -702,6 +706,15 @@ export function Sidebar({
                 <Progress value={storagePct} size={4} radius="xl" color="lavender" />
               </Stack>
             )}
+            <NavLink
+              label="Progress"
+              description="Answers, accuracy, concepts"
+              leftSection={<IconChartBar size={18} stroke={1.5} />}
+              active={pathname === "/workspace/progress"}
+              onClick={onOpenProgress}
+              mb="xs"
+              styles={{ root: { borderRadius: "var(--mantine-radius-md)" } }}
+            />
             {isAdmin && (
               <NavLink
                 label="LLM models"
@@ -771,6 +784,9 @@ export function Sidebar({
                 onClick={() => toggleColorScheme()}
               >
                 {isDark ? <IconMoon size={18} stroke={1.5} /> : <IconSun size={18} stroke={1.5} />}
+              </MiniRailButton>
+              <MiniRailButton label="Progress" active={pathname === "/workspace/progress"} onClick={onOpenProgress}>
+                <IconChartBar size={18} stroke={1.5} />
               </MiniRailButton>
               <MiniRailButton label="Settings" onClick={onOpenSettings}>
                 <IconSettings size={18} stroke={1.5} />

@@ -43,6 +43,7 @@ import { InterviewView } from "@/app/workspace/_components/InterviewView";
 import { MainsView } from "@/app/workspace/_components/MainsView";
 import { CodingView } from "@/app/workspace/_components/CodingView";
 import { ResumeView } from "@/app/workspace/_components/ResumeView";
+import { ProgressView } from "@/app/workspace/_components/ProgressView";
 import { PdfReader } from "@/app/workspace/_components/PdfReader";
 import {
   TutorPanel,
@@ -1011,6 +1012,12 @@ export default function WorkspaceArtifactPage({
             <CodingView artifactId={artifact.id} compact={isNarrow} />
           ) : mode === "resume" ? (
             <ResumeView artifactId={artifact.id} compact={isNarrow} />
+          ) : mode === "progress" ? (
+            <ProgressView
+              artifactId={artifact.id}
+              compact={isNarrow}
+              onStartLearn={() => setMode("learn")}
+            />
           ) : showNoQuestions ? (
             <Stack align="center" gap="sm" py="xl" ta="center">
               <Text ff="var(--font-serif)" fz={isNarrow ? 22 : 28} fw={500} c="var(--mantine-color-text)">
