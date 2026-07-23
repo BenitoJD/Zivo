@@ -1,7 +1,7 @@
 "use client";
 
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiDelete, apiGet, apiPost, apiPostBytes, setCsrfToken } from "@/lib/api/client";
+import { apiDelete, apiGet, apiPatch, apiPost, apiPostBytes, setCsrfToken } from "@/lib/api/client";
 import type { ArtifactMeta, PagesInfo, SourceDocument } from "@/lib/types";
 
 export type AuthSession = {
@@ -34,8 +34,11 @@ export const queryKeys = {
   resume: (id: string) => ["resume", id] as const,
   codingWorkspace: (id: string) => ["coding", "workspace", id] as const,
   codingProblem: (id: string) => ["coding", "problem", id] as const,
-  codingPublic: () => ["coding", "public"] as const,
+  codingPublic: (filters?: string) =>
+    filters ? (["coding", "public", filters] as const) : (["coding", "public"] as const),
   codingLanguages: () => ["coding", "languages"] as const,
+  codingAdmin: () => ["coding", "admin"] as const,
+  codingAdminProblem: (id: string) => ["coding", "admin", id] as const,
 };
 
 export type StudyReport = {
@@ -483,6 +486,10 @@ export type CodingProblemListItem = {
   hidden_test_count: number;
   page_number?: number;
   status?: CodingProblemStatus;
+  tags?: string[];
+  origin?: "generated" | "curated";
+  concept?: string;
+  published?: boolean;
 };
 export type CodingProblem = {
   id: string;
@@ -497,7 +504,13 @@ export type CodingProblem = {
   test_count: number;
   concept: string;
   tags: string[];
+  origin?: "generated" | "curated";
   status?: CodingProblemStatus;
+  published?: boolean;
+};
+export type CodingEditorialProblem = CodingProblem & {
+  hidden_tests: CodingTestCase[];
+  editor_solution: string;
 };
 export type CodingSubmitResult = {
   passed: number;
@@ -506,6 +519,13 @@ export type CodingSubmitResult = {
   cases: { ok: boolean; stdin?: string; expected?: string; stdout?: string; stderr?: string }[];
   error: string | null;
   status: CodingProblemStatus;
+};
+
+export type CodingPublicFilters = {
+  difficulty?: "easy" | "medium" | "hard";
+  tag?: string;
+  status?: "new" | "solved";
+  origin?: "generated" | "curated";
 };
 
 export function useCodingWorkspaceQuery(artifactId: string, enabled = true) {
@@ -529,11 +549,19 @@ export function useCodingProblemQuery(id: string | null | undefined, enabled = t
   });
 }
 
-export function useCodingPublicQuery(difficulty?: "easy" | "medium" | "hard") {
-  const qs = difficulty ? `?difficulty=${difficulty}` : "";
+export function useCodingPublicQuery(filters: CodingPublicFilters = {}) {
+  const qs = new URLSearchParams();
+  if (filters.difficulty) qs.set("difficulty", filters.difficulty);
+  if (filters.tag) qs.set("tag", filters.tag);
+  if (filters.status) qs.set("status", filters.status);
+  if (filters.origin) qs.set("origin", filters.origin);
+  const q = qs.toString();
   return useQuery({
-    queryKey: queryKeys.codingPublic(),
-    queryFn: () => apiGet<{ items: CodingProblemListItem[]; count: number }>(`/api/coding${qs}`),
+    queryKey: queryKeys.codingPublic(q || undefined),
+    queryFn: () =>
+      apiGet<{ items: CodingProblemListItem[]; count: number; tags: string[] }>(
+        `/api/coding${q ? `?${q}` : ""}`,
+      ),
   });
 }
 
@@ -542,6 +570,24 @@ export function useCodingLanguagesQuery() {
     queryKey: queryKeys.codingLanguages(),
     queryFn: () => apiGet<{ languages: InterviewLanguage[] }>(`/api/coding/meta/languages`),
     staleTime: Infinity,
+  });
+}
+
+export function useCodingAdminQuery(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.codingAdmin(),
+    queryFn: () => apiGet<{ items: CodingProblemListItem[]; count: number }>(`/api/coding/admin`),
+    enabled,
+    retry: false,
+  });
+}
+
+export function useCodingAdminProblemQuery(id: string | null | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.codingAdminProblem(id ?? ""),
+    queryFn: () => apiGet<CodingEditorialProblem>(`/api/coding/admin/${id}`),
+    enabled: enabled && Boolean(id),
+    retry: false,
   });
 }
 
@@ -555,11 +601,28 @@ export function useCodingActions(assertionId: string) {
     submit: async (source: string, language_id: number) => {
       const result = await apiPost<CodingSubmitResult>(`/api/coding/${assertionId}/submit`, { source, language_id });
       qc.invalidateQueries({ queryKey: queryKeys.codingProblem(assertionId) });
+      qc.invalidateQueries({ queryKey: ["coding", "public"] });
       return result;
     },
     invalidateWorkspace: (artifactId: string) => {
       qc.invalidateQueries({ queryKey: queryKeys.codingWorkspace(artifactId) });
     },
+  };
+}
+
+export function useCodingCurateActions() {
+  const qc = useQueryClient();
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: queryKeys.codingAdmin() });
+    qc.invalidateQueries({ queryKey: ["coding", "public"] });
+  };
+  return {
+    seed: () => apiPost<{ created: number; updated: number; total: number }>("/api/coding/admin/seed", {}),
+    create: (body: Record<string, unknown>) => apiPost<CodingProblem>("/api/coding/admin", body),
+    update: (id: string, body: Record<string, unknown>) =>
+      apiPatch<CodingProblem>(`/api/coding/admin/${id}`, body),
+    remove: (id: string) => apiDelete(`/api/coding/admin/${id}`),
+    invalidate,
   };
 }
 

@@ -313,7 +313,14 @@ def _persist(
         "editor_solution": problem.get("reference_solution") or "",
         "concept": problem.get("concept") or "",
         "tags": problem.get("tags") or [],
+        "origin": "generated",
     }
+
+    tags = [
+        str(t).strip().lower()[:40]
+        for t in (problem.get("tags") or [])
+        if str(t).strip()
+    ][:12]
 
     try:
         db.execute(
@@ -346,19 +353,22 @@ def _persist(
                 INSERT INTO qb.coding_assertion_facets (
                   assertion_id, artifact_id, page_number, sequence,
                   title, difficulty, language_id,
-                  sample_test_count, hidden_test_count
+                  sample_test_count, hidden_test_count,
+                  published, origin, tags
                 )
                 VALUES (
                   :aid, :artifact_id, :page, :seq,
                   :title, :difficulty, :language_id,
-                  :sample_count, :hidden_count
+                  :sample_count, :hidden_count,
+                  true, 'generated', :tags
                 )
                 ON CONFLICT (assertion_id) DO UPDATE SET
                   title = EXCLUDED.title,
                   difficulty = EXCLUDED.difficulty,
                   language_id = EXCLUDED.language_id,
                   sample_test_count = EXCLUDED.sample_test_count,
-                  hidden_test_count = EXCLUDED.hidden_test_count
+                  hidden_test_count = EXCLUDED.hidden_test_count,
+                  tags = EXCLUDED.tags
                 """
             ),
             {
@@ -371,6 +381,7 @@ def _persist(
                 "language_id": language_id,
                 "sample_count": len(sample_tests),
                 "hidden_count": len(hidden_tests),
+                "tags": tags,
             },
         )
     except Exception:
@@ -409,6 +420,7 @@ def public_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "test_count": len(payload.get("hidden_tests") or []),
         "concept": payload.get("concept", ""),
         "tags": payload.get("tags", []),
+        "origin": payload.get("origin", "generated"),
     }
 
 

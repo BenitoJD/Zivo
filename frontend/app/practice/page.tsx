@@ -167,7 +167,29 @@ export default function PracticeHubPage() {
             <>
               {/* Curated landing */}
               <Stack gap="xs">
-                <Text size="sm" c="dimmed" fw={500}>
+                <Paper radius="xl" p="lg" withBorder bg="gray.0" shadow="paper">
+                  <Group justify="space-between" align="center" wrap="wrap" gap="sm">
+                    <Box>
+                      <Text fw={600} ff="var(--font-serif)">
+                        Coding practice
+                      </Text>
+                      <Text size="sm" c="dimmed">
+                        LeetCode-style problems — run tests, submit, track solved.
+                      </Text>
+                    </Box>
+                    <Button
+                      component="a"
+                      href="/practice/coding"
+                      radius="xl"
+                      variant="light"
+                      color="lavender"
+                      rightSection={<IconArrowRight size={16} />}
+                    >
+                      Open bank
+                    </Button>
+                  </Group>
+                </Paper>
+                <Text size="sm" c="dimmed" fw={500} mt="sm">
                   Or explore a topic to get started
                 </Text>
                 {CURATED.map((c) => (

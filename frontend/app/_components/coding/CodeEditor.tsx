@@ -125,8 +125,20 @@ export function CodeEditor({
             {problem.test_count ? (
               <Badge variant="light" color="gray" radius="sm">{problem.test_count} hidden tests</Badge>
             ) : null}
+            {problem.status === "solved" ? (
+              <Badge variant="light" color="sage" radius="sm" leftSection={<IconCheck size={10} />}>
+                Solved
+              </Badge>
+            ) : null}
           </Group>
         </Group>
+        {problem.tags?.length ? (
+          <Group gap={6} mb="sm">
+            {problem.tags.map((t) => (
+              <Badge key={t} variant="light" color="gray" radius="sm" size="sm">{t}</Badge>
+            ))}
+          </Group>
+        ) : null}
         <Text fz="sm" lh={1.6} c="var(--mantine-color-text)" style={{ whiteSpace: "pre-wrap" }}>
           {problem.statement}
         </Text>

@@ -369,6 +369,7 @@ export type SidebarProps = {
   onSignIn: () => void;
   onOpenModels: () => void;
   onOpenProgress: () => void;
+  onOpenCodingBank?: () => void;
   onDeleteSource: (doc: SourceDocument) => void;
   onOpenSettings: () => void;
 };
@@ -389,6 +390,7 @@ export function Sidebar({
   onSignIn,
   onOpenModels,
   onOpenProgress,
+  onOpenCodingBank,
   onDeleteSource,
   onOpenSettings,
 }: SidebarProps) {
@@ -715,6 +717,17 @@ export function Sidebar({
               mb="xs"
               styles={{ root: { borderRadius: "var(--mantine-radius-md)" } }}
             />
+            {onOpenCodingBank && (
+              <NavLink
+                label="Coding bank"
+                description="Browse and practice problems"
+                leftSection={<IconCode size={18} stroke={1.5} />}
+                active={pathname.startsWith("/workspace/coding")}
+                onClick={onOpenCodingBank}
+                mb="sm"
+                styles={{ root: { borderRadius: "var(--mantine-radius-md)" } }}
+              />
+            )}
             {isAdmin && (
               <NavLink
                 label="LLM models"
