@@ -97,6 +97,9 @@ export default function WorkspaceArtifactPage({
   const invalidArtifactId = !isArtifactId(artifactId);
   const isLg = useMediaQuery(STUDY_DESKTOP_BP, false, { getInitialValueInEffect: true });
   const isCompact = useMediaQuery(STUDY_COMPACT_BP, false, { getInitialValueInEffect: true });
+  // Phone OR tablet study shell (<992): denser chrome. True phone (<768) also gets
+  // the mode dropdown (tablet keeps the desktop sidebar mode list).
+  const isNarrow = !isLg;
   const isDark = useIsDark();
   // Mode selection lives in the workspace layout so the global left sidebar can
   // host the mode navigator (below the source list) instead of a second rail.
@@ -841,7 +844,7 @@ export default function WorkspaceArtifactPage({
         confirming={confirming}
         setupError={setupError}
         confirmLabel="Start studying"
-        isCompact={isCompact}
+        isCompact={isNarrow}
         onRangeChange={handleRangeChange}
         onPageToggle={handlePageToggle}
         onSelectAll={() => {
@@ -935,7 +938,7 @@ export default function WorkspaceArtifactPage({
 
   // Both edges carry a floating trigger (SOURCE on the left, Zivo on the right), so a
   // pinned column has to leave room for one or it slides underneath.
-  const pinned = isCompact ? null : studyAlign === "left" ? "left" : studyAlign === "right" ? "right" : null;
+  const pinned = isNarrow ? null : studyAlign === "left" ? "left" : studyAlign === "right" ? "right" : null;
   const questionColumn = (
     <Box flex={1} mih={0} h="100%" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <StudyMetaBar
@@ -945,7 +948,8 @@ export default function WorkspaceArtifactPage({
         mode={mode}
         onModeChange={setMode}
         showProgress={(mode === "learn" || mode === "test") && !mcqLoading && Boolean(queue?.current_assertion_id) && !showPageComplete && !showDocumentComplete}
-        compact={isCompact}
+        compact={isNarrow}
+        showModeSelect={isCompact}
         studyMode={queue?.study_mode}
         onStudyModeChange={(m) => void setStudyMode(m)}
         align={studyAlign}
@@ -992,28 +996,28 @@ export default function WorkspaceArtifactPage({
           }}
         >
           {mode === "brainstorm" ? (
-            <BrainstormView artifactId={artifact.id} compact={isCompact} />
+            <BrainstormView artifactId={artifact.id} compact={isNarrow} />
           ) : mode === "explain" ? (
-            <ExplainView artifactId={artifact.id} compact={isCompact} />
+            <ExplainView artifactId={artifact.id} compact={isNarrow} />
           ) : mode === "notes" ? (
-            <NotesView artifactId={artifact.id} compact={isCompact} />
+            <NotesView artifactId={artifact.id} compact={isNarrow} />
           ) : mode === "cards" ? (
-            <FlashcardsView artifactId={artifact.id} compact={isCompact} />
+            <FlashcardsView artifactId={artifact.id} compact={isNarrow} />
           ) : mode === "palace" ? (
-            <MemoryPalaceView artifactId={artifact.id} compact={isCompact} />
+            <MemoryPalaceView artifactId={artifact.id} compact={isNarrow} />
           ) : mode === "quiz" ? (
-            <QuizBuilderView artifactId={artifact.id} compact={isCompact} />
+            <QuizBuilderView artifactId={artifact.id} compact={isNarrow} />
           ) : mode === "interview" ? (
-            <InterviewView artifactId={artifact.id} compact={isCompact} />
+            <InterviewView artifactId={artifact.id} compact={isNarrow} />
           ) : mode === "mains" ? (
-            <MainsView artifactId={artifact.id} compact={isCompact} />
+            <MainsView artifactId={artifact.id} compact={isNarrow} />
           ) : mode === "coding" ? (
-            <CodingView artifactId={artifact.id} compact={isCompact} />
+            <CodingView artifactId={artifact.id} compact={isNarrow} />
           ) : mode === "resume" ? (
-            <ResumeView artifactId={artifact.id} compact={isCompact} />
+            <ResumeView artifactId={artifact.id} compact={isNarrow} />
           ) : showNoQuestions ? (
             <Stack align="center" gap="sm" py="xl" ta="center">
-              <Text ff="var(--font-serif)" fz={isCompact ? 22 : 28} fw={500} c="var(--mantine-color-text)">
+              <Text ff="var(--font-serif)" fz={isNarrow ? 22 : 28} fw={500} c="var(--mantine-color-text)">
                 Nothing to quiz here
               </Text>
               <Text c="dimmed" maw={420}>
@@ -1030,7 +1034,7 @@ export default function WorkspaceArtifactPage({
               total={answeredHistory.length}
               answered={answeredHistory}
               report={studyReportQuery.data}
-              compact={isCompact}
+              compact={isNarrow}
               canChoosePages={Boolean(completedRange)}
               onReview={() => setReviewIndex(0)}
               onChoosePages={openReselectPages}
@@ -1045,13 +1049,13 @@ export default function WorkspaceArtifactPage({
               nextTo={nextRangeSuggestion?.to}
               answered={answeredHistory}
               report={studyReportQuery.data}
-              compact={isCompact}
+              compact={isNarrow}
               onChoosePages={openReselectPages}
             />
           ) : showPageComplete ? (
             <PageCompleteInterstitial
               page={queue?.current_page ?? 0}
-              compact={isCompact}
+              compact={isNarrow}
               generating={Boolean(queue?.generation_pending)}
             />
           ) : reviewIndex !== null && answeredHistory[reviewIndex] ? (
@@ -1062,7 +1066,7 @@ export default function WorkspaceArtifactPage({
             card={answeredHistory[reviewIndex]}
             index={reviewIndex}
             total={answeredHistory.length}
-            compact={isCompact}
+            compact={isNarrow}
             onPrev={reviewIndex > 0 ? () => setReviewIndex(reviewIndex - 1) : undefined}
             onNext={() =>
               setReviewIndex(reviewIndex + 1 < answeredHistory.length ? reviewIndex + 1 : null)
@@ -1096,7 +1100,7 @@ export default function WorkspaceArtifactPage({
             mode={mode as "learn" | "test"}
             gradeState={gradeState}
             submitting={submitting}
-            compact={isCompact}
+            compact={isNarrow}
             canReview={gradeState ? answeredHistory.length >= 2 : answeredHistory.length >= 1}
             onReviewPrevious={() =>
               setReviewIndex(gradeState ? answeredHistory.length - 2 : answeredHistory.length - 1)
@@ -1155,7 +1159,7 @@ export default function WorkspaceArtifactPage({
           mode={mode}
           onModeChange={setMode}
           showProgress={false}
-          compact={isCompact}
+          compact={isNarrow}
         />
         {stacked ? (
           <Group justify="flex-end" px={{ base: "sm", sm: "md" }} pt={6} pb={6} style={{ flexShrink: 0 }}>
@@ -1418,7 +1422,7 @@ export default function WorkspaceArtifactPage({
           sliderMarks={sliderMarks}
           selectedPages={sortedSelection}
           isDark={isDark}
-          isCompact={isCompact}
+          isCompact={isNarrow}
           isPdf={isPdf}
           pdfDoc={pdfDoc}
           thumbCanvasRefs={thumbCanvasRefs}

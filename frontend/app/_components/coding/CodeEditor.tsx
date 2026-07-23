@@ -149,7 +149,7 @@ export function CodeEditor({
             <Select
               size="xs"
               radius="md"
-              w={200}
+              w={{ base: "100%", xs: 220 }}
               value={String(langId)}
               onChange={(v) => setLangId(Number(v))}
               data={languages.map((l) => ({ value: String(l.id), label: l.label }))}
@@ -178,7 +178,7 @@ export function CodeEditor({
             spellCheck={false}
             styles={{ input: { fontFamily: "var(--mantine-font-family-monospace, monospace)", fontSize: 12 } }}
           />
-          <Group>
+          <Group gap="xs" wrap="wrap">
             <Button
               size="xs"
               variant="light"

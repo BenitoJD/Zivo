@@ -5,6 +5,8 @@
  * truth instead of reaching into the page module. No React, no side effects.
  */
 
+import { MOBILE_MAX_MQ, STUDY_DESKTOP_MQ } from "@/lib/responsive";
+
 // --- 3-pane panel sizing -----------------------------------------------------
 export const SOURCE_PANEL_DEFAULT = 360;
 export const SOURCE_PANEL_MIN = 280;
@@ -19,9 +21,9 @@ export const PANEL_MS = 280;
 // --- responsive breakpoints --------------------------------------------------
 // Desktop 3-pane only ≥992px (62em); below that the clean single-column mobile
 // shell is used - the cramped 3-pane didn't fit small tablets / large phones.
-export const STUDY_DESKTOP_BP = "(min-width: 62em)";
-export const STUDY_COMPACT_BP = "(max-width: 47.99em)";
-/** Tablet range (768-991px): desktop study shell, but Source/Tutor ride as floating slide-over panels. */
+export const STUDY_DESKTOP_BP = STUDY_DESKTOP_MQ;
+export const STUDY_COMPACT_BP = MOBILE_MAX_MQ;
+/** @deprecated Prefer STUDY_COMPACT_BP — same range as mobile AppShell. */
 export const STUDY_OVERLAY_BP = "(max-width: 61.99em)";
 
 // --- thumbnail grid ----------------------------------------------------------

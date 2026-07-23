@@ -15,6 +15,7 @@ import { IconMaximize, IconMinus, IconWindowMaximize, IconX } from "@tabler/icon
 const HEADER_H = 38;
 const MIN_W = 300;
 const MIN_H = 220;
+const ABS_MIN_W = 220;
 const MARGIN = 12;
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -26,6 +27,11 @@ const nextZ = () => (zTop += 1);
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
+}
+
+/** Never ask for more width than the workspace can give (narrow tablets). */
+function minPanelW(cw: number) {
+  return Math.min(MIN_W, Math.max(ABS_MIN_W, cw - 2 * MARGIN));
 }
 
 function loadRect(key: string): Rect | null {
@@ -83,17 +89,18 @@ export function FloatingPanel({
   useEffect(() => {
     if (!open || rect) return;
     const { w: cw, h: ch } = bounds();
+    const floorW = minPanelW(cw);
     const stored = loadRect(storageKey);
     let next: Rect;
     if (stored) {
       next = {
-        x: clamp(stored.x, 0, Math.max(0, cw - MIN_W)),
+        x: clamp(stored.x, 0, Math.max(0, cw - floorW)),
         y: clamp(stored.y, 0, Math.max(0, ch - MIN_H)),
-        w: clamp(stored.w, MIN_W, cw),
+        w: clamp(stored.w, floorW, cw),
         h: clamp(stored.h, MIN_H, ch),
       };
     } else {
-      const w = clamp(Math.round(cw * 0.42), MIN_W, Math.max(MIN_W, cw - 2 * MARGIN));
+      const w = clamp(Math.round(cw * 0.42), floorW, Math.max(floorW, cw - 2 * MARGIN));
       const h = Math.max(MIN_H, ch - 2 * MARGIN);
       next = { x: defaultSide === "left" ? MARGIN : Math.max(MARGIN, cw - w - MARGIN), y: MARGIN, w, h };
     }
@@ -128,8 +135,9 @@ export function FloatingPanel({
       setRect((r) => {
         if (!r) return r;
         const { w: cw, h: ch } = bounds();
+        const floorW = minPanelW(cw);
         return {
-          w: clamp(r.w, MIN_W, cw),
+          w: clamp(r.w, floorW, cw),
           h: clamp(r.h, MIN_H, ch),
           x: clamp(r.x - shift, 0, Math.max(0, cw - Math.min(r.w, cw))),
           y: clamp(r.y, 0, Math.max(0, ch - HEADER_H)),
@@ -148,6 +156,7 @@ export function FloatingPanel({
       const sy = e.clientY;
       const s = rect;
       const { w: cw, h: ch } = bounds();
+      const floorW = minPanelW(cw);
       setInteracting(true);
       document.body.style.userSelect = "none";
       if (mode !== "move") document.body.style.cursor = `${mode}-resize`;
@@ -164,10 +173,10 @@ export function FloatingPanel({
           return;
         }
         let { x, y, w, h } = s;
-        if (mode.includes("e")) w = clamp(s.w + dx, MIN_W, cw - s.x);
+        if (mode.includes("e")) w = clamp(s.w + dx, floorW, cw - s.x);
         if (mode.includes("s")) h = clamp(s.h + dy, MIN_H, ch - s.y);
         if (mode.includes("w")) {
-          w = clamp(s.w - dx, MIN_W, s.x + s.w);
+          w = clamp(s.w - dx, floorW, s.x + s.w);
           x = s.x + s.w - w;
         }
         if (mode.includes("n")) {

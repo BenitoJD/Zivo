@@ -80,7 +80,12 @@ export default function PracticeHubPage() {
             <Title
               order={1}
               fw={500}
-              style={{ fontFamily: "var(--font-serif), Georgia, serif", letterSpacing: "-0.02em" }}
+              style={{
+                fontFamily: "var(--font-serif), Georgia, serif",
+                letterSpacing: "-0.02em",
+                fontSize: "clamp(1.75rem, 6vw, 2.75rem)",
+                lineHeight: 1.15,
+              }}
             >
               Practice{" "}
               <Box component="span" fs="italic" c="lavender.7">
@@ -88,7 +93,7 @@ export default function PracticeHubPage() {
               </Box>{" "}
               in the world.
             </Title>
-            <Text size="lg" c="gray.6" lh={1.6} maw={560}>
+            <Text size="lg" c="gray.6" lh={1.6} maw={560} px="xs" style={{ fontSize: "clamp(0.95rem, 2.8vw, 1.125rem)" }}>
               Search any concept - from photosynthesis to Bebop - and practice AI-generated
               questions instantly. No sign-up needed.
             </Text>
@@ -97,7 +102,21 @@ export default function PracticeHubPage() {
           {/* Search */}
           <Paper shadow="paper" radius="xl" p={6} withBorder bg="gray.0">
             <form onSubmit={handleSearch}>
-              <Group gap={0} wrap="nowrap">
+              <Stack gap={6} hiddenFrom="sm">
+                <TextInput
+                  variant="unstyled"
+                  placeholder="Search a topic…"
+                  value={query}
+                  onChange={(e) => setQuery(e.currentTarget.value)}
+                  size="md"
+                  leftSection={<IconSearch size={18} />}
+                  styles={{ input: { fontSize: "1.05rem" } }}
+                />
+                <Button type="submit" radius="xl" fullWidth loading={loading} disabled={!query.trim()}>
+                  Search
+                </Button>
+              </Stack>
+              <Group gap={0} wrap="nowrap" visibleFrom="sm">
                 <TextInput
                   variant="unstyled"
                   placeholder="Search a topic, e.g. “quadratic equations”"

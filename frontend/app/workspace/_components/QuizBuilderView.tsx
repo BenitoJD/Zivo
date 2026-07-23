@@ -10,6 +10,7 @@ import {
   NumberInput,
   Paper,
   SegmentedControl,
+  SimpleGrid,
   Stack,
   Switch,
   Text,
@@ -134,12 +135,18 @@ export function QuizBuilderView({ artifactId, compact = false }: { artifactId: s
 
         <Group gap="xl" mt="md" wrap="wrap" align="flex-end">
           <NumberInput label="Questions" value={count} onChange={(v) => setCount(Math.max(1, Math.min(40, Number(v) || 10)))} min={1} max={40} w={120} radius="md" />
-          <Box>
+          <Box style={{ flex: "1 1 220px", minWidth: 0 }}>
             <Text fz="sm" fw={500} mb={4}>Difficulty</Text>
-            <SegmentedControl size="xs" radius="xl" value={difficulty} onChange={setDifficulty}
-              data={[{ label: "Easy", value: "easy" }, { label: "Medium", value: "medium" }, { label: "Hard", value: "hard" }, { label: "Mixed", value: "mixed" }]} />
+            <SegmentedControl
+              size="xs"
+              radius="xl"
+              fullWidth
+              value={difficulty}
+              onChange={setDifficulty}
+              data={[{ label: "Easy", value: "easy" }, { label: "Medium", value: "medium" }, { label: "Hard", value: "hard" }, { label: "Mixed", value: "mixed" }]}
+            />
           </Box>
-          <Button color="lavender" radius="xl" leftSection={<IconSparkles size={16} />} disabled={draftTypes.length === 0} loading={building} onClick={generate}>
+          <Button color="lavender" radius="xl" leftSection={<IconSparkles size={16} />} disabled={draftTypes.length === 0} loading={building} onClick={generate} fullWidth={compact}>
             {applied ? "Regenerate" : "Generate quiz"}
           </Button>
         </Group>
@@ -206,10 +213,10 @@ function QuestionCard({ n, q, showAnswers, compact }: { n: number; q: QuizQuesti
       ) : null}
 
       {q.type === "matching" && q.pairs ? (
-        <Group align="flex-start" gap="xl" wrap="nowrap">
+        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
           <Stack gap={2}>{q.pairs.map((p, pi) => <Text key={pi} fz="sm">{pi + 1}. {p.left}</Text>)}</Stack>
           <Stack gap={2}>{q.pairs.map((p, pi) => <Text key={pi} fz="sm">{LETTERS[pi]}. {p.right}</Text>)}</Stack>
-        </Group>
+        </SimpleGrid>
       ) : null}
 
       {showAnswers && (q.type === "fill_blank" || q.type === "short" || q.type === "essay") ? (

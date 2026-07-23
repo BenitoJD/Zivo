@@ -26,6 +26,7 @@ import { sourceLabel } from "@/app/workspace/_components/Sidebar";
 import { SettingsModal } from "@/app/workspace/_components/SettingsModal";
 import { OnboardingGuide } from "@/app/workspace/_components/OnboardingGuide";
 import { StudyNavProvider } from "@/app/workspace/_components/studyNav";
+import { MOBILE_MAX_MQ } from "@/lib/responsive";
 
 const MOBILE_HEADER_HEIGHT = 52;
 
@@ -52,7 +53,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   // Strictly below 48em so it never overlaps AppShell's `sm` navbar breakpoint
   // (which shows the desktop navbar at exactly 768px = iPad portrait); the overlap
   // gave the navbar width:"100%" while rendered inline, pushing content off-screen.
-  const isMobile = useMediaQuery("(max-width: 47.99em)", false, { getInitialValueInEffect: true });
+  const isMobile = useMediaQuery(MOBILE_MAX_MQ, false, { getInitialValueInEffect: true });
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)", false, {
     getInitialValueInEffect: true,
   });
@@ -146,7 +147,12 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
         zIndex={120}
         transitionDuration={reduceMotion ? 0 : SHELL_MS}
         transitionTimingFunction={SHELL_EASE}
-        header={{ height: { base: MOBILE_HEADER_HEIGHT, sm: 0 } }}
+        header={{
+          height: {
+            base: `calc(${MOBILE_HEADER_HEIGHT}px + env(safe-area-inset-top, 0px))`,
+            sm: 0,
+          },
+        }}
         navbar={{
           width: sidebarWidth,
           breakpoint: "sm",
@@ -172,7 +178,11 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
           },
         }}
       >
-        <AppShell.Header hiddenFrom="sm" px="md">
+        <AppShell.Header
+          hiddenFrom="sm"
+          px="md"
+          style={{ paddingTop: "env(safe-area-inset-top)" }}
+        >
           <Group h="100%" justify="space-between" wrap="nowrap" align="center">
             <Box w={34} style={{ flexShrink: 0 }}>
               <Burger

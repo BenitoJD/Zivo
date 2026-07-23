@@ -22,7 +22,7 @@ export function AuthSplitLayout({
   attribution: string;
 }) {
   return (
-    <Box bg="var(--mantine-color-body)" style={{ minHeight: "100dvh" }}>
+    <Box bg="var(--mantine-color-body)" style={{ minHeight: "100dvh", overflowX: "hidden" }}>
       <Group align="stretch" wrap="nowrap" gap={0} style={{ minHeight: "100dvh" }}>
         {/* Editorial brand panel - intentionally always dark (a fixed dark
             surface, like a book endpaper), regardless of color scheme. We pin
@@ -86,10 +86,10 @@ export function AuthSplitLayout({
         {/* Form panel */}
         <Box
           bg="var(--mantine-color-body)"
-          style={{ flex: "1 1 0", minHeight: "100dvh" }}
+          style={{ flex: "1 1 0", minHeight: "100dvh", minWidth: 0, overflowY: "auto", WebkitOverflowScrolling: "touch" }}
           p={{ base: "md", md: "xl" }}
         >
-          <Stack align="center" justify="center" style={{ minHeight: "100dvh" }} gap="lg">
+          <Stack align="center" justify="center" mih={{ base: "auto", md: "100dvh" }} gap="lg" py={{ base: "lg", md: 0 }}>
             <Container size="xs" w="100%" p={0}>
               <Group justify="space-between" mb="lg" hiddenFrom="md" wrap="nowrap">
                 <BrandMark height={26} />

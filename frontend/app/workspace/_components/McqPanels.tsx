@@ -121,7 +121,7 @@ function ScrollHintArea({ children }: { children: ReactNode }) {
           // bottom, invisible at the sides. 4px is the minimum that clears the border
           // plus the arrow-key focus ring (2px outline at 2px offset, also being cut);
           // 6px leaves a little room for the hover lift.
-          paddingInline: 6,
+          paddingInline: "clamp(6px, 2vw, 12px)",
         }}
       >
         {children}
@@ -847,16 +847,17 @@ export function McqReviewView({
       <Group
         justify="space-between"
         align="center"
-        wrap="nowrap"
+        wrap="wrap"
         px={4}
         pb={8}
+        gap="xs"
         style={{ flexShrink: 0 }}
       >
         <Group gap={8} wrap="nowrap" align="center" style={{ minWidth: 0 }}>
           <ThemeIcon variant="light" color="lavender" radius="xl" size={26}>
             <IconHistory size={15} stroke={1.8} />
           </ThemeIcon>
-          <Text fz="sm" fw={600} c="var(--mantine-color-text)" style={{ whiteSpace: "nowrap" }}>
+          <Text fz="sm" fw={600} c="var(--mantine-color-text)" lineClamp={1}>
             Reviewing
             <Text component="span" inherit c="dimmed" fw={500}>
               {"  "}

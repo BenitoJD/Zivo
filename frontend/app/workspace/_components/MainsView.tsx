@@ -401,8 +401,8 @@ export function MainsView({ artifactId, compact = false }: { artifactId: string;
 
         <Paper radius="lg" p="md" withBorder style={{ borderColor: "var(--mantine-color-default-border)" }}>
           <Stack gap="md">
-            <Group justify="space-between" wrap="nowrap">
-              <Box><Text fw={600} fz="sm">Marks</Text><Text c="dimmed" fz="xs">Answer length scales with this.</Text></Box>
+            <Group justify="space-between" wrap="wrap" gap="sm" align="flex-start">
+              <Box style={{ flex: "1 1 140px" }}><Text fw={600} fz="sm">Marks</Text><Text c="dimmed" fz="xs">Answer length scales with this.</Text></Box>
               <SegmentedControl
                 size="xs"
                 value={String(marksMax)}
@@ -410,8 +410,8 @@ export function MainsView({ artifactId, compact = false }: { artifactId: string;
                 data={[{ value: "10", label: "10 · ~150w" }, { value: "15", label: "15 · ~250w" }]}
               />
             </Group>
-            <Group justify="space-between" wrap="nowrap" align="flex-start">
-              <Box style={{ flex: 1 }}>
+            <Group justify="space-between" wrap="wrap" gap="sm" align="flex-start">
+              <Box style={{ flex: "1 1 140px" }}>
                 <Text fw={600} fz="sm">Strictness</Text>
                 <Text c="dimmed" fz="xs">{STRICTNESS.find((s) => s.value === strictness)?.blurb}</Text>
               </Box>
@@ -422,7 +422,7 @@ export function MainsView({ artifactId, compact = false }: { artifactId: string;
                 data={STRICTNESS.map((s) => ({ value: s.value, label: s.label }))}
               />
             </Group>
-            <Group justify="space-between" wrap="nowrap">
+            <Group justify="space-between" wrap="wrap" gap="sm">
               <Box><Text fw={600} fz="sm">Practice under time</Text><Text c="dimmed" fz="xs">~1 minute per mark, examiner-style.</Text></Box>
               <Switch checked={timerOn} onChange={(e) => setTimerOn(e.currentTarget.checked)} color="blue" />
             </Group>

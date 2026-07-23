@@ -1,7 +1,9 @@
 "use client";
 
 import { Modal } from "@mantine/core";
+import { useMediaQuery } from "@mantine/hooks";
 import { SourceImportDeck } from "@/app/workspace/_components/SourceImportDeck";
+import { MOBILE_MAX_MQ } from "@/lib/responsive";
 
 /** Sidebar "Add source" popup - the full import deck, reachable from anywhere. */
 export function AddSourceModal({
@@ -13,6 +15,8 @@ export function AddSourceModal({
   onClose: () => void;
   onImported: (id: string) => void;
 }) {
+  const isMobile = useMediaQuery(MOBILE_MAX_MQ, false, { getInitialValueInEffect: true });
+
   return (
     <Modal
       opened={opened}
@@ -20,7 +24,8 @@ export function AddSourceModal({
       title="Add source"
       centered
       size="lg"
-      radius="xl"
+      fullScreen={Boolean(isMobile)}
+      radius={isMobile ? 0 : "xl"}
       styles={{ title: { fontWeight: 600, fontSize: "1.05rem" } }}
     >
       <SourceImportDeck

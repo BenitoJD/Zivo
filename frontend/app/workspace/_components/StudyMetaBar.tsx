@@ -82,6 +82,8 @@ export function StudyMetaBar({
   onModeChange,
   showProgress = true,
   compact = false,
+  /** When compact, show the mode dropdown (phones). Tablets keep sidebar mode nav. */
+  showModeSelect,
   studyMode,
   onStudyModeChange,
   align = "center",
@@ -95,6 +97,7 @@ export function StudyMetaBar({
   onModeChange: (mode: StudyMode) => void;
   showProgress?: boolean;
   compact?: boolean;
+  showModeSelect?: boolean;
   studyMode?: "adaptive" | "classic";
   onStudyModeChange?: (mode: "adaptive" | "classic") => void;
   /** Current study-column alignment. Desktop only - phones are always centred. */
@@ -102,6 +105,7 @@ export function StudyMetaBar({
   /** Omit to hide the alignment toggle entirely (e.g. Read, which owns its layout). */
   onAlignChange?: (align: StudyAlign) => void;
 }) {
+  const modeSelect = showModeSelect ?? compact;
   const showBar = showProgress && questionTotal > 0;
   const pct = showBar ? Math.min(100, Math.round((questionIndex / questionTotal) * 100)) : 0;
   const segmented = showBar && questionTotal <= 16;
@@ -280,13 +284,13 @@ export function StudyMetaBar({
   );
 
   if (compact) {
-    // Phones can't fit a left mode rail (or 8 segments in a row), so the switch
-    // becomes a single full-width dropdown above the progress.
+    // Narrow viewports: denser chrome. Mode dropdown only on true phones
+    // (tablets keep the desktop sidebar mode list).
     return (
       <Stack px="sm" py={6} gap={6} style={{ flexShrink: 0 }}>
-        <CompactModeSelect mode={mode} onChange={onModeChange} />
+        {modeSelect ? <CompactModeSelect mode={mode} onChange={onModeChange} /> : null}
         {progress || studyModeControl ? (
-          <Group justify="space-between" wrap="nowrap" align="center" gap="sm">
+          <Group justify="space-between" wrap="wrap" align="center" gap="sm">
             <Box style={{ flex: 1, minWidth: 0 }}>{progress}</Box>
             {studyModeControl}
           </Group>

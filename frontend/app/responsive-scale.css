@@ -22,3 +22,31 @@
     --mantine-scale: 1.5;
   }
 }
+
+/*
+ * Cross-device overflow + safe-area guards.
+ * Body is locked to 100dvh for the workspace shell; public pages scroll inside
+ * their own Box. Still kill accidental horizontal scroll from wide children.
+ */
+html {
+  max-width: 100%;
+  overflow-x: clip;
+}
+body {
+  max-width: 100%;
+  overflow-x: clip;
+}
+img,
+svg,
+video,
+canvas {
+  max-width: 100%;
+  height: auto;
+}
+/* Long unbroken tokens in stems / code / URLs shouldn't blow the layout. */
+pre,
+code,
+.zv-break-words {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}

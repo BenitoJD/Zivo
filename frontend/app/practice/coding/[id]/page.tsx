@@ -15,6 +15,8 @@ import { useRouter } from "next/navigation";
 import { ensureGuestSession } from "@/lib/api/client";
 import { useCodingProblemQuery } from "@/lib/api/queries";
 import { CodeEditor } from "@/app/_components/coding/CodeEditor";
+import { useMediaQuery } from "@mantine/hooks";
+import { MOBILE_MAX_MQ } from "@/lib/responsive";
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
@@ -31,6 +33,7 @@ export default function CodingSolvePage({ params }: { params: Promise<{ id: stri
   const router = useRouter();
   const id = useResolvedParam(params);
   const { data: problem, isLoading, isError } = useCodingProblemQuery(id, Boolean(id));
+  const compact = useMediaQuery(MOBILE_MAX_MQ, false, { getInitialValueInEffect: true });
 
   useEffect(() => {
     void ensureGuestSession();
@@ -77,7 +80,7 @@ export default function CodingSolvePage({ params }: { params: Promise<{ id: stri
         >
           All problems
         </Button>
-        <CodeEditor problem={problem} />
+        <CodeEditor problem={problem} compact={Boolean(compact)} />
       </Container>
     </Shell>
   );

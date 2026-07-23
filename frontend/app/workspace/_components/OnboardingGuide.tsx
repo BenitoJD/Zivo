@@ -12,6 +12,7 @@ import {
   ThemeIcon,
   Title,
 } from "@mantine/core";
+import { useMediaQuery } from "@mantine/hooks";
 import {
   IconBookUpload,
   IconBulb,
@@ -21,6 +22,7 @@ import {
   IconMessageCircle,
   IconSparkles,
 } from "@tabler/icons-react";
+import { MOBILE_MAX_MQ } from "@/lib/responsive";
 
 type OnboardingGuideProps = {
   opened: boolean;
@@ -56,6 +58,7 @@ const STEPS = [
 
 export function OnboardingGuide({ opened, onClose }: OnboardingGuideProps) {
   const [activeStep, setActiveStep] = useState(0);
+  const isMobile = useMediaQuery(MOBILE_MAX_MQ, false, { getInitialValueInEffect: true });
 
   // Mark onboarding done on ANY close (finish, escape, or overlay click) so it
   // only ever appears once for a new user.
@@ -93,13 +96,14 @@ export function OnboardingGuide({ opened, onClose }: OnboardingGuideProps) {
       withCloseButton={false}
       centered
       size="md"
+      fullScreen={Boolean(isMobile)}
       overlayProps={{
         backgroundOpacity: 0.45,
         blur: 8,
       }}
       styles={{
         content: {
-          borderRadius: "var(--mantine-radius-xl)",
+          borderRadius: isMobile ? 0 : "var(--mantine-radius-xl)",
           background: "var(--mantine-color-body)",
           border: "1px solid var(--mantine-color-default-border)",
           overflow: "hidden",

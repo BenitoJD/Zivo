@@ -38,7 +38,10 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  maximumScale: 5,
   viewportFit: "cover",
+  // Soft keyboards (iOS/Android) resize the visual viewport so study composers stay in view.
+  interactiveWidget: "resizes-content",
 };
 
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

@@ -87,7 +87,7 @@ export function LandingNav() {
         component="header"
         pos="sticky"
         top={0}
-        style={{ zIndex: 100, transition }}
+        style={{ zIndex: 100, transition, paddingTop: "env(safe-area-inset-top, 0px)" }}
       >
         <Container
           size="lg"

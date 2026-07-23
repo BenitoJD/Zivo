@@ -16,7 +16,7 @@ import {
   ThemeIcon,
   useMantineColorScheme,
 } from "@mantine/core";
-import { useLocalStorage } from "@mantine/hooks";
+import { useLocalStorage, useMediaQuery } from "@mantine/hooks";
 import {
   IconBook,
   IconCat,
@@ -33,6 +33,7 @@ import {
   readPreferredStudyMode,
   writeStudyPreferences,
 } from "@/lib/studyPreferences";
+import { MOBILE_MAX_MQ } from "@/lib/responsive";
 
 type SettingsModalProps = {
   opened: boolean;
@@ -57,8 +58,8 @@ function SettingRow({
   control: ReactNode;
 }) {
   return (
-    <Group justify="space-between" align="center" wrap="nowrap" gap="md" px="md" py="sm">
-      <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
+    <Group justify="space-between" align="flex-start" wrap="wrap" gap="md" px="md" py="sm">
+      <Group gap="sm" wrap="nowrap" style={{ minWidth: 0, flex: "1 1 180px" }}>
         <ThemeIcon
           radius="md"
           size={34}
@@ -77,12 +78,12 @@ function SettingRow({
           <Text fw={600} size="sm" lh={1.3}>
             {title}
           </Text>
-          <Text size="xs" c="dimmed" lh={1.35} maw={230}>
+          <Text size="xs" c="dimmed" lh={1.35} maw={280}>
             {desc}
           </Text>
         </Stack>
       </Group>
-      <Box style={{ flexShrink: 0 }}>{control}</Box>
+      <Box style={{ flexShrink: 0, marginLeft: "auto" }}>{control}</Box>
     </Group>
   );
 }
@@ -92,6 +93,7 @@ const segStyles = { root: { background: "var(--mantine-color-default-hover)" } }
 export function SettingsModal({ opened, onClose, username, onReplayOnboarding }: SettingsModalProps) {
   const { colorScheme, toggleColorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
+  const isMobile = useMediaQuery(MOBILE_MAX_MQ, false, { getInitialValueInEffect: true });
 
   const [studyMode, setStudyMode] = useState<PreferredStudyMode>(() => readPreferredStudyMode());
   const [mcqCount, setMcqCount] = useState<number>(() => readPreferredMcqCount());
@@ -117,7 +119,8 @@ export function SettingsModal({ opened, onClose, username, onReplayOnboarding }:
         </Text>
       }
       size={468}
-      radius="xl"
+      fullScreen={Boolean(isMobile)}
+      radius={isMobile ? 0 : "xl"}
       overlayProps={{ backgroundOpacity: 0.5, blur: 10 }}
       styles={{
         header: { paddingBottom: 6, background: "var(--mantine-color-body)" },

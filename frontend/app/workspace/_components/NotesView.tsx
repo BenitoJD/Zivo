@@ -190,7 +190,7 @@ export function NotesView({
     <Stack gap="md" pb="xl">
       <Group justify="space-between" wrap="wrap" gap="sm">
         {toggle}
-        <Group gap={6} wrap="nowrap">
+        <Group gap={6} wrap="wrap">
           <CopyButton value={content} timeout={2000}>
             {({ copied, copy }) => (
               <Button

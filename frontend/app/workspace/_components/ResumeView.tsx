@@ -57,6 +57,7 @@ export function ResumeView({ artifactId, compact = false }: { artifactId: string
         value={tab}
         onChange={setTab}
         radius="xl"
+        fullWidth
         data={[
           { label: "ATS Score", value: "score" },
           { label: "Optimize", value: "optimize" },

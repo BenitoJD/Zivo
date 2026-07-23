@@ -2,7 +2,7 @@
 
 import { useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Box, Group, Paper, Stack, Text, ThemeIcon, Title } from "@mantine/core";
+import { Box, Paper, SimpleGrid, Stack, Text, ThemeIcon, Title } from "@mantine/core";
 import { IconBulb, IconMessageCircle, IconUpload } from "@tabler/icons-react";
 import { SourceImportDeck } from "@/app/workspace/_components/SourceImportDeck";
 
@@ -58,17 +58,19 @@ export default function WorkspaceIndexPage() {
   return (
     <Box
       flex={1}
-      px="lg"
-      py="xl"
+      px={{ base: "md", sm: "lg" }}
+      py={{ base: "md", sm: "xl" }}
       onMouseMove={handleMouseMove}
       style={{
         position: "relative",
         overflowY: "auto",
+        overflowX: "hidden",
         background: "var(--mantine-color-body)",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        justifyContent: "center",
+        justifyContent: "safe center",
+        WebkitOverflowScrolling: "touch",
       }}
     >
       {/* Ambient interactive light glow - position fed via --zx/--zy CSS vars. */}
@@ -123,13 +125,13 @@ export default function WorkspaceIndexPage() {
         {/* Main interaction deck - shared with the sidebar Add-source modal. */}
         <SourceImportDeck onImported={(id) => router.push(`/workspace/${id}`)} />
 
-        {/* Workflow steps timeline */}
-        <Group grow align="stretch" gap="md" w="100%" visibleFrom="sm">
+        {/* Workflow steps — stacked on phones, 3-up from tablet. */}
+        <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="md" w="100%">
           {STEPS.map((s) => (
             <Paper
               key={s.title}
               radius="lg"
-              p="lg"
+              p={{ base: "md", sm: "lg" }}
               withBorder
               bg="gray.0"
               style={{
@@ -161,7 +163,7 @@ export default function WorkspaceIndexPage() {
               </Stack>
             </Paper>
           ))}
-        </Group>
+        </SimpleGrid>
       </Stack>
 
       <style>{`

@@ -11,7 +11,13 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <Box
       bg="var(--mantine-color-body)"
-      style={{ height: "100dvh", overflowY: "auto", overflowX: "hidden" }}
+      style={{
+        height: "100dvh",
+        overflowY: "auto",
+        overflowX: "hidden",
+        WebkitOverflowScrolling: "touch",
+        paddingBottom: "env(safe-area-inset-bottom, 0px)",
+      }}
     >
       {children}
     </Box>

@@ -71,7 +71,7 @@ export function Footer() {
           </Group>
         </Group>
 
-        <Group justify="space-between" mt={{ base: 32, md: 40 }} wrap="nowrap" align="center">
+        <Group justify="space-between" mt={{ base: 32, md: 40 }} wrap="wrap" align="center" gap="xs">
           <Text size="xs" c="gray.5" suppressHydrationWarning>
             © {new Date().getFullYear()} Zivo. Question better.
           </Text>

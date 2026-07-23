@@ -156,7 +156,7 @@ export function SourceImportDeck({ onImported }: { onImported: (id: string) => v
   return (
     <Paper
       radius="xl"
-      p={{ base: "lg", md: "xl" }}
+      p={{ base: "md", sm: "lg", md: "xl" }}
       shadow="paper-lg"
       bg="gray.0"
       w="100%"
