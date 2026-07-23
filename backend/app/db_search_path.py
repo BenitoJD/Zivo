@@ -21,19 +21,19 @@ def _asyncpg_statement_name() -> str:
     return f"__asyncpg_{uuid4().hex}__"
 
 
-# Raw asyncpg.connect(...) kwargs only. Do NOT put SQLAlchemy-only keys here —
-# prepared_statement_cache_size is a SQLAlchemy dialect arg and crashes asyncpg.
+# Raw asyncpg.connect(...) kwargs. Older asyncpg builds only accept
+# statement_cache_size here — nothing else.
 PGBOUNCER_ASYNCPG_RAW_CONNECT_ARGS = {
     "statement_cache_size": 0,
-    "prepared_statement_name_func": _asyncpg_statement_name,
 }
 
-# SQLAlchemy create_async_engine(..., connect_args=...). Includes the dialect-level
-# prepared_statement_cache_size (asyncpg ≥0.28 / SQLAlchemy dual-cache) plus the
-# raw asyncpg kwargs above.
+# SQLAlchemy create_async_engine(..., connect_args=...). Dialect-level keys
+# (prepared_statement_cache_size, prepared_statement_name_func) are consumed by
+# SQLAlchemy's asyncpg dialect and must NOT be passed to asyncpg.connect().
 PGBOUNCER_ASYNCPG_CONNECT_ARGS = {
-    **PGBOUNCER_ASYNCPG_RAW_CONNECT_ARGS,
+    "statement_cache_size": 0,
     "prepared_statement_cache_size": 0,
+    "prepared_statement_name_func": _asyncpg_statement_name,
 }
 
 

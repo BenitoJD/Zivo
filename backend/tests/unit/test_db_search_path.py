@@ -30,6 +30,5 @@ def test_pgbouncer_connect_args_disable_prepared_statements() -> None:
     name_b = PGBOUNCER_ASYNCPG_CONNECT_ARGS["prepared_statement_name_func"]()
     assert name_a != name_b
     assert name_a.startswith("__asyncpg_")
-    # Raw asyncpg.connect must not see SQLAlchemy-only keys.
-    assert "prepared_statement_cache_size" not in PGBOUNCER_ASYNCPG_RAW_CONNECT_ARGS
-    assert PGBOUNCER_ASYNCPG_RAW_CONNECT_ARGS["statement_cache_size"] == 0
+    # Raw asyncpg.connect only gets statement_cache_size.
+    assert PGBOUNCER_ASYNCPG_RAW_CONNECT_ARGS == {"statement_cache_size": 0}
