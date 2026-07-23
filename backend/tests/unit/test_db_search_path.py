@@ -24,3 +24,8 @@ def test_db_module_uses_attach_not_startup_options() -> None:
 def test_pgbouncer_connect_args_disable_prepared_statements() -> None:
     assert PGBOUNCER_PSYCOPG_CONNECT_ARGS["prepare_threshold"] is None
     assert PGBOUNCER_ASYNCPG_CONNECT_ARGS["statement_cache_size"] == 0
+    assert PGBOUNCER_ASYNCPG_CONNECT_ARGS["prepared_statement_cache_size"] == 0
+    name_a = PGBOUNCER_ASYNCPG_CONNECT_ARGS["prepared_statement_name_func"]()
+    name_b = PGBOUNCER_ASYNCPG_CONNECT_ARGS["prepared_statement_name_func"]()
+    assert name_a != name_b
+    assert name_a.startswith("__asyncpg_")

@@ -83,11 +83,14 @@ function ScoreTab({ artifactId, compact }: { artifactId: string; compact?: boole
         action={<Button variant="light" color="lavender" radius="xl" onClick={() => void refetch()}>Try again</Button>} />
     );
   }
-  if (!data || data.status === "indexing" || data.status === "pending" || !data.analysis?.checks) {
+  // Only spin while the backend is still working. A ready payload without
+  // `checks` used to trap the UI forever (status ready + missing checks).
+  if (!data || data.status === "indexing" || data.status === "pending") {
     return <WaitState pet title="Scoring your resume" body="Running ATS checks and reading your content…" />;
   }
-  const a = data.analysis;
+  const a = data.analysis ?? {};
   const score = a.score ?? 0;
+  const checks = a.checks ?? [];
 
   return (
     <Stack gap="lg">
@@ -111,7 +114,7 @@ function ScoreTab({ artifactId, compact }: { artifactId: string; compact?: boole
       </Group>
 
       <Stack gap={6}>
-        {(a.checks ?? []).map((c) => (
+        {checks.map((c) => (
           <Group key={c.name} gap={10} wrap="nowrap" align="flex-start">
             <ThemeIcon variant="light" color={c.pass ? "sage" : "terracotta"} radius="xl" size="sm" mt={2}>
               {c.pass ? <IconCheck size={12} /> : <IconX size={12} />}

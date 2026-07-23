@@ -553,7 +553,12 @@ export function useResumeAtsQuery(artifactId: string, enabled = true) {
     queryKey: queryKeys.resume(artifactId),
     queryFn: () => apiGet<ResumeState>(`/api/artifacts/${artifactId}/resume/ats`),
     enabled: enabled && Boolean(artifactId),
-    refetchInterval: pollWhileIndexing(),
+    // Resume ATS returns "indexing" while the doc isn't ready yet, then "pending"
+    // briefly before "ready"/"failed". Poll through both busy states.
+    refetchInterval: (query) => {
+      const s = query.state.data?.status;
+      return s === "indexing" || s === "pending" ? 3000 : false;
+    },
   });
 }
 

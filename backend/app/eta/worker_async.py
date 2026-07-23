@@ -272,7 +272,7 @@ async def _listen_for_job_notifications() -> None:
     while True:
         conn = None
         try:
-            conn = await asyncpg.connect(_notify_dsn())
+            conn = await asyncpg.connect(_notify_dsn(), **PGBOUNCER_ASYNCPG_CONNECT_ARGS)
 
             def _on_notify(*_args) -> None:
                 _job_wake.set()

@@ -100,12 +100,23 @@ export default function ConceptPage({ params }: { params: Promise<{ qid: string 
     setGenerating(true);
     setError(null);
     try {
-      await apiPost<GenerateResponse>(`/api/practice/concepts/${qid}/generate`, {});
+      const res = await apiPost<GenerateResponse>(`/api/practice/concepts/${qid}/generate`, {});
+      if (res.status === "ready" && res.question_count > 0) {
+        setGenerating(false);
+        await loadDetail();
+        return;
+      }
+      if (res.error) {
+        setError(res.error);
+        setGenerating(false);
+      }
+      // Otherwise keep generating=true and let the poller watch question_count /
+      // is_generating until questions land or the attempt cap fires.
     } catch {
       setError("Could not start generation. Please try again.");
       setGenerating(false);
     }
-  }, [qid]);
+  }, [qid, loadDetail]);
 
   useEffect(() => {
     if (!detail || detail.question_count > 0 || generating) return;
@@ -203,12 +214,16 @@ export default function ConceptPage({ params }: { params: Promise<{ qid: string 
               </Text>
             )}
             <Text size="sm" c="lavender.7" fw={500}>
-              {count > 0 ? `${count} practice question${count === 1 ? "" : "s"}` : "Generating questions…"}
+              {count > 0
+                ? `${count} practice question${count === 1 ? "" : "s"}`
+                : generating
+                  ? "Generating questions…"
+                  : "No questions yet"}
             </Text>
           </Stack>
 
-          {/* Generating or ready state */}
-          {generating || count === 0 ? (
+          {/* Generating, empty, or ready */}
+          {generating ? (
             <Paper shadow="paper" radius="xl" p="xl" withBorder bg="gray.0">
               <Stack align="center" gap="md" py="lg">
                 <Progress value={100} size="sm" radius="xl" w={200} animated color="lavender" />
@@ -226,6 +241,34 @@ export default function ConceptPage({ params }: { params: Promise<{ qid: string 
                     {error}
                   </Text>
                 )}
+              </Stack>
+            </Paper>
+          ) : count === 0 ? (
+            <Paper shadow="paper" radius="xl" p="xl" withBorder bg="gray.0">
+              <Stack align="center" gap="md" py="lg">
+                <Stack align="center" gap={4}>
+                  <Text size="lg" fw={500} ta="center">
+                    No questions for {label} yet
+                  </Text>
+                  <Text size="sm" c="dimmed" ta="center" lh={1.55} maw={420}>
+                    Generate a fresh set from the concept&apos;s source material.
+                  </Text>
+                </Stack>
+                {error && (
+                  <Text size="sm" c="terracotta.7" ta="center">
+                    {error}
+                  </Text>
+                )}
+                <Button
+                  radius="xl"
+                  color="lavender"
+                  onClick={() => {
+                    generateRequestedFor.current = null;
+                    void triggerGenerate();
+                  }}
+                >
+                  Generate questions
+                </Button>
               </Stack>
             </Paper>
           ) : (

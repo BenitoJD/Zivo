@@ -138,9 +138,32 @@ def get_concept(qid: str, db: Session = Depends(get_db)) -> ConceptOut:
                 ConceptSummary(qid=c.get("qid") or "", label=c.get("label") or "", description="")
             )
 
-    # A concept counts as "generating" if we have an entity but zero questions,
-    # implying an in-flight job. (Best-effort; the run page polls questions.)
-    is_generating = bool(entity_id is not None and count == 0)
+    # Only claim "generating" when a generate.questions job is actually queued/running
+    # for this practice QID. Entity-with-zero-questions used to stick the UI forever
+    # after a failed or abandoned generation.
+    is_generating = False
+    if entity_id is not None and count == 0:
+        from sqlalchemy import text as sa_text
+
+        active = db.execute(
+            sa_text(
+                """
+                SELECT 1 FROM qb.jobs
+                WHERE name = 'generate.questions'
+                  AND status IN ('queued', 'running')
+                  AND (
+                    payload->>'practice_qid' = :qid
+                    OR payload->>'document_id' IN (
+                      SELECT id::text FROM qb.documents
+                      WHERE meta->>'wikidata_qid' = :qid
+                    )
+                  )
+                LIMIT 1
+                """
+            ),
+            {"qid": qid},
+        ).scalar()
+        is_generating = active is not None
 
     return ConceptOut(
         qid=qid,
