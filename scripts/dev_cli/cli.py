@@ -127,6 +127,12 @@ def start(args: argparse.Namespace) -> int:
         env=benv,
         check=False,
     )
+    subprocess.run(
+        [python_bin(), "scripts/seed_system_design_bank.py"],
+        cwd=BACKEND_DIR,
+        env=benv,
+        check=False,
+    )
 
     log_path = LOG_ROOT / "api.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -240,6 +246,12 @@ def db_cmd(args: argparse.Namespace) -> int:
         )
         subprocess.run(
             [python_bin(), "scripts/seed_dev.py"],
+            cwd=BACKEND_DIR,
+            env=backend_env(),
+            check=True,
+        )
+        subprocess.run(
+            [python_bin(), "scripts/seed_system_design_bank.py"],
             cwd=BACKEND_DIR,
             env=backend_env(),
             check=True,

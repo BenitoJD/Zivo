@@ -39,6 +39,10 @@ export const queryKeys = {
   codingLanguages: () => ["coding", "languages"] as const,
   codingAdmin: () => ["coding", "admin"] as const,
   codingAdminProblem: (id: string) => ["coding", "admin", id] as const,
+  systemDesignPath: () => ["system-design", "path"] as const,
+  systemDesignRecommended: () => ["system-design", "recommended"] as const,
+  systemDesignProblem: (id: string) => ["system-design", "problem", id] as const,
+  systemDesignSession: (id: string) => ["system-design", "session", id] as const,
 };
 
 export type StudyReport = {
@@ -623,6 +627,131 @@ export function useCodingCurateActions() {
       apiPatch<CodingProblem>(`/api/coding/admin/${id}`, body),
     remove: (id: string) => apiDelete(`/api/coding/admin/${id}`),
     invalidate,
+  };
+}
+
+// -------------------------------------------------------------- system design mastery
+export type SdConceptState = "not_started" | "in_progress" | "needs_work" | "strong";
+export type SdPathConcept = {
+  key: string;
+  title: string;
+  blurb: string;
+  prerequisites: string[];
+  state: SdConceptState;
+  mastery: number | null;
+};
+export type SdPath = {
+  concepts: SdPathConcept[];
+  focus_key: string | null;
+  focus_title: string;
+};
+export type SdDesign = {
+  requirements: string;
+  apis: string;
+  data: string;
+  scale: string;
+  blocks: string[];
+};
+export type SdLesson = {
+  title: string;
+  body: string;
+  try_this: string;
+};
+export type SdDimension = {
+  key: string;
+  score: number;
+  note: string;
+};
+export type SdProblem = {
+  id: string;
+  slug: string;
+  title: string;
+  prompt: string;
+  constraints: string;
+  difficulty: "easy" | "medium" | "hard";
+  concept_keys: string[];
+  sort_order?: number;
+  reference_design?: string;
+};
+export type SdSession = {
+  id: string;
+  problem_id: string;
+  status: "active" | "done";
+  design: Partial<SdDesign>;
+  scores: { dimensions?: SdDimension[] };
+  feedback: { mentor_summary?: string };
+  weak_concepts: string[];
+  lesson: Partial<SdLesson>;
+  recommended_next_id: string | null;
+  problem: SdProblem | null;
+  building_blocks: string[];
+  reference_design?: string;
+};
+export type SdRecommended = {
+  problem: SdProblem | null;
+  active_session: SdSession | null;
+  focus_key: string | null;
+  focus_title: string;
+  building_blocks: string[];
+};
+
+export function useSystemDesignPathQuery(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.systemDesignPath(),
+    queryFn: () => apiGet<SdPath>("/api/system-design/path"),
+    enabled,
+  });
+}
+
+export function useSystemDesignRecommendedQuery(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.systemDesignRecommended(),
+    queryFn: () => apiGet<SdRecommended>("/api/system-design/recommended"),
+    enabled,
+  });
+}
+
+export function useSystemDesignProblemQuery(id: string | null | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.systemDesignProblem(id ?? ""),
+    queryFn: () => apiGet<SdProblem>(`/api/system-design/problems/${id}`),
+    enabled: enabled && Boolean(id),
+  });
+}
+
+export function useSystemDesignSessionQuery(id: string | null | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.systemDesignSession(id ?? ""),
+    queryFn: () => apiGet<SdSession>(`/api/system-design/sessions/${id}`),
+    enabled: enabled && Boolean(id),
+  });
+}
+
+export function useSystemDesignActions() {
+  const qc = useQueryClient();
+  const invalidateDoor = () => {
+    void qc.invalidateQueries({ queryKey: queryKeys.systemDesignPath() });
+    void qc.invalidateQueries({ queryKey: queryKeys.systemDesignRecommended() });
+  };
+  return {
+    startSession: async (problem_id: string) => {
+      const sess = await apiPost<SdSession>("/api/system-design/sessions", { problem_id });
+      invalidateDoor();
+      qc.setQueryData(queryKeys.systemDesignSession(sess.id), sess);
+      return sess;
+    },
+    saveDesign: async (sessionId: string, design: SdDesign) => {
+      const sess = await apiPost<SdSession>(`/api/system-design/sessions/${sessionId}/design`, design);
+      qc.setQueryData(queryKeys.systemDesignSession(sessionId), sess);
+      return sess;
+    },
+    submit: async (sessionId: string, design: SdDesign) => {
+      const sess = await apiPost<SdSession>(`/api/system-design/sessions/${sessionId}/submit`, design);
+      qc.setQueryData(queryKeys.systemDesignSession(sessionId), sess);
+      invalidateDoor();
+      return sess;
+    },
+    invalidateDoor,
   };
 }
 

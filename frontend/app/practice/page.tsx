@@ -189,6 +189,28 @@ export default function PracticeHubPage() {
                     </Button>
                   </Group>
                 </Paper>
+                <Paper radius="xl" p="lg" withBorder bg="gray.0" shadow="paper">
+                  <Group justify="space-between" align="center" wrap="wrap" gap="sm">
+                    <Box>
+                      <Text fw={600} ff="var(--font-serif)">
+                        System Design
+                      </Text>
+                      <Text size="sm" c="dimmed">
+                        Mastery path — design a case, get mentor truth, close the gap.
+                      </Text>
+                    </Box>
+                    <Button
+                      component="a"
+                      href="/practice/system-design"
+                      radius="xl"
+                      variant="light"
+                      color="lavender"
+                      rightSection={<IconArrowRight size={16} />}
+                    >
+                      Open path
+                    </Button>
+                  </Group>
+                </Paper>
                 <Text size="sm" c="dimmed" fw={500} mt="sm">
                   Or explore a topic to get started
                 </Text>

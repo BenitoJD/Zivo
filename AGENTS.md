@@ -176,6 +176,7 @@ Transitions use `cubic-bezier(0.32, 0.72, 0, 1)` over ~280ms; always respect `pr
 - `/workspace` — library / empty-state (`app/workspace/page.tsx`)
 - `/workspace/[artifactId]` — page selection → MCQ → source + tutor (`app/workspace/[artifactId]/page.tsx`)
 - `/workspace/models` — admin model management (`app/workspace/models/page.tsx`)
+- `/practice/system-design` — System Design mastery path + design loop (`app/practice/system-design/`)
 - Shared shell (sidebar, add-source modal, delete modal) — `app/workspace/layout.tsx` + `app/workspace/_components/` (`Sidebar`, `AddSourceModal`, `DeleteSourceModal`). Auth is handled by `/login`, not a modal.
 
 ```bash
