@@ -18,7 +18,7 @@ import {
   IconRotateClockwise,
 } from "@tabler/icons-react";
 import { useFlashcardsQuery } from "@/lib/api/queries";
-import { GenerateGate, useGenStarted } from "./GenerateGate";
+import { GenerateGate, isGenStartedStale, restartGenStarted, useGenStarted } from "./GenerateGate";
 import { WaitState } from "./WaitState";
 
 /**
@@ -70,6 +70,28 @@ export function FlashcardsView({
   }
 
   if (!ready) {
+    if (isGenStartedStale(artifactId, "cards")) {
+      return (
+        <WaitState
+          icon={<IconAlertTriangle size={26} />}
+          title="Still making cards…"
+          body="This is taking longer than usual. You can wait, or retry."
+          action={
+            <Button
+              variant="light"
+              color="lavender"
+              radius="xl"
+              onClick={() => {
+                restartGenStarted(artifactId, "cards");
+                void refetch();
+              }}
+            >
+              Retry
+            </Button>
+          }
+        />
+      );
+    }
     return (
       <WaitState
         pet

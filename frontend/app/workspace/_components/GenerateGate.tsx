@@ -31,10 +31,35 @@ export function markGenStarted(artifactId: string, mode: string) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(genStartedKey(artifactId, mode), "1");
+    window.localStorage.setItem(`${genStartedKey(artifactId, mode)}:at`, String(Date.now()));
   } catch {
     /* ignore */
   }
   genStartedListeners.forEach((l) => l());
+}
+
+export function clearGenStarted(artifactId: string, mode: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(genStartedKey(artifactId, mode));
+    window.localStorage.removeItem(`${genStartedKey(artifactId, mode)}:at`);
+  } catch {
+    /* ignore */
+  }
+  genStartedListeners.forEach((l) => l());
+}
+
+/** True when generation was started but has been spinning longer than `ms`. */
+export function isGenStartedStale(artifactId: string, mode: string, ms = 180_000): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    if (window.localStorage.getItem(genStartedKey(artifactId, mode)) !== "1") return false;
+    const at = parseInt(window.localStorage.getItem(`${genStartedKey(artifactId, mode)}:at`) || "0", 10);
+    if (!at) return false;
+    return Date.now() - at > ms;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -47,7 +72,9 @@ export function useGenStarted(artifactId: string, mode: string): [boolean, () =>
   const subscribe = useCallback((onChange: () => void) => {
     genStartedListeners.add(onChange);
     const onStorage = (e: StorageEvent) => {
-      if (e.key === null || e.key === genStartedKey(artifactId, mode)) onChange();
+      if (e.key === null || e.key === genStartedKey(artifactId, mode) || e.key === `${genStartedKey(artifactId, mode)}:at`) {
+        onChange();
+      }
     };
     window.addEventListener("storage", onStorage);
     return () => {
@@ -62,6 +89,12 @@ export function useGenStarted(artifactId: string, mode: string): [boolean, () =>
   );
   const start = useCallback(() => markGenStarted(artifactId, mode), [artifactId, mode]);
   return [started, start];
+}
+
+/** Clear local gen flag and mark a fresh start (retry after stuck spinner). */
+export function restartGenStarted(artifactId: string, mode: string) {
+  clearGenStarted(artifactId, mode);
+  markGenStarted(artifactId, mode);
 }
 
 /**

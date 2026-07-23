@@ -29,6 +29,9 @@ class PageRangeIn(BaseModel):
     from_page: int = Field(alias="from", ge=1)
     to_page: int = Field(alias="to", ge=1)
     pages: list[int] | None = None
+    # Optional learner preference from Settings ("Questions per source").
+    # When set, overrides triage's per-page budget for this study range.
+    preferred_question_budget: int | None = Field(default=None, ge=3, le=150)
 
     model_config = {"populate_by_name": True}
 
@@ -107,6 +110,13 @@ def confirm_page_range(
             raise HTTPException(status_code=400, detail="Page range exceeds document")
         selected = {"from": body.from_page, "to": body.to_page}
     reset_for_new_page_range(db, doc, selected)
+    if body.preferred_question_budget is not None:
+        meta = dict(doc.meta or {})
+        meta["preferred_question_budget"] = int(body.preferred_question_budget)
+        doc.meta = meta
+        from sqlalchemy.orm.attributes import flag_modified
+
+        flag_modified(doc, "meta")
     study_pages = selected.get("pages") or list(
         range(int(selected["from"]), int(selected["to"]) + 1)
     )

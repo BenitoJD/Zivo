@@ -21,7 +21,7 @@ import {
 import { IconNotebook } from "@tabler/icons-react";
 import { AssistantMarkdown } from "@/lib/chatMarkdown";
 import { useNotesQuery, type NoteKind } from "@/lib/api/queries";
-import { GenerateGate, useGenStarted } from "./GenerateGate";
+import { GenerateGate, isGenStartedStale, restartGenStarted, useGenStarted } from "./GenerateGate";
 import { WaitState } from "./WaitState";
 
 /**
@@ -149,6 +149,31 @@ export function NotesView({
   }
 
   if (!ready) {
+    if (isGenStartedStale(artifactId, mode)) {
+      return (
+        <Stack gap="lg" pb="xl">
+          <Group justify="space-between">{toggle}</Group>
+          <WaitState
+            icon={<IconAlertTriangle size={26} />}
+            title="Still writing…"
+            body="This is taking longer than usual. You can wait, or retry."
+            action={
+              <Button
+                variant="light"
+                color="lavender"
+                radius="xl"
+                onClick={() => {
+                  restartGenStarted(artifactId, mode);
+                  void refetch();
+                }}
+              >
+                Retry
+              </Button>
+            }
+          />
+        </Stack>
+      );
+    }
     return (
       <Stack gap="lg" pb="xl">
         <Group justify="space-between">{toggle}</Group>

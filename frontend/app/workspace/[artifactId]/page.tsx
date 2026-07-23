@@ -75,6 +75,7 @@ import {
 import { PetPlayground } from "@/app/_components/pets/PetPlayground";
 import { indexingStage } from "@/lib/constants";
 import { getCachedPdfDocument, loadPdfForArtifact } from "@/lib/pdf";
+import { defaultWorkspaceMode, readPreferredMcqCount } from "@/lib/studyPreferences";
 import {
   normalizeMcqOptions,
   sanitizeMcqStem,
@@ -148,6 +149,10 @@ export default function WorkspaceArtifactPage({
   // shell can jump to the tutor tab (desktop just opens the floating panel).
   const [mobileTutorFocus, setMobileTutorFocus] = useState(0);
 
+  useEffect(() => {
+    if (mode === "test") closeTutor();
+  }, [mode, closeTutor]);
+
   // Study-column alignment (desktop): centred, or pinned left beside the source panel.
   const [studyAlign, setStudyAlign] = useLocalStorage<StudyAlign>({
     key: "zv-study-align",
@@ -211,7 +216,7 @@ export default function WorkspaceArtifactPage({
     setMcqLoading(true);
     setAnsweredHistory([]);
     setReviewIndex(null);
-    setMode("learn");
+    setMode(defaultWorkspaceMode());
   }, [artifactId, setMode]);
 
   // Brainstorm turns the same tutor panel into the ideation partner: the ANGLES each
@@ -722,6 +727,7 @@ export default function WorkspaceArtifactPage({
         from,
         to,
         pages: sortedSelection,
+        preferred_question_budget: readPreferredMcqCount(),
       });
       await queryClient.invalidateQueries({ queryKey: queryKeys.artifact(artifactId) });
       await queryClient.invalidateQueries({ queryKey: queryKeys.artifactPages(artifactId) });
@@ -1305,7 +1311,7 @@ export default function WorkspaceArtifactPage({
                 onClick={openSource}
               />
             )}
-            {!tutorOpen && (
+            {mode !== "test" && !tutorOpen && (
               <StudyEdgeTrigger
                 side="right"
                 icon={<IconMessageCircle size={20} stroke={2} />}
@@ -1338,6 +1344,7 @@ export default function WorkspaceArtifactPage({
               />
             </FloatingPanel>
 
+            {mode !== "test" ? (
             <FloatingPanel
               open={tutorOpen}
               title={ZIVO_ASSISTANT_NAME}
@@ -1362,11 +1369,13 @@ export default function WorkspaceArtifactPage({
                 {...brainstormChatProps}
               />
             </FloatingPanel>
+            ) : null}
           </Box>
         </>
       ) : (
         <StudyMobileShell
           focusTutorKey={mobileTutorFocus}
+          tutorHidden={mode === "test"}
           question={questionColumn}
           renderSource={(visible) => (
             <StudySourcePanel

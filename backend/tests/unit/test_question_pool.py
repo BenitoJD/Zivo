@@ -91,6 +91,17 @@ def test_get_question_budget_no_floor_and_150_cap() -> None:
     assert get_question_budget(_doc(300), 7) == 150
 
 
+def test_get_question_budget_preferred_spreads_across_range() -> None:
+    doc = MagicMock()
+    doc.meta = {
+        "preferred_question_budget": 5,
+        "selected_range": {"from": 1, "to": 3, "pages": [1, 2, 3]},
+        "question_progress": {"page_coverage": {"1": {"question_budget": 40, "aspects": []}}},
+    }
+    # 5 total across 3 pages → ceil → 2 per page (not the full 5 each).
+    assert get_question_budget(doc, 1) == 2
+
+
 def test_effective_budget_modest_before_engagement_then_deep() -> None:
     doc = MagicMock()
     doc.meta = {"question_progress": {"page_coverage": {"3": {"question_budget": 150, "aspects": []}}}}

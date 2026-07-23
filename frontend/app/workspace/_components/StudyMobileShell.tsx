@@ -17,25 +17,34 @@ export function StudyMobileShell({
   renderSource,
   renderTutor,
   focusTutorKey = 0,
+  tutorHidden = false,
 }: {
   question: ReactNode;
   renderSource: (visible: boolean) => ReactNode;
   renderTutor: () => ReactNode;
   /** Bump this to programmatically jump to the tutor tab (e.g. after quoting). */
   focusTutorKey?: number;
+  /** Exam / Test mode: hide Study Buddy tab. */
+  tutorHidden?: boolean;
 }) {
   const [active, setActive] = useState<StudyMobileTab>("question");
 
   // Switch to the tutor tab whenever a quote-to-chat action fires.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- react to an external "focus tutor" signal from the parent
-    if (focusTutorKey > 0) setActive("tutor");
-  }, [focusTutorKey]);
+    if (!tutorHidden && focusTutorKey > 0) setActive("tutor");
+  }, [focusTutorKey, tutorHidden]);
+
+  useEffect(() => {
+    if (tutorHidden && active === "tutor") setActive("question");
+  }, [tutorHidden, active]);
 
   const tabs: { id: StudyMobileTab; label: string; icon: typeof IconClipboardList }[] = [
     { id: "question", label: "Question", icon: IconClipboardList },
     { id: "source", label: "Source", icon: IconFileText },
-    { id: "tutor", label: ZIVO_ASSISTANT_NAME, icon: IconMessageCircle },
+    ...(tutorHidden
+      ? []
+      : [{ id: "tutor" as const, label: ZIVO_ASSISTANT_NAME, icon: IconMessageCircle }]),
   ];
 
   return (
@@ -43,7 +52,9 @@ export function StudyMobileShell({
       <Box flex={1} mih={0} pos="relative" style={{ overflow: "hidden" }}>
         <StudyMobilePanel visible={active === "question"}>{question}</StudyMobilePanel>
         <StudyMobilePanel visible={active === "source"}>{renderSource(active === "source")}</StudyMobilePanel>
-        <StudyMobilePanel visible={active === "tutor"}>{renderTutor()}</StudyMobilePanel>
+        {!tutorHidden ? (
+          <StudyMobilePanel visible={active === "tutor"}>{renderTutor()}</StudyMobilePanel>
+        ) : null}
       </Box>
       <Box
         component="nav"

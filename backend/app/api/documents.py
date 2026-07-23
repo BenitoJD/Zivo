@@ -44,12 +44,8 @@ ALLOWED_TYPES = {
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "text/plain",
-    "image/png",
-    "image/jpeg",
-    "image/webp",
 }
-# Image uploads fall back to this allowlist (excludes SVG, which can carry
-# script payloads that get rendered by viewers downstream).
+# Image study uploads are rejected until OCR ingest is production-ready.
 ALLOWED_IMAGE_PREFIX = "image/"
 
 
@@ -211,10 +207,13 @@ async def upload_document(
     data = await _read_upload_capped(request, file)
 
     ct = (file.content_type or "application/octet-stream").lower()
+    if ct.startswith(ALLOWED_IMAGE_PREFIX):
+        raise HTTPException(
+            status_code=422,
+            detail="Image study isn’t available yet — upload a PDF, Word doc, or paste text.",
+        )
     if ct not in ALLOWED_TYPES:
-        # Allow common raster image types only; reject SVG (script vector).
-        if not (ct.startswith(ALLOWED_IMAGE_PREFIX) and ct not in {"image/svg+xml", "image/svg"}):
-            raise HTTPException(status_code=415, detail="Unsupported file type")
+        raise HTTPException(status_code=415, detail="Unsupported file type")
 
     return await asyncio.to_thread(
         create_document_record,

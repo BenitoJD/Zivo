@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useMemo, useState } from "react";
+import { defaultWorkspaceMode } from "@/lib/studyPreferences";
 
 /** Every study mode the artifact view can show. */
 export type StudyMode =
@@ -35,7 +36,7 @@ const StudyNavContext = createContext<StudyNavValue | null>(null);
  */
 export function StudyNavProvider({ children }: { children: React.ReactNode }) {
   const [active, setActive] = useState(false);
-  const [mode, setMode] = useState<StudyMode>("learn");
+  const [mode, setMode] = useState<StudyMode>(() => defaultWorkspaceMode());
   const value = useMemo(() => ({ active, setActive, mode, setMode }), [active, mode]);
   return <StudyNavContext.Provider value={value}>{children}</StudyNavContext.Provider>;
 }

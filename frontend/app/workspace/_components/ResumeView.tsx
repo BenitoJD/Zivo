@@ -73,8 +73,6 @@ export function ResumeView({ artifactId, compact = false }: { artifactId: string
 // ------------------------------------------------------------------ ATS score
 function ScoreTab({ artifactId, compact }: { artifactId: string; compact?: boolean }) {
   const { data, isError, refetch } = useResumeAtsQuery(artifactId);
-  const { requestReview } = useResumeActions(artifactId);
-  const [requesting, setRequesting] = useState(false);
 
   if (isError || data?.status === "failed") {
     return (
@@ -105,10 +103,10 @@ function ScoreTab({ artifactId, compact }: { artifactId: string; compact?: boole
         <Box style={{ flex: 1, minWidth: 200 }}>
           <Text ff="var(--font-serif)" fz="lg" fw={500}>ATS readiness</Text>
           <Text c="dimmed" fz="sm">Format checks {a.det_score ?? 0}/100 · Content {a.content_score ?? 0}/100</Text>
-          <Button mt="sm" size="xs" variant={data.review_requested ? "light" : "filled"} color={data.review_requested ? "sage" : "lavender"} radius="xl"
-            leftSection={<IconUserCheck size={14} />} loading={requesting} disabled={data.review_requested}
-            onClick={async () => { setRequesting(true); try { await requestReview(); } finally { setRequesting(false); } }}>
-            {data.review_requested ? "Expert review requested" : "Request expert review"}
+          <Button mt="sm" size="xs" variant="light" color="gray" radius="xl"
+            leftSection={<IconUserCheck size={14} />} disabled
+            title="Human expert review isn’t available yet">
+            Expert review — coming soon
           </Button>
         </Box>
       </Group>

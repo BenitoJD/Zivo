@@ -214,7 +214,7 @@ export function SourceImportDeck({ onImported }: { onImported: (id: string) => v
               ref={fileInputRef}
               type="file"
               style={{ display: "none" }}
-              accept=".pdf,.doc,.docx,.txt,.md,image/*"
+              accept=".pdf,.doc,.docx,.txt,.md"
               onChange={handleFileChange}
               disabled={isBusy}
             />
@@ -241,7 +241,7 @@ export function SourceImportDeck({ onImported }: { onImported: (id: string) => v
                     {isDragOver ? "Drop file to upload" : "Drop textbook pages or click to select"}
                   </Text>
                   <Text size="xs" c="gray.5">
-                    PDF, Word, text, or images (max 100MB)
+                    PDF, Word, or text (max 100MB)
                   </Text>
                 </Stack>
               )}

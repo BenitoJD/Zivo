@@ -22,7 +22,7 @@ import {
   useTopicsQuery,
   type Topic,
 } from "@/lib/api/queries";
-import { GenerateGate, useGenStarted } from "./GenerateGate";
+import { GenerateGate, isGenStartedStale, restartGenStarted, useGenStarted } from "./GenerateGate";
 import { WaitState } from "./WaitState";
 
 /**
@@ -64,7 +64,15 @@ export function ExplainView({
         title="Couldn’t map the topics"
         body="Something went wrong reading this material. Try again in a moment."
         action={
-          <Button variant="light" color="lavender" radius="xl" onClick={() => void refetch()}>
+          <Button
+            variant="light"
+            color="lavender"
+            radius="xl"
+            onClick={() => {
+              restartGenStarted(artifactId, "explain");
+              void refetch();
+            }}
+          >
             Try again
           </Button>
         }
@@ -73,6 +81,28 @@ export function ExplainView({
   }
 
   if (!status || status === "indexing" || status === "generating" || topics.length === 0) {
+    if (isGenStartedStale(artifactId, "explain")) {
+      return (
+        <WaitState
+          icon={<IconAlertTriangle size={26} />}
+          title="Still mapping…"
+          body="This is taking longer than usual. You can wait, or retry."
+          action={
+            <Button
+              variant="light"
+              color="lavender"
+              radius="xl"
+              onClick={() => {
+                restartGenStarted(artifactId, "explain");
+                void refetch();
+              }}
+            >
+              Retry
+            </Button>
+          }
+        />
+      );
+    }
     return (
       <WaitState
         pet

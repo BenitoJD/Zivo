@@ -89,8 +89,7 @@ def test_guest_can_upload_image_after_non_image_cap(client: TestClient) -> None:
             files={"file": ("photo.png", io.BytesIO(b"\x89PNG\r\n"), "image/png")},
             headers={GUEST_ID_HEADER: guest_id},
         )
-        assert second.status_code == 200, second.text
-        created_ids.append(second.json()["id"])
+        assert second.status_code == 422, second.text
 
         third = client.post(
             "/api/documents",

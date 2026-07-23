@@ -27,6 +27,12 @@ import {
   IconSun,
 } from "@tabler/icons-react";
 import { CAT_ENABLED_KEY } from "@/app/_components/pets/PetPlayground";
+import {
+  type PreferredStudyMode,
+  readPreferredMcqCount,
+  readPreferredStudyMode,
+  writeStudyPreferences,
+} from "@/lib/studyPreferences";
 
 type SettingsModalProps = {
   opened: boolean;
@@ -87,15 +93,8 @@ export function SettingsModal({ opened, onClose, username, onReplayOnboarding }:
   const { colorScheme, toggleColorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
 
-  const [studyMode, setStudyMode] = useState<"relaxed" | "exam">(() => {
-    if (typeof window === "undefined") return "relaxed";
-    return (localStorage.getItem("zivo-study-mode") as "relaxed" | "exam") || "relaxed";
-  });
-  const [mcqCount, setMcqCount] = useState<number>(() => {
-    if (typeof window === "undefined") return 5;
-    const stored = localStorage.getItem("zivo-mcq-count");
-    return stored ? parseInt(stored, 10) || 5 : 5;
-  });
+  const [studyMode, setStudyMode] = useState<PreferredStudyMode>(() => readPreferredStudyMode());
+  const [mcqCount, setMcqCount] = useState<number>(() => readPreferredMcqCount());
   // Live (Mantine broadcasts to every PetPlayground) - flip and the cats appear
   // or vanish app-wide at once, no Save needed.
   const [catEnabled, setCatEnabled] = useLocalStorage({ key: CAT_ENABLED_KEY, defaultValue: false });
@@ -104,8 +103,7 @@ export function SettingsModal({ opened, onClose, username, onReplayOnboarding }:
   const displayName = username ? `@${username}` : "Guest";
 
   const saveSettings = () => {
-    localStorage.setItem("zivo-study-mode", studyMode);
-    localStorage.setItem("zivo-mcq-count", mcqCount.toString());
+    writeStudyPreferences(studyMode, mcqCount);
     onClose();
   };
 
@@ -174,12 +172,12 @@ export function SettingsModal({ opened, onClose, username, onReplayOnboarding }:
             icon={<IconBook size={18} stroke={1.7} />}
             color="lavender"
             title="Study mode"
-            desc="Relaxed gives unlimited hints; Exam is timed, no tutor."
+            desc="Relaxed opens Learn (hints + tutor). Exam opens Test (graded at the end, no peeking)."
             control={
               <SegmentedControl
                 size="xs"
                 value={studyMode}
-                onChange={(v) => setStudyMode(v as "relaxed" | "exam")}
+                onChange={(v) => setStudyMode(v as PreferredStudyMode)}
                 data={[
                   { value: "relaxed", label: <Group gap={4} wrap="nowrap"><IconBook size={13} /><Text size="xs" fw={500}>Relaxed</Text></Group> },
                   { value: "exam", label: <Group gap={4} wrap="nowrap"><IconFlame size={13} /><Text size="xs" fw={500}>Exam</Text></Group> },
@@ -211,7 +209,7 @@ export function SettingsModal({ opened, onClose, username, onReplayOnboarding }:
             icon={<IconListNumbers size={18} stroke={1.7} />}
             color="teal"
             title="Questions per source"
-            desc="How many questions to generate for a new upload."
+            desc="Target question count when you confirm pages on a new upload."
             control={
               <NumberInput
                 value={mcqCount}

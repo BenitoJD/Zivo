@@ -29,7 +29,7 @@ import {
   IconSparkles,
 } from "@tabler/icons-react";
 import { useMemoryPalaceQuery, type PalaceStation } from "@/lib/api/queries";
-import { GenerateGate, useGenStarted } from "./GenerateGate";
+import { GenerateGate, isGenStartedStale, restartGenStarted, useGenStarted } from "./GenerateGate";
 import { WaitState } from "./WaitState";
 
 /**
@@ -98,6 +98,28 @@ export function MemoryPalaceView({
   }
 
   if (!ready) {
+    if (isGenStartedStale(artifactId, "palace")) {
+      return (
+        <WaitState
+          icon={<IconAlertTriangle size={26} />}
+          title="Still building…"
+          body="This is taking longer than usual. You can wait, or retry."
+          action={
+            <Button
+              variant="light"
+              color="lavender"
+              radius="xl"
+              onClick={() => {
+                restartGenStarted(artifactId, "palace");
+                void refetch();
+              }}
+            >
+              Retry
+            </Button>
+          }
+        />
+      );
+    }
     return (
       <WaitState
         pet
