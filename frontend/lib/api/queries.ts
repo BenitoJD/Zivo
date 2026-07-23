@@ -523,6 +523,11 @@ export type CodingSubmitResult = {
   cases: { ok: boolean; stdin?: string; expected?: string; stdout?: string; stderr?: string }[];
   error: string | null;
   status: CodingProblemStatus;
+  mentor_summary?: string;
+  weak_concepts?: string[];
+  lesson?: { title: string; body: string; try_this: string };
+  recommended_next_id?: string | null;
+  reference_solution?: string | null;
 };
 
 export type CodingPublicFilters = {

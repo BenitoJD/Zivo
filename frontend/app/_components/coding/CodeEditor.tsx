@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import {
+  Accordion,
   Box,
   Button,
   Code,
@@ -13,6 +14,7 @@ import {
   Badge,
   Select,
   ThemeIcon,
+  Title,
 } from "@mantine/core";
 import {
   IconPlayerPlay,
@@ -20,7 +22,9 @@ import {
   IconCheck,
   IconX,
   IconFlag,
+  IconArrowRight,
 } from "@tabler/icons-react";
+import { useRouter } from "next/navigation";
 import {
   useCodingLanguagesQuery,
   useCodingActions,
@@ -50,6 +54,7 @@ export function CodeEditor({
   compact?: boolean;
   onSubmitted?: (result: CodingSubmitResult) => void;
 }) {
+  const router = useRouter();
   const { data: langData } = useCodingLanguagesQuery();
   const actions = useCodingActions(problem.id);
 
@@ -215,7 +220,12 @@ export function CodeEditor({
             </Button>
           </Group>
           {runResult ? <RunOutput result={runResult} /> : null}
-          {submitResult ? <SubmitOutput result={submitResult} /> : null}
+          {submitResult ? (
+            <SubmitOutput
+              result={submitResult}
+              onPracticeGap={(id) => router.push(`/practice/coding/${id}`)}
+            />
+          ) : null}
         </Stack>
       </Paper>
     </Stack>
@@ -260,51 +270,136 @@ function RunOutput({ result }: { result: CodeRunResult }) {
   );
 }
 
-function SubmitOutput({ result }: { result: CodingSubmitResult }) {
-  if (result.error) {
-    return (
-      <Paper radius="md" p="sm" withBorder style={{ borderColor: "var(--mantine-color-terracotta-3)" }} bg="var(--mantine-color-terracotta-0)">
-        <Group gap={6}>
-          <ThemeIcon color="terracotta" variant="light" size={20} radius="xl"><IconX size={12} /></ThemeIcon>
-          <Text fz="sm" c="terracotta.8">Submission error</Text>
-        </Group>
-        <Text fz="xs" c="dimmed" mt={4}>{result.error}</Text>
-      </Paper>
-    );
-  }
+function SubmitOutput({
+  result,
+  onPracticeGap,
+}: {
+  result: CodingSubmitResult;
+  onPracticeGap: (id: string) => void;
+}) {
   const allPassed = result.all_passed;
   const firstFail = result.cases.find((c) => !c.ok);
+  const lesson = result.lesson;
+  const hasMentor = Boolean(result.mentor_summary || lesson?.title);
+
   return (
-    <Paper
-      radius="md"
-      p="sm"
-      withBorder
-      bg={allPassed ? "var(--mantine-color-sage-0)" : "var(--mantine-color-terracotta-0)"}
-      style={{ borderColor: allPassed ? "var(--mantine-color-sage-3)" : "var(--mantine-color-terracotta-3)" }}
-    >
-      <Group gap={6} mb={firstFail ? "xs" : 0}>
-        <ThemeIcon color={allPassed ? "sage" : "terracotta"} variant="light" size={20} radius="xl">
-          {allPassed ? <IconCheck size={12} /> : <IconX size={12} />}
-        </ThemeIcon>
-        <Text fz="sm" fw={600} c={allPassed ? "sage.8" : "terracotta.8"}>
-          {allPassed ? "All tests passed" : `${result.passed} / ${result.total} tests passed`}
-        </Text>
-      </Group>
-      {firstFail && (firstFail.stdin !== undefined || firstFail.expected !== undefined) ? (
-        <Stack gap={2}>
-          <Text fz="xs" c="dimmed">First failing case</Text>
-          {firstFail.stdin !== undefined ? (
-            <>
-              <Text fz="xs" c="dimmed" mt={2}>Input</Text>
-              <Code block fz="xs">{firstFail.stdin || "(empty)"}</Code>
-            </>
+    <Stack gap="sm">
+      {result.error ? (
+        <Paper radius="md" p="sm" withBorder style={{ borderColor: "var(--mantine-color-terracotta-3)" }} bg="var(--mantine-color-terracotta-0)">
+          <Group gap={6}>
+            <ThemeIcon color="terracotta" variant="light" size={20} radius="xl"><IconX size={12} /></ThemeIcon>
+            <Text fz="sm" c="terracotta.8">Submission error</Text>
+          </Group>
+          <Text fz="xs" c="dimmed" mt={4}>{result.error}</Text>
+        </Paper>
+      ) : (
+        <Paper
+          radius="md"
+          p="sm"
+          withBorder
+          bg={allPassed ? "var(--mantine-color-sage-0)" : "var(--mantine-color-terracotta-0)"}
+          style={{ borderColor: allPassed ? "var(--mantine-color-sage-3)" : "var(--mantine-color-terracotta-3)" }}
+        >
+          <Group gap={6} mb={firstFail ? "xs" : 0}>
+            <ThemeIcon color={allPassed ? "sage" : "terracotta"} variant="light" size={20} radius="xl">
+              {allPassed ? <IconCheck size={12} /> : <IconX size={12} />}
+            </ThemeIcon>
+            <Text fz="sm" fw={600} c={allPassed ? "sage.8" : "terracotta.8"}>
+              {allPassed ? "All tests passed" : `${result.passed} / ${result.total} tests passed`}
+            </Text>
+          </Group>
+          {firstFail && (firstFail.stdin !== undefined || firstFail.expected !== undefined) ? (
+            <Stack gap={2}>
+              <Text fz="xs" c="dimmed">First failing case</Text>
+              {firstFail.stdin !== undefined ? (
+                <>
+                  <Text fz="xs" c="dimmed" mt={2}>Input</Text>
+                  <Code block fz="xs">{firstFail.stdin || "(empty)"}</Code>
+                </>
+              ) : null}
+              <Text fz="xs" c="dimmed" mt={2}>Expected</Text>
+              <Code block fz="xs">{firstFail.expected || "(empty)"}</Code>
+              <Text fz="xs" c="dimmed" mt={2}>Your output</Text>
+              <Code block fz="xs" color="terracotta">{firstFail.stdout || firstFail.stderr || "(no output)"}</Code>
+            </Stack>
           ) : null}
-          <Text fz="xs" c="dimmed" mt={2}>Expected</Text>
-          <Code block fz="xs">{firstFail.expected || "(empty)"}</Code>
-          <Text fz="xs" c="dimmed" mt={2}>Your output</Text>
-          <Code block fz="xs" color="terracotta">{firstFail.stdout || firstFail.stderr || "(no output)"}</Code>
-        </Stack>
+        </Paper>
+      )}
+
+      {hasMentor ? (
+        <Paper radius="lg" p="md" withBorder bg="gray.0" shadow="paper">
+          <Text size="xs" fw={600} tt="uppercase" lts={1.2} c="lavender.8" mb={6}>
+            Mentor
+          </Text>
+          {result.mentor_summary ? (
+            <Text ff="var(--font-serif)" fz="md" fw={500} lh={1.45} mb="sm">
+              {result.mentor_summary}
+            </Text>
+          ) : null}
+          {(lesson?.title || lesson?.body) ? (
+            <Box
+              p="sm"
+              mb="sm"
+              bg="lavender.0"
+              style={{ borderRadius: "var(--mantine-radius-md)", border: "1px solid var(--mantine-color-lavender-2)" }}
+            >
+              <Text size="xs" fw={600} tt="uppercase" lts={1.2} c="lavender.8" mb={4}>
+                Close the gap
+              </Text>
+              <Title order={5} ff="var(--font-serif)" fw={500} mb={4}>
+                {lesson?.title || "Lesson"}
+              </Title>
+              {lesson?.body ? (
+                <Text fz="sm" lh={1.6} mb={lesson?.try_this ? "xs" : 0}>
+                  {lesson.body}
+                </Text>
+              ) : null}
+              {lesson?.try_this ? (
+                <Text fz="sm" fs="italic" c="gray.7">
+                  Try this: {lesson.try_this}
+                </Text>
+              ) : null}
+            </Box>
+          ) : null}
+          {result.weak_concepts?.length ? (
+            <Group gap={6} mb="sm">
+              {result.weak_concepts.map((w) => (
+                <Badge key={w} variant="light" color="gray" radius="sm" size="sm">
+                  {w}
+                </Badge>
+              ))}
+            </Group>
+          ) : null}
+          {result.recommended_next_id ? (
+            <Button
+              size="xs"
+              radius="xl"
+              color="lavender"
+              rightSection={<IconArrowRight size={14} />}
+              onClick={() => onPracticeGap(result.recommended_next_id!)}
+            >
+              Practice the gap
+            </Button>
+          ) : null}
+        </Paper>
       ) : null}
-    </Paper>
+
+      {result.reference_solution ? (
+        <Accordion variant="separated" radius="md">
+          <Accordion.Item value="ref">
+            <Accordion.Control>
+              <Text fw={500} fz="sm">
+                Reference solution
+              </Text>
+            </Accordion.Control>
+            <Accordion.Panel>
+              <Code block fz="xs">
+                {result.reference_solution}
+              </Code>
+            </Accordion.Panel>
+          </Accordion.Item>
+        </Accordion>
+      ) : null}
+    </Stack>
   );
 }

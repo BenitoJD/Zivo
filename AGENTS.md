@@ -177,6 +177,7 @@ Transitions use `cubic-bezier(0.32, 0.72, 0, 1)` over ~280ms; always respect `pr
 - `/workspace/[artifactId]` — page selection → MCQ → source + tutor (`app/workspace/[artifactId]/page.tsx`)
 - `/workspace/models` — admin model management (`app/workspace/models/page.tsx`)
 - `/practice/system-design` — System Design mastery path + design loop (`app/practice/system-design/`)
+- Practice surfaces (Coding + System Design) share the mastery loop: path/case → attempt → teach-gap lesson → next at the weak edge. Learn MCQ teach-gap: TODO (same lesson shape when cheap).
 - Shared shell (sidebar, add-source modal, delete modal) — `app/workspace/layout.tsx` + `app/workspace/_components/` (`Sidebar`, `AddSourceModal`, `DeleteSourceModal`). Auth is handled by `/login`, not a modal.
 
 ```bash

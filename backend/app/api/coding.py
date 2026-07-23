@@ -35,6 +35,7 @@ from app.services.coding_curation import (
     upsert_curated_problem,
 )
 from app.services.coding_generation import public_payload, record_coding_submit
+from app.services.coding_teach_gap import teach_after_submit
 from app.services.guest_session import guest_session_for_read
 from app.services.rate_limit import rate_limit_dependency
 
@@ -593,6 +594,17 @@ async def submit_problem(
         else:
             cases_out.append({"ok": False})
 
+    teach = await teach_after_submit(
+        db,
+        assertion_id=assertion_id,
+        payload=payload,
+        source=body.source,
+        all_passed=all_passed,
+        passed=passed,
+        total=total,
+        cases=cases_out,
+    )
+
     return {
         "passed": passed,
         "total": total,
@@ -604,4 +616,9 @@ async def submit_problem(
             if subject_entity_id
             else ("solved" if all_passed else "new")
         ),
+        "mentor_summary": teach["mentor_summary"],
+        "weak_concepts": teach["weak_concepts"],
+        "lesson": teach["lesson"],
+        "recommended_next_id": teach["recommended_next_id"],
+        "reference_solution": teach.get("reference_solution"),
     }
