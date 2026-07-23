@@ -177,10 +177,42 @@ export default function WorkspaceArtifactPage({
     enabled: !invalidArtifactId,
     queue,
     selected,
+    multiSelected,
+    isMulti,
     gradeState,
     savedNotesActions,
     onSavedNote: () => setReaderNotesOpen(true),
   });
+
+  // Same page component instance survives sidebar hops A → B — wipe mirrored local
+  // state so B never flashes A's filename, queue, or answer history. Also reset mode
+  // so a Coding/Resume session on A doesn't open B in the wrong surface.
+  useEffect(() => {
+    setArtifact(null);
+    setPages(null);
+    setSetupError(null);
+    setConfirming(false);
+    setSelectedPages([]);
+    setLastClickedPage(null);
+    setPdfDoc(null);
+    setPdfError(null);
+    setPdfLoading(false);
+    thumbCanvasRefs.current = {};
+    setQueue(null);
+    setQuestion("Loading questions…");
+    setOptions([]);
+    setSelected(null);
+    setIsMulti(false);
+    setMultiSelected([]);
+    setCurrentConcept(null);
+    setFeedback(null);
+    setGradeState(null);
+    setSubmitting(false);
+    setMcqLoading(true);
+    setAnsweredHistory([]);
+    setReviewIndex(null);
+    setMode("learn");
+  }, [artifactId, setMode]);
 
   // Brainstorm turns the same tutor panel into the ideation partner: the ANGLES each
   // reply ends with become chips you can explore (send as the next turn) or keep (pin
@@ -459,7 +491,21 @@ export default function WorkspaceArtifactPage({
   ]);
 
   useEffect(() => {
-    if (invalidArtifactId || queue?.current_assertion_id) return;
+    if (invalidArtifactId || queue?.current_assertion_id) {
+      // New assertion id (or first load): drop stale stem/options so the prior
+      // question cannot flash while the next assertion fetches.
+      if (queue?.current_assertion_id) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale MCQ UI on assertion change
+        setQuestion("Loading questions…");
+        setOptions([]);
+        setSelected(null);
+        setMultiSelected([]);
+        setIsMulti(false);
+        setGradeState(null);
+        setFeedback(null);
+      }
+      return;
+    }
     // eslint-disable-next-line react-hooks/set-state-in-effect -- project the fetched assertion into the question/options view state
     setOptions([]);
     setSelected(null);
@@ -576,6 +622,12 @@ export default function WorkspaceArtifactPage({
     setFeedback(null);
     const answeredId = queue.current_assertion_id;
     const answeredSelection = isMulti ? (multiSelected[0] ?? -1) : Number(selected);
+    // Snapshot stem/options/selection at submit time — queue can advance before SSE
+    // finishes, and a stale render closure would pair the wrong text with answeredId.
+    const stemSnapshot = question;
+    const optionsSnapshot = [...options];
+    const conceptSnapshot = currentConcept;
+    const multiSnapshot = isMulti ? [...multiSelected] : undefined;
     // Verdict-first stream: the outcome (index compare + stored explanation) lands
     // in ~200ms and reveals immediately; the LLM coaching follows as a second event.
     let gotVerdict = false;
@@ -617,12 +669,13 @@ export default function WorkspaceArtifactPage({
                   ...h.filter((c) => c.assertionId !== answeredId),
                   {
                     assertionId: answeredId,
-                    stem,
-                    options: [...options],
+                    stem: stemSnapshot,
+                    options: optionsSnapshot,
                     selectedIndex: answeredSelection,
+                    selectedIndices: multiSnapshot,
                     gradeState: { correct, correctIndex, correctIndices },
                     feedback: verdictExplanation,
-                    concept: currentConcept,
+                    concept: conceptSnapshot,
                     firstTryCorrect: prior ? prior.firstTryCorrect : correct,
                   },
                 ];
@@ -1032,7 +1085,7 @@ export default function WorkspaceArtifactPage({
             mcqLoading={mcqLoading}
             artifactStatus={artifact.status}
             indexProgress={artifact.index_progress}
-            hasQuestion={Boolean(queue?.current_assertion_id)}
+            hasQuestion={Boolean(queue?.current_assertion_id) && options.length > 0}
             queue={queue}
             mode={mode as "learn" | "test"}
             gradeState={gradeState}

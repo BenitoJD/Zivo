@@ -54,7 +54,9 @@ ABSOLUTE_MAX_QUESTIONS_PER_PAGE = int(os.getenv("ZIVO_MAX_QUESTIONS_PER_PAGE", "
 # the learner once every producible question is answered).
 MAX_ASPECT_ATTEMPTS = int(os.getenv("ZIVO_MAX_ASPECT_ATTEMPTS", "3"))
 # A generate job left in 'running' after a worker crash blocks recovery until reclaimed.
-GENERATE_JOB_STALE_SECONDS = 180
+# Must sit well above p99 generation wall-clock — reclaiming a live job duplicates LLM
+# work and races assertion writes. Workers do not heartbeat locked_at during the handler.
+GENERATE_JOB_STALE_SECONDS = int(os.getenv("ZIVO_GENERATE_JOB_STALE_SECONDS", "1800"))
 
 
 def default_progress(doc: Document) -> dict[str, Any]:

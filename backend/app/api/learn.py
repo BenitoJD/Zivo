@@ -277,10 +277,12 @@ def advance_page(
 ) -> dict:
     doc = require_document(db, artifact_id, user, guest_id)
     progress = get_progress(doc)
+    advanced = False
     if int(progress.get("current_page") or 0) == page and is_page_complete(db, doc, progress):
         advance_to_next_page(db, doc)
         ensure_question_pool(db, artifact_id)
-    if user:
+        advanced = True
+    if user and advanced:
         captured = doc.artifact_captured_at or doc.created_at
         workspace_repo.upsert_workspace(
             db,
@@ -291,7 +293,7 @@ def advance_page(
             unlocked_through_page=page,
         )
         db.commit()
-    return {"unlocked_through_page": page, "page_ready": True}
+    return {"unlocked_through_page": page, "page_ready": advanced}
 
 
 class StudyModeBody(BaseModel):

@@ -33,10 +33,8 @@ type QuestionItem = {
   id: string;
   question: string;
   options: string[];
-  correct_index: number;
-  /** Present only for multi-select ("select all that apply") items. */
-  correct_indices?: number[] | null;
-  explanation: string;
+  /** True for select-all-that-apply; answers come from the grade endpoint. */
+  is_multi?: boolean;
 };
 type QuestionsResponse = { qid: string; question_count: number; items: QuestionItem[] };
 
@@ -91,7 +89,7 @@ export default function PracticeRunPage({ params }: { params: Promise<{ qid: str
   }, [qid, loadQuestions]);
 
   const current = items[index];
-  const isMulti = Array.isArray(current?.correct_indices) && (current?.correct_indices?.length ?? 0) >= 2;
+  const isMulti = Boolean(current?.is_multi);
 
   const toggleMulti = useCallback((i: number) => {
     setMultiSelected((prev) =>

@@ -143,7 +143,10 @@ class ChatScope(BaseModel):
     selection_text: str | None = Field(default=None, max_length=8000)
     current_page: int | None = Field(default=None, ge=1)
     current_assertion_id: uuid.UUID | None = None
+    selected_choice_index: int | None = Field(default=None, ge=0, le=25)
+    selected_choice_indices: list[int] | None = Field(default=None, max_length=26)
     confirmed_choice_index: int | None = Field(default=None, ge=0, le=25)
+    confirmed_choice_indices: list[int] | None = Field(default=None, max_length=26)
     answer_correct: bool | None = None
     mentions: list[str] = Field(default_factory=list, max_length=20)
     # Which study surface the chat is on. "read" → the buddy is about the document
@@ -154,6 +157,13 @@ class ChatScope(BaseModel):
     @classmethod
     def cap_mention_length(cls, value: list[str]) -> list[str]:
         return [m[:200] for m in value]
+
+    @field_validator("selected_choice_indices", "confirmed_choice_indices")
+    @classmethod
+    def cap_choice_indices(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
+        return [int(i) for i in value if 0 <= int(i) <= 25][:26]
 
 
 class ChatRequest(BaseModel):
@@ -225,16 +235,27 @@ def _chat_surface(mode: str | None) -> str:
 
 
 def _get_or_create_thread(
-    db: Session, account_id: uuid.UUID | None, doc: Document, surface: str = "general"
+    db: Session,
+    account_id: uuid.UUID | None,
+    doc: Document,
+    surface: str = "general",
+    *,
+    guest_id: str | None = None,
 ) -> ChatThread:
     artifact_id, captured_at = _artifact_ref(doc)
+    # Guests share account_id=NULL. Without a guest key they would all land on one
+    # thread for public/demo docs. Encode guest id into the surface so each guest
+    # gets an isolated conversation without a schema migration.
+    thread_surface = surface
+    if account_id is None and guest_id:
+        thread_surface = f"g:{guest_id}:{surface}"
     thread = (
         db.query(ChatThread)
         .filter(
             ChatThread.artifact_id == artifact_id,
             ChatThread.artifact_captured_at == captured_at,
             ChatThread.account_id == account_id,
-            ChatThread.surface == surface,
+            ChatThread.surface == thread_surface,
         )
         .order_by(ChatThread.version.desc())
         .first()
@@ -245,7 +266,7 @@ def _get_or_create_thread(
         account_id=account_id,
         artifact_id=artifact_id,
         artifact_captured_at=captured_at,
-        surface=surface,
+        surface=thread_surface,
         version=1,
     )
     try:
@@ -261,7 +282,7 @@ def _get_or_create_thread(
                 ChatThread.artifact_id == artifact_id,
                 ChatThread.artifact_captured_at == captured_at,
                 ChatThread.account_id == account_id,
-                ChatThread.surface == surface,
+                ChatThread.surface == thread_surface,
                 ChatThread.version == 1,
             )
             .first()
@@ -283,7 +304,9 @@ def list_messages(
     if offset < 0:
         raise HTTPException(status_code=400, detail="offset must be >= 0")
     doc = require_document(db, document_id, user, guest_id)
-    thread = _get_or_create_thread(db, user.id if user else None, doc, _chat_surface(surface))
+    thread = _get_or_create_thread(
+        db, user.id if user else None, doc, _chat_surface(surface), guest_id=guest_id
+    )
     return (
         db.query(ChatMessage)
         .filter(ChatMessage.thread_id == thread.id)
@@ -304,14 +327,18 @@ def clear_thread(
 ) -> dict[str, int]:
     doc = require_document(db, document_id, user, guest_id)
     resolved_surface = _chat_surface(surface)
-    current = _get_or_create_thread(db, user.id if user else None, doc, resolved_surface)
+    current = _get_or_create_thread(
+        db, user.id if user else None, doc, resolved_surface, guest_id=guest_id
+    )
     new_version = current.version + 1
     artifact_id, captured_at = _artifact_ref(doc)
+    # Keep the same guest-scoped surface key as _get_or_create_thread.
+    thread_surface = current.surface
     thread = ChatThread(
         account_id=user.id if user else None,
         artifact_id=artifact_id,
         artifact_captured_at=captured_at,
-        surface=resolved_surface,
+        surface=thread_surface,
         version=new_version,
     )
     db.add(thread)
@@ -356,7 +383,7 @@ def _prepare_chat_stream(
         reserve_message_slot(db, user=user, request=request, demo_cookie=guest_id)
 
         surface = _chat_surface(scope_preview.get("mode"))
-        thread = _get_or_create_thread(db, user.id if user else None, doc, surface)
+        thread = _get_or_create_thread(db, user.id if user else None, doc, surface, guest_id=guest_id)
         history = (
             db.query(ChatMessage)
             .filter(ChatMessage.thread_id == thread.id)

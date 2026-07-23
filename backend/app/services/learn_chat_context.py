@@ -58,21 +58,41 @@ def _confirmed_answer(
     *,
     scope: dict[str, Any] | None,
     progress: dict[str, Any],
-) -> tuple[int | None, bool | None]:
-    """Resolve the learner's confirmed choice for the active question."""
+) -> tuple[int | None, bool | None, list[int] | None]:
+    """Resolve the learner's confirmed choice for the active question.
+
+    Returns (first_index, correct, all_indices). all_indices is set for multi-select.
+    """
     if scope is not None:
         scope_assertion = scope.get("current_assertion_id")
         if scope_assertion is None or str(scope_assertion) == assertion_id:
+            multi = scope.get("confirmed_choice_indices")
+            if isinstance(multi, list) and len(multi) >= 1:
+                indices = [int(i) for i in multi]
+                correct = scope.get("answer_correct")
+                return indices[0], (bool(correct) if correct is not None else None), indices
             if scope.get("confirmed_choice_index") is not None:
                 correct = scope.get("answer_correct")
                 return int(scope["confirmed_choice_index"]), (
                     bool(correct) if correct is not None else None
-                )
+                ), None
     last = progress.get("last_confirmed_answer") or {}
     if str(last.get("assertion_id")) == assertion_id and last.get("choice_index") is not None:
         correct = last.get("correct")
-        return int(last["choice_index"]), bool(correct) if correct is not None else None
-    return None, None
+        multi = last.get("choice_indices")
+        indices = [int(i) for i in multi] if isinstance(multi, list) and multi else None
+        return int(last["choice_index"]), bool(correct) if correct is not None else None, indices
+    return None, None, None
+
+
+def _format_choice_labels(options: list[str], indices: list[int]) -> str:
+    parts: list[str] = []
+    for i in indices:
+        if 0 <= i < len(options):
+            parts.append(f'{_choice_letter(i)} ("{options[i]}")')
+        else:
+            parts.append(_choice_letter(i))
+    return ", ".join(parts) if parts else "(none)"
 
 
 def build_learn_chat_context(
@@ -144,7 +164,7 @@ def build_learn_chat_context(
         if mcq and mcq.get("options"):
             for i, opt in enumerate(mcq["options"]):
                 lines.append(f'  {_choice_letter(i)}. {opt}')
-        choice_index, answer_correct = _confirmed_answer(
+        choice_index, answer_correct, choice_indices = _confirmed_answer(
             assertion_id,
             scope=scope,
             progress=progress,
@@ -152,25 +172,29 @@ def build_learn_chat_context(
         if mcq and mcq.get("options") and choice_index is None:
             # The learner may have picked an option but not checked it yet — tell the
             # tutor so it's fully aware of where they are.
-            selected_raw = (scope or {}).get("selected_choice_index")
             options = mcq.get("options") or []
-            if selected_raw is not None and 0 <= int(selected_raw) < len(options):
-                sel = int(selected_raw)
-                lines.append(
-                    f'- Learner is currently leaning toward option {_choice_letter(sel)} '
-                    f'("{options[sel]}") but has NOT checked it yet.'
-                )
+            multi_raw = (scope or {}).get("selected_choice_indices")
+            if isinstance(multi_raw, list) and len(multi_raw) >= 1:
+                sels = [int(i) for i in multi_raw if 0 <= int(i) < len(options)]
+                if sels:
+                    lines.append(
+                        f"- Learner is currently leaning toward: {_format_choice_labels(options, sels)} "
+                        f"but has NOT checked yet."
+                    )
+            else:
+                selected_raw = (scope or {}).get("selected_choice_index")
+                if selected_raw is not None and 0 <= int(selected_raw) < len(options):
+                    sel = int(selected_raw)
+                    lines.append(
+                        f'- Learner is currently leaning toward option {_choice_letter(sel)} '
+                        f'("{options[sel]}") but has NOT checked it yet.'
+                    )
             lines.append(
                 "- Tutor policy: explain concepts and give hints only; do not reveal "
                 "which option is correct unless the learner explicitly asks for the answer."
             )
         if choice_index is not None and mcq and mcq.get("options"):
-            letter = _choice_letter(choice_index)
-            selected_text = (
-                mcq["options"][choice_index]
-                if 0 <= choice_index < len(mcq["options"])
-                else "unknown"
-            )
+            options = mcq["options"]
             outcome = (
                 "correct"
                 if answer_correct is True
@@ -178,9 +202,21 @@ def build_learn_chat_context(
                 if answer_correct is False
                 else "submitted"
             )
-            lines.append(
-                f"- Learner confirmed answer: {letter} ({selected_text}) — {outcome}"
-            )
+            if choice_indices and len(choice_indices) >= 2:
+                lines.append(
+                    f"- Learner confirmed answers: {_format_choice_labels(options, choice_indices)} "
+                    f"— {outcome}"
+                )
+            else:
+                letter = _choice_letter(choice_index)
+                selected_text = (
+                    options[choice_index]
+                    if 0 <= choice_index < len(options)
+                    else "unknown"
+                )
+                lines.append(
+                    f"- Learner confirmed answer: {letter} ({selected_text}) — {outcome}"
+                )
     else:
         lines.append(f"- On page {page}; no active question right now.")
 
@@ -215,4 +251,9 @@ def learn_scope_fields(
             fields["confirmed_choice_index"] = int(request_scope["confirmed_choice_index"])
         if request_scope.get("answer_correct") is not None:
             fields["answer_correct"] = bool(request_scope["answer_correct"])
+        multi = request_scope.get("confirmed_choice_indices")
+        if isinstance(multi, list) and multi:
+            # Cache-key / scope fold: keep first index for legacy fields; full set
+            # is available on request_scope for learn_chat_context.
+            fields["confirmed_choice_index"] = int(multi[0])
     return fields

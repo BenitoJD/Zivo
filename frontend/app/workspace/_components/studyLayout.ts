@@ -95,6 +95,8 @@ export type AnsweredCard = {
   stem: string;
   options: string[];
   selectedIndex: number;
+  /** Full chosen set for multi-select ("select all that apply") reviews. */
+  selectedIndices?: number[];
   gradeState: { correct: boolean; correctIndex: number; correctIndices?: number[] };
   feedback: string | null;
   /** The concept/topic this question tested - for the end-of-study report card. */

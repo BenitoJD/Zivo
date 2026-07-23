@@ -207,7 +207,20 @@ def complete_upload_session(
     user: Account | None,
     guest_id: str | None,
 ):
-    row = _assert_session_access(_session_row(db, session_id), user=user, guest_id=guest_id)
+    # Lock the session row so concurrent complete calls cannot both create documents.
+    locked = db.execute(
+        text(
+            """
+            SELECT id, account_id, guest_id, filename, content_type, total_size,
+                   chunk_size, storage_key, multipart_upload_id, parts, expires_at
+            FROM qb.upload_session
+            WHERE id = :id
+            FOR UPDATE
+            """
+        ),
+        {"id": session_id},
+    ).mappings().first()
+    row = _assert_session_access(dict(locked) if locked else None, user=user, guest_id=guest_id)
     parts = row["parts"] if isinstance(row["parts"], dict) else json.loads(row["parts"] or "{}")
     expected = math.ceil(int(row["total_size"]) / int(row["chunk_size"]))
     if len(parts) != expected:

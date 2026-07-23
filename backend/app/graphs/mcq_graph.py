@@ -50,9 +50,20 @@ class McqGradeState(TypedDict, total=False):
 
 
 def _check_answer(state: McqGradeState) -> dict[str, Any]:
-    """Decide correctness instantly (index compare); always defer feedback to the LLM."""
+    """Decide correctness instantly; always defer feedback to the LLM.
+
+    Multi-select ("select all that apply") is all-or-nothing on the chosen set.
+    Single-best-answer stays a fast index compare. Must not overwrite a correct
+    multi-select verdict with a single-index compare — that poisoned LLM coaching.
+    """
+    correct_indices = state.get("correct_indices") or []
+    if len(correct_indices) >= 2:
+        selected_indices = state.get("selected_indices") or []
+        is_correct = set(selected_indices) == set(correct_indices)
+    else:
+        is_correct = int(state["selected_index"]) == int(state["correct_index"])
     return {
-        "is_correct": int(state["selected_index"]) == int(state["correct_index"]),
+        "is_correct": is_correct,
         # Always route to the teach node so feedback is freshly generated.
         "feedback_ready": False,
     }

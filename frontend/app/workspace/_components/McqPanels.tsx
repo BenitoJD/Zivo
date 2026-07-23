@@ -108,7 +108,21 @@ function ScrollHintArea({ children }: { children: ReactNode }) {
         ref={ref}
         onScroll={update}
         className="zv-noscrollbar"
-        style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
+          display: "flex",
+          flexDirection: "column",
+          // `overflow-y: auto` forces overflow-x to compute to `auto` too (CSS won't
+          // pair `visible` with a non-visible value), so this box clips horizontally
+          // whether we ask it to or not. The option cards are full-width, which put
+          // their 1px left/right borders exactly on that clip edge - visible top and
+          // bottom, invisible at the sides. 4px is the minimum that clears the border
+          // plus the arrow-key focus ring (2px outline at 2px offset, also being cut);
+          // 6px leaves a little room for the hover lift.
+          paddingInline: 6,
+        }}
       >
         {children}
       </Box>
@@ -886,9 +900,13 @@ export function McqReviewView({
           <Stack gap={compact ? 8 : 10} mih={0} style={{ flexShrink: 0 }}>
             {safeOptions.map((opt, i) => {
               const isCorrectOption = isCorrect(i);
-              const isWrongSelected = !correct && card.selectedIndex === i && !isCorrectOption;
+              const chosen =
+                Array.isArray(card.selectedIndices) && card.selectedIndices.length > 0
+                  ? card.selectedIndices.includes(i)
+                  : card.selectedIndex === i;
+              const isWrongSelected = !correct && chosen && !isCorrectOption;
               const { border, background, chipBg, chipColor, borderWidth } = mcqOptionChrome(isDark, {
-                isSelected: card.selectedIndex === i,
+                isSelected: chosen,
                 isCorrectOption,
                 isWrongSelected,
               });

@@ -188,6 +188,7 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   captureResponseMeta(res);
+  handleAuthFailure(res);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json() as Promise<T>;
 }
@@ -200,6 +201,7 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   captureResponseMeta(res);
+  handleAuthFailure(res);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json() as Promise<T>;
 }
@@ -455,6 +457,7 @@ export async function apiDelete(path: string): Promise<void> {
     headers: buildHeaders(),
   });
   captureResponseMeta(res);
+  handleAuthFailure(res);
   if (!res.ok) throw new Error(await readApiError(res));
 }
 
@@ -509,6 +512,7 @@ export async function apiPostSSE(
     options?.signal,
   );
   captureResponseMeta(res);
+  handleAuthFailure(res);
   if (!res.ok || !res.body) {
     const detail = await readApiError(res).catch(() => humanizeApiFailure(res.status, "SSE failed"));
     throw new Error(detail);

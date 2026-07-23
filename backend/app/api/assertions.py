@@ -72,8 +72,11 @@ def _assertion_access(
     if not row:
         raise HTTPException(status_code=404, detail="Not found")
     artifact_raw = (row.get("payload") or {}).get("artifact_id")
-    if artifact_raw:
-        require_document(db, uuid.UUID(str(artifact_raw)), user, guest_id)
+    # Assertions without a document link are not publicly readable — skipping
+    # require_document here used to leak orphan / mis-keyed assertion content.
+    if not artifact_raw:
+        raise HTTPException(status_code=404, detail="Not found")
+    require_document(db, uuid.UUID(str(artifact_raw)), user, guest_id)
     return _sanitize_assertion_row(dict(row))
 
 

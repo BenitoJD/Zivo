@@ -34,6 +34,8 @@ export function useTutorChat({
   enabled,
   queue,
   selected,
+  multiSelected,
+  isMulti,
   gradeState,
   savedNotesActions,
   onSavedNote,
@@ -43,6 +45,8 @@ export function useTutorChat({
   enabled: boolean;
   queue: McqState | null;
   selected: string | null;
+  multiSelected?: number[];
+  isMulti?: boolean;
   gradeState: { correct: boolean; correctIndex: number; correctIndices?: number[] } | null;
   savedNotesActions: ReturnType<typeof useSavedNotesActions>;
   onSavedNote: () => void;
@@ -105,11 +109,19 @@ export function useTutorChat({
         if (queue?.current_assertion_id) {
           scope.current_assertion_id = queue.current_assertion_id;
         }
-        if (selected !== null) {
+        if (isMulti && (multiSelected?.length ?? 0) > 0) {
+          scope.selected_choice_indices = multiSelected;
+          scope.selected_choice_index = multiSelected![0];
+        } else if (selected !== null) {
           scope.selected_choice_index = Number(selected);
         }
-        if (gradeState !== null && selected !== null) {
-          scope.confirmed_choice_index = Number(selected);
+        if (gradeState !== null) {
+          if (isMulti && (multiSelected?.length ?? 0) > 0) {
+            scope.confirmed_choice_indices = multiSelected;
+            scope.confirmed_choice_index = multiSelected![0];
+          } else if (selected !== null) {
+            scope.confirmed_choice_index = Number(selected);
+          }
           scope.answer_correct = gradeState.correct;
         }
       }

@@ -44,6 +44,37 @@ def test_check_answer_defers_feedback_to_llm() -> None:
     assert out["feedback_ready"] is False
 
 
+def test_check_answer_multi_select_set_compare() -> None:
+    """Multi-select must compare full sets — not fall back to first-index only."""
+    wrong = _check_answer(
+        {
+            "question": "Pick both?",
+            "options": ["A", "B", "C"],
+            "correct_index": 0,
+            "selected_index": 0,
+            "correct_indices": [0, 2],
+            "selected_indices": [0],
+            "explanation": "Need A and C.",
+        }
+    )
+    assert wrong["is_correct"] is False
+    assert wrong["feedback_ready"] is False
+
+    right = _check_answer(
+        {
+            "question": "Pick both?",
+            "options": ["A", "B", "C"],
+            "correct_index": 0,
+            "selected_index": 0,
+            "correct_indices": [0, 2],
+            "selected_indices": [2, 0],
+            "explanation": "Need A and C.",
+        }
+    )
+    assert right["is_correct"] is True
+    assert right["feedback_ready"] is False
+
+
 def test_try_grade_mcq_fast_correct_returns_empty_feedback() -> None:
     """Fast path returns only the verdict; feedback is left empty for the LLM to fill."""
     out = try_grade_mcq_fast(

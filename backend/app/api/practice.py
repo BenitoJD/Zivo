@@ -157,11 +157,9 @@ class QuestionItem(BaseModel):
     id: str
     question: str
     options: list[str] = []
-    correct_index: int = 0
-    # Present only for multi-select ("select all that apply") items; its length
-    # (≥2) marks the item multi so the UI renders checkboxes.
-    correct_indices: list[int] | None = None
-    explanation: str = ""
+    # True when the item is select-all-that-apply. Answers/explanations are
+    # intentionally omitted here — grade via /api/mcq/grade.
+    is_multi: bool = False
 
 
 class QuestionsOut(BaseModel):
@@ -189,17 +187,13 @@ def list_questions(
     for row in rows:
         payload = _sanitize_payload(row.get("payload") if isinstance(row.get("payload"), dict) else {})
         raw_ci = payload.get("correct_indices")
-        correct_indices = (
-            [int(i) for i in raw_ci] if isinstance(raw_ci, list) and len(raw_ci) >= 2 else None
-        )
+        is_multi = isinstance(raw_ci, list) and len(raw_ci) >= 2
         items.append(
             QuestionItem(
                 id=str(row["id"]),
                 question=payload.get("question") or row.get("title") or "",
                 options=list(payload.get("options") or []),
-                correct_index=int(payload.get("correct_index", 0)),
-                correct_indices=correct_indices,
-                explanation=payload.get("explanation") or row.get("summary") or "",
+                is_multi=is_multi,
             )
         )
     return QuestionsOut(qid=qid, question_count=total, items=items)
