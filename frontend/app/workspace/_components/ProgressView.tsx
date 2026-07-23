@@ -136,11 +136,11 @@ function TopicCoverage({
           </Text>
           {weak.slice(0, 8).map((t) => (
             <Box key={t.concept}>
-              <Group justify="space-between" gap="sm" wrap="nowrap" mb={3} align="flex-start">
-                <Text fz="sm" c="var(--mantine-color-text)" style={{ minWidth: 0 }}>
+              <Group justify="space-between" gap="sm" wrap="wrap" mb={3} align="center">
+                <Text fz="sm" c="var(--mantine-color-text)" style={{ minWidth: 0, flex: "1 1 140px" }}>
                   {t.concept}
                 </Text>
-                <Group gap={8} wrap="nowrap" style={{ flexShrink: 0 }}>
+                <Group gap={8} wrap="nowrap" style={{ flexShrink: 0, marginLeft: "auto" }}>
                   <Text fz="xs" c="dimmed" style={{ fontVariantNumeric: "tabular-nums" }}>
                     {t.correct}/{t.total} first try
                   </Text>

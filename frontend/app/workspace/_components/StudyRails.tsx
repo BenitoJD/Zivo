@@ -30,7 +30,16 @@ export function StudyEdgeTrigger({
         onClick={onClick}
         aria-label={`Open ${label}`}
         className={`zivo-edge zivo-edge-${side}`}
-        style={{ position: "absolute", top: "50%", [side]: 10, zIndex: 6 }}
+        style={{
+          position: "absolute",
+          top: "50%",
+          [side]: 10,
+          zIndex: 6,
+          // Same footprint both sides so Source/Zivo share one vertical center.
+          minWidth: 52,
+          minHeight: 72,
+          boxSizing: "border-box",
+        }}
       >
         <style>{`
           .zivo-edge {

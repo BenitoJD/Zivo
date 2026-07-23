@@ -192,7 +192,11 @@ function BankRow({
             ) : null}
             <Box style={{ minWidth: 0 }}>
               <Text fw={600} ff="var(--font-serif)" truncate>
-                {item.title}
+                {(item.title?.trim().length ?? 0) >= 2
+                  ? item.title
+                  : (item.concept?.trim().length ?? 0) >= 2
+                    ? item.concept
+                    : "Untitled problem"}
               </Text>
               <Group gap={6} mt={4}>
                 <Badge size="sm" variant="light" color={color} tt="capitalize">

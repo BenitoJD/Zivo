@@ -367,6 +367,15 @@ export default function WorkspaceArtifactPage({
   }, [artifactId, invalidArtifactId, isPdf, artifact?.id]);
 
   useEffect(() => {
+    // Single-page pastes/notes: don't strand the learner on an empty selection
+    // with "Start studying" disabled while the slider already shows 1–1.
+    if (selectedRange) return;
+    if (pageCount !== 1) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot default when page count resolves to 1
+    setSelectedPages((prev) => (prev.length === 0 ? [1] : prev));
+  }, [pageCount, selectedRange]);
+
+  useEffect(() => {
     if (!pdfDoc?.numPages || pdfDoc.numPages <= 1) return;
     const n = pdfDoc.numPages;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- clamp the selection when the loaded PDF's page count changes
@@ -828,7 +837,7 @@ export default function WorkspaceArtifactPage({
 
     return (
       <PageSelectionScreen
-        subtitle={`${shortName} · ${pageCount} pages`}
+        subtitle={`${shortName} · ${pageCount === 1 ? "1 page" : `${pageCount} pages`}`}
         pageCount={pageCount}
         sliderFrom={sliderFrom}
         sliderTo={sliderTo}

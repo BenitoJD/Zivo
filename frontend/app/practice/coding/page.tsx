@@ -195,7 +195,11 @@ function ProblemRow({ item, onOpen }: { item: CodingProblemListItem; onOpen: () 
               </ThemeIcon>
             ) : null}
             <Text fw={600} fz="md" ff="var(--font-serif)" truncate>
-              {item.title}
+              {(item.title?.trim().length ?? 0) >= 2
+                ? item.title
+                : (item.concept?.trim().length ?? 0) >= 2
+                  ? item.concept
+                  : "Untitled problem"}
             </Text>
           </Group>
           <Badge variant="light" color={color} radius="sm" tt="capitalize">

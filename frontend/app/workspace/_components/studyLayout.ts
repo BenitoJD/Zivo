@@ -79,10 +79,15 @@ export function pagesInRange(from: number, to: number): number[] {
   return pages;
 }
 
+/** "1 page" / "N pages" — avoid "1 pages" in picker chrome. */
+export function formatPageCountLabel(n: number): string {
+  return `${n} ${n === 1 ? "page" : "pages"}`;
+}
+
 export function formatSelectionSummary(selectedPages: number[], pageCount: number): string {
   if (selectedPages.length === 0) return `No pages selected · ${pageCount} total`;
   if (selectedPages.length === 1) return `1 page selected · page ${selectedPages[0]}`;
-  if (selectedPages.length === pageCount) return `All ${pageCount} pages selected`;
+  if (selectedPages.length === pageCount) return `All ${formatPageCountLabel(pageCount)} selected`;
   const first = selectedPages[0];
   const last = selectedPages[selectedPages.length - 1];
   const contiguous = selectedPages.length === last - first + 1;

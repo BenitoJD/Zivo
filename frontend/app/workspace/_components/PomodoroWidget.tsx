@@ -86,13 +86,22 @@ export function PomodoroWidget() {
       const raw = localStorage.getItem(POS_KEY);
       if (raw) {
         const p = JSON.parse(raw);
-        if (typeof p?.x === "number" && typeof p?.y === "number") return p;
+        if (typeof p?.x === "number" && typeof p?.y === "number") {
+          // Old default parked mid-right and covered the Source/Zivo FAB rail.
+          const midBand = p.y > window.innerHeight * 0.35 && p.y < window.innerHeight * 0.78;
+          const rightEdge = p.x > window.innerWidth - 120;
+          if (midBand && rightEdge) {
+            return { x: window.innerWidth - 56, y: window.innerHeight - 56 };
+          }
+          return p;
+        }
       }
     } catch {
       /* ignore */
     }
-    // Default: bottom-right, so it never overlaps the left sidebar.
-    return { x: window.innerWidth - PANEL_W - 16, y: window.innerHeight - 320 };
+    // Default: bottom-right corner (collapsed FAB). Mid-height defaults sat on
+    // top of the Source/Zivo floating rail during Learn wait states.
+    return { x: window.innerWidth - 56, y: window.innerHeight - 56 };
   });
   const posRef = useRef(pos);
   posRef.current = pos;

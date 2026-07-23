@@ -132,7 +132,8 @@ export function PageSelectionScreen({
       )}
       {!isPdf && !pdfLoading && (
         <Text c="dimmed" size="sm" px={padX} pt={4}>
-          PDF thumbnails load automatically. Use the slider below ({pageCount} pages).
+          PDF thumbnails load automatically. Use the slider below (
+          {pageCount === 1 ? "1 page" : `${pageCount} pages`}).
         </Text>
       )}
 

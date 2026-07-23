@@ -558,7 +558,7 @@ export function McqHeroPanel({
         }}
       >
       {onFlagQuestion && !isTest ? (
-        <Group justify="flex-end" mb={4} style={{ position: "absolute", top: 0, right: 0 }}>
+        <Group justify="flex-end" mb={4} style={{ position: "absolute", top: 0, right: 0, zIndex: 4 }}>
           <Menu shadow="paper" width={220} position="bottom-end" withinPortal>
             <Menu.Target>
               <ActionIcon
@@ -598,6 +598,8 @@ export function McqHeroPanel({
           marginInline: "auto",
           overflowWrap: "anywhere",
           whiteSpace: "pre-line", // statement/matching/code stems arrive with \n line breaks
+          // Keep absolute flag from covering the last words of a long stem.
+          paddingInline: onFlagQuestion && !isTest ? 28 : 0,
         }}
       >
         {stem}
