@@ -16,14 +16,24 @@ SEARCH_PATH_STMT = text("SET LOCAL search_path TO qb, intel, public")
 # psycopg3: disable server-side prepared statements (txn pooling reassigns backends).
 PGBOUNCER_PSYCOPG_CONNECT_ARGS = {"prepare_threshold": None}
 
-# asyncpg ≥0.28 keeps TWO caches. statement_cache_size=0 alone still leaves
-# prepared_statement_cache_size active → DuplicatePreparedStatementError through
-# PgBouncer transaction pooling. Unique statement names are belt-and-suspenders
-# for any leftover prepare calls (LISTEN connections, dialect edge paths).
-PGBOUNCER_ASYNCPG_CONNECT_ARGS = {
+
+def _asyncpg_statement_name() -> str:
+    return f"__asyncpg_{uuid4().hex}__"
+
+
+# Raw asyncpg.connect(...) kwargs only. Do NOT put SQLAlchemy-only keys here —
+# prepared_statement_cache_size is a SQLAlchemy dialect arg and crashes asyncpg.
+PGBOUNCER_ASYNCPG_RAW_CONNECT_ARGS = {
     "statement_cache_size": 0,
+    "prepared_statement_name_func": _asyncpg_statement_name,
+}
+
+# SQLAlchemy create_async_engine(..., connect_args=...). Includes the dialect-level
+# prepared_statement_cache_size (asyncpg ≥0.28 / SQLAlchemy dual-cache) plus the
+# raw asyncpg kwargs above.
+PGBOUNCER_ASYNCPG_CONNECT_ARGS = {
+    **PGBOUNCER_ASYNCPG_RAW_CONNECT_ARGS,
     "prepared_statement_cache_size": 0,
-    "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4().hex}__",
 }
 
 

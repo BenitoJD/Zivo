@@ -11,7 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import aliased
 
 from app.config import get_settings
-from app.db_search_path import PGBOUNCER_ASYNCPG_CONNECT_ARGS, attach_search_path
+from app.db_search_path import (
+    PGBOUNCER_ASYNCPG_CONNECT_ARGS,
+    PGBOUNCER_ASYNCPG_RAW_CONNECT_ARGS,
+    attach_search_path,
+)
 from app.eta import context as eta_context
 from app.eta.execution_state import cancel_descendants_async, update_execution_state_async
 from app.eta.handlers import io as _io_handlers  # noqa: F401
@@ -272,7 +276,7 @@ async def _listen_for_job_notifications() -> None:
     while True:
         conn = None
         try:
-            conn = await asyncpg.connect(_notify_dsn(), **PGBOUNCER_ASYNCPG_CONNECT_ARGS)
+            conn = await asyncpg.connect(_notify_dsn(), **PGBOUNCER_ASYNCPG_RAW_CONNECT_ARGS)
 
             def _on_notify(*_args) -> None:
                 _job_wake.set()
