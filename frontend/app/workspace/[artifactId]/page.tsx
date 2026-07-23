@@ -1020,7 +1020,7 @@ export default function WorkspaceArtifactPage({
               compact={isNarrow}
               onStartLearn={() => setMode("learn")}
               onStudyConcept={(concept) => {
-                void apiPost(`/api/learn/${artifact.id}/focus-concept`, { concept }).finally(() => {
+                void apiPost(`/api/artifacts/${artifact.id}/focus-concept`, { concept }).finally(() => {
                   setMode("learn");
                   void refreshQueue();
                 });
