@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from app.services.coding_teach_gap import heuristic_teach_gap, pick_next_coding_id
 

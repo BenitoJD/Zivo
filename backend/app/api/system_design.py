@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import Account
 from app.services.auth import get_optional_user, require_csrf_or_guest
-from app.services.guest_session import guest_session_for_read, optional_guest_session
+from app.services.guest_session import optional_guest_session
 from app.services.rate_limit import rate_limit_dependency
 from app.services import system_design as sd
 
