@@ -499,22 +499,18 @@ export default function WorkspaceArtifactPage({
   ]);
 
   useEffect(() => {
-    if (invalidArtifactId || queue?.current_assertion_id) {
-      // New assertion id (or first load): drop stale stem/options so the prior
-      // question cannot flash while the next assertion fetches.
-      if (queue?.current_assertion_id) {
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale MCQ UI on assertion change
-        setQuestion("Loading questions…");
-        setOptions([]);
-        setSelected(null);
-        setMultiSelected([]);
-        setIsMulti(false);
-        setGradeState(null);
-        setFeedback(null);
-      }
+    if (invalidArtifactId) return;
+    if (queue?.current_assertion_id) {
+      // Assertion advanced: reset answer chrome only. Keep stem/options on screen
+      // until the next fetch lands — clearing them made hasQuestion false and
+      // McqHeroPanel flashed the full loading ring for ~200–500ms.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset answer UI on assertion change
+      setSelected(null);
+      setMultiSelected([]);
+      setGradeState(null);
+      setFeedback(null);
       return;
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- project the fetched assertion into the question/options view state
     setOptions([]);
     setSelected(null);
     setGradeState(null);
@@ -529,7 +525,7 @@ export default function WorkspaceArtifactPage({
       setOptions([]);
       return;
     }
-    if (!assertionQuery.data) return;
+    if (!assertionQuery.data || assertionQuery.isPlaceholderData) return;
     const row = assertionQuery.data;
     const p = (row.payload ?? {}) as AssertionPayload;
     setQuestion(sanitizeMcqStem(p.question ?? p.stem ?? row.title ?? "Question"));
@@ -540,7 +536,7 @@ export default function WorkspaceArtifactPage({
     setSelected(null);
     setFeedback(null);
     setGradeState(null);
-  }, [assertionQuery.data, assertionQuery.isError, queue?.current_assertion_id, invalidArtifactId]);
+  }, [assertionQuery.data, assertionQuery.isError, assertionQuery.isPlaceholderData, queue?.current_assertion_id, invalidArtifactId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentionally reset grade/feedback on the active question change

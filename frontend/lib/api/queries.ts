@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiDelete, apiGet, apiPost, apiPostBytes, setCsrfToken } from "@/lib/api/client";
 import type { ArtifactMeta, PagesInfo, SourceDocument } from "@/lib/types";
 
@@ -648,6 +648,8 @@ export function useAssertionQuery(assertionId: string | null | undefined) {
     queryFn: () =>
       apiGet<{ payload: Record<string, unknown>; title?: string }>(`/api/assertions/${assertionId}`),
     enabled: Boolean(assertionId),
+    placeholderData: keepPreviousData,
+    staleTime: 60_000,
   });
 }
 
