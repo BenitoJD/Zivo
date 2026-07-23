@@ -659,7 +659,7 @@ BATCH_MCQ_CAP = 5
 # the repeated page context nearly free — so critique EVERY item by default, not a
 # 25% sample. (Evaluation is the moat; don't skip it to save a few tokens.) Still an
 # env knob for cost tuning.
-CRITIC_SAMPLE_RATE = float(os.getenv("ZIVO_CRITIC_SAMPLE_RATE", "0.3"))
+CRITIC_SAMPLE_RATE = float(os.getenv("ZIVO_CRITIC_SAMPLE_RATE", "1.0"))
 
 
 def _draft_score(draft: dict[str, Any]) -> tuple[int, int, float]:

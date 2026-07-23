@@ -497,3 +497,98 @@ def test_maybe_transition_prefetch_enqueues_once() -> None:
         maybe_transition_prefetch(db, doc_id)
 
     enqueue.assert_called_once()
+
+
+def test_select_next_assertion_prefers_focus_concept() -> None:
+    from app.services.question_pool import select_next_assertion
+
+    doc_id = uuid.uuid4()
+    doc = MagicMock()
+    doc.id = doc_id
+    progress = {
+        "current_page": 1,
+        "answered_ids": [],
+        "focus_concept": "Photosynthesis",
+        "selection_policy": "sequence",
+    }
+    candidates = [str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())]
+    preferred = [candidates[1]]
+    db = MagicMock()
+
+    with (
+        patch("app.services.question_pool.page_assertion_ids", return_value=candidates),
+        patch(
+            "app.services.question_pool._candidates_matching_concept_label",
+            return_value=preferred,
+        ) as match,
+    ):
+        chosen = select_next_assertion(db, doc_id, doc, progress)
+
+    assert chosen == preferred[0]
+    match.assert_called_once()
+    assert match.call_args[0][2] == "Photosynthesis"
+
+
+def test_select_next_assertion_miss_without_lineage_falls_back_to_reinforce() -> None:
+    from app.services.question_pool import select_next_assertion
+
+    doc_id = uuid.uuid4()
+    doc = MagicMock()
+    doc.id = doc_id
+    last_id = str(uuid.uuid4())
+    candidates = [str(uuid.uuid4()), str(uuid.uuid4())]
+    progress = {
+        "current_page": 1,
+        "answered_ids": [],
+        "selection_policy": "difficulty_edge",
+        "last_assertion_id": last_id,
+        "last_correct": False,
+        "last_concept_key": "cell-membrane",
+    }
+    db = MagicMock()
+
+    with (
+        patch("app.services.question_pool.page_assertion_ids", return_value=candidates),
+        patch("app.services.question_pool._difficulty_for_ids", return_value={}),
+        patch(
+            "app.services.question_pool._concept_keys_for_ids",
+            return_value={c: "cell-membrane" for c in candidates},
+        ),
+        patch("app.services.question_pool._lineage_successors", return_value={}),
+        patch("app.services.selection.choose_next_assertion", return_value=candidates[0]) as choose,
+        patch("app.services.selection.build_learner_state") as state_fn,
+    ):
+        state_fn.return_value = MagicMock(
+            last_assertion_id=last_id,
+            last_correct=False,
+            last_concept_key="cell-membrane",
+        )
+        chosen = select_next_assertion(db, doc_id, doc, progress)
+
+    assert chosen == candidates[0]
+    # Cold lineage on miss → concept_reinforce policy handed to chooser.
+    assert choose.call_args[0][0] == "concept_reinforce"
+
+
+def test_write_batch_lineage_links_same_concept_and_sequence() -> None:
+    from app.graphs.generation_graph import _write_batch_lineage
+
+    a1, a2, a3 = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    finalized = [
+        {"_assertion_id": str(a1), "primary_concept_key": "osmosis"},
+        {"_assertion_id": str(a2), "primary_concept_key": "osmosis"},
+        {"_assertion_id": str(a3), "primary_concept_key": "diffusion"},
+    ]
+    db = MagicMock()
+    follow = uuid.uuid4()
+    harder = uuid.uuid4()
+
+    with patch("app.repositories.intel._concept_id", side_effect=[follow, harder]):
+        _write_batch_lineage(db, finalized)
+
+    db.execute.assert_called_once()
+    rows = db.execute.call_args[0][1]
+    kinds = {(r["f"], r["t"], r["lt"]) for r in rows}
+    assert (a1, a2, follow) in kinds  # same-concept follow-up
+    assert (a1, a2, harder) in kinds  # sequential harder_than
+    assert (a2, a3, harder) in kinds

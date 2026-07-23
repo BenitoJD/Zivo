@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import Account, User
 from app.repositories.intel import create_activity
-from app.services.auth import get_current_user, get_optional_user, require_csrf
+from app.services.auth import get_current_user, get_optional_user, require_csrf, require_csrf_or_guest
 from app.api.access import require_document
 from app.services.guest_session import guest_session_for_read
 from app.services.jobs import enqueue_generate
@@ -153,14 +153,13 @@ def generate_assertions(
     return {"activity_id": str(activity_id), "job_id": str(job.id)}
 
 
-@router.post("/{assertion_id}/flag", dependencies=[Depends(rate_limit_dependency)])
+@router.post("/{assertion_id}/flag", dependencies=[Depends(rate_limit_dependency), Depends(require_csrf_or_guest)])
 def flag_assertion(
     assertion_id: uuid.UUID,
     body: FlagIn,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
-    _: None = Depends(require_csrf),
 ) -> dict:
     _assertion_access(db, assertion_id, user, guest_id)
     db.execute(
@@ -170,7 +169,7 @@ def flag_assertion(
             VALUES (:aid, :uid, :reason)
             """
         ),
-        {"aid": assertion_id, "uid": user.id, "reason": body.reason},
+        {"aid": assertion_id, "uid": user.id if user else None, "reason": body.reason},
     )
     db.commit()
     return {"ok": True}

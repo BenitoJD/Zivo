@@ -138,6 +138,8 @@ export default function WorkspaceArtifactPage({
   // Answered-question history + a "review" cursor (null = on the live question).
   const [answeredHistory, setAnsweredHistory] = useState<AnsweredCard[]>([]);
   const [reviewIndex, setReviewIndex] = useState<number | null>(null);
+  const [flagBusy, setFlagBusy] = useState(false);
+  const [flaggedIds, setFlaggedIds] = useState<Record<string, true>>({});
 
   const savedNotesQuery = useSavedNotesQuery(artifactId);
   const savedNotesActions = useSavedNotesActions(artifactId);
@@ -1017,6 +1019,12 @@ export default function WorkspaceArtifactPage({
               artifactId={artifact.id}
               compact={isNarrow}
               onStartLearn={() => setMode("learn")}
+              onStudyConcept={(concept) => {
+                void apiPost(`/api/learn/${artifact.id}/focus-concept`, { concept }).finally(() => {
+                  setMode("learn");
+                  void refreshQueue();
+                });
+              }}
             />
           ) : showNoQuestions ? (
             <Stack align="center" gap="sm" py="xl" ta="center">
@@ -1111,6 +1119,20 @@ export default function WorkspaceArtifactPage({
             onSubmit={() => void submitMcq()}
             onContinue={() => void advanceMcq()}
             onRetry={() => void refreshQueue()}
+            flagged={Boolean(queue?.current_assertion_id && flaggedIds[queue.current_assertion_id])}
+            flagBusy={flagBusy}
+            onFlagQuestion={
+              queue?.current_assertion_id
+                ? (reason) => {
+                    const aid = queue.current_assertion_id!;
+                    setFlagBusy(true);
+                    void apiPost(`/api/assertions/${aid}/flag`, { reason })
+                      .then(() => setFlaggedIds((m) => ({ ...m, [aid]: true })))
+                      .catch(() => undefined)
+                      .finally(() => setFlagBusy(false));
+                  }
+                : undefined
+            }
           />
           </SelectionQuote>
           </Box>

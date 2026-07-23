@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  ActionIcon,
   Box,
   Button,
   Center,
   Group,
+  Menu,
   Paper,
   Stack,
   Text,
@@ -21,6 +23,7 @@ import {
   IconCheck,
   IconChevronDown,
   IconClipboardList,
+  IconFlag,
   IconHistory,
   IconX,
 } from "@tabler/icons-react";
@@ -174,6 +177,9 @@ export function McqHeroPanel({
   onContinue,
   onAdvance,
   onRetry,
+  onFlagQuestion,
+  flagBusy = false,
+  flagged = false,
 }: {
   stem: string;
   options: string[];
@@ -199,6 +205,10 @@ export function McqHeroPanel({
   onContinue: () => void;
   onAdvance?: () => void;
   onRetry?: () => void;
+  /** Report a bad / ambiguous question (Learn). */
+  onFlagQuestion?: (reason: string) => void;
+  flagBusy?: boolean;
+  flagged?: boolean;
 }) {
   const isDark = useIsDark();
   // Roaming study cat - opt-in (off by default); toggled in Settings and applied live.
@@ -547,6 +557,32 @@ export function McqHeroPanel({
           background: "var(--mantine-color-body)",
         }}
       >
+      {onFlagQuestion && !isTest ? (
+        <Group justify="flex-end" mb={4} style={{ position: "absolute", top: 0, right: 0 }}>
+          <Menu shadow="paper" width={220} position="bottom-end" withinPortal>
+            <Menu.Target>
+              <ActionIcon
+                variant="subtle"
+                color={flagged ? "terracotta" : "gray"}
+                radius="xl"
+                size="sm"
+                loading={flagBusy}
+                disabled={flagged || flagBusy}
+                aria-label={flagged ? "Question flagged" : "Flag this question"}
+              >
+                <IconFlag size={14} />
+              </ActionIcon>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Label>Something wrong with this question?</Menu.Label>
+              <Menu.Item onClick={() => onFlagQuestion("ambiguous")}>Ambiguous / unclear</Menu.Item>
+              <Menu.Item onClick={() => onFlagQuestion("wrong_key")}>Wrong answer key</Menu.Item>
+              <Menu.Item onClick={() => onFlagQuestion("not_grounded")}>Not in the source</Menu.Item>
+              <Menu.Item onClick={() => onFlagQuestion("other")}>Other</Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
+        </Group>
+      ) : null}
       <Title
         order={2}
         className="mcq-q"

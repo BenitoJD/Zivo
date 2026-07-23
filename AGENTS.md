@@ -26,7 +26,7 @@ Same deployment model as [zivo](https://github.com/BenitoJD/zivo): **K3s + Helm 
 | **VPS app stack** | Empty | Run deploy after code is on `main` |
 | **Question generation** | **Next** | Upload source → MCQs + explanations + difficulty |
 | **Question evaluation** | Not started | Quality / ambiguity / discrimination scoring |
-| **Answer intelligence** | Not started | Capture responses → improve calibration |
+| **Answer intelligence** | In progress | First-attempt measurements, online Elo calibration, adaptive selection; batch lineage edges written at generation |
 | **Question graph** | In progress | Concepts in `intel.*`; mastery via `qb.artifact_workspace` |
 
 ## Layout

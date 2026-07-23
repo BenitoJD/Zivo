@@ -115,7 +115,13 @@ function RecentActivity({ recent }: { recent: LearnerProgress["recent"] }) {
   );
 }
 
-function TopicCoverage({ topics }: { topics: LearnerProgress["topics"] }) {
+function TopicCoverage({
+  topics,
+  onStudyConcept,
+}: {
+  topics: LearnerProgress["topics"];
+  onStudyConcept?: (concept: string) => void;
+}) {
   if (topics.length === 0) return null;
   const weak = topics
     .filter((t) => t.correct < t.total)
@@ -134,9 +140,22 @@ function TopicCoverage({ topics }: { topics: LearnerProgress["topics"] }) {
                 <Text fz="sm" c="var(--mantine-color-text)" style={{ minWidth: 0 }}>
                   {t.concept}
                 </Text>
-                <Text fz="xs" c="dimmed" style={{ flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
-                  {t.correct}/{t.total} first try
-                </Text>
+                <Group gap={8} wrap="nowrap" style={{ flexShrink: 0 }}>
+                  <Text fz="xs" c="dimmed" style={{ fontVariantNumeric: "tabular-nums" }}>
+                    {t.correct}/{t.total} first try
+                  </Text>
+                  {onStudyConcept ? (
+                    <Button
+                      size="compact-xs"
+                      variant="light"
+                      color="lavender"
+                      radius="xl"
+                      onClick={() => onStudyConcept(t.concept)}
+                    >
+                      Study this
+                    </Button>
+                  ) : null}
+                </Group>
               </Group>
               <Progress
                 value={Math.round((t.correct / Math.max(t.total, 1)) * 100)}
@@ -247,6 +266,7 @@ export function ProgressView({
   artifactId,
   compact = false,
   onStartLearn,
+  onStudyConcept,
   onAddSource,
 }: {
   /** When set, scopes the journal to one source (workspace Progress mode). */
@@ -254,6 +274,8 @@ export function ProgressView({
   compact?: boolean;
   /** Switch into Learn for this source (preferred over a same-page Link). */
   onStartLearn?: () => void;
+  /** Weak-concept CTA: set focus + jump to Learn. */
+  onStudyConcept?: (concept: string) => void;
   onAddSource?: () => void;
 }) {
   const { data, isLoading, isError, refetch } = useLearnerProgressQuery(artifactId ?? null);
@@ -407,11 +429,16 @@ export function ProgressView({
         </Paper>
 
         <RecentActivity recent={data.recent} />
-        <TopicCoverage topics={data.topics} />
+        <TopicCoverage topics={data.topics} onStudyConcept={scoped ? onStudyConcept : undefined} />
         {!scoped ? <SourceLedger sources={data.sources} highlightId={artifactId} /> : null}
 
         {scoped ? (
           <Group>
+            {onStartLearn ? (
+              <Button color="lavender" radius="xl" leftSection={<IconBulb size={16} />} onClick={onStartLearn}>
+                Continue Learn
+              </Button>
+            ) : null}
             <Button
               component={Link}
               href="/workspace/progress"

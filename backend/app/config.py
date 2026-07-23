@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     # Best-of-N: over-generate this many candidate drafts per aspect in the (single)
     # batch call and keep the structurally-strongest one (free heuristic scoring),
     # before the verifier/critic gate. 1 = current behaviour (no over-generation).
-    mcq_candidates_per_aspect: int = 1
+    mcq_candidates_per_aspect: int = 2
     # Use a separate (typically faster/cheaper) model to write DRAFTS, reserving the
     # strong default for the critic + answer-key verifier. Empty = use the default
     # for everything. Match is by the model's display name (case-insensitive).

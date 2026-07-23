@@ -51,6 +51,6 @@ def test_draft_model_falls_back_when_unset() -> None:
 
 def test_world_class_defaults() -> None:
     s = Settings()
-    assert s.mcq_candidates_per_aspect == 1  # best-of-N off by default
+    assert s.mcq_candidates_per_aspect == 2  # best-of-2 drafts per aspect (quality bar)
     assert s.draft_model_name == ""
     assert s.item_self_improve_enabled is True

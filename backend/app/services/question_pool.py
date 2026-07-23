@@ -402,6 +402,13 @@ def select_next_assertion(
     if not candidates:
         return None
 
+    # Progress "Study this" — temporarily prefer unanswered items on that concept.
+    focus = str(progress.get("focus_concept") or "").strip()
+    if focus:
+        preferred = _candidates_matching_concept_label(db, candidates, focus)
+        if preferred:
+            candidates = preferred
+
     from app.config import get_settings
 
     # Per-document override (the learner's Adaptive/Classic choice) wins; otherwise
@@ -426,11 +433,46 @@ def select_next_assertion(
         concept_by_id = _concept_keys_for_ids(db, candidates)  # for per-concept ability
         if state.last_assertion_id:
             lineage_by_id = _lineage_successors(db, state.last_assertion_id, candidates)
+        # Cold lineage: miss → reinforce same concept (selector already supports it).
+        if state.last_correct is False and not lineage_by_id and state.last_concept_key:
+            policy = "concept_reinforce"
     else:
         concept_by_id = {}
     return choose_next_assertion(
         policy, candidates, concept_by_id, state, difficulty_by_id, lineage_by_id
     )
+
+
+def _candidates_matching_concept_label(
+    db: Session, candidate_ids: list[str], focus: str
+) -> list[str]:
+    """Keep candidates whose primary_concept / key matches the Progress focus label."""
+    if not candidate_ids or not focus:
+        return []
+    needle = focus.strip().lower()
+    rows = db.execute(
+        text(
+            """
+            SELECT id::text AS id,
+                   lower(COALESCE(payload->>'primary_concept', '')) AS label,
+                   lower(COALESCE(payload->>'primary_concept_key', '')) AS key
+            FROM intel.assertion
+            WHERE id::text = ANY(:ids)
+            """
+        ),
+        {"ids": candidate_ids},
+    ).mappings().all()
+    matched = {
+        r["id"]
+        for r in rows
+        if needle in (r["label"] or "") or needle in (r["key"] or "") or (r["label"] or "") == needle
+    }
+    return [cid for cid in candidate_ids if cid in matched]
+
+
+def set_focus_concept(db: Session, doc: Document, concept: str | None) -> None:
+    """Persist Progress → Learn concept focus (empty clears)."""
+    save_progress(db, doc, {"focus_concept": (concept or "").strip() or None})
 
 
 def _lineage_successors(

@@ -30,6 +30,7 @@ from app.services.question_pool import (
     is_page_complete,
     page_range_bounds,
     selected_page_list,
+    set_focus_concept,
     set_study_mode,
 )
 from app.services.learn_notify import wait_learn_notify
@@ -326,3 +327,22 @@ def get_study_mode_endpoint(
 ) -> dict:
     doc = require_document(db, artifact_id, user, guest_id)
     return {"study_mode": get_study_mode(doc)}
+
+
+class FocusConceptBody(BaseModel):
+    concept: str | None = None
+
+
+@router.post("/{artifact_id}/focus-concept", dependencies=[Depends(require_csrf_or_guest)])
+def set_focus_concept_endpoint(
+    artifact_id: uuid.UUID,
+    body: FocusConceptBody,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """Progress → Learn: prefer unanswered questions on this concept until cleared."""
+    doc = require_document(db, artifact_id, user, guest_id)
+    set_focus_concept(db, doc, body.concept)
+    db.commit()
+    return {"focus_concept": (body.concept or "").strip() or None}

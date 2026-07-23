@@ -795,4 +795,55 @@ def _persist_assertions(
         if assertion_id_str:
             _link_assertion_concepts(db, uuid.UUID(assertion_id_str), payload, pinned_qid)
             _seed_birth_difficulty(db, uuid.UUID(assertion_id_str), payload)
+    _write_batch_lineage(db, finalized)
     return finalized
+
+
+def _write_batch_lineage(db: Session, finalized: list[dict[str, Any]]) -> None:
+    """Link batch items so miss/hit routing has successors to follow.
+
+    Same-concept later item → ``follow_up_after_miss``. Next-in-sequence →
+    ``harder_than``. Without these edges, difficulty_edge lineage routing is dead.
+    """
+    if len(finalized) < 2:
+        return
+    from app.repositories.intel import _concept_id
+
+    follow_id = _concept_id(db, "/vocab/link/follow_up_after_miss")
+    harder_id = _concept_id(db, "/vocab/link/harder_than")
+    rows: list[dict[str, Any]] = []
+
+    by_concept: dict[str, list[uuid.UUID]] = {}
+    ordered: list[uuid.UUID] = []
+    for payload in finalized:
+        raw = payload.get("_assertion_id")
+        if not raw:
+            continue
+        aid = uuid.UUID(str(raw))
+        ordered.append(aid)
+        key = str(payload.get("primary_concept_key") or payload.get("primary_concept") or "").strip().lower()
+        if key:
+            by_concept.setdefault(key, []).append(aid)
+
+    for ids in by_concept.values():
+        for i in range(len(ids) - 1):
+            rows.append(
+                {"f": ids[i], "t": ids[i + 1], "lt": follow_id, "conf": 0.85}
+            )
+    for i in range(len(ordered) - 1):
+        rows.append(
+            {"f": ordered[i], "t": ordered[i + 1], "lt": harder_id, "conf": 0.7}
+        )
+    if not rows:
+        return
+    db.execute(
+        text(
+            """
+            INSERT INTO intel.assertion_lineage
+              (from_assertion_id, to_assertion_id, link_type_concept_id, confidence)
+            VALUES (:f, :t, :lt, :conf)
+            ON CONFLICT DO NOTHING
+            """
+        ),
+        rows,
+    )
