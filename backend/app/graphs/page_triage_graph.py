@@ -128,7 +128,16 @@ def run_page_triage(
             )
             note_empty_page_triage(db, document_id, vision_usable=vision_usable)
 
-        result = _non_content_result(rationale=rationale)
+        from app.services.content_worthiness import evaluate_worthiness
+
+        worth = evaluate_worthiness(
+            page_text=page_text or "",
+            empty=True,
+            min_chars=40,
+        )
+        result = _non_content_result(
+            rationale=f"{rationale} [worthiness:{worth.reason}]"
+        )
         _persist_triage_coverage(
             db,
             document_id,
@@ -453,8 +462,14 @@ def _fallback_triage(page_text: str, page_number: int, *, mode: Mode = "learn") 
     # completes (is_page_complete treats 0 generated + not non_content as "not done"
     # and would otherwise strand the learner here with nothing to answer).
     if not aspects:
+        from app.services.content_worthiness import evaluate_worthiness
+
+        worth = evaluate_worthiness(page_text=page_text or "", empty=(words == 0))
         return _non_content_result(
-            rationale="Heuristic triage: no testable text on this page.",
+            rationale=(
+                "Heuristic triage: no testable text on this page."
+                f" [worthiness:{worth.reason}]"
+            ),
             mode=mode,
         )
     return _finalize_triage(
@@ -478,10 +493,13 @@ def _finalize_triage(
     substantial_paragraphs: int = 0,
     confidence: Literal["high", "medium", "low"] | None = None,
 ) -> dict[str, Any]:
-    """Dedup aspects, then let plan_page_budget own N (LLM never sets the count)."""
+    """Dedup aspects, normalize KC keys, then let plan_page_budget own N."""
+    from app.services.kc_coverage import normalize_key
+
     deduped, meta = dedupe_aspects(aspects)
     for aspect in deduped:
         aspect.setdefault("centrality", "central")
+        aspect["key"] = normalize_key(str(aspect.get("key") or aspect.get("label") or ""))
     units = _units_from_aspects(deduped)
     plan = plan_page_budget(
         units if units else None,
@@ -515,6 +533,7 @@ def _finalize_triage(
         "budget_mode": plan.mode,
         "budget_version": plan.budget_version,
         "n_cov": plan.n_cov,
+        "kc_policy_version": "qb.kc.v1",
     }
 
 

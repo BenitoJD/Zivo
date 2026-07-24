@@ -98,3 +98,10 @@ def test_item_health_retire_and_keep() -> None:
     assert bad.action == "retire"
     good = evaluate_item_health(p_correct=0.6, n_exposure=20, r_pbis=0.35)
     assert good.action == "keep"
+
+
+def test_session_soft_matches_budget_constant() -> None:
+    from app.services.question_budget import SESSION_SOFT
+    from app.services.session_design import SESSION_SOFT_DEFAULT
+
+    assert SESSION_SOFT_DEFAULT == SESSION_SOFT
