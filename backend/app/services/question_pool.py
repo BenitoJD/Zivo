@@ -377,7 +377,9 @@ def is_coverage_complete(doc: Document, page: int) -> bool:
         return False
     if cov.get("coverage_complete"):
         return True
-    return all(a.get("asked") for a in aspects)
+    from app.services.kc_coverage import is_page_covered
+
+    return is_page_covered(cov)
 
 
 def count_assertions_on_page(db: Session, document_id: uuid.UUID, page: int) -> int:
@@ -739,7 +741,7 @@ def build_learn_queue_state(
     *,
     mode: Mode | None = None,
 ) -> dict[str, Any]:
-    from app.services.question_budget import SESSION_SOFT
+    from app.services.session_design import SESSION_SOFT_DEFAULT, plan_session
 
     serve_mode = mode if mode is not None else serve_budget_mode(doc)
     page = int(progress.get("current_page") or 1)
@@ -755,6 +757,11 @@ def build_learn_queue_state(
     # FE compat: generation_cap used to be a generate-ahead pace; now equals plan.
     generation_cap = plan_budget
     doc_plan = plan_document_budget(page_budgets_for_document(doc, mode=serve_mode), mode=serve_mode)
+    session = plan_session(
+        max(0, int(doc_plan.n_doc) - len(answered_set)),
+        soft_cap=SESSION_SOFT_DEFAULT,
+        mode=serve_mode,
+    )
     # Loop's choosing step (policy-driven; defaults to sequence order).
     next_id = select_next_assertion(db, document_id, doc, progress, page_ids=page_ids)
     coverage_complete = is_coverage_complete(doc, page)
@@ -785,7 +792,8 @@ def build_learn_queue_state(
         "question_budget": plan_budget,
         "plan_budget": plan_budget,
         "generation_cap": generation_cap,
-        "session_soft": SESSION_SOFT,
+        "session_soft": session.soft_cap,
+        "n_session": session.n_session,
         "document_budget": doc_plan.n_doc,
         "budget_confidence": cov.get("budget_confidence"),
         "budget_version": cov.get("budget_version"),

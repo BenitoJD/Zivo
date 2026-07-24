@@ -23,10 +23,10 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.repositories.intel import concept_id
 from app.services.answer_signal import ANSWER_CORRECT_METRIC_URI
+from app.services.item_health import evaluate_item_health
 from app.services.quality_evaluation import (
     EMPIRICAL_MAX_BROKEN_RATE,
     EMPIRICAL_MIN_EXPOSURE,
-    evaluate_empirical,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,13 +70,13 @@ def retire_broken_items(db: Session) -> int:
 
     ids: list[str] = []
     for row in rows:
-        verdict = evaluate_empirical(
+        health = evaluate_item_health(
             p_correct=float(row["p_correct"]),
             n_exposure=int(row["n_exposure"]),
             min_exposure=min_exposure,
             max_broken_rate=max_rate,
         )
-        if verdict.decision == "fail" and "empirical_likely_broken" in verdict.flaw_codes:
+        if health.action == "retire":
             ids.append(str(row["aid"]))
 
     if not ids:

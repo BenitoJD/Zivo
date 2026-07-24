@@ -892,6 +892,42 @@ def _quality_gate_one(
     critic_meta|None, run_critic)``. status is ``accept`` or ``reject``.
     """
     heuristic_flaws = run_heuristic_checks(draft, prior_mcqs=check_against)
+    # Grounding / Answerability Engine: cheap evidence overlap before LLM verify.
+    from app.services.grounding_answerability import evaluate_grounding
+    from app.services.misconception_distractor import evaluate_distractors
+
+    options = [str(o) for o in (draft.get("options") or [])]
+    correct_idx = draft.get("correct_indices") or (
+        [draft["correct_index"]] if draft.get("correct_index") is not None else []
+    )
+    correct_texts = [
+        options[i] for i in correct_idx if isinstance(i, int) and 0 <= i < len(options)
+    ]
+    ground = evaluate_grounding(
+        stem=str(draft.get("question") or draft.get("stem") or ""),
+        correct_texts=correct_texts,
+        page_text=page_text,
+        min_score=0.02,
+    )
+    # Only emit fatal not_grounded on near-zero overlap; soft scores stay advisory.
+    if not ground.grounded and ground.score < 0.02:
+        heuristic_flaws = list(heuristic_flaws) + [
+            {"code": "not_grounded", "detail": f"grounding_score={ground.score:.3f}"}
+        ]
+    distract = evaluate_distractors(
+        options,
+        [int(i) for i in correct_idx if isinstance(i, int)],
+        heuristic_codes=[str(f.get("code") or "") for f in heuristic_flaws],
+    )
+    # Distractor engine soft codes only (never invent fatal structure fails here).
+    for code in distract.flaw_codes:
+        if code in ("implausible_distractors", "none_or_all_of_above", "longest_option_correct") and not any(
+            f.get("code") == code for f in heuristic_flaws
+        ):
+            heuristic_flaws = list(heuristic_flaws) + [
+                {"code": code, "detail": "distractor_engine"}
+            ]
+
     too_similar, max_sim = is_mcq_too_similar(
         draft,
         check_against,

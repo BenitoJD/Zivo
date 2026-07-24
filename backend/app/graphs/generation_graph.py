@@ -849,37 +849,38 @@ def _persist_assertions(
 def _write_batch_lineage(db: Session, finalized: list[dict[str, Any]]) -> None:
     """Link batch items so miss/hit routing has successors to follow.
 
-    Same-concept later item → ``follow_up_after_miss``. Next-in-sequence →
-    ``harder_than``. Without these edges, difficulty_edge lineage routing is dead.
+    Plans edges via Question Graph Engine, then persists follow_up_after_miss and
+    harder_than (same_concept is plan-only metadata today).
     """
     if len(finalized) < 2:
         return
     from app.repositories.intel import _concept_id
+    from app.services.question_graph import (
+        LINK_FOLLOW_UP_AFTER_MISS,
+        LINK_HARDER_THAN,
+        plan_batch_lineage,
+    )
 
     follow_id = _concept_id(db, "/vocab/link/follow_up_after_miss")
     harder_id = _concept_id(db, "/vocab/link/harder_than")
+    kind_to_id = {
+        LINK_FOLLOW_UP_AFTER_MISS: follow_id,
+        LINK_HARDER_THAN: harder_id,
+    }
+    plan = plan_batch_lineage(finalized)
     rows: list[dict[str, Any]] = []
-
-    by_concept: dict[str, list[uuid.UUID]] = {}
-    ordered: list[uuid.UUID] = []
-    for payload in finalized:
-        raw = payload.get("_assertion_id")
-        if not raw:
+    for edge in plan.edges:
+        lt = kind_to_id.get(edge.kind)
+        if lt is None:
             continue
-        aid = uuid.UUID(str(raw))
-        ordered.append(aid)
-        key = str(payload.get("primary_concept_key") or payload.get("primary_concept") or "").strip().lower()
-        if key:
-            by_concept.setdefault(key, []).append(aid)
-
-    for ids in by_concept.values():
-        for i in range(len(ids) - 1):
-            rows.append(
-                {"f": ids[i], "t": ids[i + 1], "lt": follow_id, "conf": 0.85}
-            )
-    for i in range(len(ordered) - 1):
+        conf = 0.85 if edge.kind == LINK_FOLLOW_UP_AFTER_MISS else 0.7
         rows.append(
-            {"f": ordered[i], "t": ordered[i + 1], "lt": harder_id, "conf": 0.7}
+            {
+                "f": uuid.UUID(edge.from_id),
+                "t": uuid.UUID(edge.to_id),
+                "lt": lt,
+                "conf": conf,
+            }
         )
     if not rows:
         return
