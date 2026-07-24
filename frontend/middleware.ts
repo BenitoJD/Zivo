@@ -9,10 +9,13 @@ import type { NextRequest } from "next/server";
 export function middleware(request: NextRequest) {
   const host = request.headers.get("host")?.split(":")[0]?.toLowerCase() ?? "";
   if (host === "www.zivo.fyi") {
-    const url = request.nextUrl.clone();
-    url.host = "zivo.fyi";
-    url.protocol = "https:";
-    return NextResponse.redirect(url, 308);
+    // Build apex URL from path/query only. nextUrl.clone() keeps the container
+    // listen port (:3000), which would leak into the public Location header.
+    const dest = new URL(request.url);
+    dest.protocol = "https:";
+    dest.hostname = "zivo.fyi";
+    dest.port = "";
+    return NextResponse.redirect(dest, 308);
   }
 
   const response = NextResponse.next();
