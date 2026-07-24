@@ -105,13 +105,20 @@ helm upgrade --install db-schema ./infra/k8s/charts/db-schema -n "$NS" \
 
 for release in zivo-worker-io zivo-worker-cpu; do
   helm_record "$release"
-  io=true cpu=false
-  if [[ "$release" == *cpu* ]]; then io=false; cpu=true; fi
+  # Each release owns one primary workload. Newspaper (Telethon) rides with CPU
+  # only — shared values would otherwise create the same Deployment/PDB twice.
+  io=true cpu=false newspaper=false
+  if [[ "$release" == *cpu* ]]; then
+    io=false
+    cpu=true
+    newspaper=true
+  fi
   helm upgrade --install "$release" ./infra/k8s/charts/worker -n "$NS" \
     -f infra/k8s/environments/prod/worker-values.yaml \
     --set image.tag="${TAG}" \
     --set "workloads.io.enabled=${io}" \
     --set "workloads.cpu.enabled=${cpu}" \
+    --set "workloads.newspaper.enabled=${newspaper}" \
     --wait --timeout 10m
   rollout_wait deployment "${release#zivo-}" 10m
 done
