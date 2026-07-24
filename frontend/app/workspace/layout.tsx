@@ -241,6 +241,10 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
               router.push("/workspace/newspaper");
               if (isMobile) closeMobile();
             }}
+            onOpenNewspaperPractice={() => {
+              router.push("/practice/newspaper");
+              if (isMobile) closeMobile();
+            }}
             onOpenProgress={() => {
               router.push("/workspace/progress");
               if (isMobile) closeMobile();

@@ -370,6 +370,7 @@ export type SidebarProps = {
   onSignIn: () => void;
   onOpenModels: () => void;
   onOpenNewspaper?: () => void;
+  onOpenNewspaperPractice?: () => void;
   onOpenProgress: () => void;
   onOpenCodingBank?: () => void;
   onDeleteSource: (doc: SourceDocument) => void;
@@ -392,6 +393,7 @@ export function Sidebar({
   onSignIn,
   onOpenModels,
   onOpenNewspaper,
+  onOpenNewspaperPractice,
   onOpenProgress,
   onOpenCodingBank,
   onDeleteSource,
@@ -736,6 +738,17 @@ export function Sidebar({
                 leftSection={<IconCode size={18} stroke={1.5} />}
                 active={pathname.startsWith("/workspace/coding")}
                 onClick={onOpenCodingBank}
+                mb="xs"
+                styles={{ root: { borderRadius: "var(--mantine-radius-md)" } }}
+              />
+            )}
+            {onOpenNewspaperPractice && (
+              <NavLink
+                label="Newspaper"
+                description="Daily papers as questions"
+                leftSection={<IconNews size={18} stroke={1.5} />}
+                active={pathname.startsWith("/practice/newspaper")}
+                onClick={onOpenNewspaperPractice}
                 mb="sm"
                 styles={{ root: { borderRadius: "var(--mantine-radius-md)" } }}
               />
@@ -753,8 +766,8 @@ export function Sidebar({
             )}
             {isAdmin && onOpenNewspaper && (
               <NavLink
-                label="Newspaper channel"
-                description="Swap Telegram source"
+                label="Newspaper source"
+                description="Channel + which papers"
                 leftSection={<IconNews size={18} stroke={1.5} />}
                 active={pathname === "/workspace/newspaper"}
                 onClick={onOpenNewspaper}
