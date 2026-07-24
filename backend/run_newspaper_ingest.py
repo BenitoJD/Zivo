@@ -10,16 +10,12 @@ import asyncio
 import logging
 import os
 import sys
-from datetime import date, datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
+from datetime import date, datetime, timezone
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("newspaper_ingest")
 
-_IST = ZoneInfo("Asia/Kolkata")
-# Reconcile scans last N IST calendar days (today + yesterday covers midnight edge).
-_RECONCILE_LOOKBACK_DAYS = 2
-# Hard cap on iter_messages so a stuck cursor / flood cannot loop forever.
+# Wide enough to see recent filename dates; hard cap avoids unbounded history walks.
 _RECONCILE_SAFETY_MAX = 500
 
 
@@ -27,51 +23,24 @@ def _env(name: str, default: str = "") -> str:
     return (os.environ.get(name) or default).strip()
 
 
-def message_ist_date(dt: datetime | None) -> date:
-    """Telegram message.date → Asia/Kolkata calendar day (naive treated as UTC)."""
-    if dt is None:
-        dt = datetime.now(timezone.utc)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(_IST).date()
+def plan_gap_fill(
+    seen: list[tuple[int, str, date]],
+    existing: set[tuple[str, date]],
+) -> list[int]:
+    """Which telegram msg ids to cook.
 
-
-def lookback_start_date(*, now: datetime | None = None, days: int = _RECONCILE_LOOKBACK_DAYS) -> date:
-    """Earliest IST date included in a day-scoped reconcile (inclusive)."""
-    today = message_ist_date(now)
-    return today - timedelta(days=max(days, 1) - 1)
-
-
-def past_lookback(
-    dt: datetime | None,
-    *,
-    now: datetime | None = None,
-    days: int = _RECONCILE_LOOKBACK_DAYS,
-) -> bool:
-    """True when message IST day is older than the lookback window — stop scanning."""
-    return message_ist_date(dt) < lookback_start_date(now=now, days=days)
-
-
-def in_edition_lookback(
-    edition_day: date,
-    *,
-    now: datetime | None = None,
-    days: int = _RECONCILE_LOOKBACK_DAYS,
-) -> bool:
-    """True when parsed edition day falls in [lookback_start, today IST] inclusive."""
-    start = lookback_start_date(now=now, days=days)
-    today = message_ist_date(now)
-    return start <= edition_day <= today
-
-
-def _message_filename(message) -> str:  # noqa: ANN001
-    fname = ""
-    doc = getattr(message, "document", None)
-    for attr in getattr(doc, "attributes", None) or []:
-        fname = getattr(attr, "file_name", None) or fname
-    if not fname and getattr(message, "file", None):
-        fname = getattr(message.file, "name", "") or ""
-    return fname or ""
+    ``seen`` = (msg_id, paper_slug, edition_date) from channel PDFs.
+    ``existing`` = (paper_slug, edition_date) already in DB (ignore purged).
+    Missing pairs only; lowest msg_id wins (first city for that paper/day).
+    """
+    winners: dict[tuple[str, date], int] = {}
+    for msg_id, paper_slug, edition_date in sorted(seen, key=lambda t: int(t[0])):
+        key = (paper_slug, edition_date)
+        if key in existing:
+            continue
+        if key not in winners:
+            winners[key] = int(msg_id)
+    return sorted(winners.values())
 
 
 async def _process_message(client, db, message) -> None:
@@ -166,63 +135,32 @@ async def _reconcile(
     entity,
     db,
     *,
-    lookback_days: int = _RECONCILE_LOOKBACK_DAYS,
     safety_max: int = _RECONCILE_SAFETY_MAX,
 ) -> None:
-    """Catch-up: PDFs whose *edition day* falls in the last `lookback_days` IST days.
+    """Gap-fill: cook Telegram PDFs whose (paper, edition_date) is missing in DB.
 
-    Edition day prefers filename/caption date (e.g. TH …24-07-2026.pdf); falls back to
-    message.date IST. Wrong-day filenames are excluded even if Telegram posted today.
-    sync_cursor is tip watermark only. Process oldest→newest (lowest msg_id wins).
-    Live NewMessage handler stays arrival-order first-wins (unchanged).
+    Scan recent channel history (safety cap). Filename date primary via parse.
+    DB (status <> purged) = already done → skip inside _process_message.
+    Oldest msg_id first → first city wins. sync_cursor = tip watermark only.
     """
     from app.repositories import newspaper as newspaper_repo
-    from app.services.newspaper_naming import resolve_edition_date
 
-    now = datetime.now(timezone.utc)
-    start = lookback_start_date(now=now, days=lookback_days)
-    candidates: list = []
     tip_id: int | None = None
+    pdfs: list = []
     async for message in client.iter_messages(entity, limit=safety_max):
         if tip_id is None:
             tip_id = int(message.id)
-        # Stop walking the channel once Telegram post day is older than lookback.
-        if past_lookback(message.date, now=now, days=lookback_days):
-            break
-        if not _is_pdf_message(message):
-            continue
-        fname = _message_filename(message)
-        edition_day = resolve_edition_date(
-            filename=fname,
-            caption=message.message or "",
-            message_date=message.date,
-        )
-        if in_edition_lookback(edition_day, now=now, days=lookback_days):
-            candidates.append(message)
-        else:
-            logger.info(
-                "reconcile skip msg=%s edition_day=%s outside IST lookback start=%s file=%r",
-                getattr(message, "id", None),
-                edition_day,
-                start,
-                fname,
-            )
+        if _is_pdf_message(message):
+            pdfs.append(message)
 
-    # iter_messages is newest-first; ascending msg_id so earliest claims (paper, day).
-    candidates.sort(key=lambda m: int(m.id))
-    logger.info(
-        "reconcile IST lookback start=%s days=%s pdfs=%s tip=%s",
-        start,
-        lookback_days,
-        len(candidates),
-        tip_id,
-    )
-    for message in candidates:
+    # Newest-first from Telegram → ascending so lowest msg_id claims (paper, day).
+    pdfs.sort(key=lambda m: int(m.id))
+    logger.info("reconcile gap-fill pdfs=%s tip=%s", len(pdfs), tip_id)
+    for message in pdfs:
         try:
             await _process_message(client, db, message)
         except Exception:
             logger.exception("reconcile failed msg=%s", getattr(message, "id", None))
-    # Watermark channel tip only — next day-scan still re-reads the IST window.
     if tip_id is not None:
         newspaper_repo.set_sync_cursor(db, tip_id)
 
