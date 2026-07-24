@@ -374,6 +374,7 @@ export function McqHeroPanel({
     // question (then the learner leaves this wait), not the full page budget —
     // a 400-idea plan must not pin the ring at ~48% for an hour.
     const generated = queue?.questions_generated ?? 0;
+    const budget = queue?.plan_budget ?? queue?.question_budget ?? queue?.generation_cap ?? 0;
     const readingPhase = artifactStatus === "indexing" || queue?.rag_window_ready === false;
     const planningPhase = !readingPhase && !queue?.page_triage_complete;
     const progressPct = readingPhase
