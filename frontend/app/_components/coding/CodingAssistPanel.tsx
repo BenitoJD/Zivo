@@ -2,23 +2,20 @@
 
 /**
  * Coding assistant tab — assertion-scoped SSE chat (no PDF / document required).
+ * Chrome is TutorPanel (same as Learn / workspace), not a one-off layout.
  */
 
-import { useEffect, useRef, useState } from "react";
-import {
-  Box,
-  Button,
-  Group,
-  ScrollArea,
-  Stack,
-  Text,
-  Textarea,
-  UnstyledButton,
-} from "@mantine/core";
-import { IconEraser, IconSend } from "@tabler/icons-react";
+import { useEffect, useState } from "react";
+import { TutorPanel } from "@/app/workspace/_components/TutorPanel";
 import { apiGet, apiPost, apiPostSSE } from "@/lib/api/client";
 
 type ChatMsg = { role: string; content: string };
+
+const CODING_SUGGESTIONS = [
+  "What's wrong with my approach?",
+  "Hint for the failing case — no full solution",
+  "Explain the constraints in plain language",
+];
 
 export function CodingAssistPanel({
   assertionId,
@@ -36,7 +33,6 @@ export function CodingAssistPanel({
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const bottomRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -59,10 +55,6 @@ export function CodingAssistPanel({
       alive = false;
     };
   }, [assertionId]);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, busy]);
 
   async function send() {
     const text = input.trim();
@@ -117,72 +109,16 @@ export function CodingAssistPanel({
   }
 
   return (
-    <Stack gap="sm" h="100%" style={{ minHeight: 0 }}>
-      <Group justify="space-between" px="md" pt="sm" wrap="nowrap">
-        <Text fz="xs" c="dimmed">
-          Ask about the statement, errors, or approach — hints first, not spoilers.
-        </Text>
-        <UnstyledButton onClick={() => void clearThread()} aria-label="Clear chat">
-          <Group gap={4}>
-            <IconEraser size={14} color="var(--mantine-color-dimmed)" />
-            <Text fz="xs" c="dimmed">
-              Clear
-            </Text>
-          </Group>
-        </UnstyledButton>
-      </Group>
-      <ScrollArea flex={1} px="md" offsetScrollbars style={{ minHeight: 0 }}>
-        <Stack gap="sm" pb="sm">
-          {messages.length === 0 ? (
-            <Text size="sm" c="dimmed">
-              Stuck on constraints or a failing case? Ask here.
-            </Text>
-          ) : (
-            messages.map((m, i) => (
-              <Box key={`${i}-${m.role}`}>
-                <Text size="xs" c="dimmed" tt="uppercase" lts={0.5} mb={2}>
-                  {m.role === "user" ? "You" : "Assistant"}
-                </Text>
-                <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
-                  {m.content || (busy && i === messages.length - 1 ? "…" : "")}
-                </Text>
-              </Box>
-            ))
-          )}
-          <div ref={bottomRef} />
-        </Stack>
-      </ScrollArea>
-      <Box px="md" pb="md">
-        <Textarea
-          placeholder="Ask a question…"
-          value={input}
-          onChange={(e) => setInput(e.currentTarget.value)}
-          minRows={2}
-          maxRows={5}
-          autosize
-          radius="md"
-          disabled={busy}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-        />
-        <Group justify="flex-end" mt="xs">
-          <Button
-            size="xs"
-            radius="xl"
-            color="lavender"
-            leftSection={<IconSend size={14} />}
-            loading={busy}
-            disabled={!input.trim()}
-            onClick={() => void send()}
-          >
-            Send
-          </Button>
-        </Group>
-      </Box>
-    </Stack>
+    <TutorPanel
+      messages={messages}
+      input={input}
+      busy={busy}
+      onInputChange={setInput}
+      onSend={() => void send()}
+      onClear={() => void clearThread()}
+      suggestions={CODING_SUGGESTIONS}
+      emptyHint="Ask about the statement, errors, or approach — hints first, not spoilers."
+      disclaimer="Hints first — Zivo can make mistakes. Verify against the problem and your tests."
+    />
   );
 }

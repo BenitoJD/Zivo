@@ -55,6 +55,7 @@ export function TutorPanel({
   onClear,
   suggestions = CHAT_SUGGESTIONS,
   emptyHint = "Questions about this page, the source, or how to think through the answer.",
+  disclaimer,
   showHeader = false,
   onExploreAngle,
   onKeepAngle,
@@ -73,6 +74,8 @@ export function TutorPanel({
   onClear?: () => void;
   suggestions?: string[];
   emptyHint?: string;
+  /** Footer under the composer. Defaults to source-check copy for Learn. */
+  disclaimer?: string;
   /** Show a branded top bar - for surfaces (Read, mobile) that have no rail header. */
   showHeader?: boolean;
   /** Brainstorm only: send an angle as the next turn. Passing either angle handler
@@ -372,7 +375,8 @@ export function TutorPanel({
           </Group>
         </Paper>
         <Text size="10px" c="dimmed" ta="center" mt={6} lh={1.3} opacity={0.85}>
-          {ZIVO_ASSISTANT_NAME} can make mistakes. Check important details in your source.
+          {disclaimer ??
+            `${ZIVO_ASSISTANT_NAME} can make mistakes. Check important details in your source.`}
         </Text>
       </Box>
     </Stack>
