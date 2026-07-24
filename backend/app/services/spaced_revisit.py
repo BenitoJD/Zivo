@@ -1,0 +1,45 @@
+"""Spaced Revisit Engine — simplified SM-2-inspired schedule.
+
+Design: docs/SPACED_REVISIT_ENGINE.md
+Version: qb.space.v1
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+SPACE_VERSION = "qb.space.v1"
+
+
+@dataclass(frozen=True)
+class RevisitPlan:
+    next_due_hours: float
+    ease: float
+    repetitions: int
+    policy_version: str = SPACE_VERSION
+
+
+def plan_revisit(
+    *,
+    last_correct: bool,
+    prior_interval_hours: float = 24.0,
+    ease: float = 2.5,
+    repetitions: int = 0,
+) -> RevisitPlan:
+    ease = max(1.3, float(ease))
+    reps = max(0, int(repetitions))
+    prior = max(1.0, float(prior_interval_hours))
+    if last_correct:
+        reps += 1
+        ease = min(3.0, ease + 0.1)
+        if reps == 1:
+            nxt = 24.0
+        elif reps == 2:
+            nxt = 72.0
+        else:
+            nxt = prior * ease
+    else:
+        reps = 0
+        ease = max(1.3, ease - 0.2)
+        nxt = 4.0
+    return RevisitPlan(next_due_hours=float(nxt), ease=float(ease), repetitions=reps)

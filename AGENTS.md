@@ -24,11 +24,13 @@ Same deployment model as [zivo](https://github.com/BenitoJD/zivo): **K3s + Helm 
 | **Deploy workflow** | Ready | `.github/workflows/deploy.yml` (needs push + workflow run) |
 | **VPS base** | Ready | K3s, Traefik, cert-manager, GH runner at `103.194.228.47` |
 | **VPS app stack** | Empty | Run deploy after code is on `main` |
-| **Question generation** | **Next** | Upload source → MCQs + explanations + difficulty |
-| **Question evaluation** | Ready (engine) | `docs/QUALITY_EVALUATION_ENGINE.md` + `quality_evaluation.py`; cook gates + retirement |
-| **Adaptive selection** | Ready (engine) | `docs/ADAPTIVE_SELECTION_ENGINE.md` + `adaptive_selection.py`; learn-queue next-Q |
-| **Answer intelligence** | In progress | First-attempt measurements, online Elo calibration; batch lineage edges written at generation |
-| **Question graph** | In progress | Concepts in `intel.*`; mastery via `qb.artifact_workspace` |
+| **Question generation** | Ready | Upload source → MCQs; Budget + Quality + Graph + priors |
+| **Question evaluation** | Ready (engine) | `docs/QUALITY_EVALUATION_ENGINE.md` + `quality_evaluation.py` |
+| **Adaptive selection** | Ready (engine) | `docs/ADAPTIVE_SELECTION_ENGINE.md` + `adaptive_selection.py` |
+| **Calibration** | Ready (engine) | `docs/CALIBRATION_ENGINE.md` + `calibration_engine.py` |
+| **Engines index** | Ready | [docs/ENGINES.md](docs/ENGINES.md) - all 13 Year-1+ engines |
+| **Answer intelligence** | Ready (engine) | Measurements + Elo + mastery stop + spaced revisit on grade |
+| **Question graph** | Ready (engine) | `docs/QUESTION_GRAPH_ENGINE.md` + lineage at cook |
 
 ## Layout
 
@@ -36,6 +38,7 @@ Same deployment model as [zivo](https://github.com/BenitoJD/zivo): **K3s + Helm 
 zivo/
 ├── docs/
 │   ├── VISION.md         # product strategy and 10-year roadmap
+│   ├── ENGINES.md        # index of all policy engines
 │   └── DATA_MODEL.md     # every intel table → Question Better use case
 ├── .cursor/skills/       # agent skills (zivo-dev, fastapi, postgres, …)
 ├── agents/               # prod-safety, testing notes
@@ -194,7 +197,7 @@ error handling, typing, naming, Alembic, testing) — each rule with a `file:lin
 Design decisions are in [docs/adr/](docs/adr/0000-index.md). Quick pointers:
 
 - Business copy: root `README.md` only.
-- Product strategy: `docs/VISION.md`. · Table reference: `docs/DATA_MODEL.md`.
+- Product strategy: `docs/VISION.md`. · Engines: `docs/ENGINES.md`. · Table reference: `docs/DATA_MODEL.md`.
 - Schema changes: `backend/alembic/versions/` (+ update `backend/schema/*.sql` when baselining raw SQL).
 - New routes: `backend/app/api/`. · Background jobs: `backend/app/eta/`.
 - UI: **`frontend/app/` only** — see [Frontend UI](#frontend-ui) above.

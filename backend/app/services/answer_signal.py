@@ -21,6 +21,8 @@ from sqlalchemy.orm import Session
 from app.models import Account
 from app.repositories.intel import concept_id
 from app.services.calibration import record_outcome
+from app.services.mastery_evidence import evaluate_stop
+from app.services.spaced_revisit import plan_revisit
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,9 @@ class AnswerSignal:
     concept_key: str | None
     ability: float | None = None
     difficulty: float | None = None
+    ability_se: float | None = None
+    mastery_stop: bool | None = None
+    revisit_hours: float | None = None
 
 
 def record_answer_signal(
@@ -122,11 +127,16 @@ def record_answer_signal(
 
     ability: float | None = None
     difficulty: float | None = None
+    ability_se: float | None = None
+    mastery_stop: bool | None = None
+    revisit_hours: float | None = None
     if inserted and calibrate:
         # Best-effort: the immutable measurement row is already written, so a
         # calibration failure must never break grading — degrade to "no estimate
         # this turn" (selection falls back gracefully) rather than 500 the answer.
         try:
+            from app.services.calibration_engine import get_ability
+
             update = record_outcome(
                 db,
                 subject_entity_id=subject_entity_id,
@@ -134,11 +144,23 @@ def record_answer_signal(
                 correct=correct,
             )
             ability, difficulty = update.ability, update.difficulty
+            _rating, n, ability_se = get_ability(db, subject_entity_id)
+            stop = evaluate_stop(
+                ability=ability, n=n, se_theta=ability_se, mode=mode
+            )
+            mastery_stop = stop.stop
+            revisit_hours = plan_revisit(last_correct=correct).next_due_hours
         except Exception:
             logger.warning(
                 "calibration failed for assertion %s; measurement kept", assertion_id, exc_info=True
             )
 
     return AnswerSignal(
-        inserted=inserted, concept_key=concept_key, ability=ability, difficulty=difficulty
+        inserted=inserted,
+        concept_key=concept_key,
+        ability=ability,
+        difficulty=difficulty,
+        ability_se=ability_se,
+        mastery_stop=mastery_stop,
+        revisit_hours=revisit_hours,
     )

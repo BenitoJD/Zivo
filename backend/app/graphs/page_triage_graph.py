@@ -164,9 +164,19 @@ def run_page_triage(
 
         verdict, rationale = newspaper_page_verdict(page_text)
         if verdict != "cook":
+            from app.services.content_worthiness import evaluate_worthiness
+
+            worth = evaluate_worthiness(
+                page_text=page_text,
+                ad_likely=(verdict == "ad"),
+                non_content=(verdict != "cook"),
+            )
             # Newspaper cook plans Learn by default (docs/QUESTION_BUDGET_ENGINE.md §0).
             result = _non_content_result(
-                rationale=f"Newspaper filter ({verdict}): {rationale}",
+                rationale=(
+                    f"Newspaper filter ({verdict}): {rationale}"
+                    f" [worthiness:{worth.reason}]"
+                ),
                 mode="learn",
             )
             _persist_triage_coverage(
