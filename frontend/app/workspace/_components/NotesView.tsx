@@ -232,7 +232,7 @@ export function NotesView({
         radius="lg"
         p={compact ? "md" : "xl"}
         withBorder
-        bg={isDark ? "dark.7" : "white"}
+        bg={isDark ? "dark.7" : "gray.0"}
         style={{ borderColor: "var(--app-border, var(--mantine-color-gray-2))" }}
       >
         <AssistantMarkdown content={content} isDark={isDark} />

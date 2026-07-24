@@ -84,11 +84,32 @@ const TERRACOTTA_PALETTE = [
   "#AE5634", "#90432A", "#73341F", "#582716", "#3E1B0E",
 ] as const;
 
+/** Brand + semantic accents whose dark CSS vars invert low/high shades. */
+const REMAPPED_ACCENTS = new Set([
+  "lavender",
+  "forest",
+  "sage",
+  "terracotta",
+  "green",
+  "red",
+  "blue",
+  "orange",
+  "indigo",
+  "grape",
+  "teal",
+  "cyan",
+  "pink",
+  "violet",
+  "lime",
+  "yellow",
+]);
+
 /** Big primary buttons are ink with cream text; lavender fills keep readable contrast. */
 const variantColorResolver: VariantColorsResolver = (input) => {
   const resolved = defaultVariantColorsResolver(input);
   const variant = input.variant ?? "filled";
   const colorName = input.color || input.theme.primaryColor;
+  const scheme = resolveColorScheme();
 
   // Ghost gray buttons (subtle/light/transparent/default) get their label color from
   // low gray shades. Our gray scale is INVERTED for dark mode (low = dark), so Mantine
@@ -105,6 +126,21 @@ const variantColorResolver: VariantColorsResolver = (input) => {
     };
   }
 
+  // Same class of bug for remapped accents: Mantine's dark `*-light-color` picks
+  // shade 0 (deep surface in our remap) as the label. Point light/subtle/outline
+  // labels at the bright text-on-ink shade instead.
+  if (
+    scheme === "dark" &&
+    REMAPPED_ACCENTS.has(colorName) &&
+    (variant === "subtle" || variant === "light" || variant === "transparent" || variant === "outline")
+  ) {
+    return {
+      ...resolved,
+      color: `var(--mantine-color-${colorName}-7)`,
+      hoverColor: `var(--mantine-color-${colorName}-8)`,
+    };
+  }
+
   const autoContrast =
     typeof input.autoContrast === "boolean" ? input.autoContrast : input.theme.autoContrast;
   if (!autoContrast || variant !== "filled") return resolved;
@@ -112,7 +148,7 @@ const variantColorResolver: VariantColorsResolver = (input) => {
   const palette = input.theme.colors[colorName];
   if (!palette) return resolved;
 
-  const surface = palette[getPrimaryShade(input.theme, resolveColorScheme())];
+  const surface = palette[getPrimaryShade(input.theme, scheme)];
   if (!isLightColor(surface, input.theme.luminanceThreshold ?? 0.3)) return resolved;
 
   // The button surface is light, so its label must be dark ink for contrast.
@@ -167,7 +203,8 @@ const theme = mergeMantineTheme(
       xl: "1.85",
     },
     shadows: {
-      // Soft "paper lift" - calm, not Material-heavy.
+      // Soft "paper lift" - calm, not Material-heavy. Dark values are overridden
+      // in cssVariablesResolver so cards still lift on ink.
       paper: "0 1px 2px rgba(35, 34, 32, 0.04), 0 4px 16px rgba(35, 34, 32, 0.05)",
       "paper-lg": "0 2px 6px rgba(35, 34, 32, 0.06), 0 12px 36px rgba(35, 34, 32, 0.08)",
     },
@@ -317,13 +354,16 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
     "--mantine-color-white": "#FFFFFF",
     "--mantine-color-default-border": "#2E2C28",  // Soft charcoal border
     "--mantine-color-default-hover": "#262522",   // Hover over charcoal items
-    "--mantine-color-placeholder": "#7A756B",     // Placeholder
-    "--mantine-color-dimmed": "#98989D",          // Apple-style secondary on ink
+    "--mantine-color-placeholder": "#8E8A7E",     // Placeholder (warmer, matches gray-5)
+    "--mantine-color-dimmed": "#A8A296",          // Secondary labels - warm, readable on ink
     "--mantine-skeleton-color": "#262522",
     "--mantine-skeleton-color-da": "#2E2C28",
     "--zivo-header-bg": "#22211F",
     "--zivo-tooltip-bg": "#2E2C28",
     "--zivo-tooltip-fg": "#FAF9F6",
+    // Paper lift must stay visible on ink - light-scheme soft browns vanish at night.
+    "--mantine-shadow-paper": "0 1px 2px rgba(0, 0, 0, 0.28), 0 4px 18px rgba(0, 0, 0, 0.32)",
+    "--mantine-shadow-paper-lg": "0 2px 8px rgba(0, 0, 0, 0.32), 0 14px 40px rgba(0, 0, 0, 0.4)",
 
     // Neutral gray scale overrides for dark mode (inverted logic)
     "--mantine-color-gray-0": "#22211F",          // Lifted paper (dark card background)
@@ -406,6 +446,231 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
     "--mantine-color-terracotta-7": "#F0C4B2",
     "--mantine-color-terracotta-8": "#F7D8CC",
     "--mantine-color-terracotta-9": "#FBECE6",
+
+    // Semantic aliases must follow the same dark remap as their Calm Paper
+    // counterparts - otherwise `color="green"|"red"|"blue"` still paints
+    // near-white shade-0/1 chips on ink (Settings, Alerts, legacy props).
+    "--mantine-color-green-0": "#1A2B1F",
+    "--mantine-color-green-1": "#243628",
+    "--mantine-color-green-2": "#2E4535",
+    "--mantine-color-green-3": "#3A5843",
+    "--mantine-color-green-4": "#5F9156",
+    "--mantine-color-green-5": "#82AE79",
+    "--mantine-color-green-6": "#A8C9A0",
+    "--mantine-color-green-7": "#C5D8BE",
+    "--mantine-color-green-8": "#DDEAD6",
+    "--mantine-color-green-9": "#EEF5EB",
+
+    "--mantine-color-red-0": "#2B1A14",
+    "--mantine-color-red-1": "#3A2319",
+    "--mantine-color-red-2": "#4A2E22",
+    "--mantine-color-red-3": "#5E3B2C",
+    "--mantine-color-red-4": "#C57454",
+    "--mantine-color-red-5": "#D69B7D",
+    "--mantine-color-red-6": "#E8B09A",
+    "--mantine-color-red-7": "#F0C4B2",
+    "--mantine-color-red-8": "#F7D8CC",
+    "--mantine-color-red-9": "#FBECE6",
+
+    "--mantine-color-blue-0": "#1E1A2A",
+    "--mantine-color-blue-1": "#262034",
+    "--mantine-color-blue-2": "#332B45",
+    "--mantine-color-blue-3": "#433A5C",
+    "--mantine-color-blue-4": "#9C86C8",
+    "--mantine-color-blue-5": "#AB97D2",
+    "--mantine-color-blue-6": "#BCABDD",
+    "--mantine-color-blue-7": "#CDBFEA",
+    "--mantine-color-blue-8": "#DDD2F2",
+    "--mantine-color-blue-9": "#EFE9F8",
+
+    // Sidebar / Settings still use a few stock Mantine hues for mode icons.
+    // Remap the same way: low = deep tint surfaces, high = bright glyphs on ink.
+    // Without this, variant="light" ThemeIcons blast near-white chips at night.
+    "--mantine-color-orange-0": "#2A1C12",
+    "--mantine-color-orange-1": "#3A2618",
+    "--mantine-color-orange-2": "#4A3220",
+    "--mantine-color-orange-3": "#5E412A",
+    "--mantine-color-orange-4": "#D98A4A",
+    "--mantine-color-orange-5": "#E4A06A",
+    "--mantine-color-orange-6": "#EBB888",
+    "--mantine-color-orange-7": "#F2CBA6",
+    "--mantine-color-orange-8": "#F7DEC4",
+    "--mantine-color-orange-9": "#FBF0E4",
+
+    "--mantine-color-indigo-0": "#1A1C2E",
+    "--mantine-color-indigo-1": "#22253A",
+    "--mantine-color-indigo-2": "#2E3250",
+    "--mantine-color-indigo-3": "#3C4166",
+    "--mantine-color-indigo-4": "#7480C8",
+    "--mantine-color-indigo-5": "#8A95D4",
+    "--mantine-color-indigo-6": "#A0ABDE",
+    "--mantine-color-indigo-7": "#B8C0E8",
+    "--mantine-color-indigo-8": "#D0D5F0",
+    "--mantine-color-indigo-9": "#E8EAF8",
+
+    "--mantine-color-grape-0": "#241828",
+    "--mantine-color-grape-1": "#302034",
+    "--mantine-color-grape-2": "#3E2A44",
+    "--mantine-color-grape-3": "#503656",
+    "--mantine-color-grape-4": "#B07AC8",
+    "--mantine-color-grape-5": "#C090D4",
+    "--mantine-color-grape-6": "#CEA6DE",
+    "--mantine-color-grape-7": "#DCBCE8",
+    "--mantine-color-grape-8": "#EAD2F2",
+    "--mantine-color-grape-9": "#F6EAF8",
+
+    "--mantine-color-teal-0": "#122422",
+    "--mantine-color-teal-1": "#18302C",
+    "--mantine-color-teal-2": "#204038",
+    "--mantine-color-teal-3": "#2A5248",
+    "--mantine-color-teal-4": "#4FA89A",
+    "--mantine-color-teal-5": "#6BBAAE",
+    "--mantine-color-teal-6": "#88CCC0",
+    "--mantine-color-teal-7": "#A6DAD2",
+    "--mantine-color-teal-8": "#C6E8E2",
+    "--mantine-color-teal-9": "#E4F4F0",
+
+    "--mantine-color-cyan-0": "#122428",
+    "--mantine-color-cyan-1": "#183034",
+    "--mantine-color-cyan-2": "#204044",
+    "--mantine-color-cyan-3": "#2A5256",
+    "--mantine-color-cyan-4": "#4AA8B8",
+    "--mantine-color-cyan-5": "#68BAC8",
+    "--mantine-color-cyan-6": "#86CCD6",
+    "--mantine-color-cyan-7": "#A6DCE4",
+    "--mantine-color-cyan-8": "#C6ECF0",
+    "--mantine-color-cyan-9": "#E4F6F8",
+
+    "--mantine-color-pink-0": "#2A141C",
+    "--mantine-color-pink-1": "#3A1C28",
+    "--mantine-color-pink-2": "#4A2634",
+    "--mantine-color-pink-3": "#5E3244",
+    "--mantine-color-pink-4": "#D07098",
+    "--mantine-color-pink-5": "#DC88AC",
+    "--mantine-color-pink-6": "#E6A0BE",
+    "--mantine-color-pink-7": "#EEB8D0",
+    "--mantine-color-pink-8": "#F4D0E0",
+    "--mantine-color-pink-9": "#FAE8F0",
+
+    "--mantine-color-violet-0": "#1E1830",
+    "--mantine-color-violet-1": "#282040",
+    "--mantine-color-violet-2": "#342A52",
+    "--mantine-color-violet-3": "#443668",
+    "--mantine-color-violet-4": "#9070D0",
+    "--mantine-color-violet-5": "#A488DC",
+    "--mantine-color-violet-6": "#B8A0E6",
+    "--mantine-color-violet-7": "#CCB8EE",
+    "--mantine-color-violet-8": "#E0D0F4",
+    "--mantine-color-violet-9": "#F0E8FA",
+
+    "--mantine-color-lime-0": "#1C2412",
+    "--mantine-color-lime-1": "#263018",
+    "--mantine-color-lime-2": "#324020",
+    "--mantine-color-lime-3": "#40522A",
+    "--mantine-color-lime-4": "#8AB84A",
+    "--mantine-color-lime-5": "#A0C868",
+    "--mantine-color-lime-6": "#B4D686",
+    "--mantine-color-lime-7": "#C8E2A4",
+    "--mantine-color-lime-8": "#DCEEC4",
+    "--mantine-color-lime-9": "#F0F8E4",
+
+    "--mantine-color-yellow-0": "#2A2410",
+    "--mantine-color-yellow-1": "#3A3018",
+    "--mantine-color-yellow-2": "#4A4020",
+    "--mantine-color-yellow-3": "#5E522A",
+    "--mantine-color-yellow-4": "#D4B04A",
+    "--mantine-color-yellow-5": "#E0C268",
+    "--mantine-color-yellow-6": "#E8D086",
+    "--mantine-color-yellow-7": "#F0DEA4",
+    "--mantine-color-yellow-8": "#F6EAC4",
+    "--mantine-color-yellow-9": "#FBF4E4",
+
+    // Mantine derives `*-light-color` / `*-outline` from shade 0 in dark mode
+    // (default dark scales put bright text at 0). Our accent remaps put DEEP
+    // surfaces at 0 so app code can keep `bg="lavender.0"` - which left light/
+    // outline labels as near-invisible ink-on-ink ("Open bank", ThemeIcons…).
+    // Pin those derived tokens to the bright text-on-ink shades instead.
+    // Also lift `*-light` fills off pure ink so the chip/button silhouette reads.
+    "--mantine-color-lavender-light": "#332B45",
+    "--mantine-color-lavender-light-hover": "#433A5C",
+    "--mantine-color-lavender-light-color": "#CDBFEA",
+    "--mantine-color-lavender-outline": "#CDBFEA",
+    "--mantine-color-lavender-outline-hover": "rgba(205, 191, 234, 0.12)",
+    "--mantine-color-forest-light": "#234039",
+    "--mantine-color-forest-light-hover": "#2E5148",
+    "--mantine-color-forest-light-color": "#B3D1CB",
+    "--mantine-color-forest-outline": "#B3D1CB",
+    "--mantine-color-forest-outline-hover": "rgba(179, 209, 203, 0.12)",
+    "--mantine-color-sage-light": "#2E4535",
+    "--mantine-color-sage-light-hover": "#3A5843",
+    "--mantine-color-sage-light-color": "#C5D8BE",
+    "--mantine-color-sage-outline": "#C5D8BE",
+    "--mantine-color-sage-outline-hover": "rgba(197, 216, 190, 0.12)",
+    "--mantine-color-terracotta-light": "#4A2E22",
+    "--mantine-color-terracotta-light-hover": "#5E3B2C",
+    "--mantine-color-terracotta-light-color": "#F0C4B2",
+    "--mantine-color-terracotta-outline": "#F0C4B2",
+    "--mantine-color-terracotta-outline-hover": "rgba(240, 196, 178, 0.12)",
+    "--mantine-color-green-light": "#2E4535",
+    "--mantine-color-green-light-hover": "#3A5843",
+    "--mantine-color-green-light-color": "#C5D8BE",
+    "--mantine-color-green-outline": "#C5D8BE",
+    "--mantine-color-green-outline-hover": "rgba(197, 216, 190, 0.12)",
+    "--mantine-color-red-light": "#4A2E22",
+    "--mantine-color-red-light-hover": "#5E3B2C",
+    "--mantine-color-red-light-color": "#F0C4B2",
+    "--mantine-color-red-outline": "#F0C4B2",
+    "--mantine-color-red-outline-hover": "rgba(240, 196, 178, 0.12)",
+    "--mantine-color-blue-light": "#332B45",
+    "--mantine-color-blue-light-hover": "#433A5C",
+    "--mantine-color-blue-light-color": "#CDBFEA",
+    "--mantine-color-blue-outline": "#CDBFEA",
+    "--mantine-color-blue-outline-hover": "rgba(205, 191, 234, 0.12)",
+    "--mantine-color-orange-light": "#4A3220",
+    "--mantine-color-orange-light-hover": "#5E412A",
+    "--mantine-color-orange-light-color": "#F2CBA6",
+    "--mantine-color-orange-outline": "#F2CBA6",
+    "--mantine-color-orange-outline-hover": "rgba(242, 203, 166, 0.12)",
+    "--mantine-color-indigo-light": "#2E3250",
+    "--mantine-color-indigo-light-hover": "#3C4166",
+    "--mantine-color-indigo-light-color": "#B8C0E8",
+    "--mantine-color-indigo-outline": "#B8C0E8",
+    "--mantine-color-indigo-outline-hover": "rgba(184, 192, 232, 0.12)",
+    "--mantine-color-grape-light": "#3E2A44",
+    "--mantine-color-grape-light-hover": "#503656",
+    "--mantine-color-grape-light-color": "#DCBCE8",
+    "--mantine-color-grape-outline": "#DCBCE8",
+    "--mantine-color-grape-outline-hover": "rgba(220, 188, 232, 0.12)",
+    "--mantine-color-teal-light": "#204038",
+    "--mantine-color-teal-light-hover": "#2A5248",
+    "--mantine-color-teal-light-color": "#A6DAD2",
+    "--mantine-color-teal-outline": "#A6DAD2",
+    "--mantine-color-teal-outline-hover": "rgba(166, 218, 210, 0.12)",
+    "--mantine-color-cyan-light": "#204044",
+    "--mantine-color-cyan-light-hover": "#2A5256",
+    "--mantine-color-cyan-light-color": "#A6DCE4",
+    "--mantine-color-cyan-outline": "#A6DCE4",
+    "--mantine-color-cyan-outline-hover": "rgba(166, 220, 228, 0.12)",
+    "--mantine-color-pink-light": "#4A2634",
+    "--mantine-color-pink-light-hover": "#5E3244",
+    "--mantine-color-pink-light-color": "#EEB8D0",
+    "--mantine-color-pink-outline": "#EEB8D0",
+    "--mantine-color-pink-outline-hover": "rgba(238, 184, 208, 0.12)",
+    "--mantine-color-violet-light": "#342A52",
+    "--mantine-color-violet-light-hover": "#443668",
+    "--mantine-color-violet-light-color": "#CCB8EE",
+    "--mantine-color-violet-outline": "#CCB8EE",
+    "--mantine-color-violet-outline-hover": "rgba(204, 184, 238, 0.12)",
+    "--mantine-color-lime-light": "#324020",
+    "--mantine-color-lime-light-hover": "#40522A",
+    "--mantine-color-lime-light-color": "#C8E2A4",
+    "--mantine-color-lime-outline": "#C8E2A4",
+    "--mantine-color-lime-outline-hover": "rgba(200, 226, 164, 0.12)",
+    "--mantine-color-yellow-light": "#4A4020",
+    "--mantine-color-yellow-light-hover": "#5E522A",
+    "--mantine-color-yellow-light-color": "#F0DEA4",
+    "--mantine-color-yellow-outline": "#F0DEA4",
+    "--mantine-color-yellow-outline-hover": "rgba(240, 222, 164, 0.12)",
   },
 });
 

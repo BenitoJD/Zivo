@@ -121,7 +121,7 @@ export function TutorPanel({
   }
 
   return (
-    <Stack gap={0} h="100%" mih={0} bg={isDark ? "dark.8" : "white"}>
+    <Stack gap={0} h="100%" mih={0} bg={isDark ? "dark.8" : "gray.0"}>
       <style>{`
         @keyframes chat-msg-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
         .chat-msg { animation: chat-msg-in 320ms cubic-bezier(0.32,0.72,0,1) both; }
@@ -276,7 +276,7 @@ export function TutorPanel({
             e.preventDefault();
             submitMessage();
           }}
-          bg={isDark ? "dark.7" : "white"}
+          bg={isDark ? "dark.7" : "gray.0"}
           styles={{
             root: {
               borderColor: isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-4)",

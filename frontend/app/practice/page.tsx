@@ -70,7 +70,7 @@ export default function PracticeHubPage() {
       bg="var(--mantine-color-body)"
       style={{ height: "100dvh", overflowY: "auto", overflowX: "hidden" }}
     >
-      <Container size="md" py={{ base: 48, md: 72 }}>
+      <Container size="md" py={{ base: 48, md: 72 }} pb={{ base: 88, md: 72 }}>
         <Stack gap="xl">
           {/* Header */}
           <Stack gap={6} align="center" ta="center">
@@ -169,11 +169,11 @@ export default function PracticeHubPage() {
               <Stack gap="xs">
                 <Paper radius="xl" p="lg" withBorder bg="gray.0" shadow="paper">
                   <Group justify="space-between" align="center" wrap="wrap" gap="sm">
-                    <Box>
+                    <Box style={{ minWidth: 0, flex: "1 1 180px" }}>
                       <Text fw={600} ff="var(--font-serif)">
                         Coding practice
                       </Text>
-                      <Text size="sm" c="dimmed">
+                      <Text size="sm" c="dimmed" style={{ overflowWrap: "anywhere" }}>
                         LeetCode-style problems — run tests, submit, track solved.
                       </Text>
                     </Box>
@@ -183,6 +183,8 @@ export default function PracticeHubPage() {
                       radius="xl"
                       variant="light"
                       color="lavender"
+                      fullWidth
+                      maw={{ base: "100%", xs: 180 }}
                       rightSection={<IconArrowRight size={16} />}
                     >
                       Open bank
@@ -191,11 +193,11 @@ export default function PracticeHubPage() {
                 </Paper>
                 <Paper radius="xl" p="lg" withBorder bg="gray.0" shadow="paper">
                   <Group justify="space-between" align="center" wrap="wrap" gap="sm">
-                    <Box>
+                    <Box style={{ minWidth: 0, flex: "1 1 180px" }}>
                       <Text fw={600} ff="var(--font-serif)">
                         System Design
                       </Text>
-                      <Text size="sm" c="dimmed">
+                      <Text size="sm" c="dimmed" style={{ overflowWrap: "anywhere" }}>
                         Mastery path — design a case, get mentor truth, close the gap.
                       </Text>
                     </Box>
@@ -205,6 +207,8 @@ export default function PracticeHubPage() {
                       radius="xl"
                       variant="light"
                       color="lavender"
+                      fullWidth
+                      maw={{ base: "100%", xs: 180 }}
                       rightSection={<IconArrowRight size={16} />}
                     >
                       Open path
@@ -243,16 +247,20 @@ function ConceptCard({ concept }: { concept: ConceptSummary }) {
           e.currentTarget.style.transform = "translateY(0)";
         }}
       >
-        <Group justify="space-between" align="flex-start" wrap="nowrap">
-          <Stack gap={4}>
+        <Group justify="space-between" align="flex-start" wrap="nowrap" gap="sm">
+          <Stack gap={4} style={{ minWidth: 0, flex: 1 }}>
             <Title
               order={3}
               fw={500}
-              style={{ fontFamily: "var(--font-serif), Georgia, serif", fontSize: "1.15rem" }}
+              style={{
+                fontFamily: "var(--font-serif), Georgia, serif",
+                fontSize: "1.15rem",
+                overflowWrap: "anywhere",
+              }}
             >
               {concept.label}
             </Title>
-            <Text size="sm" c="gray.6" lh={1.5}>
+            <Text size="sm" c="dimmed" lh={1.5} style={{ overflowWrap: "anywhere" }}>
               {concept.description || "Practice questions for this concept."}
             </Text>
           </Stack>

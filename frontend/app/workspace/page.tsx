@@ -117,7 +117,7 @@ export default function WorkspaceIndexPage() {
               begin?
             </Box>
           </Title>
-          <Text size="sm" c="gray.6" maw={480} lh={1.6}>
+          <Text size="sm" c="dimmed" maw={480} lh={1.6}>
             Drag in a file, import a link, or paste notes directly. Zivo will index your content and build tailored study loops.
           </Text>
         </Stack>
@@ -157,7 +157,7 @@ export default function WorkspaceIndexPage() {
                 <Text fw={600} size="sm" style={{ fontFamily: "var(--font-sans), sans-serif" }}>
                   {s.title}
                 </Text>
-                <Text size="xs" c="gray.6" lh={1.5}>
+                <Text size="xs" c="dimmed" lh={1.5}>
                   {s.body}
                 </Text>
               </Stack>

@@ -426,6 +426,12 @@ export function Sidebar({
           background: var(--mantine-color-lavender-0);
           border-color: var(--mantine-color-lavender-2);
         }
+        /* lavender-0/2 are remapped in dark, but bump the active wash one step
+           so the selected source still lifts off the ink page body. */
+        [data-mantine-color-scheme="dark"] .zivo-source-row[data-active] {
+          background: var(--mantine-color-lavender-1);
+          border-color: var(--mantine-color-lavender-3);
+        }
         .zivo-source-chip {
           position: relative;
           flex-shrink: 0;
@@ -458,6 +464,9 @@ export function Sidebar({
         @keyframes zivo-dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
         .zivo-source-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; text-align: left; }
         .zivo-source-row[data-active] .zivo-source-title { color: var(--mantine-color-lavender-8); }
+        [data-mantine-color-scheme="dark"] .zivo-source-row[data-active] .zivo-source-title {
+          color: var(--mantine-color-lavender-9);
+        }
         .zivo-source-statusline { line-height: 1.3; }
         .zivo-source-track {
           height: 3px;

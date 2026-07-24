@@ -98,7 +98,7 @@ export function AuthSplitLayout({
               <Group mb="xl" visibleFrom="md">
                 <Text
                   size="sm"
-                  c="gray.5"
+                  c="dimmed"
                   component={Link}
                   href="/"
                   style={{ cursor: "pointer", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}

@@ -695,7 +695,13 @@ export function McqHeroPanel({
                   size={compact ? "sm" : "md"}
                   lh={1.45}
                   ta="left"
-                  style={{ flex: 1, fontSize: compact ? undefined : "1.0625rem", color: "var(--mantine-color-text)" }}
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    overflowWrap: "anywhere",
+                    fontSize: compact ? undefined : "1.0625rem",
+                    color: "var(--mantine-color-text)",
+                  }}
                 >
                   {opt}
                 </Text>
@@ -704,7 +710,7 @@ export function McqHeroPanel({
                     aria-hidden
                     style={{
                       flexShrink: 0,
-                      display: "flex",
+                      display: compact ? "none" : "flex",
                       alignItems: "center",
                       gap: 3,
                       padding: "3px 9px",
@@ -789,10 +795,19 @@ export function McqHeroPanel({
           }}
         >
           {isTest ? <IconClipboardList size={14} stroke={2} style={{ flexShrink: 0, color: `var(--mantine-color-${accent}-${isDark ? 8 : 7})` }} /> : <IconBulb size={14} stroke={2} style={{ flexShrink: 0, color: `var(--mantine-color-${accent}-${isDark ? 8 : 7})` }} />}
-          <Text fz="xs" fw={600} c={`var(--mantine-color-${accent}-${isDark ? 9 : 8})`} style={{ letterSpacing: "-0.01em" }}>
+          <Text
+            fz="xs"
+            fw={600}
+            c={`var(--mantine-color-${accent}-${isDark ? 9 : 8})`}
+            style={{ letterSpacing: "-0.01em", overflowWrap: "anywhere", lineHeight: 1.35 }}
+          >
             {isTest
-              ? `Test · graded at the end${(queue?.question_budget ?? 0) > 0 ? ` · ${queue?.questions_answered ?? 0} of ${queue?.question_budget} answered` : ""}`
-              : "Learn · instant feedback after each answer, retry until it clicks"}
+              ? compact
+                ? `Test · graded at end${(queue?.question_budget ?? 0) > 0 ? ` · ${queue?.questions_answered ?? 0}/${queue?.question_budget}` : ""}`
+                : `Test · graded at the end${(queue?.question_budget ?? 0) > 0 ? ` · ${queue?.questions_answered ?? 0} of ${queue?.question_budget} answered` : ""}`
+              : compact
+                ? "Learn · feedback after each answer"
+                : "Learn · instant feedback after each answer, retry until it clicks"}
           </Text>
         </Box>
       </Center>
@@ -999,7 +1014,13 @@ export function McqReviewView({
                       size={compact ? "sm" : "md"}
                       lh={1.45}
                       ta="left"
-                      style={{ flex: 1, fontSize: compact ? undefined : "1.0625rem", color: "var(--mantine-color-text)" }}
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        overflowWrap: "anywhere",
+                        fontSize: compact ? undefined : "1.0625rem",
+                        color: "var(--mantine-color-text)",
+                      }}
                     >
                       {opt}
                     </Text>

@@ -40,7 +40,7 @@ export function mcqOptionChrome(isDark: boolean, state: McqOptionVisualState) {
   let background = isDark ? "var(--mantine-color-dark-7)" : "var(--mantine-color-gray-0)";
   // Idle chip: a quiet tinted square. Keep the letter readable on it in both schemes.
   let chipBg = isDark ? "var(--mantine-color-dark-5)" : "var(--mantine-color-gray-2)";
-  let chipColor = isDark ? "var(--mantine-color-gray-5)" : "var(--mantine-color-gray-7)";
+  let chipColor = isDark ? "var(--mantine-color-gray-6)" : "var(--mantine-color-gray-7)";
   let borderWidth = 1;
 
   if (isCorrectOption) {
@@ -273,7 +273,12 @@ export function McqCard({
                       size={compact ? "sm" : "md"}
                       lh={1.5}
                       c="var(--mantine-color-text)"
-                      style={{ flex: 1, fontSize: compact ? undefined : "1.0625rem" }}
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        overflowWrap: "anywhere",
+                        fontSize: compact ? undefined : "1.0625rem",
+                      }}
                     >
                       {opt}
                     </Text>

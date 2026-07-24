@@ -235,8 +235,8 @@ export function StudyMetaBar({
     ) : null;
 
   const progress = !showBar ? null : (
-    <Group gap={compact ? 8 : 12} wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
-      {page ? (
+    <Group gap={compact ? 8 : 12} wrap={compact ? "wrap" : "nowrap"} style={{ flex: 1, minWidth: 0 }}>
+      {page && !compact ? (
         <Text
           size="xs"
           c="dimmed"
@@ -255,6 +255,11 @@ export function StudyMetaBar({
         openDelay={250}
       >
         <Text size="xs" c="dimmed" fw={600} ff="monospace" style={{ flexShrink: 0, letterSpacing: "0.02em", cursor: "help" }}>
+          {page && compact ? (
+            <Text component="span" inherit c="dimmed" fw={600} style={{ marginRight: 8, letterSpacing: "0.01em", fontFamily: "var(--font-sans)" }}>
+              p.{page}
+            </Text>
+          ) : null}
           {String(questionIndex).padStart(2, "0")}
           <Text component="span" inherit style={{ opacity: 0.45 }}>
             {" / "}
@@ -263,7 +268,7 @@ export function StudyMetaBar({
         </Text>
       </Tooltip>
       {segmented ? (
-        <Group gap={4} wrap="nowrap" style={{ flex: 1, minWidth: 0, maxWidth: 380 }}>
+        <Group gap={4} wrap="nowrap" style={{ flex: 1, minWidth: 72, maxWidth: 380 }}>
           {Array.from({ length: questionTotal }).map((_, i) => (
             <Box
               key={i}
@@ -278,7 +283,7 @@ export function StudyMetaBar({
           ))}
         </Group>
       ) : (
-        <Box style={{ flex: 1, maxWidth: 380, height: 5, borderRadius: 99, background: "var(--mantine-color-gray-3)", overflow: "hidden" }}>
+        <Box style={{ flex: 1, minWidth: 72, maxWidth: 380, height: 5, borderRadius: 99, background: "var(--mantine-color-gray-3)", overflow: "hidden" }}>
           <Box style={{ width: `${pct}%`, height: "100%", borderRadius: 99, background: `var(--mantine-color-${barAccent}-6)`, transition: "width 320ms cubic-bezier(0.32,0.72,0,1)" }} />
         </Box>
       )}
@@ -362,7 +367,9 @@ function CompactModeSelect({
             radius="md"
             variant="light"
             color="lavender"
-            style={{ color: "light-dark(var(--mantine-color-lavender-7), var(--mantine-color-lavender-3))" }}
+            // Same invert rule as the desktop Learn/Test badge: shade-7 is the
+            // readable glyph tone on BOTH schemes (shade-3 is a deep surface in dark).
+            style={{ color: "var(--mantine-color-lavender-7)" }}
           >
             <CurrentIcon size={15} stroke={2} />
           </ThemeIcon>

@@ -88,7 +88,7 @@ export function StudyMobileShell({
                     stroke={selected ? 2.25 : 1.75}
                     color={selected ? "var(--mantine-color-lavender-7)" : "var(--mantine-color-dimmed)"}
                   />
-                  <Text size="10px" fw={selected ? 700 : 500} c={selected ? "lavender.7" : "dimmed"} lh={1.1}>
+                  <Text size="10px" fw={selected ? 700 : 500} c={selected ? "lavender.7" : "dimmed"} lh={1.1} ta="center" style={{ maxWidth: "100%", overflowWrap: "anywhere" }}>
                     {tab.label}
                   </Text>
                 </Stack>

@@ -497,7 +497,8 @@ function SelectionActionBar({
             size="sm"
             c={hasSelection ? "var(--mantine-color-text)" : "dimmed"}
             style={{ flex: "1 1 auto", minWidth: 0 }}
-            lineClamp={1}
+            lineClamp={isCompact ? 2 : 1}
+            title={summary}
           >
             {summary}
           </Text>

@@ -267,7 +267,9 @@ export function FloatingPanel({
           flexShrink: 0,
           cursor: maximized ? "default" : "move",
           borderBottom: minimized ? "none" : "1px solid var(--mantine-color-default-border)",
-          background: `light-dark(var(--mantine-color-${accent}-0), var(--mantine-color-dark-6))`,
+          // accent-0/1 are remapped in dark to deep tinted surfaces - keep the
+          // accent wash instead of falling back to a flat charcoal strip.
+          background: `light-dark(var(--mantine-color-${accent}-0), var(--mantine-color-${accent}-1))`,
           touchAction: "none",
           userSelect: "none",
         }}

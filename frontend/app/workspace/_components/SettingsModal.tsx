@@ -133,7 +133,7 @@ export function SettingsModal({ opened, onClose, username, onReplayOnboarding }:
             border: "1px solid var(--mantine-color-lavender-2)",
             background: isDark
               ? "linear-gradient(135deg, var(--mantine-color-lavender-1), var(--mantine-color-body))"
-              : "linear-gradient(135deg, var(--mantine-color-lavender-0), #FFFFFF)",
+              : "linear-gradient(135deg, var(--mantine-color-lavender-0), var(--mantine-color-gray-0))",
           }}
         >
           <Group gap="md" wrap="nowrap">
@@ -188,14 +188,14 @@ export function SettingsModal({ opened, onClose, username, onReplayOnboarding }:
           <Divider color="var(--mantine-color-default-border)" />
           <SettingRow
             icon={<IconCat size={18} stroke={1.7} />}
-            color="orange"
+            color="terracotta"
             title="Study cat"
             desc="A pixel cat roams the free space while you study. Applies everywhere. Off by default."
             control={
               <Switch
                 checked={catEnabled}
                 onChange={(e) => setCatEnabled(e.currentTarget.checked)}
-                color="orange"
+                color="terracotta"
                 size="lg"
                 onLabel="ON"
                 offLabel="OFF"
@@ -206,7 +206,7 @@ export function SettingsModal({ opened, onClose, username, onReplayOnboarding }:
           <Divider color="var(--mantine-color-default-border)" />
           <SettingRow
             icon={isDark ? <IconMoon size={18} stroke={1.7} /> : <IconSun size={18} stroke={1.7} />}
-            color="indigo"
+            color="forest"
             title="Appearance"
             desc="Warm oat light, or deep ink dark."
             control={
@@ -228,13 +228,13 @@ export function SettingsModal({ opened, onClose, username, onReplayOnboarding }:
         <Paper radius="lg" withBorder style={{ overflow: "hidden", background: "var(--mantine-color-body)" }}>
           <SettingRow
             icon={<IconSparkles size={18} stroke={1.7} />}
-            color="grape"
+            color="lavender"
             title="Replay the guide"
             desc="Walk through the intro tour again."
             control={
               <Button
                 variant="light"
-                color="grape"
+                color="lavender"
                 size="xs"
                 radius="md"
                 onClick={() => {
