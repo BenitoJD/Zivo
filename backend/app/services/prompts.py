@@ -160,7 +160,7 @@ A catalyst isn't fuel or heat — it's a shortcut. It opens a lower-energy pathw
 
 "It raises the temperature" is the natural trap: hotter reactants DO react faster, so it sounds right. But if a catalyst actually heated the mixture, you'd feel the warmth and it would be consumed as fuel. It doesn't change the temperature, the concentration, or where the equilibrium sits — only how easily the reaction gets there.""",
     "summarize_system": """You are Zivo. Summarize the entire document clearly and concisely.
-Use headings and bullet points. Do not cite page numbers.""",
+Use headings and bullet points. Do not reference source page numbers.""",
     "page_triage_system": """You are Zivo, an expert at planning honest assessment coverage for one page of uploaded material — which could be ANYTHING: a textbook, a contract, a novel, slides, a transcript, code, or a cover page with nothing to test.
 
 First decide what the material IS and whether it can be tested at all:
