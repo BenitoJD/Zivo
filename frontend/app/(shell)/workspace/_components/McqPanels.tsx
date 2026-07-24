@@ -32,7 +32,7 @@ import { PetPlayground } from "@/app/_components/pets/PetPlayground";
 import { CAT_ENABLED_KEY } from "@/app/_components/pets/PetPlayground";
 import { MCQ_CONTENT_MAX, mcqOptionChrome, McqFeedbackCard } from "@/app/_components/mcq/McqCard";
 import { normalizeMcqOptions, type McqState } from "@/lib/types";
-import { learnWaitStatus } from "@/lib/learnStatus";
+import { learnHasUnansweredReady, learnWaitStatus } from "@/lib/learnStatus";
 import { type AnsweredCard } from "@/app/workspace/_components/studyLayout";
 import { useIsDark } from "@/lib/useIsDark";
 
@@ -232,10 +232,16 @@ export function McqHeroPanel({
   // with a calm pulse so the wait never feels frozen.
   const checking = submitting && !graded;
   // Full-screen wait ONLY when the pool has nothing for the learner yet.
-  // If learn-queue already has a next assertion (or options are on screen),
-  // advance instantly — never flash "Writing questions" over a ready card.
+  // If learn-queue already has a next assertion (or unanswered generated cards),
+  // advance instantly — never flash "Writing questions" over a ready card
+  // (regression: 92% ring + "2 ready" while blocking).
   const poolHasNext =
-    Boolean(queue?.current_assertion_id) || (queue?.pool_available ?? 0) > 0;
+    Boolean(queue?.current_assertion_id) ||
+    learnHasUnansweredReady({
+      poolAvailable: queue?.pool_available,
+      questionsGenerated: queue?.questions_generated,
+      questionsAnswered: queue?.questions_answered,
+    });
   const waiting =
     artifactStatus === "indexing" ||
     (!hasQuestion && !poolHasNext && (mcqLoading || Boolean(queue?.generation_pending)));
@@ -269,6 +275,7 @@ export function McqHeroPanel({
       pageTriageComplete: queue?.page_triage_complete,
       ragWindowReady: queue?.rag_window_ready,
       questionsGenerated: queue?.questions_generated,
+      questionsAnswered: queue?.questions_answered,
       questionBudget: queue?.question_budget,
       poolAvailable: queue?.pool_available,
     },

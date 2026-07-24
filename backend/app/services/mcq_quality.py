@@ -711,6 +711,12 @@ BATCH_MCQ_CAP = 5
 # First draft always gates serially so Q1 hits the pool ASAP; remaining drafts
 # share this pool (capped further by process-wide LLM_MAX_CONCURRENT).
 GENERATION_CONCURRENCY = max(1, int(os.getenv("ZIVO_GENERATION_CONCURRENCY", "4")))
+# Overlap rest-of-batch draft with Q1 gate when cooking multiple targets.
+PIPELINE_DRAFT_SPLIT = os.getenv("ZIVO_PIPELINE_DRAFT_SPLIT", "1").lower() not in (
+    "0",
+    "false",
+    "no",
+)
 # The critic is the cheapest, highest-leverage quality gate and prompt caching makes
 # the repeated page context nearly free — so critique EVERY item by default, not a
 # 25% sample. (Evaluation is the moat; don't skip it to save a few tokens.) Still an
@@ -976,6 +982,34 @@ def _quality_gate_one(
     return ("accept", draft, None, max_sim, heuristic_flaws, critic_meta, run_critic)
 
 
+def _draft_batch_worker(
+    *,
+    page_text: str,
+    page_number: int,
+    targets: list[dict[str, Any]],
+    prior_mcqs: list[dict[str, Any]] | None,
+    model_id: uuid.UUID | None,
+    aspect_hints: str,
+    content_type: str | None,
+    candidates_per_aspect: int,
+) -> list[dict[str, Any]]:
+    """Thread worker: draft targets on a dedicated DB session."""
+    from app.db import SessionLocal
+
+    with SessionLocal() as session:
+        return _generate_batch_drafts(
+            session,
+            page_text=page_text,
+            page_number=page_number,
+            targets=targets,
+            prior_mcqs=prior_mcqs,
+            model_id=model_id,
+            aspect_hints=aspect_hints,
+            content_type=content_type,
+            candidates_per_aspect=candidates_per_aspect,
+        )
+
+
 def _parallel_gate_draft(
     *,
     idx: int,
@@ -1020,14 +1054,17 @@ def generate_quality_mcq_batch(
     content_type: str | None = None,
     on_accept: Callable[[dict[str, Any], dict[str, Any]], bool] | None = None,
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    """Generate N MCQs in ONE LLM call, then quality-gate them.
+    """Generate N MCQs, quality-gate them, stream accepts via ``on_accept``.
 
     Pipeline for seamless Learn:
-      1. Shared draft call (cached).
-      2. Gate draft[0] serially → ``on_accept`` so Q1 lands ASAP.
-      3. Gate remaining drafts in parallel (``GENERATION_CONCURRENCY``, bounded
+      1. Prefer cache hit for the full target set.
+      2. Else (multi-target + ``PIPELINE_DRAFT_SPLIT``): draft target[0] here while
+         a worker drafts the rest — gate Q1 as soon as its draft lands.
+      3. Else: one shared draft call for all targets.
+      4. Gate draft[0] serially (force critic) → ``on_accept`` so Learn unblocks.
+      5. Gate remaining drafts in parallel (``GENERATION_CONCURRENCY``, bounded
          by process-wide ``LLM_MAX_CONCURRENT``) while the learner studies.
-      4. Finalize accepts in index order with intra-batch dedup.
+      6. Finalize accepts in index order with intra-batch dedup.
 
     Returns (target_aspect, payload) pairs for MCQs that pass heuristics,
     embedding similarity, and sampled LLM critic checks.
@@ -1064,28 +1101,13 @@ def generate_quality_mcq_batch(
         content_type=content_type,
     )
     drafts = cache_get(db, kind="batch_drafts", cache_key=drafts_cache_key)
-    if drafts is None:
-        drafts = _generate_batch_drafts(
-            db,
-            page_text=page_text,
-            page_number=page_number,
-            targets=targets,
-            prior_mcqs=prior_mcqs,
-            model_id=draft_model_id,
-            aspect_hints=aspect_hints,
-            content_type=content_type,
-            candidates_per_aspect=candidates_per_aspect,
-        )
-        if drafts:
-            cache_put(db, kind="batch_drafts", cache_key=drafts_cache_key, value=drafts)
-    if not drafts:
-        return []
 
     accepted: list[tuple[dict[str, Any], dict[str, Any]]] = []
     accepted_payloads: list[dict[str, Any]] = []
     prior_embeddings = prior_mcq_embeddings(list(prior_mcqs or []))
     rejected: Counter[str] = Counter()
     stop = False
+    first_gated = False
 
     def _finalize_accept(
         target: dict[str, Any] | None,
@@ -1118,33 +1140,73 @@ def generate_quality_mcq_batch(
             return False
         return True
 
-    # --- Draft 0: serial gate so the first question hits the pool ASAP --------
-    first = drafts[0]
-    first_target = targets[0] if targets else None
-    status, gated, reason, max_sim, h_flaws, critic_meta, run_critic = _quality_gate_one(
-        db,
-        draft=first,
-        target=first_target,
-        check_against=list(prior_mcqs or []),
-        prior_embeddings=list(prior_embeddings),
+    def _gate_first(draft: dict[str, Any]) -> None:
+        nonlocal stop, first_gated
+        first_gated = True
+        first_target = targets[0] if targets else None
+        status, gated, reason, max_sim, h_flaws, critic_meta, run_critic = _quality_gate_one(
+            db,
+            draft=draft,
+            target=first_target,
+            check_against=list(prior_mcqs or []),
+            prior_embeddings=list(prior_embeddings),
+            page_text=page_text,
+            page_number=page_number,
+            model_id=model_id,
+            verify_enabled=verify_enabled,
+            force_critic=True,
+        )
+        if status == "accept" and gated is not None:
+            if not _finalize_accept(
+                first_target,
+                gated,
+                max_sim=max_sim,
+                heuristic_flaws=h_flaws,
+                critic_meta=critic_meta,
+                run_critic=run_critic,
+            ):
+                stop = True
+        elif reason:
+            rejected[reason] += 1
+
+    draft_kwargs = dict(
         page_text=page_text,
         page_number=page_number,
-        model_id=model_id,
-        verify_enabled=verify_enabled,
-        force_critic=True,
+        prior_mcqs=prior_mcqs,
+        model_id=draft_model_id,
+        aspect_hints=aspect_hints,
+        content_type=content_type,
+        candidates_per_aspect=candidates_per_aspect,
     )
-    if status == "accept" and gated is not None:
-        if not _finalize_accept(
-            first_target,
-            gated,
-            max_sim=max_sim,
-            heuristic_flaws=h_flaws,
-            critic_meta=critic_meta,
-            run_critic=run_critic,
-        ):
-            stop = True
-    elif reason:
-        rejected[reason] += 1
+
+    if drafts is None and PIPELINE_DRAFT_SPLIT and len(targets) > 1:
+        # Overlap rest draft with Q1 gate (hide refill latency behind studying).
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="mcq-draft") as draft_pool:
+            rest_fut = draft_pool.submit(
+                _draft_batch_worker,
+                targets=targets[1:],
+                **draft_kwargs,
+            )
+            first_drafts = _generate_batch_drafts(db, targets=targets[:1], **draft_kwargs)
+            if first_drafts:
+                _gate_first(first_drafts[0])
+            rest_drafts = rest_fut.result() or []
+        drafts = list(first_drafts or []) + list(rest_drafts)
+        if drafts:
+            cache_put(db, kind="batch_drafts", cache_key=drafts_cache_key, value=drafts)
+    elif drafts is None:
+        drafts = _generate_batch_drafts(db, targets=targets, **draft_kwargs)
+        if drafts:
+            cache_put(db, kind="batch_drafts", cache_key=drafts_cache_key, value=drafts)
+
+    if not drafts:
+        return accepted
+
+    # --- Draft 0: serial gate so the first question hits the pool ASAP --------
+    if not first_gated:
+        _gate_first(drafts[0])
 
     # --- Remaining drafts: parallel LLM gates, then ordered finalize ----------
     rest = list(enumerate(drafts[1:], start=1))
@@ -1255,12 +1317,13 @@ def generate_quality_mcq_batch(
                 stop = True
 
     logger.info(
-        "mcq batch gate: page=%s drafts=%d accepted=%d rejected=%d reasons=%s concurrency=%s",
+        "mcq batch gate: page=%s drafts=%d accepted=%d rejected=%d reasons=%s concurrency=%s pipeline_split=%s",
         page_number,
         len(drafts),
         len(accepted),
         sum(rejected.values()),
         dict(rejected),
         GENERATION_CONCURRENCY,
+        PIPELINE_DRAFT_SPLIT,
     )
     return accepted

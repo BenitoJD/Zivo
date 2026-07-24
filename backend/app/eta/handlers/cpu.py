@@ -5,7 +5,7 @@ from uuid import UUID
 
 from app.db import SessionLocal
 from app.eta.registry import eta
-from app.models import Document, JobWorkload
+from app.models import Document, JobPriority, JobWorkload
 from app.services.chunking import chunk_pages
 from app.services.chunks import finalize_image_document, persist_document_index, upsert_page_chunks
 from app.services.embed import embed_texts
@@ -353,7 +353,7 @@ def transition_prep_job(payload: dict) -> dict:
     return {"document_id": str(document_id), "current_page": current_page, "next_page": next_page}
 
 
-@eta(name="generate.questions", workload=JobWorkload.cpu)
+@eta(name="generate.questions", workload=JobWorkload.cpu, priority=JobPriority.HIGH)
 def generate_questions_job(payload: dict) -> dict:
     from app.graphs.generation_graph import run_generation
     from app.services.question_pool import on_batch_failed
