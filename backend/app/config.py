@@ -95,16 +95,16 @@ class Settings(BaseSettings):
     item_self_improve_enabled: bool = True
     item_retire_min_exposure: int = 12
     item_retire_max_correct_rate: float = 0.08
-    # 3. How the next question is chosen: "sequence" (legacy, by generation order),
-    #    "concept_reinforce" (adaptive — reacts to the last answer), or
-    #    "difficulty_edge" (targets the productive-struggle band from calibration).
-    selection_policy: str = "difficulty_edge"
+    # 3. How the next question is chosen (docs/ADAPTIVE_SELECTION_ENGINE.md):
+    #    "sequence" (Classic), "concept_reinforce", "difficulty_edge" (band-only /
+    #    sim Gate 2), or "adaptive_v1" (composite Elo+CAT+mastery+exposure).
+    selection_policy: str = "adaptive_v1"
     # Quality Evaluation Engine policy (docs/QUALITY_EVALUATION_ENGINE.md).
     # code_driven_v1 = Haladyna-mapped flaw codes + deterministic decide_verdict.
     quality_policy: str = "code_driven_v1"
     # 4. Calibrate per-item difficulty + per-learner ability from real answer
     #    outcomes (online Elo → intel.projection). Off by default so the moat fills
-    #    only when enabled; "difficulty_edge" selection needs this on to have data.
+    #    only when enabled; adaptive selection needs this on to have data.
     calibration_enabled: bool = True
     # 5. Seed a birth-time difficulty PRIOR per item at generation time (cold-start
     #    fix for answered-once items, so difficulty_edge has a non-coin-flip starting

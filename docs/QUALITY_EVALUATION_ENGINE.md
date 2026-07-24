@@ -4,7 +4,7 @@
 **Owns the question:** which draft MCQs survive cook, and which live items should retire after learner evidence?  
 **Product home:** Question Better / Zivo Learn + Test + newspaper editions; cook gates, rewrite loop, item retirement. VISION Phase 2 evaluator starts here.
 
-Related: [VISION.md](VISION.md) (Phase 2), [QUESTION_BUDGET_ENGINE.md](QUESTION_BUDGET_ENGINE.md) (how many), [ADR 0004](adr/0004-swappable-policy-seam.md) (swappable policy seam), [DATA_MODEL.md](DATA_MODEL.md).
+Related: [VISION.md](VISION.md) (Phase 2), [QUESTION_BUDGET_ENGINE.md](QUESTION_BUDGET_ENGINE.md) (how many), [ADAPTIVE_SELECTION_ENGINE.md](ADAPTIVE_SELECTION_ENGINE.md) (which next), [ADR 0004](adr/0004-swappable-policy-seam.md) (swappable policy seam), [DATA_MODEL.md](DATA_MODEL.md).
 
 ---
 
@@ -14,8 +14,9 @@ Related: [VISION.md](VISION.md) (Phase 2), [QUESTION_BUDGET_ENGINE.md](QUESTION_
 |--------|----------|--------|
 | **Budget** | How many items does this page/document need? | `N_page`, `N_doc` |
 | **Quality** | Which drafts are fit to count toward that N? | `pass` \| `fail` \| `revise` + flaw codes + scores |
+| **Selection** | Which accepted item does this learner see next? | `assertion_id` + scores |
 
-Budget plans slots. Quality decides which instruments fill them. Cook still stops at `N_page` of *accepted* items; failed drafts do not inflate coverage. Zero-wait / `REFILL_BATCH_SIZE` / budget stop rules stay untouched.
+Budget plans slots. Quality decides which instruments fill them. Selection orders the serve path. Cook still stops at `N_page` of *accepted* items; failed drafts do not inflate coverage. Zero-wait / `REFILL_BATCH_SIZE` / budget stop rules stay untouched.
 
 Newspaper editions and ordinary Learn/Test share the same quality gate. Only prompts / content_type styling differ upstream.
 

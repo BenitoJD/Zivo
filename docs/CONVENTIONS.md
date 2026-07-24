@@ -72,9 +72,11 @@ from another project and is stale — fix it to match the proof above.
   callers. The seam degrades safely to legacy behavior.
 - **Why.** Keeps the long-lived loop stable while the metric inside it evolves. See
   [ADR 0004](adr/0004-swappable-policy-seam.md).
-- **Proof.** `app/services/selection.py:33` (`choose_next_assertion`) dispatches by
-  policy name and falls back to sequence order; the caller
-  `app/services/question_pool.py:294` is policy-agnostic.
+- **Proof.** `app/services/adaptive_selection.py` (`select_next` / `choose_next_assertion`)
+  dispatches by policy name and falls back to sequence order; the caller
+  `app/services/question_pool.py` (`select_next_assertion`) is policy-agnostic.
+  Design: [ADAPTIVE_SELECTION_ENGINE.md](ADAPTIVE_SELECTION_ENGINE.md).
+  Compat re-exports: `app/services/selection.py`.
 
 ### 2.5 Background work goes through the ETA job system
 
@@ -109,8 +111,8 @@ from another project and is stale — fix it to match the proof above.
   `entity`/`account`) — never another project's nouns.
 - **Why.** Consistent, self-documenting code; domain-true names stop cross-project
   contamination.
-- **Proof.** `app/services/selection.py:1-15`, `app/services/calibration.py`,
-  `app/services/question_pool.py:22-50` (constants).
+- **Proof.** `app/services/adaptive_selection.py`, `app/services/calibration.py`,
+  `app/services/question_pool.py` (constants).
 
 ### 2.8 Schema changes go through Alembic
 

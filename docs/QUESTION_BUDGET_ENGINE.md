@@ -4,7 +4,7 @@
 **Owns the question:** how many questions are needed for this page, and for this whole document?  
 **Product home:** Question Better / Zivo Learn + Test; generation cook, verify/critic gates, Elo calibration, page-scoped pools.
 
-Related: [VISION.md](VISION.md), [DATA_MODEL.md](DATA_MODEL.md), [WORKSPACE.md](WORKSPACE.md), [ADR 0004](adr/0004-swappable-policy-seam.md) (swappable policy seam).
+Related: [VISION.md](VISION.md), [DATA_MODEL.md](DATA_MODEL.md), [WORKSPACE.md](WORKSPACE.md), [QUALITY_EVALUATION_ENGINE.md](QUALITY_EVALUATION_ENGINE.md) (survivors), [ADAPTIVE_SELECTION_ENGINE.md](ADAPTIVE_SELECTION_ENGINE.md) (next item), [ADR 0004](adr/0004-swappable-policy-seam.md) (swappable policy seam).
 
 ---
 
