@@ -804,7 +804,7 @@ export function Sidebar({
                     }}
                   />
                 </UnstyledButton>
-                <Collapse in={adminOpen}>
+                <Collapse expanded={adminOpen}>
                   <Stack gap={2} mt={2}>
                     <NavLink
                       label="Models"
