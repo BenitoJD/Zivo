@@ -28,6 +28,7 @@ import {
   IconCpu,
   IconFileText,
   IconLayoutSidebarLeftCollapse,
+  IconNews,
   IconListCheck,
   IconLogin,
   IconMessage2,
@@ -368,6 +369,7 @@ export type SidebarProps = {
   onAddSource: () => void;
   onSignIn: () => void;
   onOpenModels: () => void;
+  onOpenNewspaper?: () => void;
   onOpenProgress: () => void;
   onOpenCodingBank?: () => void;
   onDeleteSource: (doc: SourceDocument) => void;
@@ -389,6 +391,7 @@ export function Sidebar({
   onAddSource,
   onSignIn,
   onOpenModels,
+  onOpenNewspaper,
   onOpenProgress,
   onOpenCodingBank,
   onDeleteSource,
@@ -744,6 +747,17 @@ export function Sidebar({
                 leftSection={<IconCpu size={18} stroke={1.5} />}
                 active={pathname === "/workspace/models"}
                 onClick={onOpenModels}
+                mb="sm"
+                styles={{ root: { borderRadius: "var(--mantine-radius-md)" } }}
+              />
+            )}
+            {isAdmin && onOpenNewspaper && (
+              <NavLink
+                label="Newspaper channel"
+                description="Swap Telegram source"
+                leftSection={<IconNews size={18} stroke={1.5} />}
+                active={pathname === "/workspace/newspaper"}
+                onClick={onOpenNewspaper}
                 mb="sm"
                 styles={{ root: { borderRadius: "var(--mantine-radius-md)" } }}
               />

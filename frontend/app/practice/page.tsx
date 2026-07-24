@@ -171,6 +171,30 @@ export default function PracticeHubPage() {
                   <Group justify="space-between" align="center" wrap="wrap" gap="sm">
                     <Box style={{ minWidth: 0, flex: "1 1 180px" }}>
                       <Text fw={600} ff="var(--font-serif)">
+                        Newspaper
+                      </Text>
+                      <Text size="sm" c="dimmed" style={{ overflowWrap: "anywhere" }}>
+                        Daily papers as questions — pick a day, practice, ask the tutor.
+                      </Text>
+                    </Box>
+                    <Button
+                      component="a"
+                      href="/practice/newspaper"
+                      radius="xl"
+                      variant="light"
+                      color="lavender"
+                      fullWidth
+                      maw={{ base: "100%", xs: 180 }}
+                      rightSection={<IconArrowRight size={16} />}
+                    >
+                      Open papers
+                    </Button>
+                  </Group>
+                </Paper>
+                <Paper radius="xl" p="lg" withBorder bg="gray.0" shadow="paper">
+                  <Group justify="space-between" align="center" wrap="wrap" gap="sm">
+                    <Box style={{ minWidth: 0, flex: "1 1 180px" }}>
+                      <Text fw={600} ff="var(--font-serif)">
                         Coding practice
                       </Text>
                       <Text size="sm" c="dimmed" style={{ overflowWrap: "anywhere" }}>

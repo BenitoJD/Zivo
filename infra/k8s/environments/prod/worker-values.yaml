@@ -21,6 +21,13 @@ workloads:
     command: ["python", "run_eta_worker_cpu.py"]
     env:
       ETA_WORKER_WORKLOADS: cpu
+  newspaper:
+    # Flip to true after TELEGRAM_API_ID / TELEGRAM_API_HASH / TELEGRAM_SESSION
+    # are in zivo-secrets and channel_ref is set via /workspace/newspaper.
+    enabled: false
+    replicaCount: 1
+    command: ["python", "run_newspaper_ingest.py"]
+    env: {}
 resources:
   requests:
     cpu: 100m

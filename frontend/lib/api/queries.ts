@@ -43,6 +43,10 @@ export const queryKeys = {
   systemDesignRecommended: () => ["system-design", "recommended"] as const,
   systemDesignProblem: (id: string) => ["system-design", "problem", id] as const,
   systemDesignSession: (id: string) => ["system-design", "session", id] as const,
+  newspaperCatalog: () => ["newspaper", "catalog"] as const,
+  newspaperDays: (slug: string) => ["newspaper", "days", slug] as const,
+  newspaperQuestions: (id: string) => ["newspaper", "questions", id] as const,
+  newspaperChannel: () => ["newspaper", "channel"] as const,
 };
 
 export type StudyReport = {
@@ -758,6 +762,90 @@ export function useSystemDesignActions() {
     },
     invalidateDoor,
   };
+}
+
+export type NewspaperPaper = {
+  slug: string;
+  title: string;
+  ready_days: number;
+  latest_date: string | null;
+};
+export type NewspaperCatalog = {
+  retention_days: number;
+  since: string;
+  papers: NewspaperPaper[];
+};
+export type NewspaperDay = {
+  id: string;
+  edition_date: string;
+  status: string;
+  document_id: string | null;
+};
+export type NewspaperDays = {
+  paper_slug: string;
+  paper_title: string;
+  since: string;
+  days: NewspaperDay[];
+};
+export type NewspaperQuestion = {
+  id: string;
+  question: string;
+  options: string[];
+  is_multi?: boolean;
+};
+export type NewspaperQuestions = {
+  edition: {
+    id: string;
+    paper_slug: string;
+    paper_title: string;
+    edition_date: string;
+    status: string;
+    document_id: string | null;
+  } | null;
+  items: NewspaperQuestion[];
+};
+export type NewspaperChannel = {
+  channel_ref: string;
+  channel_label: string;
+  sync_cursor: number | null;
+  updated_at: string | null;
+};
+
+export function useNewspaperCatalogQuery(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.newspaperCatalog(),
+    queryFn: () => apiGet<NewspaperCatalog>("/api/newspaper/catalog"),
+    enabled,
+  });
+}
+
+export function useNewspaperDaysQuery(slug: string | null | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.newspaperDays(slug ?? ""),
+    queryFn: () => apiGet<NewspaperDays>(`/api/newspaper/papers/${slug}/days`),
+    enabled: enabled && Boolean(slug),
+  });
+}
+
+export function useNewspaperQuestionsQuery(editionId: string | null | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.newspaperQuestions(editionId ?? ""),
+    queryFn: () => apiGet<NewspaperQuestions>(`/api/newspaper/editions/${editionId}/questions`),
+    enabled: enabled && Boolean(editionId),
+    refetchInterval: (q) => {
+      const status = q.state.data?.edition?.status;
+      return status === "indexing" || status === "pending" ? 4000 : false;
+    },
+  });
+}
+
+export function useNewspaperChannelQuery(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.newspaperChannel(),
+    queryFn: () => apiGet<NewspaperChannel>("/api/newspaper/admin/channel"),
+    enabled,
+    retry: false,
+  });
 }
 
 // -------------------------------------------------------------- resume suite

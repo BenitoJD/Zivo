@@ -25,3 +25,4 @@ pygments>=2.18.0
 alembic>=1.14.0
 tiktoken>=0.8.0
 youtube-transcript-api>=0.6.2,<1.0
+telethon>=1.36.0
