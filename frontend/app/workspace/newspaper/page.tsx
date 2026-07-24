@@ -156,7 +156,7 @@ export default function NewspaperAdminPage() {
   }
 
   return (
-    <Box p={{ base: "md", md: "xl" }} maw={640}>
+    <Box p={{ base: "md", md: "xl" }} maw={640} mx="auto" w="100%">
       <Stack gap="xl">
         <Stack gap={4}>
           <Text size="xs" fw={600} tt="uppercase" lts={1.2} c="lavender.8">
