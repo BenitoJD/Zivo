@@ -1,12 +1,11 @@
 "use client";
 
 /**
- * Newspaper paper — pick a day from the rolling month.
+ * Newspaper paper — pick a day, then hand off to Learn/Test workspace.
  */
 
 import { useEffect, use } from "react";
 import {
-  Anchor,
   Badge,
   Box,
   Button,
@@ -15,13 +14,13 @@ import {
   Paper,
   Stack,
   Text,
-  Title,
 } from "@mantine/core";
 import { IconArrowLeft, IconArrowRight } from "@tabler/icons-react";
 import { useRouter } from "next/navigation";
 import { ensureGuestSession } from "@/lib/api/client";
 import { useNewspaperDaysQuery } from "@/lib/api/queries";
 import { Shell } from "@/app/practice/_components/Shell";
+import { PaperMasthead } from "@/app/practice/newspaper/_components/PaperMasthead";
 
 export default function NewspaperPaperPage({
   params,
@@ -36,46 +35,50 @@ export default function NewspaperPaperPage({
     void ensureGuestSession();
   }, []);
 
+  const title = daysQ.data?.paper_title || slug;
+
   return (
     <Shell>
-      <Container size="sm" py={{ base: 36, md: 64 }}>
+      <Container size="sm" py={{ base: 28, md: 56 }}>
         <Stack gap="xl">
-          <Anchor
-            component="button"
-            c="dimmed"
-            fz="sm"
+          <Button
+            variant="subtle"
+            color="gray"
+            size="compact-sm"
+            w="fit-content"
+            leftSection={<IconArrowLeft size={14} />}
             onClick={() => router.push("/practice/newspaper")}
           >
-            <Group gap={6}>
-              <IconArrowLeft size={14} />
-              All papers
-            </Group>
-          </Anchor>
+            All papers
+          </Button>
 
-          <Box>
-            <Title order={2} ff="var(--font-serif)" fw={500}>
-              {daysQ.data?.paper_title || slug}
-            </Title>
-            <Text c="dimmed" fz="sm">
-              Last month of practice days.
-            </Text>
-          </Box>
+          <PaperMasthead
+            title={title}
+            subtitle="Last month of practice days. Open a day to study in Learn."
+          />
 
           {daysQ.isLoading ? (
-            <Text c="dimmed">Loading days…</Text>
+            <Text c="dimmed" ta="center">
+              Loading days…
+            </Text>
           ) : daysQ.isError ? (
-            <Text c="terracotta">Couldn&rsquo;t load days.</Text>
+            <Text c="terracotta" ta="center">
+              Couldn&rsquo;t load days.
+            </Text>
           ) : (daysQ.data?.days.length ?? 0) === 0 ? (
-            <Text c="dimmed">No editions in the window yet.</Text>
+            <Text c="dimmed" ta="center">
+              No editions in the window yet.
+            </Text>
           ) : (
             <Stack gap="sm">
               {daysQ.data!.days.map((d) => {
                 const ready = d.status === "ready";
+                const canOpen = Boolean(d.document_id) && (ready || d.status === "indexing");
                 return (
                   <Paper key={d.id} radius="xl" p="lg" withBorder bg="gray.0" shadow="paper">
                     <Group justify="space-between" align="center" wrap="wrap" gap="sm">
                       <Group gap="sm">
-                        <Text fw={600} ff="var(--font-serif)">
+                        <Text fw={600} ff="var(--font-serif)" fz="lg" style={{ letterSpacing: "-0.01em" }}>
                           {d.edition_date}
                         </Text>
                         <Badge
@@ -83,16 +86,23 @@ export default function NewspaperPaperPage({
                           color={ready ? "sage" : d.status === "failed" ? "terracotta" : "lavender"}
                           radius="xl"
                         >
-                          {ready ? "Ready" : d.status === "indexing" || d.status === "pending" ? "Preparing" : d.status}
+                          {ready
+                            ? "Ready"
+                            : d.status === "indexing" || d.status === "pending"
+                              ? "Preparing"
+                              : d.status}
                         </Badge>
                       </Group>
                       <Button
                         radius="xl"
                         variant="light"
                         color="lavender"
-                        disabled={!ready}
+                        disabled={!canOpen}
                         rightSection={<IconArrowRight size={16} />}
-                        onClick={() => router.push(`/practice/newspaper/e/${d.id}`)}
+                        onClick={() => {
+                          if (!d.document_id) return;
+                          router.push(`/workspace/${d.document_id}`);
+                        }}
                       >
                         Practice
                       </Button>

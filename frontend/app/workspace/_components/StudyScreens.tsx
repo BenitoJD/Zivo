@@ -312,6 +312,8 @@ export function DocumentCompleteScreen({
   report,
   compact,
   onChoosePages,
+  actionLabel,
+  hideNextSuggestion = false,
 }: {
   completedFrom: number;
   completedTo: number;
@@ -323,6 +325,10 @@ export function DocumentCompleteScreen({
   report?: StudyReport | null;
   compact?: boolean;
   onChoosePages: () => void;
+  /** Override primary CTA copy (e.g. newspaper → "Back to days"). */
+  actionLabel?: string;
+  /** Hide "suggested next pages" (no page picker for this surface). */
+  hideNextSuggestion?: boolean;
 }) {
   const pageLabel =
     completedFrom === completedTo
@@ -361,7 +367,7 @@ export function DocumentCompleteScreen({
 
         <StudyReportCard answered={answered} report={report} compact={compact} />
 
-        {!bookFinished && nextFrom !== undefined && nextTo !== undefined && (
+        {!hideNextSuggestion && !bookFinished && nextFrom !== undefined && nextTo !== undefined && (
           <Paper withBorder radius="lg" p="md" w="100%" bg="var(--mantine-color-body)">
             <Text size="xs" tt="uppercase" fw={600} c="dimmed" mb={6}>
               Suggested next
@@ -374,7 +380,7 @@ export function DocumentCompleteScreen({
 
         <Stack gap="sm" w="100%" maw={320}>
           <Button size="md" radius="xl" fullWidth onClick={onChoosePages}>
-            {bookFinished ? "Choose pages to study" : "Choose next pages"}
+            {actionLabel ?? (bookFinished ? "Choose pages to study" : "Choose next pages")}
           </Button>
         </Stack>
       </Stack>

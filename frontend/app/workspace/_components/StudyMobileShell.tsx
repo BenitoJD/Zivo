@@ -18,6 +18,7 @@ export function StudyMobileShell({
   renderTutor,
   focusTutorKey = 0,
   tutorHidden = false,
+  sourceHidden = false,
 }: {
   question: ReactNode;
   renderSource: (visible: boolean) => ReactNode;
@@ -26,9 +27,14 @@ export function StudyMobileShell({
   focusTutorKey?: number;
   /** Exam / Test mode: hide Study Buddy tab. */
   tutorHidden?: boolean;
+  /** Newspaper / hide-source docs: no PDF reader tab. */
+  sourceHidden?: boolean;
 }) {
   const [activeTab, setActive] = useState<StudyMobileTab>("question");
-  const active = tutorHidden && activeTab === "tutor" ? "question" : activeTab;
+  const active =
+    (tutorHidden && activeTab === "tutor") || (sourceHidden && activeTab === "source")
+      ? "question"
+      : activeTab;
 
   // Switch to the tutor tab whenever a quote-to-chat action fires.
   useEffect(() => {
@@ -38,7 +44,7 @@ export function StudyMobileShell({
 
   const tabs: { id: StudyMobileTab; label: string; icon: typeof IconClipboardList }[] = [
     { id: "question", label: "Question", icon: IconClipboardList },
-    { id: "source", label: "Source", icon: IconFileText },
+    ...(sourceHidden ? [] : [{ id: "source" as const, label: "Source", icon: IconFileText }]),
     ...(tutorHidden
       ? []
       : [{ id: "tutor" as const, label: ZIVO_ASSISTANT_NAME, icon: IconMessageCircle }]),
@@ -48,7 +54,9 @@ export function StudyMobileShell({
     <Stack gap={0} flex={1} mih={0} style={{ overflow: "hidden" }}>
       <Box flex={1} mih={0} pos="relative" style={{ overflow: "hidden" }}>
         <StudyMobilePanel visible={active === "question"}>{question}</StudyMobilePanel>
-        <StudyMobilePanel visible={active === "source"}>{renderSource(active === "source")}</StudyMobilePanel>
+        {!sourceHidden ? (
+          <StudyMobilePanel visible={active === "source"}>{renderSource(active === "source")}</StudyMobilePanel>
+        ) : null}
         {!tutorHidden ? (
           <StudyMobilePanel visible={active === "tutor"}>{renderTutor()}</StudyMobilePanel>
         ) : null}

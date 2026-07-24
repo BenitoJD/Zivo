@@ -18,7 +18,7 @@ import {
   Title,
 } from "@mantine/core";
 import { useDisclosure, useLocalStorage, useMediaQuery } from "@mantine/hooks";
-import { IconFileText, IconMessageCircle, IconNotebook } from "@tabler/icons-react";
+import { IconArrowLeft, IconFileText, IconMessageCircle, IconNotebook } from "@tabler/icons-react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { apiFetchBytes, apiGet, apiPost, apiPostSSE, apiUrl, ensureGuestSession, isArtifactId } from "@/lib/api/client";
@@ -253,7 +253,24 @@ export default function WorkspaceArtifactPage({
         }
       : {};
 
-  const selectedRange = artifact?.meta?.selected_range;
+  const selectedRange = useMemo(() => {
+    if (artifact?.meta?.selected_range) return artifact.meta.selected_range;
+    if (
+      !(
+        artifact?.ingest_kind === "newspaper" ||
+        artifact?.meta?.newspaper ||
+        artifact?.meta?.hide_source
+      ) ||
+      !pages
+    ) {
+      return undefined;
+    }
+    return {
+      from: 1,
+      to: pages.page_count,
+      pages: pagesInRange(1, pages.page_count),
+    };
+  }, [artifact?.meta?.selected_range, artifact?.ingest_kind, artifact?.meta?.newspaper, artifact?.meta?.hide_source, pages]);
   const studyRangeKey = selectedRange
     ? `${selectedRange.from}:${selectedRange.to}:${(selectedRange.pages ?? []).join(",")}`
     : "";
@@ -283,7 +300,26 @@ export default function WorkspaceArtifactPage({
   }, [invalidArtifactId, router]);
 
   const artifactQuery = useArtifactQuery(artifactId, !invalidArtifactId);
-  const pagesQuery = useArtifactPagesQuery(artifactId, !invalidArtifactId);
+  const isNewspaper = Boolean(
+    artifactQuery.data?.ingest_kind === "newspaper" ||
+      artifactQuery.data?.meta?.newspaper ||
+      artifactQuery.data?.meta?.hide_source ||
+      artifact?.ingest_kind === "newspaper" ||
+      artifact?.meta?.newspaper ||
+      artifact?.meta?.hide_source,
+  );
+  const paperSlug = artifactQuery.data?.meta?.paper_slug ?? artifact?.meta?.paper_slug;
+  const paperTitle =
+    artifactQuery.data?.meta?.paper_title ?? artifact?.meta?.paper_title ?? null;
+  const editionDate =
+    artifactQuery.data?.meta?.edition_date ?? artifact?.meta?.edition_date ?? null;
+  const newspaperBackHref = paperSlug
+    ? `/practice/newspaper/${paperSlug}`
+    : "/practice/newspaper";
+  const pagesQuery = useArtifactPagesQuery(
+    artifactId,
+    !invalidArtifactId && Boolean(artifactQuery.data) && !isNewspaper,
+  );
   const assertionQuery = useAssertionQuery(displayAssertionId);
   // Persistent report card - only fetched once a range is complete.
   const studyReportQuery = useStudyReportQuery(
@@ -317,6 +353,26 @@ export default function WorkspaceArtifactPage({
       return count === 1 ? 1 : null;
     });
   }, [pagesQuery.data, artifact?.meta?.selected_range]);
+
+  // Newspaper: no PDF/pages endpoint for learners — synthesize PagesInfo from meta.
+  useEffect(() => {
+    if (!isNewspaper || !artifactQuery.data) return;
+    const meta = artifactQuery.data.meta ?? {};
+    const range = meta.selected_range;
+    const count = Math.max(
+      meta.page_count ?? range?.to ?? range?.pages?.length ?? 1,
+      1,
+    );
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- newspaper has no /pages route; seed from artifact meta
+    setPages({ page_count: count, status: artifactQuery.data.status });
+    if (range?.pages?.length) {
+      setSelectedPages(range.pages);
+    } else if (range?.from && range?.to) {
+      setSelectedPages(pagesInRange(range.from, range.to));
+    } else {
+      setSelectedPages(pagesInRange(1, count));
+    }
+  }, [isNewspaper, artifactQuery.data]);
 
   // Explicit indexing → ready poll. A freshly-uploaded PDF first settles the
   // artifact query on status "pending" (awaiting page selection); React Query
@@ -355,7 +411,7 @@ export default function WorkspaceArtifactPage({
   const isPdf = artifact?.content_type === "application/pdf";
 
   useEffect(() => {
-    if (invalidArtifactId || !artifact || !isPdf) return;
+    if (invalidArtifactId || !artifact || !isPdf || isNewspaper) return;
 
     // eslint-disable-next-line react-hooks/set-state-in-effect -- async PDF document load - inherently an effect
     setPdfError(null);
@@ -388,7 +444,7 @@ export default function WorkspaceArtifactPage({
       cancelled = true;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- depend on artifact?.id (stable); the artifact object changes identity on every edit and would needlessly reload the PDF
-  }, [artifactId, invalidArtifactId, isPdf, artifact?.id]);
+  }, [artifactId, invalidArtifactId, isPdf, isNewspaper, artifact?.id]);
 
   useEffect(() => {
     if (!pdfDoc?.numPages || pdfDoc.numPages <= 1) return;
@@ -841,6 +897,10 @@ export default function WorkspaceArtifactPage({
   }
 
   function openReselectPages() {
+    if (isNewspaper) {
+      router.push(newspaperBackHref);
+      return;
+    }
     if (!selectedRange) return;
     const suggestion = suggestNextPageRange(selectedRange, pageCount);
     setSelectedPages(pagesInRange(suggestion.from, suggestion.to));
@@ -892,8 +952,12 @@ export default function WorkspaceArtifactPage({
           <Alert color="terracotta" title="Could not load source" variant="light">
             {setupError}
           </Alert>
-          <Button variant="default" onClick={() => router.push("/workspace")}>
-            Back to library
+          <Button
+            variant="default"
+            leftSection={<IconArrowLeft size={16} />}
+            onClick={() => router.push(isNewspaper ? newspaperBackHref : "/workspace")}
+          >
+            {isNewspaper ? "Back to paper" : "Back to library"}
           </Button>
         </Stack>
       </Center>
@@ -913,6 +977,16 @@ export default function WorkspaceArtifactPage({
   }
 
   if (!selectedRange) {
+    if (isNewspaper) {
+      return (
+        <Center mih="50vh">
+          <Stack gap="sm" w={320}>
+            <Skeleton height={28} width="60%" radius="md" />
+            <Skeleton height={200} radius="md" />
+          </Stack>
+        </Center>
+      );
+    }
     const shortName = artifact.filename?.replace(/\.[^.]+$/, "") ?? "Source";
 
     return (
@@ -1008,14 +1082,18 @@ export default function WorkspaceArtifactPage({
     );
   }
 
-  const shortFilename = artifact.filename?.replace(/\.[^.]+$/, "") ?? "Source";
+  const shortFilename = isNewspaper
+    ? (paperTitle || artifact.filename?.replace(/\.[^.]+$/, "") || "Newspaper")
+    : (artifact.filename?.replace(/\.[^.]+$/, "") ?? "Source");
   const questionIndex = queue?.question_number ?? (queue?.questions_answered ?? 0) + 1;
   const questionTotal = queue?.question_budget ?? queue?.max_per_page ?? 0;
   const showPageComplete =
     Boolean(queue?.page_complete) && !queue?.current_assertion_id && !queue?.document_complete;
   const showDocumentComplete = Boolean(queue?.document_complete) && !reselectOpen;
   const showNoQuestions = Boolean(queue?.no_questions_reason) && !reselectOpen;
-  const showPromptReselect = Boolean(queue?.prompt_reselect_pages) && !reselectOpen;
+  // Newspaper editions are fixed-range — no page reselect UI.
+  const showPromptReselect =
+    !isNewspaper && Boolean(queue?.prompt_reselect_pages) && !reselectOpen;
   const reselectPromptCopy =
     queue?.prompt_reselect_reason === "unreadable_content"
       ? {
@@ -1037,13 +1115,59 @@ export default function WorkspaceArtifactPage({
 
   // Both edges carry a floating trigger (SOURCE on the left, Zivo on the right), so a
   // pinned column has to leave room for one or it slides underneath.
-  const pinned = isNarrow ? null : studyAlign === "left" ? "left" : studyAlign === "right" ? "right" : null;
+  // Newspaper hides Source — only tutor edge may claim right-side inset.
+  const pinned = isNarrow
+    ? null
+    : studyAlign === "left"
+      ? isNewspaper
+        ? null
+        : "left"
+      : studyAlign === "right"
+        ? "right"
+        : null;
   const questionColumn = (
     <Box flex={1} mih={0} h="100%" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      {isNewspaper ? (
+        <Group
+          gap="sm"
+          wrap="nowrap"
+          px={{ base: "sm", sm: "md", lg: "lg" }}
+          pt="xs"
+          pb={4}
+          style={{ flexShrink: 0 }}
+        >
+          <Button
+            variant="subtle"
+            color="gray"
+            size="compact-sm"
+            leftSection={<IconArrowLeft size={14} />}
+            onClick={() => router.push(newspaperBackHref)}
+          >
+            {paperTitle || "Paper"}
+          </Button>
+          <Box style={{ minWidth: 0, flex: 1 }}>
+            <Text
+              ff="var(--font-serif)"
+              fw={500}
+              fz="sm"
+              truncate
+              style={{ letterSpacing: "-0.01em" }}
+            >
+              {paperTitle || shortFilename}
+              {editionDate ? (
+                <Text span c="dimmed" fw={400} ff="var(--font-sans)" fz="xs">
+                  {" · "}
+                  {editionDate}
+                </Text>
+              ) : null}
+            </Text>
+          </Box>
+        </Group>
+      ) : null}
       <StudyMetaBar
         questionIndex={questionIndex}
         questionTotal={questionTotal}
-        page={queue?.current_page}
+        page={isNewspaper ? undefined : queue?.current_page}
         mode={mode}
         onModeChange={setMode}
         showProgress={(mode === "learn" || mode === "test") && !mcqLoading && Boolean(displayAssertionId) && !showPageComplete && !showDocumentComplete}
@@ -1144,11 +1268,19 @@ export default function WorkspaceArtifactPage({
                 Nothing to quiz here
               </Text>
               <Text c="dimmed" maw={420}>
-                This material doesn&rsquo;t contain testable content - it looks like a cover
-                page, contents, or reference list. Choose different pages to study.
+                {isNewspaper
+                  ? "This edition doesn’t have testable questions yet. Try another day."
+                  : "This material doesn’t contain testable content - it looks like a cover page, contents, or reference list. Choose different pages to study."}
               </Text>
-              <Button variant="light" color="lavender" radius="xl" mt="xs" onClick={openReselectPages}>
-                Choose pages
+              <Button
+                variant="light"
+                color="lavender"
+                radius="xl"
+                mt="xs"
+                leftSection={isNewspaper ? <IconArrowLeft size={16} /> : undefined}
+                onClick={isNewspaper ? () => router.push(newspaperBackHref) : openReselectPages}
+              >
+                {isNewspaper ? "Back to days" : "Choose pages"}
               </Button>
             </Stack>
           ) : showTestResults ? (
@@ -1158,7 +1290,7 @@ export default function WorkspaceArtifactPage({
               answered={answeredHistory}
               report={studyReportQuery.data}
               compact={isNarrow}
-              canChoosePages={Boolean(completedRange)}
+              canChoosePages={!isNewspaper && Boolean(completedRange)}
               onReview={() => setReviewIndex(0)}
               onChoosePages={openReselectPages}
             />
@@ -1167,13 +1299,15 @@ export default function WorkspaceArtifactPage({
               completedFrom={completedRange.from}
               completedTo={completedRange.to}
               pageCount={pageCount}
-              bookFinished={nextRangeSuggestion?.bookFinished ?? false}
+              bookFinished={isNewspaper ? true : (nextRangeSuggestion?.bookFinished ?? false)}
               nextFrom={nextRangeSuggestion?.from}
               nextTo={nextRangeSuggestion?.to}
               answered={answeredHistory}
               report={studyReportQuery.data}
               compact={isNarrow}
               onChoosePages={openReselectPages}
+              actionLabel={isNewspaper ? "Back to days" : undefined}
+              hideNextSuggestion={isNewspaper}
             />
           ) : showPageComplete ? (
             <PageCompleteInterstitial
@@ -1255,6 +1389,33 @@ export default function WorkspaceArtifactPage({
   );
 
   if (mode === "read") {
+    if (isNewspaper) {
+      return (
+        <Center flex={1} px="md">
+          <Stack align="center" gap="md" maw={420} ta="center">
+            <Text ff="var(--font-serif)" fz={24} fw={500}>
+              Questions only
+            </Text>
+            <Text c="dimmed" size="sm">
+              Newspaper editions hide the PDF. Use Learn or Test — same MCQ surface as your other sources.
+            </Text>
+            <Group>
+              <Button
+                variant="subtle"
+                color="gray"
+                leftSection={<IconArrowLeft size={16} />}
+                onClick={() => router.push(newspaperBackHref)}
+              >
+                Back to days
+              </Button>
+              <Button radius="xl" color="lavender" onClick={() => setMode("learn")}>
+                Open Learn
+              </Button>
+            </Group>
+          </Stack>
+        </Center>
+      );
+    }
     const notes = savedNotesQuery.data?.notes ?? [];
     // Stack reader/buddy into tabs whenever we're not in the desktop 3-pane (< 992),
     // matching how the rest of the study view drops to the single-column shell.
@@ -1443,7 +1604,7 @@ export default function WorkspaceArtifactPage({
               {questionColumn}
             </Box>
 
-            {!sourceOpen && (
+            {!isNewspaper && !sourceOpen && (
               <StudyEdgeTrigger
                 side="left"
                 icon={<IconFileText size={20} stroke={2} />}
@@ -1462,6 +1623,7 @@ export default function WorkspaceArtifactPage({
               />
             )}
 
+            {!isNewspaper ? (
             <FloatingPanel
               open={sourceOpen}
               title={shortFilename}
@@ -1484,6 +1646,7 @@ export default function WorkspaceArtifactPage({
                 open={sourceOpen}
               />
             </FloatingPanel>
+            ) : null}
 
             {mode !== "test" ? (
             <FloatingPanel
@@ -1517,6 +1680,7 @@ export default function WorkspaceArtifactPage({
         <StudyMobileShell
           focusTutorKey={mobileTutorFocus}
           tutorHidden={mode === "test"}
+          sourceHidden={isNewspaper}
           question={questionColumn}
           renderSource={(visible) => (
             <StudySourcePanel
@@ -1549,7 +1713,7 @@ export default function WorkspaceArtifactPage({
           )}
         />
       )}
-      {reselectOpen && (
+      {reselectOpen && !isNewspaper && (
         <StudyRangeReselectOverlay
           filename={shortFilename}
           pageCount={pageCount}

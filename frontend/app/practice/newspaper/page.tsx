@@ -2,6 +2,7 @@
 
 /**
  * Newspaper door — pick a paper from the last month.
+ * Practice hands off to Learn/Test at /workspace/[documentId].
  */
 
 import { useEffect } from "react";
@@ -13,14 +14,13 @@ import {
   Paper,
   Stack,
   Text,
-  ThemeIcon,
-  Title,
 } from "@mantine/core";
-import { IconArrowRight, IconNews } from "@tabler/icons-react";
+import { IconArrowLeft, IconArrowRight } from "@tabler/icons-react";
 import { useRouter } from "next/navigation";
 import { ensureGuestSession } from "@/lib/api/client";
 import { useNewspaperCatalogQuery } from "@/lib/api/queries";
 import { Shell } from "@/app/practice/_components/Shell";
+import { PaperMasthead } from "@/app/practice/newspaper/_components/PaperMasthead";
 
 export default function NewspaperDoorPage() {
   const router = useRouter();
@@ -32,32 +32,38 @@ export default function NewspaperDoorPage() {
 
   return (
     <Shell>
-      <Container size="sm" py={{ base: 36, md: 64 }}>
+      <Container size="sm" py={{ base: 28, md: 56 }}>
         <Stack gap="xl">
-          <Group gap="sm" align="center">
-            <ThemeIcon variant="light" color="lavender" size={44} radius="xl">
-              <IconNews size={22} />
-            </ThemeIcon>
-            <Box>
-              <Title order={2} ff="var(--font-serif)" fw={500}>
-                Newspaper
-              </Title>
-              <Text c="dimmed" fz="sm">
-                Pick a paper. Pick a day. Question better — no PDF clutter.
-              </Text>
-            </Box>
-          </Group>
+          <Button
+            variant="subtle"
+            color="gray"
+            size="compact-sm"
+            w="fit-content"
+            leftSection={<IconArrowLeft size={14} />}
+            onClick={() => router.push("/practice")}
+          >
+            Practice
+          </Button>
+
+          <PaperMasthead
+            title="Today’s papers"
+            subtitle="Pick a paper. Pick a day. Same Learn flow — questions only."
+          />
 
           {catalog.isLoading ? (
-            <Text c="dimmed">Loading papers…</Text>
+            <Text c="dimmed" ta="center">
+              Loading papers…
+            </Text>
           ) : catalog.isError ? (
-            <Text c="terracotta">Couldn&rsquo;t load newspapers right now.</Text>
+            <Text c="terracotta" ta="center">
+              Couldn&rsquo;t load newspapers right now.
+            </Text>
           ) : (catalog.data?.papers.length ?? 0) === 0 ? (
             <Paper radius="xl" p="xl" withBorder bg="gray.0" shadow="paper">
-              <Stack gap="xs">
-                <Title order={3} ff="var(--font-serif)" fw={500}>
+              <Stack gap="xs" ta="center">
+                <Text ff="var(--font-serif)" fw={500} fz="lg">
                   Nothing ready yet
-                </Title>
+                </Text>
                 <Text c="dimmed" size="sm">
                   Editions appear here once today&rsquo;s papers are cooked. Check back soon.
                 </Text>
@@ -76,7 +82,7 @@ export default function NewspaperDoorPage() {
                 >
                   <Group justify="space-between" align="center" wrap="wrap" gap="sm">
                     <Box style={{ minWidth: 0, flex: "1 1 180px" }}>
-                      <Text fw={600} ff="var(--font-serif)">
+                      <Text fw={600} ff="var(--font-serif)" fz="lg" style={{ letterSpacing: "-0.01em" }}>
                         {p.title}
                       </Text>
                       <Text size="sm" c="dimmed">

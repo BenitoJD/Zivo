@@ -14,7 +14,17 @@ export type ArtifactMeta = {
   index_progress?: number;
   filename?: string;
   content_type?: string;
-  meta?: { selected_range?: { from: number; to: number; pages?: number[] }; page_count?: number };
+  ingest_kind?: string | null;
+  meta?: {
+    selected_range?: { from: number; to: number; pages?: number[] };
+    page_count?: number;
+    newspaper?: boolean;
+    hide_source?: boolean;
+    paper_slug?: string;
+    paper_title?: string;
+    edition_date?: string;
+    is_public?: boolean;
+  };
 };
 
 export type PagesInfo = {
