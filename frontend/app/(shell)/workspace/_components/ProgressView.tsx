@@ -25,6 +25,7 @@ import {
 import { sourceLabel } from "@/app/workspace/_components/Sidebar";
 import { WaitState } from "@/app/workspace/_components/WaitState";
 import { useLearnerProgressQuery, type LearnerProgress } from "@/lib/api/queries";
+import { shortTopicName } from "@/lib/shortTopicName";
 
 function pct(correct: number, total: number) {
   if (total <= 0) return null;
@@ -138,7 +139,7 @@ function TopicCoverage({
             <Box key={t.concept}>
               <Group justify="space-between" gap="sm" wrap="wrap" mb={3} align="center">
                 <Text fz="sm" c="var(--mantine-color-text)" style={{ minWidth: 0, flex: "1 1 140px" }}>
-                  {t.concept}
+                  {shortTopicName(t.concept)}
                 </Text>
                 <Group gap={8} wrap="nowrap" style={{ flexShrink: 0, marginLeft: "auto" }}>
                   <Text fz="xs" c="dimmed" style={{ fontVariantNumeric: "tabular-nums" }}>
@@ -187,7 +188,7 @@ function TopicCoverage({
                   },
                 }}
               >
-                {t.concept}
+                {shortTopicName(t.concept)}
               </Badge>
             ))}
           </Group>

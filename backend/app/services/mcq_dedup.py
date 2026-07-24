@@ -89,6 +89,15 @@ def short_concept_label(raw: str | None, *, max_chars: int = _CONCEPT_LABEL_MAX_
         if sep in s:
             s = s.split(sep, 1)[0].strip()
             break
+    # Mid-word residue from newspaper/OCR extracts ("ngress government…").
+    if s[:1].islower():
+        parts = s.split()
+        for i, w in enumerate(parts):
+            if w[:1].isupper():
+                s = " ".join(parts[i:])
+                break
+        else:
+            return "General"
     words = s.split()
     if len(words) > _CONCEPT_LABEL_MAX_WORDS:
         s = " ".join(words[:_CONCEPT_LABEL_MAX_WORDS])

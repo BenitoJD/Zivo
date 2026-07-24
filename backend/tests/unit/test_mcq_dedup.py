@@ -122,6 +122,10 @@ def test_short_concept_label_clamps_paragraphs() -> None:
         short_concept_label("Chlorophyll is the green pigment in plants that")
         == "Chlorophyll is the green pigment in plants"
     )
+    assert short_concept_label("ngress government in Karnataka should first set") == (
+        "Karnataka should first set"
+    )
+    assert short_concept_label("ri- cades") == "General"
 
 
 @pytest.mark.parametrize(
