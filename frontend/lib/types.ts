@@ -58,6 +58,8 @@ export type McqState = {
   document_budget?: number;
   budget_confidence?: "high" | "medium" | "low" | string | null;
   budget_version?: string | null;
+  /** Active Learn/Test budget multiplier mode for this queue. */
+  budget_mode?: "learn" | "test" | string | null;
   questions_answered?: number;
   questions_generated?: number;
   coverage_complete?: boolean;

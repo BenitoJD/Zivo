@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * Legacy edition URL → Learn/Test workspace (same MCQ surface).
+ * Legacy edition URL → Learn workspace (same MCQ surface).
  * Catalog stays under /practice/newspaper; practice is /workspace/[documentId].
+ * Test uses ?mode=test (docs/QUESTION_BUDGET_ENGINE.md §0).
  */
 
 import { use, useEffect, useState } from "react";

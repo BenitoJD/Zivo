@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Newspaper paper — pick a day (last 30 days), then hand off to Learn/Test workspace.
- * Same left-header / dense-card chrome as coding + system-design practice.
+ * Newspaper paper — pick a day (last 30 days), then hand off to Learn workspace.
+ * Explicit secondary CTA opens Test (docs/QUESTION_BUDGET_ENGINE.md §0).
  */
 
 import { useEffect, use } from "react";
@@ -15,7 +15,7 @@ import {
   Stack,
   Text,
 } from "@mantine/core";
-import { IconArrowRight } from "@tabler/icons-react";
+import { IconArrowRight, IconClipboardList } from "@tabler/icons-react";
 import { useRouter } from "next/navigation";
 import { ensureGuestSession } from "@/lib/api/client";
 import { useNewspaperDaysQuery } from "@/lib/api/queries";
@@ -46,7 +46,7 @@ export default function NewspaperPaperPage({
             compact
             eyebrow="Newspaper"
             title={title}
-            subtitle="Last 30 days of practice days. Open a day to study in Learn."
+            subtitle="Last 30 days. Open a day to Learn. Test is optional."
           />
 
           {daysQ.isLoading ? (
@@ -79,21 +79,34 @@ export default function NewspaperPaperPage({
                               : d.status}
                         </Badge>
                       </Group>
-                      <Button
-                        radius="xl"
-                        variant="light"
-                        color="lavender"
-                        disabled={!canOpen}
-                        fullWidth
-                        maw={{ base: "100%", xs: 180 }}
-                        rightSection={<IconArrowRight size={16} />}
-                        onClick={() => {
-                          if (!d.document_id) return;
-                          router.push(`/workspace/${d.document_id}`);
-                        }}
-                      >
-                        Practice
-                      </Button>
+                      <Group gap="xs" wrap="nowrap">
+                        <Button
+                          radius="xl"
+                          variant="subtle"
+                          color="gray"
+                          disabled={!canOpen}
+                          leftSection={<IconClipboardList size={16} />}
+                          onClick={() => {
+                            if (!d.document_id) return;
+                            router.push(`/workspace/${d.document_id}?mode=test`);
+                          }}
+                        >
+                          Test this edition
+                        </Button>
+                        <Button
+                          radius="xl"
+                          variant="light"
+                          color="lavender"
+                          disabled={!canOpen}
+                          rightSection={<IconArrowRight size={16} />}
+                          onClick={() => {
+                            if (!d.document_id) return;
+                            router.push(`/workspace/${d.document_id}`);
+                          }}
+                        >
+                          Learn
+                        </Button>
+                      </Group>
                     </Group>
                   </Paper>
                 );

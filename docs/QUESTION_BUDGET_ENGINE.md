@@ -8,6 +8,23 @@ Related: [VISION.md](VISION.md), [DATA_MODEL.md](DATA_MODEL.md), [WORKSPACE.md](
 
 ---
 
+## 0. Product rule: newspaper editions (Jobs)
+
+**Source of truth for this rule lives here** (not a separate ADR). Workspace chrome follows it.
+
+| Surface | Mode | Behavior |
+|---------|------|----------|
+| Open a newspaper edition | **Learn** (`mode=learn`) | Land straight in Learn MCQ chrome. **No Learn/Test chooser modal** on every open. |
+| **Test this edition** | **Test** (`mode=test`) | Explicit, quieter secondary CTA (catalog or sidebar Learn/Test toggle). Never a blocking popup. |
+
+Same budget engine for both. Only the mode multiplier / document info floor differs (`m_learn=1` vs `m_test_formative=3`; Test `N_doc` may raise via `N_info`).
+
+- **Cook / triage / pool default** for editions: `mode=learn` (coverage dose).
+- **Test path** passes `mode=test` into `plan_page_budget` / `plan_document_budget` (serve + optional expand cook).
+- Ordinary PDF artifacts keep Settings → Relaxed/Exam preference for initial workspace mode. Newspapers **ignore** that preference on open and always start Learn.
+
+---
+
 ## 1. Problem definition
 
 ### Two budgets, one planner
@@ -337,7 +354,7 @@ Per ADR 0004 and VISION (“metric stays swappable”): keep `plan_page_budget(.
 | **Ads / newspaper junk** | Existing `newspaper_page_verdict`; budget 0. |
 | **Huge PDF page (400 “ideas”)** | Density prior + `CEIL_page`; centrality; never one ETA job of 400 (`MAX_GENERATE_BATCH_SIZE` stays small). |
 | **Huge document** | Large `N_doc` OK for cook plan; UI uses page Y + session soft; eager triage lookahead stays bounded. |
-| **Newspaper edition** | Per-page cook filter; doc budget = sum of cookable article pages only. |
+| **Newspaper edition** | Per-page cook filter; doc budget = sum of cookable article pages only. Default open = Learn (§0); Test only via explicit CTA. |
 | **LLM over-propose** | Clamp to prior ± tolerance; dedup aspects. |
 | **LLM under-propose** | Prefer max(LLM units, density prior * m) for central text pages when confidence medium. |
 | **All drafts fail verify/critic** | Existing `MAX_ASPECT_ATTEMPTS`; mark abandoned; do not inflate budget. |

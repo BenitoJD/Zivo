@@ -22,6 +22,10 @@ UI is implemented with **Mantine** in `frontend/app/workspace/` — no custom co
 
 - MCQ fullscreen; chat and file API return 403
 
+## Newspaper editions
+
+Default open is **Learn** (no Learn/Test modal). Explicit **Test this edition** (or sidebar Test) uses the same MCQ surface with `mode=test`. Budget math: [QUESTION_BUDGET_ENGINE.md](QUESTION_BUDGET_ENGINE.md) §0.
+
 ## Routes
 
 - `/workspace` — shell

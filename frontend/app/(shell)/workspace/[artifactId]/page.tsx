@@ -1,7 +1,7 @@
 "use client";
 
 import { use, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Alert,
   Box,
@@ -77,7 +77,7 @@ import {
 import { PetPlayground } from "@/app/_components/pets/PetPlayground";
 import { indexingStage } from "@/lib/constants";
 import { getCachedPdfDocument, loadPdfForArtifact } from "@/lib/pdf";
-import { defaultWorkspaceMode } from "@/lib/studyPreferences";
+import { budgetModeQuery, defaultWorkspaceMode } from "@/lib/studyPreferences";
 import {
   normalizeMcqOptions,
   sanitizeMcqStem,
@@ -94,9 +94,11 @@ export default function WorkspaceArtifactPage({
   params: Promise<{ artifactId: string }>;
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const { artifactId } = use(params);
   const invalidArtifactId = !isArtifactId(artifactId);
+  const urlMode = searchParams.get("mode");
   const isLg = useMediaQuery(STUDY_DESKTOP_BP, false, { getInitialValueInEffect: true });
   const isCompact = useMediaQuery(STUDY_COMPACT_BP, false, { getInitialValueInEffect: true });
   // Phone OR tablet study shell (<992): denser chrome. True phone (<768) also gets
@@ -237,9 +239,11 @@ export default function WorkspaceArtifactPage({
     setMcqLoading(true);
     setAnsweredHistory([]);
     setReviewIndex(null);
-    setMode(defaultWorkspaceMode());
+    // Non-newspaper: Settings Relaxed/Exam. Newspaper default Learn unless ?mode=test
+    // (docs/QUESTION_BUDGET_ENGINE.md §0 — no Learn/Test modal on open).
+    setMode(urlMode === "test" ? "test" : defaultWorkspaceMode());
     /* eslint-enable react-hooks/set-state-in-effect */
-  }, [artifactId, setMode]);
+  }, [artifactId, setMode, urlMode]);
 
   // Brainstorm turns the same tutor panel into the ideation partner: the ANGLES each
   // reply ends with become chips you can explore (send as the next turn) or keep (pin
@@ -319,6 +323,19 @@ export default function WorkspaceArtifactPage({
   const newspaperBackHref = paperSlug
     ? `/practice/newspaper/${paperSlug}`
     : "/practice/newspaper";
+
+  // Newspaper: always enter Learn unless URL asked for Test. No chooser modal.
+  // Sidebar Test after open is fine (this effect does not depend on mode).
+  useEffect(() => {
+    if (!isNewspaper) return;
+    setMode(urlMode === "test" ? "test" : "learn");
+  }, [isNewspaper, urlMode, artifactId, setMode]);
+
+  // PDF-less editions: Read is a dead end — bounce to Learn, never a Learn/Test popup.
+  useEffect(() => {
+    if (isNewspaper && mode === "read") setMode("learn");
+  }, [isNewspaper, mode, setMode]);
+
   const pagesQuery = useArtifactPagesQuery(
     artifactId,
     !invalidArtifactId && Boolean(artifactQuery.data) && !isNewspaper,
@@ -504,6 +521,21 @@ export default function WorkspaceArtifactPage({
   // every queue update, so polling on top of it would just double-fetch.
   const [streamConnected, setStreamConnected] = useState(false);
 
+  const learnQueuePath = useMemo(() => {
+    const path = `/api/artifacts/${artifactId}/learn-queue`;
+    if (mode === "learn" || mode === "test") {
+      return `${path}?mode=${budgetModeQuery(mode)}`;
+    }
+    return path;
+  }, [artifactId, mode]);
+  const learnQueueStreamPath = useMemo(() => {
+    const path = `/api/artifacts/${artifactId}/learn-queue/stream`;
+    if (mode === "learn" || mode === "test") {
+      return `${path}?mode=${budgetModeQuery(mode)}`;
+    }
+    return path;
+  }, [artifactId, mode]);
+
   useEffect(() => {
     if (invalidArtifactId || !studyRangeKey || artifact?.status === "indexing") return;
     let cancelled = false;
@@ -512,7 +544,7 @@ export default function WorkspaceArtifactPage({
       await ensureGuestSession();
       if (cancelled) return;
       try {
-        const data = await apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`);
+        const data = await apiGet<McqState>(learnQueuePath);
         if (cancelled) return;
         setQueue(data);
         setMcqLoading(false);
@@ -522,7 +554,7 @@ export default function WorkspaceArtifactPage({
       if (cancelled) return;
 
       queueStreamRef.current?.close();
-      const url = apiUrl(`/api/artifacts/${artifactId}/learn-queue/stream`);
+      const url = apiUrl(learnQueueStreamPath);
       const es = new EventSource(url, { withCredentials: true });
       queueStreamRef.current = es;
       es.onopen = () => {
@@ -570,7 +602,7 @@ export default function WorkspaceArtifactPage({
           setStreamConnected(false);
           void (async () => {
             try {
-              const data = await apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`);
+              const data = await apiGet<McqState>(learnQueuePath);
               if (cancelled) return;
               setQueue(data);
             } catch {
@@ -590,7 +622,7 @@ export default function WorkspaceArtifactPage({
       queueStreamRef.current = null;
       setStreamConnected(false);
     };
-  }, [artifactId, invalidArtifactId, studyRangeKey, artifact?.status]);
+  }, [artifactId, invalidArtifactId, studyRangeKey, artifact?.status, learnQueuePath, learnQueueStreamPath]);
 
   useEffect(() => {
     if (invalidArtifactId || !studyRangeKey || artifact?.status !== "ready") return;
@@ -609,7 +641,7 @@ export default function WorkspaceArtifactPage({
     if (!needsPoll) return;
 
     const id = window.setInterval(() => {
-      void apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`)
+      void apiGet<McqState>(learnQueuePath)
         .then((data) => setQueue(data))
         .catch(() => {});
     }, 3000);
@@ -620,6 +652,7 @@ export default function WorkspaceArtifactPage({
     studyRangeKey,
     artifact?.status,
     streamConnected,
+    learnQueuePath,
     queue?.current_assertion_id,
     queue?.generation_pending,
     queue?.pool_available,
@@ -691,7 +724,7 @@ export default function WorkspaceArtifactPage({
   }, [queue?.page_complete, queue?.current_assertion_id, queue?.document_complete]);
 
   async function refreshQueue() {
-    const data = await apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`);
+    const data = await apiGet<McqState>(learnQueuePath);
     if (pinnedAssertionIdRef.current) {
       setQueue({ ...data, current_assertion_id: pinnedAssertionIdRef.current });
     } else {
@@ -760,7 +793,7 @@ export default function WorkspaceArtifactPage({
       if (nextId) {
         // Instant Next: swap to the prefetched card; background-refresh pool metadata.
         setQueue((q) => (q ? { ...q, current_assertion_id: nextId } : q));
-        void apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`)
+        void apiGet<McqState>(learnQueuePath)
           .then((data) => {
             if (pinnedAssertionIdRef.current) return;
             setQueue(data);
@@ -1395,28 +1428,21 @@ export default function WorkspaceArtifactPage({
 
   if (mode === "read") {
     if (isNewspaper) {
+      // Should already have bounced to Learn; keep a minimal back-out, never a mode chooser.
       return (
         <Center flex={1} px="md">
           <Stack align="center" gap="md" maw={420} ta="center">
-            <Text ff="var(--font-serif)" fz={24} fw={500}>
-              Questions only
-            </Text>
             <Text c="dimmed" size="sm">
-              Newspaper editions hide the PDF. Use Learn or Test: same MCQ surface as your other sources.
+              Opening Learn…
             </Text>
-            <Group>
-              <Button
-                variant="subtle"
-                color="gray"
-                leftSection={<IconArrowLeft size={16} />}
-                onClick={() => router.push(newspaperBackHref)}
-              >
-                Back to days
-              </Button>
-              <Button radius="xl" color="lavender" onClick={() => setMode("learn")}>
-                Open Learn
-              </Button>
-            </Group>
+            <Button
+              variant="subtle"
+              color="gray"
+              leftSection={<IconArrowLeft size={16} />}
+              onClick={() => router.push(newspaperBackHref)}
+            >
+              Back to days
+            </Button>
           </Stack>
         </Center>
       );

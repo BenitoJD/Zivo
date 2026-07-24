@@ -69,6 +69,28 @@ def mode_multiplier(mode: Mode, *, high_stakes: bool = False) -> int:
     return M_TEST_HIGH_STAKES if high_stakes else M_TEST_FORMATIVE
 
 
+def parse_budget_mode(value: str | None) -> Mode:
+    """Normalize API / progress values. Anything other than test → learn."""
+    return "test" if (value or "").strip().lower() == "test" else "learn"
+
+
+def units_from_aspect_dicts(aspects: Sequence[dict[str, object]] | None) -> list[Unit]:
+    """Build planner units from persisted page_coverage aspects."""
+    out: list[Unit] = []
+    for i, raw in enumerate(aspects or []):
+        if not isinstance(raw, dict):
+            continue
+        key = str(raw.get("key") or f"aspect-{i + 1}")
+        cent_raw = str(raw.get("centrality") or "central").strip().lower()
+        centrality: Centrality
+        if cent_raw in WEIGHT:
+            centrality = cent_raw  # type: ignore[assignment]
+        else:
+            centrality = "central"
+        out.append(Unit(key=key, centrality=centrality))
+    return out
+
+
 def coverage_score(units: Sequence[Unit], mode: Mode, *, high_stakes: bool = False) -> float:
     m = mode_multiplier(mode, high_stakes=high_stakes)
     return sum(WEIGHT[u.centrality] * m for u in units)
