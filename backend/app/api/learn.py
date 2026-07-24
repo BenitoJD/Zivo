@@ -211,7 +211,10 @@ async def learn_queue_stream(
             if not woke:
                 continue
 
-    return EventSourceResponse(gen())
+    return EventSourceResponse(
+        gen(),
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache, no-transform"},
+    )
 
 
 @router.get("/{artifact_id}/mastery")

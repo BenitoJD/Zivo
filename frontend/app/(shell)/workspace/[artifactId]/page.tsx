@@ -569,6 +569,18 @@ export default function WorkspaceArtifactPage({
             // still absorb pool/progress fields so Continue stays warm.
             const pinned = pinnedAssertionIdRef.current;
             if (pinned && prev) {
+              // Cook often finishes the next card during feedback. Stash it so
+              // Continue can swap instantly; otherwise pin overwrite + a hung
+              // SSE leaves the learner on "Writing your next question" forever.
+              const realNext = data.current_assertion_id;
+              if (
+                realNext &&
+                realNext !== pinned &&
+                !pendingNextAssertionIdRef.current
+              ) {
+                pendingNextAssertionIdRef.current = realNext;
+                setPendingNextAssertionId(realNext);
+              }
               return {
                 ...data,
                 current_assertion_id: pinned,
@@ -626,25 +638,48 @@ export default function WorkspaceArtifactPage({
 
   useEffect(() => {
     if (invalidArtifactId || !studyRangeKey || artifact?.status !== "ready") return;
-    // Fallback only: while the SSE stream is connected it already pushes every
-    // update, so polling would double-fetch. Poll only when the stream is down.
-    if (streamConnected) return;
+    // Waiting for the next card with an empty pool: always poll. A "connected"
+    // EventSource can hang without delivering (seen as permanent 92% "Writing
+    // your next question" while /learn-queue already has current_assertion_id).
+    const waitingForNextCard =
+      !pinnedAssertionIdRef.current &&
+      !queue?.current_assertion_id &&
+      (Boolean(queue?.generation_pending) || (queue?.pool_available ?? 0) === 0);
+    // Healthy stream already pushes queue ticks; skip poll except when stuck
+    // waiting for the next card (belt-and-suspenders against hung SSE).
+    if (streamConnected && !waitingForNextCard) return;
     const needsPoll =
-      !queue?.document_complete &&
-      (!queue?.current_assertion_id ||
-        // The RAG window slides as the learner advances pages, resetting
-        // rag_window_ready to false until the new pages finish indexing. Keep
-        // polling until it flips back so the chat composer re-enables on its own
-        // instead of being stuck on "Preparing chat context…" until a refresh.
-        queue.rag_window_ready === false ||
-        (Boolean(queue.generation_pending) && (queue.pool_available ?? 0) === 0));
+      waitingForNextCard ||
+      (!queue?.document_complete &&
+        (!queue?.current_assertion_id ||
+          // The RAG window slides as the learner advances pages, resetting
+          // rag_window_ready to false until the new pages finish indexing. Keep
+          // polling until it flips back so the chat composer re-enables on its own
+          // instead of being stuck on "Preparing chat context…" until a refresh.
+          queue.rag_window_ready === false ||
+          (Boolean(queue.generation_pending) && (queue.pool_available ?? 0) === 0)));
     if (!needsPoll) return;
 
     const id = window.setInterval(() => {
       void apiGet<McqState>(learnQueuePath)
-        .then((data) => setQueue(data))
+        .then((data) => {
+          if (pinnedAssertionIdRef.current) {
+            const realNext = data.current_assertion_id;
+            if (
+              realNext &&
+              realNext !== pinnedAssertionIdRef.current &&
+              !pendingNextAssertionIdRef.current
+            ) {
+              pendingNextAssertionIdRef.current = realNext;
+              setPendingNextAssertionId(realNext);
+            }
+            setQueue({ ...data, current_assertion_id: pinnedAssertionIdRef.current });
+            return;
+          }
+          setQueue(data);
+        })
         .catch(() => {});
-    }, 3000);
+    }, waitingForNextCard ? 1500 : 3000);
     return () => window.clearInterval(id);
   }, [
     artifactId,
@@ -800,7 +835,15 @@ export default function WorkspaceArtifactPage({
           })
           .catch(() => {});
       } else {
-        await refreshQueue();
+        // Grade often finishes before the next card cooks. Poll briefly so we
+        // do not freeze on the wait ring if SSE is quiet.
+        let data = await apiGet<McqState>(learnQueuePath);
+        for (let i = 0; i < 20 && !data.current_assertion_id && !data.document_complete; i += 1) {
+          await new Promise((r) => window.setTimeout(r, 750));
+          if (pinnedAssertionIdRef.current) return;
+          data = await apiGet<McqState>(learnQueuePath);
+        }
+        if (!pinnedAssertionIdRef.current) setQueue(data);
       }
     } catch {
       setFeedback("Could not load next question.");

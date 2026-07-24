@@ -92,6 +92,35 @@ def short_concept_label(raw: str | None, *, max_chars: int = _CONCEPT_LABEL_MAX_
     words = s.split()
     if len(words) > _CONCEPT_LABEL_MAX_WORDS:
         s = " ".join(words[:_CONCEPT_LABEL_MAX_WORDS])
+        words = s.split()
+    # Drop dangling clause openers left by mid-sentence truncation
+    # ("… in plants that" → "… in plants").
+    while words and words[-1].lower() in {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "of",
+        "in",
+        "on",
+        "to",
+        "for",
+        "with",
+        "that",
+        "which",
+        "who",
+        "whom",
+        "whose",
+        "where",
+        "when",
+        "is",
+        "are",
+        "was",
+        "were",
+    }:
+        words.pop()
+        s = " ".join(words)
     if len(s) > max_chars:
         s = s[: max(1, max_chars - 1)].rstrip(" ,;:-") + "…"
     return s or "General"

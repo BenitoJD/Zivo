@@ -118,6 +118,10 @@ def test_short_concept_label_clamps_paragraphs() -> None:
     assert len(out) <= 60
     assert short_concept_label("") == "General"
     assert short_concept_label("Chlorophyll") == "Chlorophyll"
+    assert (
+        short_concept_label("Chlorophyll is the green pigment in plants that")
+        == "Chlorophyll is the green pigment in plants"
+    )
 
 
 @pytest.mark.parametrize(
