@@ -333,3 +333,17 @@ CREATE TABLE IF NOT EXISTS qb.newspaper_brand (
 CREATE INDEX IF NOT EXISTS ix_newspaper_brand_enabled
   ON qb.newspaper_brand (enabled)
   WHERE enabled = true;
+
+-- Hindu v1 seed (also 031_hindu_newspaper_v1).
+-- Paper aliases are NOT seeded — ingest LLM classifies filenames and learns
+-- into qb.newspaper_paper_alias (names drift; avoid hardcoding TH/ET/…).
+UPDATE qb.newspaper_settings
+  SET allowlist_only = true, updated_at = now()
+  WHERE id = 1;
+
+INSERT INTO qb.newspaper_brand (paper_slug, paper_title, enabled, first_seen_at, updated_at)
+VALUES ('the-hindu', 'The Hindu', true, now(), now())
+ON CONFLICT (paper_slug) DO UPDATE SET
+  paper_title = EXCLUDED.paper_title,
+  enabled = true,
+  updated_at = now();

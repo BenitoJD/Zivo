@@ -173,7 +173,8 @@ export default function NewspaperAdminPage() {
               Telegram channel
             </Text>
             <Text size="sm" c="dimmed">
-              Paste a channel @username, invite link, or numeric id. No redeploy needed.
+              Paste numeric peer id (preferred), @username, or invite link. Example label:
+              MyBookZon ENGLISH (PREMIUM). No redeploy needed.
             </Text>
             <TextInput
               label="Channel"
@@ -184,7 +185,7 @@ export default function NewspaperAdminPage() {
             />
             <TextInput
               label="Label (optional)"
-              placeholder="My newspaper drop"
+              placeholder="MyBookZon ENGLISH (PREMIUM)"
               value={label}
               onChange={(e) => setLabelEdit(e.currentTarget.value)}
               radius="md"
@@ -216,8 +217,9 @@ export default function NewspaperAdminPage() {
                   Papers you want
                 </Text>
                 <Text size="sm" c="dimmed">
-                  Turn on “only selected” then enable Mint, ET, etc. New brands show up after
-                  the channel posts them (off by default).
+                  Turn on “only selected” then enable papers. Filenames change — ingest uses LLM
+                  to map TH/Mint/… then remembers aliases. New brands appear after a post (off by
+                  default).
                 </Text>
               </Box>
               <Switch

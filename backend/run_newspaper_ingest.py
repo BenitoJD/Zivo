@@ -22,7 +22,7 @@ def _env(name: str, default: str = "") -> str:
 
 async def _process_message(client, db, message) -> None:
     from app.services.newspaper import create_edition_from_pdf
-    from app.services.newspaper_naming import parse_edition_meta
+    from app.services.newspaper_naming import parse_edition_meta_async
     from app.repositories import newspaper as newspaper_repo
 
     if not message or not message.document:
@@ -38,7 +38,9 @@ async def _process_message(client, db, message) -> None:
 
     caption = message.message or ""
     msg_date = message.date or datetime.now(timezone.utc)
-    parsed = parse_edition_meta(db, filename=fname or "edition.pdf", caption=caption, message_date=msg_date)
+    parsed = await parse_edition_meta_async(
+        db, filename=fname or "edition.pdf", caption=caption, message_date=msg_date
+    )
 
     from io import BytesIO
 
@@ -70,18 +72,42 @@ async def _process_message(client, db, message) -> None:
         )
 
 
+def _is_pdf_message(message) -> bool:  # noqa: ANN001
+    if not message or not message.document:
+        return False
+    mime = (message.document.mime_type or "").lower()
+    fname = ""
+    for attr in message.document.attributes or []:
+        fname = getattr(attr, "file_name", None) or fname
+    if not fname and message.file:
+        fname = getattr(message.file, "name", "") or ""
+    return "pdf" in mime or (fname or "").lower().endswith(".pdf")
+
+
 async def _reconcile(client, entity, db, *, limit: int = 80) -> None:
+    """Catch-up: collect PDFs above cursor, process oldest→newest so first city wins."""
     from app.repositories import newspaper as newspaper_repo
 
     settings = newspaper_repo.get_settings(db)
     cursor = settings.get("sync_cursor")
+    candidates: list = []
     async for message in client.iter_messages(entity, limit=limit):
         if cursor is not None and message.id <= int(cursor):
             break
+        if _is_pdf_message(message):
+            candidates.append(message)
+
+    # iter_messages is newest-first; reverse so earliest msg_id claims (paper, day).
+    candidates.sort(key=lambda m: int(m.id))
+    max_id: int | None = None
+    for message in candidates:
         try:
             await _process_message(client, db, message)
+            max_id = int(message.id) if max_id is None else max(max_id, int(message.id))
         except Exception:
             logger.exception("reconcile failed msg=%s", getattr(message, "id", None))
+    if max_id is not None:
+        newspaper_repo.set_sync_cursor(db, max_id)
 
 
 async def run() -> None:
