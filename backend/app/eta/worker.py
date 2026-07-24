@@ -26,8 +26,8 @@ RETRY_DELAY_SECONDS = float(os.getenv("ETA_WORKER_RETRY_DELAY_SECONDS", "5.0"))
 # generate.questions is LLM-I/O-bound — threads overlap on network waits — and the
 # reservation uses SELECT ... FOR UPDATE SKIP LOCKED so parallel slots never collide.
 # Default to parallel now that the model is a concurrent hosted API. Total concurrent
-# LLM calls ≈ this × the per-batch GENERATION_CONCURRENCY; keep the product under the
-# provider's rate limit (override via env).
+# LLM calls ≈ this × ZIVO_GENERATION_CONCURRENCY (intra-batch gates); keep the product
+# under the provider's rate limit (override via env). Also bounded by LLM_MAX_CONCURRENT.
 MAX_CONCURRENCY = max(1, int(os.getenv("ETA_CPU_WORKER_MAX_CONCURRENCY", "4")))
 
 

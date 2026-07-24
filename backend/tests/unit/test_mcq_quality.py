@@ -449,3 +449,74 @@ def test_parse_mcq_blocks_bare_objects_without_fences() -> None:
     assert len(parsed) == 2
     assert parsed[0]["question"] == "Bare1?"
     assert parsed[1]["correct_index"] == 1
+
+
+
+def test_generate_quality_mcq_batch_gates_rest_in_parallel() -> None:
+    """First draft gates serially; remaining drafts share a thread pool."""
+    from app.services import mcq_quality as mq
+
+    db = MagicMock()
+    targets = [{"key": f"k{i}", "label": f"L{i}"} for i in range(3)]
+    drafts = [
+        {
+            "question": f"Q{i} about photosynthesis mechanisms?",
+            "options": ["A option here", "B option here", "C option here", "D option here"],
+            "correct_index": 0,
+            "explanation": "Because chlorophyll.",
+            "primary_concept_key": f"k{i}",
+        }
+        for i in range(3)
+    ]
+    accepted_order: list[str] = []
+
+    def _on_accept(target, draft):
+        accepted_order.append(str(target["key"]))
+        return True
+
+    gate_calls: list[str] = []
+
+    def _fake_gate(session, **kwargs):
+        key = (kwargs.get("target") or {}).get("key")
+        gate_calls.append(str(key))
+        return ("accept", kwargs["draft"], None, 0.0, [], None, False)
+
+    settings = MagicMock()
+    settings.verify_answer_key = False
+    settings.mcq_candidates_per_aspect = 1
+
+    session_cm = MagicMock()
+    session_cm.__enter__.return_value = MagicMock()
+    session_cm.__exit__.return_value = False
+
+    with (
+        patch("app.services.generation_cache.get", return_value=None),
+        patch("app.services.generation_cache.put"),
+        patch("app.services.generation_cache.batch_drafts_key", return_value="k"),
+        patch.object(mq, "_generate_batch_drafts", return_value=drafts),
+        patch("app.services.llm_registry.default_chat_model_id", return_value=None),
+        patch("app.services.llm_registry.draft_chat_model_id", return_value=None),
+        patch("app.config.get_settings", return_value=settings),
+        patch.object(mq, "_quality_gate_one", side_effect=_fake_gate),
+        patch.object(mq, "GENERATION_CONCURRENCY", 4),
+        patch.object(mq, "is_mcq_too_similar", return_value=(False, 0.0)),
+        patch.object(mq, "run_heuristic_checks", return_value=[]),
+        patch.object(mq, "has_fatal_heuristic_flaws", return_value=False),
+        patch.object(mq, "prior_mcq_embeddings", return_value=[]),
+        patch.object(mq, "embed_signature_cached", return_value=[0.0]),
+        patch.object(mq, "mcq_signature", return_value="sig"),
+        patch("app.db.SessionLocal", return_value=session_cm),
+    ):
+        out = mq.generate_quality_mcq_batch(
+            db,
+            page_text="Page text about biology and photosynthesis.",
+            page_number=1,
+            targets=targets,
+            on_accept=_on_accept,
+        )
+
+    assert [t["key"] for t, _ in out] == ["k0", "k1", "k2"]
+    assert accepted_order == ["k0", "k1", "k2"]
+    # Serial first + parallel rest.
+    assert gate_calls[0] == "k0"
+    assert set(gate_calls[1:]) == {"k1", "k2"}

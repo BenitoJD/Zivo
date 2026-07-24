@@ -231,11 +231,14 @@ export function McqHeroPanel({
   // "Checking" = answer submitted, grade not back yet. We light up the chosen option
   // with a calm pulse so the wait never feels frozen.
   const checking = submitting && !graded;
+  // Full-screen wait ONLY when the pool has nothing for the learner yet.
+  // If learn-queue already has a next assertion (or options are on screen),
+  // advance instantly — never flash "Writing questions" over a ready card.
+  const poolHasNext =
+    Boolean(queue?.current_assertion_id) || (queue?.pool_available ?? 0) > 0;
   const waiting =
-    mcqLoading ||
     artifactStatus === "indexing" ||
-    !hasQuestion ||
-    (Boolean(queue?.generation_pending) && !queue?.current_assertion_id);
+    (!hasQuestion && !poolHasNext && (mcqLoading || Boolean(queue?.generation_pending)));
 
   const [statusTick, setStatusTick] = useState(0);
   const stagnant =
