@@ -265,20 +265,18 @@ export function MainsView({ artifactId, compact = false }: { artifactId: string;
   const [imageName, setImageName] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
 
-  // sync strictness picker with whatever the current attempt used
-  useEffect(() => {
-    if (data?.strictness) setStrictness(data.strictness);
-  }, [data?.strictness]);
-
   // optional timer (deadline-based so a throttled tab still lands right)
   const [deadline, setDeadline] = useState<number | null>(null);
   const [now, setNow] = useState<number>(() => Date.now());
   useEffect(() => {
-    if (data?.status === "awaiting_answer" && timerOn && deadline === null) {
-      setDeadline(Date.now() + (data.marks_max || 10) * 60 * 1000);
+    /* eslint-disable react-hooks/set-state-in-effect -- arm countdown when answer session or timer toggle changes */
+    if (data?.status !== "awaiting_answer" || !timerOn) {
+      setDeadline(null);
+      return;
     }
-    if (data?.status !== "awaiting_answer" && deadline !== null) setDeadline(null);
-  }, [data?.status, data?.marks_max, timerOn, deadline]);
+    setDeadline(Date.now() + (data.marks_max || 10) * 60 * 1000);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [data?.status, data?.marks_max, data?.question, timerOn]);
   useEffect(() => {
     if (deadline === null) return;
     const id = window.setInterval(() => setNow(Date.now()), 1000);
@@ -367,7 +365,7 @@ export function MainsView({ artifactId, compact = false }: { artifactId: string;
     return (
       <ResultView
         result={data.result}
-        strictness={strictness}
+        strictness={data.strictness}
         busy={busy}
         compact={compact}
         onRestart={() => setRestarting(true)}

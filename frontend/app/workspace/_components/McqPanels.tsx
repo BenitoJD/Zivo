@@ -295,6 +295,15 @@ export function McqHeroPanel({
       // reach for the mouse. A focused button/link keeps its native activation so
       // we never double-fire.
       if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+        // After a grade, Enter/Space must always advance — even when focus is still
+        // on the chosen option. Correct answers lock options; the old path returned
+        // early on that focused+locked case, so "press Enter to continue" did nothing.
+        if (graded) {
+          e.preventDefault();
+          onContinue();
+          return;
+        }
+        if (checking) return;
         // Arrowing leaves focus ON an option, so this is now the common case. Drive
         // the option's own click handler and preventDefault to suppress the native
         // activation, rather than relying on that native activation to fire at all -
@@ -303,16 +312,12 @@ export function McqHeroPanel({
           "[data-mcq-option]",
         );
         if (focusedOption) {
-          if (optionsLocked || checking) return;
           e.preventDefault();
           focusedOption.click();
           return;
         }
         if (tag === "BUTTON" || tag === "A") return;
-        if (graded) {
-          e.preventDefault();
-          onContinue();
-        } else if (hasSelection && !submitting) {
+        if (hasSelection && !submitting) {
           e.preventDefault();
           onSubmit();
         }
@@ -636,9 +641,17 @@ export function McqHeroPanel({
               // Arrow-key navigation targets these by attribute. Only the interactive
               // panel carries it - the read-only review view renders its own options.
               data-mcq-option={i}
-              disabled={optionsLocked || checking}
+              // Keep clickable when locked: disabled buttons swallow clicks, and after
+              // a correct answer the focused option is exactly where the learner taps
+              // again / presses Enter. Treat that as Continue.
+              disabled={checking}
+              aria-disabled={optionsLocked || checking}
               onClick={() => {
-                if (optionsLocked || checking) return;
+                if (checking) return;
+                if (optionsLocked) {
+                  onContinue();
+                  return;
+                }
                 if (multiSelect) { onToggle?.(i); return; }
                 // Second click on the already-selected option checks it - the
                 // answer IS the button, so there's no reach for the far one.

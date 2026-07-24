@@ -132,8 +132,9 @@ export function PageSelectionScreen({
       )}
       {!isPdf && !pdfLoading && (
         <Text c="dimmed" size="sm" px={padX} pt={4}>
-          PDF thumbnails load automatically. Use the slider below (
-          {pageCount === 1 ? "1 page" : `${pageCount} pages`}).
+          {pageCount === 1
+            ? "1 study page in this source. Tap to select."
+            : `${pageCount} study pages — tap a page or drag the range.`}
         </Text>
       )}
 

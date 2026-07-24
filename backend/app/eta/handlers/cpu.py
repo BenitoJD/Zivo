@@ -48,7 +48,7 @@ def parse_document_job(payload: dict) -> dict:
                 page_to = int(selected.get("to", page_from))
                 pages = [p for p in pages if page_from <= int(p.get("page", 0)) <= page_to]
         meta = dict(doc.meta or {})
-        meta["page_count"] = int(meta.get("page_count") or total_pages or 1)
+        meta["page_count"] = total_pages or 1
         doc.meta = meta
         put_json(ingest_tmp_key(document_id, "pages"), {"pages": pages})
         doc.index_progress = 30
@@ -147,7 +147,7 @@ def ingest_document_job(payload: dict) -> dict:
                 page_to = int(selected.get("to", page_from))
                 pages = [p for p in pages if page_from <= int(p.get("page", 0)) <= page_to]
         meta = dict(doc.meta or {})
-        meta["page_count"] = int(meta.get("page_count") or total_pages or 1)
+        meta["page_count"] = total_pages or 1
         doc.meta = meta
         doc.index_progress = 40
         db.commit()

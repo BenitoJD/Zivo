@@ -16,7 +16,8 @@ import {
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { IconCpu } from "@tabler/icons-react";
-import { apiGet, apiPatch } from "@/lib/api/client";
+import { apiGet, apiPatch, isApiAccessDenied } from "@/lib/api/client";
+import { useSessionQuery } from "@/lib/api/queries";
 
 type AdminModel = {
   id: string;
@@ -37,6 +38,8 @@ type AdminModelList = {
 
 export default function WorkspaceModelsPage() {
   const queryClient = useQueryClient();
+  const session = useSessionQuery();
+  const isAdmin = Boolean(session.data?.is_admin);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [poolBusy, setPoolBusy] = useState(false);
 
@@ -48,21 +51,18 @@ export default function WorkspaceModelsPage() {
 
   const models = modelsQuery.data?.models ?? [];
   const poolEnabled = modelsQuery.data?.pool_enabled ?? false;
-  const loading = modelsQuery.isLoading;
+  const loading = session.isLoading || modelsQuery.isLoading;
   const forbidden =
-    modelsQuery.isError &&
-    (modelsQuery.error instanceof Error
-      ? modelsQuery.error.message.toLowerCase().includes("admin")
-      : false);
+    !isAdmin || (modelsQuery.isError && isApiAccessDenied(modelsQuery.error));
 
   useEffect(() => {
-    if (!modelsQuery.isError || forbidden) return;
+    if (!isAdmin || !modelsQuery.isError || forbidden) return;
     notifications.show({
       title: "Models",
       message: modelsQuery.error instanceof Error ? modelsQuery.error.message : "Unknown error",
       color: "terracotta",
     });
-  }, [modelsQuery.isError, modelsQuery.error, forbidden]);
+  }, [modelsQuery.isError, modelsQuery.error, forbidden, isAdmin]);
 
   async function toggleModel(model: AdminModel, enabled: boolean) {
     setBusyId(model.id);

@@ -318,7 +318,11 @@ def logout(
     user: User = Depends(get_current_user),
     _: None = Depends(require_csrf),
 ) -> Response:
+    # Injected Response starts with status_code=None; returning it without setting
+    # 204 yields an incomplete ASGI response (empty reply from uvicorn). Set the
+    # status explicitly, then return the same instance so Set-Cookie is kept.
     user.session_version = int(getattr(user, "session_version", 0) or 0) + 1
     db.commit()
+    response.status_code = status.HTTP_204_NO_CONTENT
     response.delete_cookie("zivo_session")
     return response

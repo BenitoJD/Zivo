@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
 import {
   Box,
@@ -21,9 +22,11 @@ import {
   IconCat,
   IconFlame,
   IconMoon,
+  IconLogout,
   IconSparkles,
   IconSun,
 } from "@tabler/icons-react";
+import { useSignOut } from "@/lib/auth";
 import { CAT_ENABLED_KEY } from "@/app/_components/pets/PetPlayground";
 import {
   type PreferredStudyMode,
@@ -88,11 +91,14 @@ function SettingRow({
 const segStyles = { root: { background: "var(--mantine-color-default-hover)" } };
 
 export function SettingsModal({ opened, onClose, username, onReplayOnboarding }: SettingsModalProps) {
+  const router = useRouter();
+  const signOut = useSignOut();
   const { colorScheme, toggleColorScheme } = useMantineColorScheme();
   const isDark = colorScheme === "dark";
   const isMobile = useMediaQuery(MOBILE_MAX_MQ, false, { getInitialValueInEffect: true });
 
   const [studyMode, setStudyMode] = useState<PreferredStudyMode>(() => readPreferredStudyMode());
+  const [signingOut, setSigningOut] = useState(false);
   // Live (Mantine broadcasts to every PetPlayground) - flip and the cats appear
   // or vanish app-wide at once, no Save needed.
   const [catEnabled, setCatEnabled] = useLocalStorage({ key: CAT_ENABLED_KEY, defaultValue: false });
@@ -103,6 +109,16 @@ export function SettingsModal({ opened, onClose, username, onReplayOnboarding }:
   const saveSettings = () => {
     writeStudyPreferences(studyMode);
     onClose();
+  };
+
+  const handleSignOut = async () => {
+    setSigningOut(true);
+    const result = await signOut();
+    setSigningOut(false);
+    if (result.ok) {
+      onClose();
+      router.replace("/login");
+    }
   };
 
   return (
@@ -247,6 +263,29 @@ export function SettingsModal({ opened, onClose, username, onReplayOnboarding }:
             }
           />
         </Paper>
+
+        {username ? (
+          <Paper radius="lg" withBorder style={{ overflow: "hidden", background: "var(--mantine-color-body)" }}>
+            <SettingRow
+              icon={<IconLogout size={18} stroke={1.7} />}
+              color="terracotta"
+              title="Sign out"
+              desc="End this signed-in session on this device."
+              control={
+                <Button
+                  variant="light"
+                  color="terracotta"
+                  size="xs"
+                  radius="md"
+                  loading={signingOut}
+                  onClick={() => void handleSignOut()}
+                >
+                  Sign out
+                </Button>
+              }
+            />
+          </Paper>
+        ) : null}
 
         <Group justify="flex-end" gap="sm" mt={2}>
           <Button variant="subtle" color="gray" radius="md" onClick={onClose}>

@@ -19,7 +19,10 @@ import { useEffect, useState } from "react";
 import { createQueryClient } from "@/lib/api/query-client";
 import {
   type MantineColorScheme,
+  cookieColorSchemeManager,
   isLightOnlyPath,
+  MANTINE_COLOR_SCHEME_STORAGE_KEY,
+  readColorSchemeCookieClient,
   resolveColorScheme,
   setSsrColorScheme,
   writeColorSchemeCookie,
@@ -674,6 +677,8 @@ const cssVariablesResolver: CSSVariablesResolver = () => ({
   },
 });
 
+const zivoColorSchemeManager = cookieColorSchemeManager();
+
 function ColorSchemeCookieSync() {
   const pathname = usePathname();
   const { colorScheme } = useMantineColorScheme();
@@ -681,6 +686,33 @@ function ColorSchemeCookieSync() {
     if (isLightOnlyPath(pathname)) return;
     writeColorSchemeCookie(colorScheme === "dark" ? "dark" : "light");
   }, [colorScheme, pathname]);
+  return null;
+}
+
+/** Keep variantColorResolver in sync when the user toggles theme (no document reads during render). */
+function SsrColorSchemeSync() {
+  const { colorScheme } = useMantineColorScheme();
+  setSsrColorScheme(colorScheme === "dark" ? "dark" : "light");
+  return null;
+}
+
+/**
+ * One-time: users who only had localStorage (pre-cookie) get their preference
+ * after hydration — never during the first paint (avoids SSR/client HTML drift).
+ */
+function LegacyColorSchemeMigration() {
+  const { setColorScheme } = useMantineColorScheme();
+  useEffect(() => {
+    if (readColorSchemeCookieClient() !== null) return;
+    try {
+      const stored = window.localStorage.getItem(MANTINE_COLOR_SCHEME_STORAGE_KEY);
+      if (stored === "dark" || stored === "light") {
+        setColorScheme(stored);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [setColorScheme]);
   return null;
 }
 
@@ -722,7 +754,10 @@ export default function Providers({
         cssVariablesResolver={cssVariablesResolver}
         defaultColorScheme={colorScheme}
         forceColorScheme={lightOnly ? "light" : undefined}
+        colorSchemeManager={zivoColorSchemeManager}
       >
+        <SsrColorSchemeSync />
+        <LegacyColorSchemeMigration />
         <ColorSchemeCookieSync />
         <LandingSchemeSync />
         <Notifications position="top-right" />

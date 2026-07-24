@@ -29,12 +29,18 @@ export function DeleteSourceModal({
   const router = useRouter();
   const pathname = usePathname();
   const [deleteBusy, setDeleteBusy] = useState(false);
+  // Freeze display while deleteBusy so parent can clear `target` without blanking
+  // the dialog mid-request / mid-close.
+  const [frozenLabel, setFrozenLabel] = useState("");
 
   const artifactId = pathname.startsWith("/workspace/") ? pathname.split("/")[2] : undefined;
+  const opened = Boolean(target) || deleteBusy;
+  const displayName = target ? label(target.filename) : frozenLabel;
 
   async function confirmDeleteSource() {
     if (!target) return;
     const t = target;
+    setFrozenLabel(label(t.filename));
     setDeleteBusy(true);
     try {
       await ensureGuestSession();
@@ -58,14 +64,16 @@ export function DeleteSourceModal({
       });
     } finally {
       setDeleteBusy(false);
+      setFrozenLabel("");
     }
   }
 
   return (
     <Modal
-      opened={target !== null}
+      opened={opened}
       onClose={() => {
-        if (!deleteBusy) onClose();
+        if (deleteBusy) return;
+        onClose();
       }}
       title="Delete source?"
       centered
@@ -77,7 +85,7 @@ export function DeleteSourceModal({
         <Text size="sm" lh={1.55}>
           Permanently delete{" "}
           <Text span fw={600}>
-            {target ? label(target.filename) : ""}
+            {displayName}
           </Text>
           ? This removes the file, generated questions, chat history, and cached responses. This
           cannot be undone.

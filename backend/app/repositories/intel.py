@@ -208,6 +208,89 @@ def get_or_create_concept_entity(
     return entity_id
 
 
+_PERSON_TYPE_URI = "/vocab/entity/person"
+
+
+def get_or_create_account_entity(
+    db: Session,
+    account_id: uuid.UUID,
+    username: str,
+) -> uuid.UUID:
+    """Link a qb.account to a stable intel.entity (person) for measurements.
+
+    Idempotent — safe on signup gaps, OAuth completes, and concurrent first grades.
+    """
+    row = db.execute(
+        text("SELECT entity_id FROM qb.account_entity WHERE account_id = :id"),
+        {"id": account_id},
+    ).first()
+    if row:
+        return row[0]
+
+    canonical_uri = f"qb://account/{account_id}"
+    now = datetime.now(timezone.utc)
+    type_id = _concept_id(db, _PERSON_TYPE_URI)
+    label = (username or str(account_id))[:500]
+    normalized = label.strip().lower()[:500]
+
+    entity_row = db.execute(
+        text(
+            """
+            INSERT INTO intel.entity (type_concept_id, canonical_uri, status)
+            VALUES (:type_id, :uri, 'active')
+            ON CONFLICT (canonical_uri) DO UPDATE SET canonical_uri = EXCLUDED.canonical_uri
+            RETURNING id
+            """
+        ),
+        {"type_id": type_id, "uri": canonical_uri},
+    ).first()
+    entity_id = entity_row[0]
+
+    db.execute(
+        text(
+            """
+            UPDATE intel.entity_label SET valid_to = :now
+            WHERE entity_id = :entity_id AND valid_to IS NULL
+            """
+        ),
+        {"entity_id": entity_id, "now": now},
+    )
+    db.execute(
+        text(
+            """
+            INSERT INTO intel.entity_label
+              (entity_id, label, label_normalized, language, valid_from)
+            VALUES (:entity_id, :label, :normalized, 'en', :now)
+            """
+        ),
+        {
+            "entity_id": entity_id,
+            "label": label,
+            "normalized": normalized,
+            "now": now,
+        },
+    )
+
+    db.execute(
+        text(
+            """
+            INSERT INTO qb.account_entity (account_id, entity_id)
+            VALUES (:account_id, :entity_id)
+            ON CONFLICT (account_id) DO NOTHING
+            """
+        ),
+        {"account_id": account_id, "entity_id": entity_id},
+    )
+
+    linked = db.execute(
+        text("SELECT entity_id FROM qb.account_entity WHERE account_id = :id"),
+        {"id": account_id},
+    ).first()
+    if not linked:
+        raise RuntimeError(f"account_entity link missing for account {account_id}")
+    return linked[0]
+
+
 def link_assertion_concept(
     db: Session,
     assertion_id: uuid.UUID,

@@ -44,6 +44,18 @@ async function readApiError(res: Response): Promise<string> {
   return humanizeApiFailure(res.status, text);
 }
 
+/** Admin-only route failed: guest 401 or non-admin 403. */
+export function isApiAccessDenied(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const m = error.message.toLowerCase();
+  return (
+    m.includes("admin") ||
+    m.includes("not authenticated") ||
+    m.includes("forbidden") ||
+    m.includes("unauthorized")
+  );
+}
+
 export function humanizeApiFailure(status: number, message: string): string {
   const trimmed = message.trim();
   if (trimmed && !/^internal server error$/i.test(trimmed)) {
@@ -191,6 +203,19 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   handleAuthFailure(res);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json() as Promise<T>;
+}
+
+/** POST that succeeds with 204 No Content (e.g. logout). */
+export async function apiPostNoContent(path: string, body: unknown): Promise<void> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    credentials: "include",
+    headers: buildHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  captureResponseMeta(res);
+  handleAuthFailure(res);
+  if (!res.ok) throw new Error(await readApiError(res));
 }
 
 export async function apiPatch<T>(path: string, body: unknown): Promise<T> {

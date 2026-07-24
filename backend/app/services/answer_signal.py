@@ -36,11 +36,9 @@ def resolve_subject_entity(
     neither identity is available.
     """
     if user:
-        row = db.execute(
-            text("SELECT entity_id FROM qb.account_entity WHERE account_id = :id"),
-            {"id": user.id},
-        ).first()
-        return row[0] if row else None
+        from app.repositories.intel import get_or_create_account_entity
+
+        return get_or_create_account_entity(db, user.id, user.username)
     if not guest_id:
         return None
     from app.repositories.intel import get_or_create_concept_entity

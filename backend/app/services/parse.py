@@ -6,6 +6,11 @@ import json
 
 import fitz
 from docx import Document as DocxDocument
+from docx.oxml.ns import qn
+from docx.table import Table
+from docx.text.paragraph import Paragraph
+
+from app.services.web_import import paginate_reader_text
 
 _SPARSE_PAGE_CHARS = 40
 
@@ -89,6 +94,14 @@ def count_pdf_pages(data: bytes) -> int:
         return max(1, doc.page_count)
 
 
+def count_document_pages(content_type: str, data: bytes) -> int:
+    """Page count for upload meta — PDF physical pages; Word/text via parse."""
+    ct = (content_type or "").lower()
+    if "pdf" in ct or data[:4] == b"%PDF":
+        return count_pdf_pages(data)
+    return max(1, len(parse_document(content_type, data)))
+
+
 def render_pdf_page_png(
     data: bytes,
     page_number: int,
@@ -120,11 +133,93 @@ def render_pdf_page_png(
         return None
 
 
+def _iter_docx_blocks(doc: DocxDocument):
+    """Yield paragraphs and tables in document body order."""
+    body = doc.element.body
+    for child in body.iterchildren():
+        if child.tag == qn("w:p"):
+            yield "p", Paragraph(child, doc)
+        elif child.tag == qn("w:tbl"):
+            yield "t", Table(child, doc)
+
+
+def _table_text(table: Table) -> str:
+    rows: list[str] = []
+    for row in table.rows:
+        cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+        if cells:
+            rows.append(" | ".join(cells))
+    return "\n".join(rows)
+
+
+def _paragraph_page_break_before(paragraph: Paragraph) -> bool:
+    p_pr = paragraph._element.find(qn("w:pPr"))
+    return p_pr is not None and p_pr.find(qn("w:pageBreakBefore")) is not None
+
+
+def _split_paragraph_by_page_breaks(paragraph: Paragraph) -> list[str]:
+    """Split one paragraph on hard page breaks; always returns ≥1 segment."""
+    if not paragraph.runs:
+        return [paragraph.text or ""]
+
+    segments: list[str] = [""]
+    for run in paragraph.runs:
+        for child in run._element:
+            if child.tag == qn("w:br") and child.get(qn("w:type")) == "page":
+                segments.append("")
+            elif child.tag == qn("w:t"):
+                segments[-1] += child.text or ""
+            elif child.tag == qn("w:tab"):
+                segments[-1] += "\t"
+    return segments
+
+
+def _paginate_hard_segments(segments: list[str]) -> list[dict]:
+    """Soft-paginate each hard page segment (same char budget as paste/URL)."""
+    out: list[dict] = []
+    page_num = 1
+    for segment in segments:
+        text = segment.strip()
+        if not text:
+            continue
+        for item in paginate_reader_text(text):
+            out.append({"page": page_num, "text": item["text"]})
+            page_num += 1
+    return out or [{"page": 1, "text": ""}]
+
+
 def _parse_docx(data: bytes) -> list[dict]:
+    """Split Word docs on hard page breaks; otherwise soft-paginate like paste."""
     doc = DocxDocument(io.BytesIO(data))
-    paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-    text = "\n\n".join(paragraphs)
-    return [{"page": 1, "text": text}] if text else [{"page": 1, "text": ""}]
+    hard_segments: list[str] = []
+    current: list[str] = []
+
+    def flush() -> None:
+        hard_segments.append("\n\n".join(part for part in current if part.strip()).strip())
+        current.clear()
+
+    def add_text(text: str) -> None:
+        stripped = text.strip()
+        if stripped:
+            current.append(stripped)
+
+    for kind, block in _iter_docx_blocks(doc):
+        if kind == "t":
+            add_text(_table_text(block))
+            continue
+        paragraph: Paragraph = block
+        if _paragraph_page_break_before(paragraph) and current:
+            flush()
+        parts = _split_paragraph_by_page_breaks(paragraph)
+        for i, part in enumerate(parts):
+            if i > 0:
+                flush()
+            add_text(part)
+
+    flush()
+    while len(hard_segments) > 1 and not hard_segments[-1]:
+        hard_segments.pop()
+    return _paginate_hard_segments(hard_segments)
 
 
 def _parse_text(data: bytes) -> list[dict]:
@@ -149,4 +244,4 @@ def _parse_text(data: bytes) -> list[dict]:
                     return parsed
         except (json.JSONDecodeError, TypeError, ValueError):
             pass
-    return [{"page": 1, "text": text.strip()}]
+    return paginate_reader_text(text.strip())

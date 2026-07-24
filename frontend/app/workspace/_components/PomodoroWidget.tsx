@@ -32,6 +32,20 @@ const STORAGE_KEY = "zivo-pomodoro-v1";
 const POS_KEY = "zivo-pomodoro-pos-v1";
 const PANEL_W = 232;
 
+function readPersistedPomodoro(): { presetIdx: number; completed: number } {
+  if (typeof window === "undefined") return { presetIdx: 0, completed: 0 };
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { presetIdx: 0, completed: 0 };
+    const s = JSON.parse(raw);
+    const presetIdx = typeof s.presetIdx === "number" && PRESETS[s.presetIdx] ? s.presetIdx : 0;
+    const completed = typeof s.completed === "number" ? s.completed : 0;
+    return { presetIdx, completed };
+  } catch {
+    return { presetIdx: 0, completed: 0 };
+  }
+}
+
 function phaseSeconds(preset: Preset, phase: Phase): number {
   return (phase === "focus" ? preset.focus : phase === "break" ? preset.break : preset.long) * 60;
 }
@@ -70,11 +84,11 @@ function chime(up: boolean) {
 
 export function PomodoroWidget() {
   const [open, setOpen] = useState(false);
-  const [presetIdx, setPresetIdx] = useState(0);
+  const [presetIdx, setPresetIdx] = useState(() => readPersistedPomodoro().presetIdx);
   const [phase, setPhase] = useState<Phase>("focus");
-  const [remaining, setRemaining] = useState(() => PRESETS[0].focus * 60);
+  const [remaining, setRemaining] = useState(() => PRESETS[readPersistedPomodoro().presetIdx].focus * 60);
   const [running, setRunning] = useState(false);
-  const [completed, setCompleted] = useState(0); // focus rounds finished
+  const [completed, setCompleted] = useState(() => readPersistedPomodoro().completed); // focus rounds finished
   const preset = PRESETS[presetIdx];
 
   // --- Draggable, position-persisted placement -------------------------------
@@ -104,8 +118,11 @@ export function PomodoroWidget() {
     return { x: window.innerWidth - 56, y: window.innerHeight - 56 };
   });
   const posRef = useRef(pos);
-  posRef.current = pos;
   const movedRef = useRef(false);
+
+  useEffect(() => {
+    posRef.current = pos;
+  }, [pos]);
 
   const clampPos = useCallback(
     (p: { x: number; y: number }) => {
@@ -159,22 +176,6 @@ export function PomodoroWidget() {
     },
     [clampPos],
   );
-
-  // Restore persisted config (not the live countdown - a stale timer shouldn't
-  // resume mid-count after a reload).
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
-      const s = JSON.parse(raw);
-      if (typeof s.presetIdx === "number" && PRESETS[s.presetIdx]) setPresetIdx(s.presetIdx);
-      if (typeof s.completed === "number") setCompleted(s.completed);
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time restore of persisted config
-      if (typeof s.presetIdx === "number" && PRESETS[s.presetIdx]) setRemaining(PRESETS[s.presetIdx].focus * 60);
-    } catch {
-      /* ignore */
-    }
-  }, []);
 
   useEffect(() => {
     try {

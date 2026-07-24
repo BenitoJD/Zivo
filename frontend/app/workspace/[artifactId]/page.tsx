@@ -206,6 +206,7 @@ export default function WorkspaceArtifactPage({
   // state so B never flashes A's filename, queue, or answer history. Also reset mode
   // so a Coding/Resume session on A doesn't open B in the wrong surface.
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect -- artifactId change must reset local study state without remounting the route */
     setArtifact(null);
     setPages(null);
     setSetupError(null);
@@ -234,6 +235,7 @@ export default function WorkspaceArtifactPage({
     setAnsweredHistory([]);
     setReviewIndex(null);
     setMode(defaultWorkspaceMode());
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [artifactId, setMode]);
 
   // Brainstorm turns the same tutor panel into the ideation partner: the ANGLES each
@@ -298,13 +300,23 @@ export default function WorkspaceArtifactPage({
   }, [artifactQuery.data, artifactQuery.error]);
 
   useEffect(() => {
-    if (pagesQuery.data) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- sync server pages into local state + reset selection
-      setPages(pagesQuery.data);
-      setSelectedPages([]);
-      setLastClickedPage(null);
-    }
-  }, [pagesQuery.data]);
+    if (!pagesQuery.data) return;
+    const data = pagesQuery.data;
+    const count = Math.max(data.page_count ?? 1, 1);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync server pages; default/clamp selection (artifactId reset already clears)
+    setPages(data);
+    if (artifact?.meta?.selected_range) return;
+    setSelectedPages((prev) => {
+      const clamped = prev.filter((p) => p >= 1 && p <= count);
+      if (clamped.length > 0) return clamped;
+      if (count === 1) return [1];
+      return [];
+    });
+    setLastClickedPage((prev) => {
+      if (prev !== null && prev >= 1 && prev <= count) return prev;
+      return count === 1 ? 1 : null;
+    });
+  }, [pagesQuery.data, artifact?.meta?.selected_range]);
 
   // Explicit indexing → ready poll. A freshly-uploaded PDF first settles the
   // artifact query on status "pending" (awaiting page selection); React Query
@@ -377,15 +389,6 @@ export default function WorkspaceArtifactPage({
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- depend on artifact?.id (stable); the artifact object changes identity on every edit and would needlessly reload the PDF
   }, [artifactId, invalidArtifactId, isPdf, artifact?.id]);
-
-  useEffect(() => {
-    // Single-page pastes/notes: don't strand the learner on an empty selection
-    // with "Start studying" disabled while the slider already shows 1–1.
-    if (selectedRange) return;
-    if (pageCount !== 1) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot default when page count resolves to 1
-    setSelectedPages((prev) => (prev.length === 0 ? [1] : prev));
-  }, [pageCount, selectedRange]);
 
   useEffect(() => {
     if (!pdfDoc?.numPages || pdfDoc.numPages <= 1) return;
@@ -816,8 +819,10 @@ export default function WorkspaceArtifactPage({
         to,
         pages: sortedSelection,
       });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.artifact(artifactId) });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.artifactPages(artifactId) });
+      const updated = await apiGet<ArtifactMeta>(`/api/artifacts/${artifactId}`);
+      queryClient.setQueryData(queryKeys.artifact(artifactId), updated);
+      setArtifact(updated);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.artifactPages(artifactId) });
       setReselectOpen(false);
       setQueue(null);
       setMcqLoading(true);
@@ -828,7 +833,6 @@ export default function WorkspaceArtifactPage({
       setFeedback(null);
       setAnsweredHistory([]);
       setReviewIndex(null);
-      setArtifact(await apiGet<ArtifactMeta>(`/api/artifacts/${artifactId}`));
     } catch (e) {
       setSetupError(e instanceof Error ? e.message : "Could not start indexing");
     } finally {

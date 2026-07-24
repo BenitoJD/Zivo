@@ -47,6 +47,29 @@ ALLOWED_TYPES = {
 }
 # Image study uploads are rejected until OCR ingest is production-ready.
 ALLOWED_IMAGE_PREFIX = "image/"
+_DOCX_CT = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def _normalize_upload_content_type(filename: str, content_type: str, data: bytes) -> str:
+    """Sniff real type; browsers often mislabel .docx as application/msword."""
+    ct = (content_type or "application/octet-stream").lower()
+    name = (filename or "").lower()
+    if data[:4] == b"%PDF" or name.endswith(".pdf"):
+        return "application/pdf"
+    # OOXML (.docx) is a ZIP; legacy .doc is OLE compound (D0 CF 11 E0).
+    is_zip = data[:2] == b"PK"
+    if name.endswith(".docx") or (is_zip and ("wordprocessingml" in ct or ct == "application/msword")):
+        return _DOCX_CT
+    if name.endswith(".doc") or ct == "application/msword":
+        if is_zip:
+            return _DOCX_CT
+        raise HTTPException(
+            status_code=415,
+            detail="Legacy .doc isn’t supported — save as .docx or PDF and upload again.",
+        )
+    if name.endswith((".txt", ".md")) or ct.startswith("text/"):
+        return "text/plain"
+    return ct
 
 
 class DocumentOut(BaseModel):
@@ -215,7 +238,10 @@ async def upload_document(
 ) -> Document:
     data = await _read_upload_capped(request, file)
 
-    ct = (file.content_type or "application/octet-stream").lower()
+    try:
+        ct = _normalize_upload_content_type(file.filename or "document", file.content_type or "", data)
+    except HTTPException:
+        raise
     if ct.startswith(ALLOWED_IMAGE_PREFIX):
         raise HTTPException(
             status_code=422,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -47,3 +48,38 @@ def test_get_session_unauthenticated() -> None:
     assert body["authenticated"] is False
     assert body["username"] is None
     assert body["csrf_token"] is None
+
+
+def test_logout_returns_204() -> None:
+    import time
+
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+
+    try:
+        db = SessionLocal()
+        db.execute(select(1))
+        db.close()
+    except Exception:
+        pytest.skip("dev DB not reachable")
+
+    username = f"logout_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+
+    client = TestClient(app)
+    signup = client.post(
+        "/api/auth/signup",
+        json={
+            "username": username,
+            "password": "SmokeTest1!",
+            "confirm_password": "SmokeTest1!",
+            "accept_terms": True,
+        },
+    )
+    assert signup.status_code == 200, signup.text
+    csrf = signup.json()["csrf_token"]
+    out = client.post("/api/auth/logout", headers={"X-CSRF-Token": csrf})
+    assert out.status_code == 204, out.text
+
+    session = client.get("/api/auth/session")
+    assert session.json()["authenticated"] is False

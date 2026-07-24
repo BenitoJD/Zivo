@@ -2,7 +2,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { notifications } from "@mantine/notifications";
-import { apiPost, setCsrfToken } from "@/lib/api/client";
+import { apiPost, apiPostNoContent, clearClientSessionState, setCsrfToken } from "@/lib/api/client";
 import { queryKeys, type AuthSession } from "@/lib/api/queries";
 
 export type AuthMode = "login" | "signup";
@@ -49,6 +49,32 @@ export function useSubmitAuth(mode: AuthMode) {
         ok: false,
         error: err instanceof Error ? err.message : "Authentication failed",
       };
+    }
+  };
+}
+
+export function useSignOut() {
+  const queryClient = useQueryClient();
+
+  return async (): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      await apiPostNoContent("/api/auth/logout", {});
+      clearClientSessionState();
+      await queryClient.invalidateQueries({ queryKey: queryKeys.session });
+      notifications.show({
+        title: "Signed out",
+        message: "Your session has ended.",
+        color: "gray",
+      });
+      return { ok: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Could not sign out";
+      notifications.show({
+        title: "Sign out failed",
+        message,
+        color: "terracotta",
+      });
+      return { ok: false, error: message };
     }
   };
 }

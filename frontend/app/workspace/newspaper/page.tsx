@@ -20,11 +20,12 @@ import {
   Title,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
-import { apiPatch } from "@/lib/api/client";
+import { apiPatch, isApiAccessDenied } from "@/lib/api/client";
 import {
   queryKeys,
   useNewspaperBrandsQuery,
   useNewspaperChannelQuery,
+  useSessionQuery,
   type NewspaperBrand,
   type NewspaperBrands,
   type NewspaperChannel,
@@ -32,8 +33,11 @@ import {
 
 export default function NewspaperAdminPage() {
   const qc = useQueryClient();
-  const channelQ = useNewspaperChannelQuery();
-  const brandsQ = useNewspaperBrandsQuery();
+  const session = useSessionQuery();
+  const isAdmin = Boolean(session.data?.is_admin);
+  const channelQ = useNewspaperChannelQuery(isAdmin);
+  const brandsQ = useNewspaperBrandsQuery(isAdmin);
+  // undefined = show server value; string = user edited
   const [refEdit, setRefEdit] = useState<string | undefined>(undefined);
   const [labelEdit, setLabelEdit] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
@@ -41,10 +45,7 @@ export default function NewspaperAdminPage() {
   const [modeBusy, setModeBusy] = useState(false);
 
   const forbidden =
-    channelQ.isError &&
-    (channelQ.error instanceof Error
-      ? channelQ.error.message.toLowerCase().includes("admin")
-      : false);
+    !isAdmin || (channelQ.isError && isApiAccessDenied(channelQ.error));
 
   const ref = refEdit ?? channelQ.data?.channel_ref ?? "";
   const label = labelEdit ?? channelQ.data?.channel_label ?? "";
@@ -138,7 +139,7 @@ export default function NewspaperAdminPage() {
     }
   }
 
-  if (channelQ.isLoading || brandsQ.isLoading) {
+  if (session.isLoading || channelQ.isLoading || brandsQ.isLoading) {
     return (
       <Center mih={240}>
         <Loader color="lavender" />

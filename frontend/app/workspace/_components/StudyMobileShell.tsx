@@ -27,17 +27,14 @@ export function StudyMobileShell({
   /** Exam / Test mode: hide Study Buddy tab. */
   tutorHidden?: boolean;
 }) {
-  const [active, setActive] = useState<StudyMobileTab>("question");
+  const [activeTab, setActive] = useState<StudyMobileTab>("question");
+  const active = tutorHidden && activeTab === "tutor" ? "question" : activeTab;
 
   // Switch to the tutor tab whenever a quote-to-chat action fires.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- react to an external "focus tutor" signal from the parent
     if (!tutorHidden && focusTutorKey > 0) setActive("tutor");
   }, [focusTutorKey, tutorHidden]);
-
-  useEffect(() => {
-    if (tutorHidden && active === "tutor") setActive("question");
-  }, [tutorHidden, active]);
 
   const tabs: { id: StudyMobileTab; label: string; icon: typeof IconClipboardList }[] = [
     { id: "question", label: "Question", icon: IconClipboardList },

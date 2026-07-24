@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.models import Account, Document
 from app.services.jobs import enqueue_ingest
-from app.services.parse import count_pdf_pages
+from app.services.parse import count_document_pages
 from app.services.storage import save_upload, slugify_filename
 
 _GB = 1024 * 1024 * 1024
@@ -99,10 +99,20 @@ def create_document_record(
         doc_meta["guest_id"] = doc_guest_id
 
     ct_lower = (content_type or "").lower()
-    if "pdf" in ct_lower or data[:4] == b"%PDF":
-        doc_meta["page_count"] = count_pdf_pages(data)
-
-    is_image = content_type.startswith("image/")
+    if not is_image:
+        try:
+            if (
+                "pdf" in ct_lower
+                or data[:4] == b"%PDF"
+                or "wordprocessingml" in ct_lower
+                or "msword" in ct_lower
+                or ct_lower.startswith("text/")
+                or ct_lower == "application/json"
+            ):
+                doc_meta["page_count"] = count_document_pages(content_type, data)
+        except Exception:
+            # Upload must succeed even if page counting fails; ingest will set it.
+            pass
 
     doc = Document(
         account_id=user.id if user else None,
@@ -156,12 +166,21 @@ def create_document_from_storage(
         doc_meta["guest_id"] = doc_guest_id
 
     ct_lower = (content_type or "").lower()
-    if "pdf" in ct_lower:
-        from app.services.storage import fetch_object
+    if not is_image:
+        try:
+            if (
+                "pdf" in ct_lower
+                or "wordprocessingml" in ct_lower
+                or "msword" in ct_lower
+                or ct_lower.startswith("text/")
+                or ct_lower == "application/json"
+            ):
+                from app.services.storage import fetch_object
 
-        data = fetch_object(storage_key)
-        if data[:4] == b"%PDF":
-            doc_meta["page_count"] = count_pdf_pages(data)
+                data = fetch_object(storage_key)
+                doc_meta["page_count"] = count_document_pages(content_type, data)
+        except Exception:
+            pass
 
     doc = Document(
         account_id=user.id if user else None,
