@@ -105,6 +105,7 @@ def create_document_record(
                 "pdf" in ct_lower
                 or data[:4] == b"%PDF"
                 or "wordprocessingml" in ct_lower
+                or "presentationml" in ct_lower
                 or "msword" in ct_lower
                 or ct_lower.startswith("text/")
                 or ct_lower == "application/json"
@@ -171,6 +172,7 @@ def create_document_from_storage(
             if (
                 "pdf" in ct_lower
                 or "wordprocessingml" in ct_lower
+                or "presentationml" in ct_lower
                 or "msword" in ct_lower
                 or ct_lower.startswith("text/")
                 or ct_lower == "application/json"

@@ -43,11 +43,13 @@ DEMO_DOC_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
 ALLOWED_TYPES = {
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "text/plain",
 }
 # Image study uploads are rejected until OCR ingest is production-ready.
 ALLOWED_IMAGE_PREFIX = "image/"
 _DOCX_CT = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+_PPTX_CT = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
 
 def _normalize_upload_content_type(filename: str, content_type: str, data: bytes) -> str:
@@ -56,10 +58,17 @@ def _normalize_upload_content_type(filename: str, content_type: str, data: bytes
     name = (filename or "").lower()
     if data[:4] == b"%PDF" or name.endswith(".pdf"):
         return "application/pdf"
-    # OOXML (.docx) is a ZIP; legacy .doc is OLE compound (D0 CF 11 E0).
+    # OOXML (.docx / .pptx) is a ZIP; legacy .doc is OLE compound (D0 CF 11 E0).
     is_zip = data[:2] == b"PK"
+    if name.endswith(".pptx") or (is_zip and "presentationml" in ct):
+        return _PPTX_CT
     if name.endswith(".docx") or (is_zip and ("wordprocessingml" in ct or ct == "application/msword")):
         return _DOCX_CT
+    if name.endswith(".ppt") or "ms-powerpoint" in ct:
+        raise HTTPException(
+            status_code=415,
+            detail="Legacy .ppt isn’t supported — save as .pptx or PDF and upload again.",
+        )
     if name.endswith(".doc") or ct == "application/msword":
         if is_zip:
             return _DOCX_CT
@@ -245,7 +254,7 @@ async def upload_document(
     if ct.startswith(ALLOWED_IMAGE_PREFIX):
         raise HTTPException(
             status_code=422,
-            detail="Image study isn’t available yet — upload a PDF, Word doc, or paste text.",
+            detail="Image study isn’t available yet — upload a PDF, Word, PowerPoint, or paste text.",
         )
     if ct not in ALLOWED_TYPES:
         raise HTTPException(status_code=415, detail="Unsupported file type")

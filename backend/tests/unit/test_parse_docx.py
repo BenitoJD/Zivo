@@ -49,10 +49,26 @@ def test_parse_docx_splits_on_hard_page_break() -> None:
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         data,
     )
-    assert len(pages) >= 2
+    # Hard breaks are native units — keep as 2 pages (no soft-split of short pages).
+    assert len(pages) == 2
     assert pages[0]["page"] == 1
-    assert "First page" in pages[0]["text"]
+    assert "First page" in pages[0]["text"] or "before" in pages[0]["text"]
     assert any("Second page" in p["text"] for p in pages)
+
+
+def test_parse_docx_native_breaks_not_soft_split_when_short() -> None:
+    """Native page breaks win: two short hard pages stay two study pages."""
+    data = _docx_bytes(
+        _add_paragraph("Alpha only"),
+        _add_page_break_then("Beta only"),
+    )
+    pages = parse_document(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        data,
+    )
+    assert len(pages) == 2
+    assert "Alpha" in pages[0]["text"] or "before" in pages[0]["text"]
+    assert "Beta" in pages[1]["text"]
 
 
 def test_parse_docx_soft_paginates_long_doc_without_breaks() -> None:
@@ -107,3 +123,19 @@ def test_avidpay_like_docx_is_multi_page() -> None:
     assert len(pages) >= 8
     assert all(pages[i]["page"] == i + 1 for i in range(len(pages)))
     assert any("Part 1" in p["text"] for p in pages)
+
+
+def test_parse_pptx_one_slide_per_page() -> None:
+    from pathlib import Path
+
+    path = Path("/Users/benito/Desktop/Name_Profile Summary.pptx")
+    if not path.is_file():
+        return
+    pages = parse_document(
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        path.read_bytes(),
+    )
+    assert len(pages) >= 1
+    assert pages[0]["page"] == 1
+    # Native slide unit — not soft-split into empty crumbs.
+    assert all(p.get("text") is not None for p in pages)

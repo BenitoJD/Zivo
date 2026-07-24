@@ -1,8 +1,16 @@
-"""Document parsing — PDF, DOCX, plain text, imported articles."""
+"""Document parsing — PDF, DOCX, PPTX, plain text, imported articles.
+
+Study pages follow a native-first policy (see ``app.services.study_pages``):
+use the format's own page/slide/break units when present; soft-paginate only
+when the format has no native paging.
+"""
 
 import hashlib
 import io
 import json
+import re
+from xml.etree import ElementTree as ET
+from zipfile import ZipFile
 
 import fitz
 from docx import Document as DocxDocument
@@ -10,9 +18,15 @@ from docx.oxml.ns import qn
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 
+from app.services.study_pages import study_pages_from_native_units
 from app.services.web_import import paginate_reader_text
 
 _SPARSE_PAGE_CHARS = 40
+_PPTX_CT = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+_A_NS = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
+_P_NS = {"p": "http://schemas.openxmlformats.org/presentationml/2006/main"}
+_R_NS = {"r": "http://schemas.openxmlformats.org/package/2006/relationships"}
+_PR_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 
 
 def document_bytes_hash(data: bytes) -> str:
@@ -20,12 +34,14 @@ def document_bytes_hash(data: bytes) -> str:
 
 
 def parse_document(content_type: str, data: bytes) -> list[dict]:
-    """Return list of {page: int, text: str} (1-indexed pages)."""
+    """Return list of {page: int, text: str} (1-indexed study pages)."""
     ct = (content_type or "").lower()
     if "pdf" in ct or data[:4] == b"%PDF":
         return _parse_pdf(data)
     if "wordprocessingml" in ct or "msword" in ct:
         return _parse_docx(data)
+    if "presentationml" in ct or ct == _PPTX_CT:
+        return _parse_pptx(data)
     if ct.startswith("text/") or ct in ("application/json",):
         return _parse_text(data)
     # images / unknown — single page placeholder for vision path later
@@ -33,6 +49,7 @@ def parse_document(content_type: str, data: bytes) -> list[dict]:
 
 
 def _parse_pdf(data: bytes) -> list[dict]:
+    """PDF physical pages are native units — never soft-merge them."""
     pages: list[dict] = []
     with fitz.open(stream=data, filetype="pdf") as doc:
         for i, page in enumerate(doc, start=1):
@@ -70,7 +87,7 @@ def parse_document_page(
     *,
     cached_pages: list[dict] | None = None,
 ) -> dict:
-    """Return {page, text} for one page (PDF) or the whole doc for single-page formats."""
+    """Return {page, text} for one study page."""
     page_number = int(page_number)
     if cached_pages:
         for item in cached_pages:
@@ -95,7 +112,7 @@ def count_pdf_pages(data: bytes) -> int:
 
 
 def count_document_pages(content_type: str, data: bytes) -> int:
-    """Page count for upload meta — PDF physical pages; Word/text via parse."""
+    """Page count for upload meta — native units when present, else parse length."""
     ct = (content_type or "").lower()
     if "pdf" in ct or data[:4] == b"%PDF":
         return count_pdf_pages(data)
@@ -241,29 +258,19 @@ def _split_paragraph_by_page_breaks(paragraph: Paragraph) -> list[str]:
     return segments
 
 
-def _paginate_hard_segments(segments: list[str]) -> list[dict]:
-    """Soft-paginate each hard page segment (same char budget as paste/URL)."""
-    out: list[dict] = []
-    page_num = 1
-    for segment in segments:
-        text = segment.strip()
-        if not text:
-            continue
-        for item in paginate_reader_text(text):
-            out.append({"page": page_num, "text": item["text"]})
-            page_num += 1
-    return out or [{"page": 1, "text": ""}]
-
-
 def _parse_docx(data: bytes) -> list[dict]:
-    """Split Word docs on hard page breaks; otherwise soft-paginate like paste."""
+    """Native page breaks when present; otherwise soft-paginate like paste."""
     doc = DocxDocument(io.BytesIO(data))
     hard_segments: list[str] = []
     current: list[str] = []
+    native_breaks = 0
 
-    def flush() -> None:
+    def flush(*, from_break: bool = False) -> None:
+        nonlocal native_breaks
         hard_segments.append("\n\n".join(part for part in current if part.strip()).strip())
         current.clear()
+        if from_break:
+            native_breaks += 1
 
     def add_text(text: str) -> None:
         stripped = text.strip()
@@ -276,17 +283,72 @@ def _parse_docx(data: bytes) -> list[dict]:
             continue
         paragraph: Paragraph = block
         if _paragraph_page_break_before(paragraph) and current:
-            flush()
+            flush(from_break=True)
         parts = _split_paragraph_by_page_breaks(paragraph)
         for i, part in enumerate(parts):
             if i > 0:
-                flush()
+                flush(from_break=True)
             add_text(part)
 
-    flush()
+    flush(from_break=False)
     while len(hard_segments) > 1 and not hard_segments[-1]:
         hard_segments.pop()
-    return _paginate_hard_segments(hard_segments)
+    return study_pages_from_native_units(hard_segments, has_native=native_breaks > 0)
+
+
+def _pptx_slide_targets(zf: ZipFile) -> list[str]:
+    """Slide paths in presentation order from presentation.xml + rels."""
+    try:
+        rels_root = ET.fromstring(zf.read("ppt/_rels/presentation.xml.rels"))
+    except KeyError:
+        return sorted(
+            n for n in zf.namelist() if re.match(r"ppt/slides/slide\d+\.xml$", n)
+        )
+    id_to_target: dict[str, str] = {}
+    for rel in rels_root.findall("r:Relationship", _R_NS):
+        typ = rel.attrib.get("Type", "")
+        if typ.endswith("/slide"):
+            target = rel.attrib.get("Target", "")
+            rid = rel.attrib.get("Id", "")
+            if target and rid:
+                id_to_target[rid] = (
+                    target if target.startswith("ppt/") else f"ppt/{target.lstrip('/')}"
+                )
+    try:
+        pres = ET.fromstring(zf.read("ppt/presentation.xml"))
+    except KeyError:
+        return list(id_to_target.values())
+    ordered: list[str] = []
+    for sld in pres.findall(".//p:sldIdLst/p:sldId", _P_NS):
+        rid = sld.attrib.get(f"{_PR_NS}id") or sld.attrib.get("r:id")
+        if rid and rid in id_to_target:
+            ordered.append(id_to_target[rid])
+    return ordered or list(id_to_target.values())
+
+
+def _pptx_slide_text(xml_bytes: bytes) -> str:
+    root = ET.fromstring(xml_bytes)
+    parts: list[str] = []
+    for node in root.findall(".//a:t", _A_NS):
+        if node.text and node.text.strip():
+            parts.append(node.text.strip())
+    return re.sub(r"\s+", " ", " ".join(parts)).strip()
+
+
+def _parse_pptx(data: bytes) -> list[dict]:
+    """One PowerPoint slide = one native study page."""
+    try:
+        with ZipFile(io.BytesIO(data)) as zf:
+            targets = _pptx_slide_targets(zf)
+            units: list[str] = []
+            for path in targets:
+                try:
+                    units.append(_pptx_slide_text(zf.read(path)))
+                except KeyError:
+                    units.append("")
+    except Exception:
+        return [{"page": 1, "text": ""}]
+    return study_pages_from_native_units(units or [""], has_native=True)
 
 
 def _parse_text(data: bytes) -> list[dict]:
@@ -300,15 +362,16 @@ def _parse_text(data: bytes) -> list[dict]:
             payload = json.loads(text)
             pages = payload.get("pages")
             if isinstance(pages, list) and pages:
-                parsed: list[dict] = []
-                for item in pages:
-                    if not isinstance(item, dict):
-                        continue
-                    page_num = int(item.get("page", len(parsed) + 1))
-                    page_text = str(item.get("text") or "").strip()
-                    parsed.append({"page": page_num, "text": page_text})
-                if parsed:
-                    return parsed
+                # Pre-baked article pages (paste/URL/YouTube) are native units.
+                units = [
+                    str(item.get("text") or "").strip()
+                    for item in pages
+                    if isinstance(item, dict)
+                ]
+                units = [u for u in units if u]
+                if units:
+                    return study_pages_from_native_units(units, has_native=True)
         except (json.JSONDecodeError, TypeError, ValueError):
             pass
+    # Plain text / markdown — no native pages → soft fallback.
     return paginate_reader_text(text.strip())

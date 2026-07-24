@@ -17,11 +17,13 @@ import { notifications } from "@mantine/notifications";
 import { apiUploadFile, apiPost, ensureGuestSession, isArtifactId } from "@/lib/api/client";
 import { useInvalidateSources } from "@/lib/api/queries";
 
-const FORMATS = ["PDF", "Word", "URL", "Paste", "GitHub"] as const;
+const FORMATS = ["PDF", "Word", "PowerPoint", "URL", "Paste", "GitHub"] as const;
+
 type DeckTab = "file" | "paste" | "link" | "github";
 const TAG_TO_TAB: Record<(typeof FORMATS)[number], DeckTab> = {
   PDF: "file",
   Word: "file",
+  PowerPoint: "file",
   URL: "link",
   Paste: "paste",
   GitHub: "github",
@@ -214,7 +216,7 @@ export function SourceImportDeck({ onImported }: { onImported: (id: string) => v
               ref={fileInputRef}
               type="file"
               style={{ display: "none" }}
-              accept=".pdf,.doc,.docx,.txt,.md"
+              accept=".pdf,.doc,.docx,.ppt,.pptx,.txt,.md"
               onChange={handleFileChange}
               disabled={isBusy}
             />
@@ -241,7 +243,7 @@ export function SourceImportDeck({ onImported }: { onImported: (id: string) => v
                     {isDragOver ? "Drop file to upload" : "Drop textbook pages or click to select"}
                   </Text>
                   <Text size="xs" c="gray.5">
-                    PDF, Word, or text (max 100MB)
+                    PDF, Word, PowerPoint, or text (max 100MB)
                   </Text>
                 </Stack>
               )}
