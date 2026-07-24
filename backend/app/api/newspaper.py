@@ -20,6 +20,14 @@ class ChannelIn(BaseModel):
     channel_label: str = Field(default="", max_length=256)
 
 
+class AllowlistIn(BaseModel):
+    allowlist_only: bool
+
+
+class BrandEnabledIn(BaseModel):
+    enabled: bool
+
+
 @router.get("/catalog")
 def catalog(db: Session = Depends(get_db)) -> dict:
     return newspaper_svc.list_catalog(db)
@@ -37,6 +45,8 @@ def get_edition(edition_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     ed = newspaper_repo.get_edition(db, edition_id)
     if not ed:
         raise HTTPException(status_code=404, detail="Edition not found")
+    if not newspaper_repo.is_brand_allowed(db, ed["paper_slug"]):
+        raise HTTPException(status_code=404, detail="Edition not found")
     return {
         "id": str(ed["id"]),
         "paper_slug": ed["paper_slug"],
@@ -53,6 +63,11 @@ def edition_questions(
     limit: int = 40,
     db: Session = Depends(get_db),
 ) -> dict:
+    from app.repositories import newspaper as newspaper_repo
+
+    ed = newspaper_repo.get_edition(db, edition_id)
+    if ed and not newspaper_repo.is_brand_allowed(db, ed["paper_slug"]):
+        raise HTTPException(status_code=404, detail="Edition not found")
     out = newspaper_svc.list_edition_questions(db, edition_id, limit=min(limit, 80))
     if out["edition"] is None:
         raise HTTPException(status_code=404, detail="Edition not found")
@@ -72,3 +87,26 @@ def put_channel(body: ChannelIn, db: Session = Depends(get_db)) -> dict:
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/admin/brands", dependencies=[Depends(require_admin)])
+def get_brands(db: Session = Depends(get_db)) -> dict:
+    return newspaper_svc.list_admin_brands(db)
+
+
+@router.patch("/admin/allowlist", dependencies=[Depends(require_admin), Depends(require_csrf)])
+def patch_allowlist(body: AllowlistIn, db: Session = Depends(get_db)) -> dict:
+    return newspaper_svc.set_allowlist_only(db, allowlist_only=body.allowlist_only)
+
+
+@router.patch(
+    "/admin/brands/{paper_slug}",
+    dependencies=[Depends(require_admin), Depends(require_csrf)],
+)
+def patch_brand(paper_slug: str, body: BrandEnabledIn, db: Session = Depends(get_db)) -> dict:
+    try:
+        return newspaper_svc.set_brand_enabled(
+            db, paper_slug=paper_slug, enabled=body.enabled
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

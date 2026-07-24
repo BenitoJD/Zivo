@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Admin: swap the Telegram channel that feeds Newspaper ingest.
+ * Admin: Telegram channel + which newspaper brands to cook.
  */
 
 import { useState } from "react";
@@ -10,9 +10,11 @@ import {
   Box,
   Button,
   Center,
+  Group,
   Loader,
   Paper,
   Stack,
+  Switch,
   Text,
   TextInput,
   Title,
@@ -21,17 +23,22 @@ import { notifications } from "@mantine/notifications";
 import { apiPatch } from "@/lib/api/client";
 import {
   queryKeys,
+  useNewspaperBrandsQuery,
   useNewspaperChannelQuery,
+  type NewspaperBrand,
+  type NewspaperBrands,
   type NewspaperChannel,
 } from "@/lib/api/queries";
 
 export default function NewspaperAdminPage() {
   const qc = useQueryClient();
   const channelQ = useNewspaperChannelQuery();
-  // undefined = show server value; string = user edited
+  const brandsQ = useNewspaperBrandsQuery();
   const [refEdit, setRefEdit] = useState<string | undefined>(undefined);
   const [labelEdit, setLabelEdit] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
+  const [brandBusy, setBrandBusy] = useState<string | null>(null);
+  const [modeBusy, setModeBusy] = useState(false);
 
   const forbidden =
     channelQ.isError &&
@@ -41,8 +48,11 @@ export default function NewspaperAdminPage() {
 
   const ref = refEdit ?? channelQ.data?.channel_ref ?? "";
   const label = labelEdit ?? channelQ.data?.channel_label ?? "";
+  const allowlistOnly =
+    brandsQ.data?.allowlist_only ?? channelQ.data?.allowlist_only ?? false;
+  const brands = brandsQ.data?.brands ?? [];
 
-  async function save() {
+  async function saveChannel() {
     setBusy(true);
     try {
       const updated = await apiPatch<NewspaperChannel>("/api/newspaper/admin/channel", {
@@ -68,7 +78,67 @@ export default function NewspaperAdminPage() {
     }
   }
 
-  if (channelQ.isLoading) {
+  async function toggleAllowlist(next: boolean) {
+    setModeBusy(true);
+    try {
+      const updated = await apiPatch<NewspaperChannel>("/api/newspaper/admin/allowlist", {
+        allowlist_only: next,
+      });
+      qc.setQueryData(queryKeys.newspaperChannel(), (prev) =>
+        prev ? { ...prev, ...updated } : updated,
+      );
+      qc.setQueryData(queryKeys.newspaperBrands(), (prev: NewspaperBrands | undefined) =>
+        prev ? { ...prev, allowlist_only: next } : prev,
+      );
+      void qc.invalidateQueries({ queryKey: queryKeys.newspaperCatalog() });
+      notifications.show({
+        title: "Paper filter",
+        message: next
+          ? "Only enabled papers will ingest and show."
+          : "All discovered papers will ingest and show.",
+        color: "sage",
+      });
+    } catch (e) {
+      notifications.show({
+        title: "Paper filter",
+        message: e instanceof Error ? e.message : "Update failed",
+        color: "terracotta",
+      });
+    } finally {
+      setModeBusy(false);
+    }
+  }
+
+  async function toggleBrand(brand: NewspaperBrand, enabled: boolean) {
+    setBrandBusy(brand.slug);
+    try {
+      const updated = await apiPatch<NewspaperBrand>(
+        `/api/newspaper/admin/brands/${encodeURIComponent(brand.slug)}`,
+        { enabled },
+      );
+      qc.setQueryData(queryKeys.newspaperBrands(), (prev: NewspaperBrands | undefined) =>
+        prev
+          ? {
+              ...prev,
+              brands: prev.brands.map((b) =>
+                b.slug === updated.slug ? { ...b, enabled: updated.enabled } : b,
+              ),
+            }
+          : prev,
+      );
+      void qc.invalidateQueries({ queryKey: queryKeys.newspaperCatalog() });
+    } catch (e) {
+      notifications.show({
+        title: brand.title,
+        message: e instanceof Error ? e.message : "Update failed",
+        color: "terracotta",
+      });
+    } finally {
+      setBrandBusy(null);
+    }
+  }
+
+  if (channelQ.isLoading || brandsQ.isLoading) {
     return (
       <Center mih={240}>
         <Loader color="lavender" />
@@ -85,21 +155,24 @@ export default function NewspaperAdminPage() {
   }
 
   return (
-    <Box p={{ base: "md", md: "xl" }} maw={560}>
-      <Stack gap="lg">
+    <Box p={{ base: "md", md: "xl" }} maw={640}>
+      <Stack gap="xl">
         <Stack gap={4}>
           <Text size="xs" fw={600} tt="uppercase" lts={1.2} c="lavender.8">
             Newspaper
           </Text>
           <Title order={2} ff="var(--font-serif)" fw={500}>
-            Source channel
+            Source &amp; papers
           </Title>
         </Stack>
+
         <Paper radius="xl" p="lg" withBorder bg="gray.0" shadow="paper">
           <Stack gap="md">
+            <Text fw={600} ff="var(--font-serif)">
+              Telegram channel
+            </Text>
             <Text size="sm" c="dimmed">
-              Paste a channel @username, invite link, or numeric id. No redeploy needed —
-              the ingest worker re-reads this on the next loop.
+              Paste a channel @username, invite link, or numeric id. No redeploy needed.
             </Text>
             <TextInput
               label="Channel"
@@ -127,10 +200,67 @@ export default function NewspaperAdminPage() {
               radius="xl"
               loading={busy}
               disabled={!ref.trim()}
-              onClick={() => void save()}
+              onClick={() => void saveChannel()}
             >
               Save channel
             </Button>
+          </Stack>
+        </Paper>
+
+        <Paper radius="xl" p="lg" withBorder bg="gray.0" shadow="paper">
+          <Stack gap="md">
+            <Group justify="space-between" align="flex-start" wrap="nowrap">
+              <Box>
+                <Text fw={600} ff="var(--font-serif)">
+                  Papers you want
+                </Text>
+                <Text size="sm" c="dimmed">
+                  Turn on “only selected” then enable Mint, ET, etc. New brands show up after
+                  the channel posts them (off by default).
+                </Text>
+              </Box>
+              <Switch
+                checked={allowlistOnly}
+                onChange={(e) => void toggleAllowlist(e.currentTarget.checked)}
+                disabled={modeBusy}
+                label="Only selected"
+                labelPosition="left"
+              />
+            </Group>
+
+            {brands.length === 0 ? (
+              <Text size="sm" c="dimmed">
+                No papers discovered yet. After ingest sees a PDF, it appears here.
+              </Text>
+            ) : (
+              <Stack gap="xs">
+                {brands.map((b) => (
+                  <Paper key={b.slug} radius="md" p="sm" withBorder bg="var(--mantine-color-body)">
+                    <Group justify="space-between" wrap="nowrap">
+                      <Box style={{ minWidth: 0 }}>
+                        <Text fw={500} truncate>
+                          {b.title}
+                        </Text>
+                        <Text size="xs" c="dimmed" truncate>
+                          {b.slug}
+                        </Text>
+                      </Box>
+                      <Switch
+                        checked={b.enabled}
+                        disabled={brandBusy === b.slug || !allowlistOnly}
+                        onChange={(e) => void toggleBrand(b, e.currentTarget.checked)}
+                        aria-label={`Enable ${b.title}`}
+                      />
+                    </Group>
+                  </Paper>
+                ))}
+                {!allowlistOnly ? (
+                  <Text size="xs" c="dimmed">
+                    Switches apply when “Only selected” is on. Right now every paper is allowed.
+                  </Text>
+                ) : null}
+              </Stack>
+            )}
           </Stack>
         </Paper>
       </Stack>

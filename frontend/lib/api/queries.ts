@@ -47,6 +47,7 @@ export const queryKeys = {
   newspaperDays: (slug: string) => ["newspaper", "days", slug] as const,
   newspaperQuestions: (id: string) => ["newspaper", "questions", id] as const,
   newspaperChannel: () => ["newspaper", "channel"] as const,
+  newspaperBrands: () => ["newspaper", "brands"] as const,
 };
 
 export type StudyReport = {
@@ -808,7 +809,18 @@ export type NewspaperChannel = {
   channel_ref: string;
   channel_label: string;
   sync_cursor: number | null;
+  allowlist_only?: boolean;
   updated_at: string | null;
+};
+export type NewspaperBrand = {
+  slug: string;
+  title: string;
+  enabled: boolean;
+  first_seen_at: string | null;
+};
+export type NewspaperBrands = {
+  allowlist_only: boolean;
+  brands: NewspaperBrand[];
 };
 
 export function useNewspaperCatalogQuery(enabled = true) {
@@ -843,6 +855,15 @@ export function useNewspaperChannelQuery(enabled = true) {
   return useQuery({
     queryKey: queryKeys.newspaperChannel(),
     queryFn: () => apiGet<NewspaperChannel>("/api/newspaper/admin/channel"),
+    enabled,
+    retry: false,
+  });
+}
+
+export function useNewspaperBrandsQuery(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.newspaperBrands(),
+    queryFn: () => apiGet<NewspaperBrands>("/api/newspaper/admin/brands"),
     enabled,
     retry: false,
   });

@@ -22,7 +22,7 @@ def get_settings(db: Session) -> dict[str, Any]:
     row = db.execute(
         text(
             """
-            SELECT channel_ref, channel_label, sync_cursor, updated_at
+            SELECT channel_ref, channel_label, sync_cursor, allowlist_only, updated_at
             FROM qb.newspaper_settings WHERE id = 1
             """
         )
@@ -38,8 +38,16 @@ def get_settings(db: Session) -> dict[str, Any]:
             )
         )
         db.commit()
-        return {"channel_ref": "", "channel_label": "", "sync_cursor": None, "updated_at": None}
-    return dict(row)
+        return {
+            "channel_ref": "",
+            "channel_label": "",
+            "sync_cursor": None,
+            "allowlist_only": False,
+            "updated_at": None,
+        }
+    out = dict(row)
+    out["allowlist_only"] = bool(out.get("allowlist_only"))
+    return out
 
 
 def set_channel(db: Session, *, channel_ref: str, channel_label: str = "") -> dict[str, Any]:
@@ -205,27 +213,6 @@ def update_edition_status(
         )
 
 
-def list_papers(db: Session, *, since: date) -> list[dict[str, Any]]:
-    rows = db.execute(
-        text(
-            """
-            SELECT paper_slug, paper_title,
-                   COUNT(*) FILTER (WHERE status = 'ready')::int AS ready_days,
-                   MAX(edition_date) FILTER (WHERE status = 'ready') AS latest_date
-            FROM qb.newspaper_edition
-            WHERE edition_date >= :since
-              AND status IN ('ready', 'indexing', 'pending')
-            GROUP BY paper_slug, paper_title
-            HAVING COUNT(*) FILTER (WHERE status = 'ready') > 0
-               OR COUNT(*) FILTER (WHERE status IN ('indexing', 'pending')) > 0
-            ORDER BY paper_title
-            """
-        ),
-        {"since": since},
-    ).mappings().all()
-    return [dict(r) for r in rows]
-
-
 def list_days_for_paper(db: Session, *, paper_slug: str, since: date) -> list[dict[str, Any]]:
     rows = db.execute(
         text(
@@ -268,3 +255,124 @@ def retention_cutoff(now: datetime | None = None) -> date:
 def make_paper_identity(title: str) -> tuple[str, str]:
     title = re.sub(r"\s+", " ", (title or "").strip()) or "Newspaper"
     return _slugify(title), title
+
+
+def set_allowlist_only(db: Session, *, allowlist_only: bool) -> dict[str, Any]:
+    db.execute(
+        text(
+            """
+            UPDATE qb.newspaper_settings
+            SET allowlist_only = :v, updated_at = now()
+            WHERE id = 1
+            """
+        ),
+        {"v": allowlist_only},
+    )
+    db.commit()
+    return get_settings(db)
+
+
+def upsert_brand(
+    db: Session,
+    *,
+    paper_slug: str,
+    paper_title: str,
+    enabled_if_new: bool = False,
+) -> None:
+    db.execute(
+        text(
+            """
+            INSERT INTO qb.newspaper_brand (paper_slug, paper_title, enabled, first_seen_at, updated_at)
+            VALUES (:slug, :title, :enabled, now(), now())
+            ON CONFLICT (paper_slug) DO UPDATE SET
+              paper_title = EXCLUDED.paper_title,
+              updated_at = now()
+            """
+        ),
+        {"slug": paper_slug, "title": paper_title, "enabled": enabled_if_new},
+    )
+
+
+def set_brand_enabled(db: Session, *, paper_slug: str, enabled: bool) -> dict[str, Any] | None:
+    db.execute(
+        text(
+            """
+            UPDATE qb.newspaper_brand
+            SET enabled = :e, updated_at = now()
+            WHERE paper_slug = :slug
+            """
+        ),
+        {"slug": paper_slug, "e": enabled},
+    )
+    db.commit()
+    row = db.execute(
+        text(
+            """
+            SELECT paper_slug, paper_title, enabled, first_seen_at, updated_at
+            FROM qb.newspaper_brand WHERE paper_slug = :slug
+            """
+        ),
+        {"slug": paper_slug},
+    ).mappings().first()
+    return dict(row) if row else None
+
+
+def list_brands(db: Session) -> list[dict[str, Any]]:
+    rows = db.execute(
+        text(
+            """
+            SELECT paper_slug, paper_title, enabled, first_seen_at, updated_at
+            FROM qb.newspaper_brand
+            ORDER BY paper_title
+            """
+        )
+    ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def is_brand_allowed(db: Session, paper_slug: str) -> bool:
+    """When allowlist_only is off → all papers allowed. When on → must be enabled."""
+    settings = get_settings(db)
+    if not settings.get("allowlist_only"):
+        return True
+    row = db.execute(
+        text(
+            """
+            SELECT enabled FROM qb.newspaper_brand WHERE paper_slug = :slug
+            """
+        ),
+        {"slug": paper_slug},
+    ).first()
+    return bool(row and row[0])
+
+
+def list_papers(db: Session, *, since: date, allowlist_only: bool | None = None) -> list[dict[str, Any]]:
+    if allowlist_only is None:
+        allowlist_only = bool(get_settings(db).get("allowlist_only"))
+    filter_sql = ""
+    if allowlist_only:
+        filter_sql = """
+              AND EXISTS (
+                SELECT 1 FROM qb.newspaper_brand b
+                WHERE b.paper_slug = e.paper_slug AND b.enabled = true
+              )
+        """
+    rows = db.execute(
+        text(
+            f"""
+            SELECT e.paper_slug, e.paper_title,
+                   COUNT(*) FILTER (WHERE e.status = 'ready')::int AS ready_days,
+                   MAX(e.edition_date) FILTER (WHERE e.status = 'ready') AS latest_date
+            FROM qb.newspaper_edition e
+            WHERE e.edition_date >= :since
+              AND e.status IN ('ready', 'indexing', 'pending')
+              {filter_sql}
+            GROUP BY e.paper_slug, e.paper_title
+            HAVING COUNT(*) FILTER (WHERE e.status = 'ready') > 0
+               OR COUNT(*) FILTER (WHERE e.status IN ('indexing', 'pending')) > 0
+            ORDER BY e.paper_title
+            """
+        ),
+        {"since": since},
+    ).mappings().all()
+    return [dict(r) for r in rows]

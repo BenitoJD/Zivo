@@ -317,3 +317,19 @@ CREATE INDEX IF NOT EXISTS ix_newspaper_edition_ready_date
 
 CREATE INDEX IF NOT EXISTS ix_newspaper_edition_paper
   ON qb.newspaper_edition (paper_slug, edition_date DESC);
+
+-- Newspaper brand allowlist (additive; also 029_newspaper_brands)
+ALTER TABLE qb.newspaper_settings
+  ADD COLUMN IF NOT EXISTS allowlist_only BOOLEAN NOT NULL DEFAULT false;
+
+CREATE TABLE IF NOT EXISTS qb.newspaper_brand (
+  paper_slug     TEXT PRIMARY KEY,
+  paper_title    TEXT NOT NULL,
+  enabled        BOOLEAN NOT NULL DEFAULT false,
+  first_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ix_newspaper_brand_enabled
+  ON qb.newspaper_brand (enabled)
+  WHERE enabled = true;

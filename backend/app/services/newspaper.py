@@ -61,6 +61,13 @@ def list_catalog(db: Session) -> dict[str, Any]:
 
 
 def list_paper_days(db: Session, paper_slug: str) -> dict[str, Any]:
+    if not newspaper_repo.is_brand_allowed(db, paper_slug):
+        return {
+            "paper_slug": paper_slug,
+            "paper_title": paper_slug,
+            "since": window_start().isoformat(),
+            "days": [],
+        }
     since = window_start()
     days = newspaper_repo.list_days_for_paper(db, paper_slug=paper_slug, since=since)
     title = days[0]["paper_title"] if days else paper_slug
@@ -86,6 +93,7 @@ def get_channel(db: Session) -> dict[str, Any]:
         "channel_ref": s.get("channel_ref") or "",
         "channel_label": s.get("channel_label") or "",
         "sync_cursor": s.get("sync_cursor"),
+        "allowlist_only": bool(s.get("allowlist_only")),
         "updated_at": s["updated_at"].isoformat() if s.get("updated_at") else None,
     }
 
@@ -95,6 +103,48 @@ def update_channel(db: Session, *, channel_ref: str, channel_label: str = "") ->
         raise ValueError("channel_ref is required")
     newspaper_repo.set_channel(db, channel_ref=channel_ref, channel_label=channel_label)
     return get_channel(db)
+
+
+def set_allowlist_only(db: Session, *, allowlist_only: bool) -> dict[str, Any]:
+    newspaper_repo.set_allowlist_only(db, allowlist_only=allowlist_only)
+    return get_channel(db)
+
+
+def list_admin_brands(db: Session) -> dict[str, Any]:
+    s = newspaper_repo.get_settings(db)
+    brands = newspaper_repo.list_brands(db)
+    return {
+        "allowlist_only": bool(s.get("allowlist_only")),
+        "brands": [
+            {
+                "slug": b["paper_slug"],
+                "title": b["paper_title"],
+                "enabled": bool(b["enabled"]),
+                "first_seen_at": b["first_seen_at"].isoformat() if b.get("first_seen_at") else None,
+            }
+            for b in brands
+        ],
+    }
+
+
+def set_brand_enabled(db: Session, *, paper_slug: str, enabled: bool) -> dict[str, Any]:
+    row = newspaper_repo.set_brand_enabled(db, paper_slug=paper_slug, enabled=enabled)
+    if not row:
+        raise ValueError("Unknown paper — it appears after the channel posts it once")
+    return {
+        "slug": row["paper_slug"],
+        "title": row["paper_title"],
+        "enabled": bool(row["enabled"]),
+    }
+
+
+def ensure_brand_and_allowed(db: Session, *, paper_slug: str, paper_title: str) -> bool:
+    """Register brand if new; return True if ingest should proceed."""
+    newspaper_repo.upsert_brand(
+        db, paper_slug=paper_slug, paper_title=paper_title, enabled_if_new=False
+    )
+    db.commit()
+    return newspaper_repo.is_brand_allowed(db, paper_slug)
 
 
 def create_edition_from_pdf(
@@ -109,6 +159,10 @@ def create_edition_from_pdf(
     location_raw: str,
 ) -> uuid.UUID | None:
     """Idempotent: if (paper, day) exists, skip. Returns edition id or None if skipped."""
+    if not ensure_brand_and_allowed(db, paper_slug=paper_slug, paper_title=paper_title):
+        logger.info("skip paper %s — not on allowlist", paper_slug)
+        return None
+
     existing = newspaper_repo.get_edition_by_paper_day(
         db, paper_slug=paper_slug, edition_date=edition_date
     )
