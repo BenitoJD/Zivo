@@ -905,15 +905,17 @@ def save_confirmed_answer(
     correct: bool,
     learner_ability: float | None = None,
     item_difficulty: float | None = None,
+    ability_se: float | None = None,
+    mastery_stop: bool | None = None,
+    revisit_hours: float | None = None,
 ) -> None:
     """Persist the learner's latest confirmed MCQ choice for tutor chat context.
 
     Also records the question's concept key so the selection loop can react to the
     last answer, and mirrors the learner's freshly calibrated ability into progress so
-    the difficulty_edge policy can target their edge without an extra read. When the
+    adaptive selection can target their edge without an extra read. When the
     item's calibrated difficulty is supplied, advances the learner's *per-concept*
-    ability with one Elo step, so a learner strong in one concept and weak in another
-    is met in the right band on each. ``learner_ability``/``item_difficulty`` are only
+    ability via the Calibration Engine. ``learner_ability``/``item_difficulty`` are only
     passed for a genuinely new (non-replayed) answer, so this never double-counts.
     """
     doc = db.get(Document, document_id)
@@ -933,16 +935,37 @@ def save_confirmed_answer(
     }
     if learner_ability is not None:
         patch["learner_ability"] = float(learner_ability)
+    if ability_se is not None:
+        patch["learner_ability_se"] = float(ability_se)
+    if mastery_stop is not None:
+        patch["mastery_stop"] = bool(mastery_stop)
+    if revisit_hours is not None:
+        patch["revisit_due_hours"] = float(revisit_hours)
+        # Per-concept due map for Spaced Revisit Engine consumers.
+        if concept_key:
+            progress = get_progress(doc)
+            due = dict(progress.get("concept_revisit_hours") or {})
+            due[str(concept_key)] = float(revisit_hours)
+            patch["concept_revisit_hours"] = due
     if concept_key and item_difficulty is not None:
-        from app.services.calibration import DEFAULT_RATING, elo_update
+        from app.services.calibration_engine import DEFAULT_RATING, update_from_outcome
 
         progress = get_progress(doc)
         concept_ability = dict(progress.get("concept_ability") or {})
+        concept_n = dict(progress.get("concept_ability_n") or {})
         prior = float(concept_ability.get(concept_key, DEFAULT_RATING))
-        concept_ability[concept_key] = elo_update(
-            prior, float(item_difficulty), bool(correct)
-        ).ability
+        prior_n = int(concept_n.get(concept_key, 0) or 0)
+        verdict = update_from_outcome(
+            prior,
+            float(item_difficulty),
+            bool(correct),
+            ability_n=prior_n,
+            difficulty_n=0,
+        )
+        concept_ability[concept_key] = verdict.ability
+        concept_n[concept_key] = verdict.ability_n
         patch["concept_ability"] = concept_ability
+        patch["concept_ability_n"] = concept_n
     save_progress(db, doc, patch)
     db.commit()
 

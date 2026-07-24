@@ -102,6 +102,9 @@ def _record_graded_answer(
     subject_entity_id = resolve_subject_entity(db, user, guest_id)
     learner_ability: float | None = None
     item_difficulty: float | None = None
+    ability_se: float | None = None
+    mastery_stop: bool | None = None
+    revisit_hours: float | None = None
     if subject_entity_id is not None:
         signal = record_answer_signal(
             db,
@@ -119,6 +122,9 @@ def _record_graded_answer(
         if signal.inserted:
             learner_ability = signal.ability
             item_difficulty = signal.difficulty
+            ability_se = signal.ability_se
+            mastery_stop = signal.mastery_stop
+            revisit_hours = signal.revisit_hours
 
     save_confirmed_answer(
         db,
@@ -128,6 +134,9 @@ def _record_graded_answer(
         correct=correct,
         learner_ability=learner_ability,
         item_difficulty=item_difficulty,
+        ability_se=ability_se,
+        mastery_stop=mastery_stop,
+        revisit_hours=revisit_hours,
     )
     record_answer(db, artifact_id, body.assertion_id)
 

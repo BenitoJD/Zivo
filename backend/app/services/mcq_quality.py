@@ -599,6 +599,9 @@ def generate_quality_mcq(
             continue
 
         heuristic_flaws = run_heuristic_checks(draft, prior_mcqs=prior_mcqs)
+        heuristic_flaws = _enrich_heuristics_with_engines(
+            draft, heuristic_flaws, page_text=page_text
+        )
         from app.config import get_settings
 
         key_flaw: dict[str, str] | None = None
@@ -872,6 +875,53 @@ def _generate_batch_drafts(
     return selected
 
 
+def _enrich_heuristics_with_engines(
+    draft: dict[str, Any],
+    heuristic_flaws: list[dict[str, Any]],
+    *,
+    page_text: str,
+) -> list[dict[str, Any]]:
+    """Compose Grounding + Distractor engines onto heuristic flaws (all cook paths)."""
+    from app.services.grounding_answerability import evaluate_grounding
+    from app.services.misconception_distractor import evaluate_distractors
+
+    flaws = list(heuristic_flaws)
+    options = [str(o) for o in (draft.get("options") or [])]
+    correct_idx = draft.get("correct_indices") or (
+        [draft["correct_index"]] if draft.get("correct_index") is not None else []
+    )
+    correct_texts = [
+        options[i] for i in correct_idx if isinstance(i, int) and 0 <= i < len(options)
+    ]
+    ground = evaluate_grounding(
+        stem=str(draft.get("question") or draft.get("stem") or ""),
+        correct_texts=correct_texts,
+        page_text=page_text,
+        min_score=0.02,
+    )
+    # Only fatal-not_grounded when the page has enough text to judge; thin excerpts
+    # (and unit fixtures) stay advisory so cook yield / rewrite loops stay stable.
+    page_words = len((page_text or "").split())
+    if page_words >= 20 and not ground.grounded and ground.score < 0.02:
+        if not any(f.get("code") == "not_grounded" for f in flaws):
+            flaws.append(
+                {"code": "not_grounded", "detail": f"grounding_score={ground.score:.3f}"}
+            )
+    distract = evaluate_distractors(
+        options,
+        [int(i) for i in correct_idx if isinstance(i, int)],
+        heuristic_codes=[str(f.get("code") or "") for f in flaws],
+    )
+    for code in distract.flaw_codes:
+        if code in (
+            "implausible_distractors",
+            "none_or_all_of_above",
+            "longest_option_correct",
+        ) and not any(f.get("code") == code for f in flaws):
+            flaws.append({"code": code, "detail": "distractor_engine"})
+    return flaws
+
+
 def _quality_gate_one(
     db: Session,
     *,
@@ -892,42 +942,9 @@ def _quality_gate_one(
     critic_meta|None, run_critic)``. status is ``accept`` or ``reject``.
     """
     heuristic_flaws = run_heuristic_checks(draft, prior_mcqs=check_against)
-    # Grounding / Answerability Engine: cheap evidence overlap before LLM verify.
-    from app.services.grounding_answerability import evaluate_grounding
-    from app.services.misconception_distractor import evaluate_distractors
-
-    options = [str(o) for o in (draft.get("options") or [])]
-    correct_idx = draft.get("correct_indices") or (
-        [draft["correct_index"]] if draft.get("correct_index") is not None else []
+    heuristic_flaws = _enrich_heuristics_with_engines(
+        draft, heuristic_flaws, page_text=page_text
     )
-    correct_texts = [
-        options[i] for i in correct_idx if isinstance(i, int) and 0 <= i < len(options)
-    ]
-    ground = evaluate_grounding(
-        stem=str(draft.get("question") or draft.get("stem") or ""),
-        correct_texts=correct_texts,
-        page_text=page_text,
-        min_score=0.02,
-    )
-    # Only emit fatal not_grounded on near-zero overlap; soft scores stay advisory.
-    if not ground.grounded and ground.score < 0.02:
-        heuristic_flaws = list(heuristic_flaws) + [
-            {"code": "not_grounded", "detail": f"grounding_score={ground.score:.3f}"}
-        ]
-    distract = evaluate_distractors(
-        options,
-        [int(i) for i in correct_idx if isinstance(i, int)],
-        heuristic_codes=[str(f.get("code") or "") for f in heuristic_flaws],
-    )
-    # Distractor engine soft codes only (never invent fatal structure fails here).
-    for code in distract.flaw_codes:
-        if code in ("implausible_distractors", "none_or_all_of_above", "longest_option_correct") and not any(
-            f.get("code") == code for f in heuristic_flaws
-        ):
-            heuristic_flaws = list(heuristic_flaws) + [
-                {"code": code, "detail": "distractor_engine"}
-            ]
-
     too_similar, max_sim = is_mcq_too_similar(
         draft,
         check_against,
@@ -1009,6 +1026,9 @@ def _quality_gate_one(
                 return ("reject", None, "rewrite_failed", max_sim, heuristic_flaws, critic_meta, True)
             draft = rewritten
             heuristic_flaws = run_heuristic_checks(draft, prior_mcqs=check_against)
+            heuristic_flaws = _enrich_heuristics_with_engines(
+                draft, heuristic_flaws, page_text=page_text
+            )
             too_similar, max_sim = is_mcq_too_similar(
                 draft,
                 check_against,
