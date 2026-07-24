@@ -46,6 +46,7 @@ export default function WorkspaceModelsPage() {
   const modelsQuery = useQuery({
     queryKey: ["models", "admin"],
     queryFn: () => apiGet<AdminModelList>("/api/models/admin"),
+    enabled: isAdmin,
     retry: false,
   });
 

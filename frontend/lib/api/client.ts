@@ -111,7 +111,7 @@ export async function ensureGuestSession(): Promise<void> {
         return;
       }
     }
-    handleAuthFailure(sessionRes);
+    await maybeClearSessionOnAuthFailure(sessionRes);
 
     if (guestId) return;
 
@@ -153,8 +153,36 @@ export function clearClientSessionState() {
   guestSessionPromise = null;
 }
 
-function handleAuthFailure(res: Response) {
-  if (res.status === 401) clearClientSessionState();
+/**
+ * Only treat "session cookie rejected" as logout-worthy. Endpoint 401s for
+ * missing guest, admin gates, bad credentials, etc. must NOT wipe CSRF: that
+ * made signed-in users look logged out after an unrelated 401.
+ */
+export function isSessionAuthFailure(status: number, detail: string): boolean {
+  if (status !== 401) return false;
+  const d = detail.toLowerCase();
+  return (
+    d.includes("invalid session") ||
+    d.includes("session revoked") ||
+    d.includes("user not found") ||
+    d === "not authenticated"
+  );
+}
+
+async function maybeClearSessionOnAuthFailure(res: Response): Promise<void> {
+  if (res.status !== 401) return;
+  // Clone so callers can still read the body.
+  const detail = await res.clone().text().catch(() => "");
+  let message = detail;
+  try {
+    const body = JSON.parse(detail) as { detail?: unknown };
+    if (typeof body.detail === "string") message = body.detail;
+  } catch {
+    /* keep raw */
+  }
+  if (isSessionAuthFailure(res.status, message)) {
+    clearClientSessionState();
+  }
 }
 
 export async function apiFetchBytes(path: string): Promise<ArrayBuffer> {
@@ -163,7 +191,7 @@ export async function apiFetchBytes(path: string): Promise<ArrayBuffer> {
     headers: buildHeaders(),
   });
   captureResponseMeta(res);
-  handleAuthFailure(res);
+  await maybeClearSessionOnAuthFailure(res);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.arrayBuffer();
 }
@@ -176,7 +204,7 @@ export async function apiPostBytes(path: string, body: unknown): Promise<ArrayBu
     body: JSON.stringify(body),
   });
   captureResponseMeta(res);
-  handleAuthFailure(res);
+  await maybeClearSessionOnAuthFailure(res);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.arrayBuffer();
 }
@@ -187,7 +215,7 @@ export async function apiGet<T>(path: string): Promise<T> {
     headers: buildHeaders(),
   });
   captureResponseMeta(res);
-  handleAuthFailure(res);
+  await maybeClearSessionOnAuthFailure(res);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json() as Promise<T>;
 }
@@ -200,7 +228,7 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   captureResponseMeta(res);
-  handleAuthFailure(res);
+  await maybeClearSessionOnAuthFailure(res);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json() as Promise<T>;
 }
@@ -214,7 +242,7 @@ export async function apiPostNoContent(path: string, body: unknown): Promise<voi
     body: JSON.stringify(body),
   });
   captureResponseMeta(res);
-  handleAuthFailure(res);
+  await maybeClearSessionOnAuthFailure(res);
   if (!res.ok) throw new Error(await readApiError(res));
 }
 
@@ -226,7 +254,7 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   captureResponseMeta(res);
-  handleAuthFailure(res);
+  await maybeClearSessionOnAuthFailure(res);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json() as Promise<T>;
 }
@@ -482,7 +510,7 @@ export async function apiDelete(path: string): Promise<void> {
     headers: buildHeaders(),
   });
   captureResponseMeta(res);
-  handleAuthFailure(res);
+  await maybeClearSessionOnAuthFailure(res);
   if (!res.ok) throw new Error(await readApiError(res));
 }
 
@@ -537,7 +565,7 @@ export async function apiPostSSE(
     options?.signal,
   );
   captureResponseMeta(res);
-  handleAuthFailure(res);
+  await maybeClearSessionOnAuthFailure(res);
   if (!res.ok || !res.body) {
     const detail = await readApiError(res).catch(() => humanizeApiFailure(res.status, "SSE failed"));
     throw new Error(detail);

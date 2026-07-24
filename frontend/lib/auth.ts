@@ -28,7 +28,7 @@ export function useSubmitAuth(mode: AuthMode) {
       const path = mode === "login" ? "/api/auth/login" : "/api/auth/signup";
       const payload =
         mode === "login"
-          ? { username: values.username, password: values.password, remember_me: false }
+          ? { username: values.username, password: values.password, remember_me: true }
           : {
               username: values.username,
               password: values.password,

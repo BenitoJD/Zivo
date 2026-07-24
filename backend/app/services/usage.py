@@ -32,14 +32,12 @@ def ensure_demo_cookie(response: Response | None, cookie_id: str | None) -> str:
         return cookie_id
     new_id = uuid.uuid4().hex
     if response is not None:
+        from app.services.auth import cookie_set_kwargs
+
         response.set_cookie(
             key=DEMO_COOKIE,
             value=new_id,
-            httponly=True,
-            secure=settings.is_production,
-            samesite="lax",
-            max_age=86400 * 30,
-            path="/",
+            **cookie_set_kwargs(max_age=86400 * 30),
         )
     return new_id
 

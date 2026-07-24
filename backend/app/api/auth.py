@@ -11,6 +11,9 @@ from app.db import get_db
 from app.models import Account as User
 from app.services.auth import (
     authenticate_user,
+    clear_session_cookie,
+    cookie_delete_kwargs,
+    cookie_set_kwargs,
     create_session_token,
     csrf_from_session_token,
     get_current_user,
@@ -86,8 +89,9 @@ def _oauth_error_redirect(message: str) -> RedirectResponse:
 
 
 def _clear_oauth_cookies(response: Response) -> None:
-    response.delete_cookie(STATE_COOKIE, path="/")
-    response.delete_cookie(PENDING_COOKIE, path="/")
+    kwargs = cookie_delete_kwargs()
+    response.delete_cookie(STATE_COOKIE, **kwargs)
+    response.delete_cookie(PENDING_COOKIE, **kwargs)
 
 
 @router.post("/guest")
@@ -129,8 +133,10 @@ def signup(
 
     claim_guest_documents(db, user.id, read_guest_id_from_cookie(zivo_demo_id))
 
-    token, csrf = create_session_token(user.id, int(getattr(user, "session_version", 0) or 0))
-    set_session_cookie(response, token, remember=False)
+    token, csrf = create_session_token(
+        user.id, int(getattr(user, "session_version", 0) or 0), remember=True
+    )
+    set_session_cookie(response, token, remember=True)
     return AuthResponse(username=user.username, csrf_token=csrf, is_admin=user.is_admin)
 
 
@@ -168,11 +174,7 @@ def google_start(response: Response) -> RedirectResponse:
     response.set_cookie(
         key=STATE_COOKIE,
         value=state,
-        httponly=True,
-        secure=settings.is_production,
-        samesite="lax",
-        max_age=600,
-        path="/",
+        **cookie_set_kwargs(max_age=600),
     )
     return response
 
@@ -206,7 +208,9 @@ def google_callback(
     if existing:
         claim_guest_documents(db, existing.id, read_guest_id_from_cookie(zivo_demo_id))
         token, _csrf = create_session_token(
-            existing.id, int(getattr(existing, "session_version", 0) or 0)
+            existing.id,
+            int(getattr(existing, "session_version", 0) or 0),
+            remember=True,
         )
         redirect = RedirectResponse(url=frontend_path(settings, "/workspace"), status_code=302)
         set_session_cookie(redirect, token, remember=True)
@@ -223,13 +227,9 @@ def google_callback(
     redirect.set_cookie(
         key=PENDING_COOKIE,
         value=pending,
-        httponly=True,
-        secure=settings.is_production,
-        samesite="lax",
-        max_age=PENDING_COOKIE_MAX_AGE,
-        path="/",
+        **cookie_set_kwargs(max_age=PENDING_COOKIE_MAX_AGE),
     )
-    redirect.delete_cookie(STATE_COOKIE, path="/")
+    redirect.delete_cookie(STATE_COOKIE, **cookie_delete_kwargs())
     return redirect
 
 
@@ -288,7 +288,9 @@ def google_complete(
 
     claim_guest_documents(db, user.id, read_guest_id_from_cookie(zivo_demo_id))
 
-    token, csrf = create_session_token(user.id, int(getattr(user, "session_version", 0) or 0))
+    token, csrf = create_session_token(
+        user.id, int(getattr(user, "session_version", 0) or 0), remember=True
+    )
     set_session_cookie(response, token, remember=True)
     _clear_oauth_cookies(response)
     return AuthResponse(username=user.username, csrf_token=csrf, is_admin=user.is_admin)
@@ -324,5 +326,5 @@ def logout(
     user.session_version = int(getattr(user, "session_version", 0) or 0) + 1
     db.commit()
     response.status_code = status.HTTP_204_NO_CONTENT
-    response.delete_cookie("zivo_session")
+    clear_session_cookie(response)
     return response

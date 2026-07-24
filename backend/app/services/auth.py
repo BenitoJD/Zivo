@@ -74,17 +74,37 @@ def _session_version_matches(user: Account, payload: dict) -> bool:
     return token_sv == user_sv
 
 
+def cookie_set_kwargs(*, max_age: int | None = None) -> dict:
+    """Shared cookie flags so set + delete agree (Domain especially)."""
+    kwargs: dict = {
+        "httponly": True,
+        "secure": settings.is_production,
+        "samesite": "lax",
+        "path": "/",
+    }
+    if max_age is not None:
+        kwargs["max_age"] = max_age
+    domain = settings.resolved_cookie_domain
+    if domain:
+        kwargs["domain"] = domain
+    return kwargs
+
+
+def cookie_delete_kwargs() -> dict:
+    """delete_cookie rejects max_age; keep Domain/Path/Secure/SameSite aligned."""
+    kwargs = cookie_set_kwargs()
+    kwargs.pop("max_age", None)
+    return kwargs
+
+
 def set_session_cookie(response: Response, token: str, remember: bool) -> None:
     max_age = (settings.session_remember_days if remember else settings.session_days) * 86400
-    response.set_cookie(
-        key="zivo_session",
-        value=token,
-        httponly=True,
-        secure=settings.is_production,
-        samesite="lax",
-        max_age=max_age,
-        path="/",
-    )
+    response.set_cookie(key="zivo_session", value=token, **cookie_set_kwargs(max_age=max_age))
+
+
+def clear_session_cookie(response: Response) -> None:
+    # Must match Domain/Path/Secure/SameSite used at set time or the browser keeps it.
+    response.delete_cookie("zivo_session", **cookie_delete_kwargs())
 
 
 def get_current_user(

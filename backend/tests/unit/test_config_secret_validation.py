@@ -56,6 +56,36 @@ class TestSettingsAccessors:
         s = Settings(cors_origins="https://a.com, https://b.com,, ")
         assert s.cors_origin_list == ["https://a.com", "https://b.com"]
 
+    def test_cookie_domain_explicit_wins(self) -> None:
+        s = Settings(cookie_domain=".zivo.fyi", environment="development")
+        assert s.resolved_cookie_domain == "zivo.fyi"
+
+    def test_cookie_domain_host_only_in_development(self) -> None:
+        s = Settings(environment="development", frontend_url="https://zivo.fyi")
+        assert s.resolved_cookie_domain is None
+
+    def test_cookie_domain_derived_from_frontend_url_in_production(self) -> None:
+        s = _make_settings(
+            secret_key="real-prod-secret-32chars-or-more",
+            csrf_secret="real-prod-csrf-32chars-or-more",
+            minio_access_key="prod-access",
+            minio_secret_key="prod-secret-value",
+            frontend_url="https://zivo.fyi",
+            cookie_domain="",
+        )
+        assert s.resolved_cookie_domain == "zivo.fyi"
+
+    def test_cookie_domain_derived_strips_www(self) -> None:
+        s = _make_settings(
+            secret_key="real-prod-secret-32chars-or-more",
+            csrf_secret="real-prod-csrf-32chars-or-more",
+            minio_access_key="prod-access",
+            minio_secret_key="prod-secret-value",
+            frontend_url="https://www.zivo.fyi",
+            cookie_domain="",
+        )
+        assert s.resolved_cookie_domain == "zivo.fyi"
+
     def test_minio_presign_endpoint_falls_back_to_internal(self) -> None:
         s = Settings()
         assert s.minio_presign_endpoint == s.minio_endpoint

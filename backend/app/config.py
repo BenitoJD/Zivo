@@ -129,6 +129,9 @@ class Settings(BaseSettings):
 
     session_days: int = 7
     session_remember_days: int = 30
+    # Shared across apex + www (e.g. "zivo.fyi"). Empty = host-only cookie.
+    # In production, blank falls back to the registrable host of frontend_url.
+    cookie_domain: str = ""
     guest_document_limit: int = 1
     guest_message_limit: int = 30
     daily_message_limit: int = 100
@@ -156,6 +159,24 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production" or self.environment == "production"
+
+    @property
+    def resolved_cookie_domain(self) -> str | None:
+        """Cookie Domain so apex + www share session (host-only cookies do not)."""
+        raw = self.cookie_domain.strip().lstrip(".")
+        if raw:
+            return raw
+        if not self.is_production:
+            return None
+        from urllib.parse import urlparse
+
+        host = (urlparse(self.frontend_url).hostname or "").strip().lower()
+        if not host or host in {"localhost", "127.0.0.1"} or host.endswith(".local"):
+            return None
+        parts = host.split(".")
+        if len(parts) < 2:
+            return None
+        return ".".join(parts[-2:])
 
     @property
     def minio_presign_endpoint(self) -> str:
