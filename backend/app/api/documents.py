@@ -138,6 +138,10 @@ def get_document_file(
     guest_id: str | None = Depends(guest_session_for_read),
 ):
     doc = require_document(db, document_id, user, guest_id)
+    from app.services.newspaper import is_newspaper_document
+
+    if is_newspaper_document(doc) and (user is None or not getattr(user, "is_admin", False)):
+        raise HTTPException(status_code=404, detail="Not found")
     if doc.meta and doc.meta.get("is_demo"):
         chunks = (
             db.query(DocumentChunk)
@@ -158,7 +162,11 @@ def get_document_pages(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> dict:
-    require_document(db, document_id, user, guest_id)
+    doc = require_document(db, document_id, user, guest_id)
+    from app.services.newspaper import is_newspaper_document
+
+    if is_newspaper_document(doc) and (user is None or not getattr(user, "is_admin", False)):
+        raise HTTPException(status_code=404, detail="Not found")
     chunks = (
         db.query(DocumentChunk)
         .filter(DocumentChunk.document_id == document_id)

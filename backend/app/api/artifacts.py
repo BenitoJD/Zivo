@@ -73,6 +73,12 @@ def get_pages(
     guest_id: str | None = Depends(optional_guest_session),
 ) -> dict:
     doc = require_document(db, artifact_id, user, guest_id)
+    from app.services.newspaper import is_newspaper_document
+
+    if is_newspaper_document(doc):
+        # Learners never get the newspaper PDF — admins may for ops.
+        if user is None or not getattr(user, "is_admin", False):
+            raise HTTPException(status_code=404, detail="Not found")
     page_count = (doc.meta or {}).get("page_count") or 1
     return {
         "artifact_id": str(doc.id),
@@ -91,6 +97,10 @@ def confirm_page_range(
     guest_id: str | None = Depends(optional_guest_session),
 ) -> dict:
     doc = require_document(db, artifact_id, user, guest_id)
+    from app.services.newspaper import is_newspaper_document
+
+    if is_newspaper_document(doc) and (user is None or not getattr(user, "is_admin", False)):
+        raise HTTPException(status_code=404, detail="Not found")
     page_count = (doc.meta or {}).get("page_count") or body.to_page
 
     if body.pages:

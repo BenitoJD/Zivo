@@ -269,3 +269,51 @@ END $$;
 CREATE INDEX IF NOT EXISTS document_chunks_embedding_hnsw_idx
   ON qb.document_chunks USING hnsw (embedding vector_cosine_ops)
   WHERE embedding IS NOT NULL;
+
+-- -----------------------------------------------------------------------------
+-- Newspaper practice (shared editions — MCQs only for learners)
+-- Lives here (not qb_app.sql) because editions FK to qb.documents above.
+-- Additive migration: 028_newspaper.py
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS qb.newspaper_settings (
+  id              INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  channel_ref     TEXT NOT NULL DEFAULT '',
+  channel_label   TEXT NOT NULL DEFAULT '',
+  sync_cursor     BIGINT,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO qb.newspaper_settings (id, channel_ref, channel_label)
+VALUES (1, '', '')
+ON CONFLICT (id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS qb.newspaper_paper_alias (
+  alias_key       TEXT PRIMARY KEY,
+  paper_slug      TEXT NOT NULL,
+  paper_title     TEXT NOT NULL,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS qb.newspaper_edition (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  paper_slug        TEXT NOT NULL,
+  paper_title       TEXT NOT NULL,
+  edition_date      DATE NOT NULL,
+  document_id       UUID REFERENCES qb.documents (id) ON DELETE SET NULL,
+  telegram_msg_id   BIGINT,
+  location_raw      TEXT NOT NULL DEFAULT '',
+  status            TEXT NOT NULL DEFAULT 'pending',
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT newspaper_edition_status_check
+    CHECK (status IN ('pending', 'indexing', 'ready', 'failed', 'purged')),
+  CONSTRAINT newspaper_edition_paper_day_unique
+    UNIQUE (paper_slug, edition_date)
+);
+
+CREATE INDEX IF NOT EXISTS ix_newspaper_edition_ready_date
+  ON qb.newspaper_edition (edition_date DESC)
+  WHERE status = 'ready';
+
+CREATE INDEX IF NOT EXISTS ix_newspaper_edition_paper
+  ON qb.newspaper_edition (paper_slug, edition_date DESC);

@@ -155,6 +155,47 @@ def run_page_triage(
         return result
 
     reset_empty_page_streak(db, document_id)
+
+    # Newspaper editions: drop ads/junk before normal triage so MCQs stay signal-only.
+    doc_for_signal = db.get(Document, document_id)
+    if doc_for_signal and (doc_for_signal.meta or {}).get("newspaper"):
+        from app.services.newspaper_ad_filter import classify_page_text
+
+        label, rationale = classify_page_text(page_text)
+        if label != "editorial":
+            result = _non_content_result(
+                rationale=f"Newspaper filter ({label}): {rationale}",
+            )
+            save_page_coverage(
+                db,
+                document_id,
+                page=page_number,
+                question_budget=0,
+                aspects=[],
+                rationale=result.get("rationale", ""),
+                triage_activity_id=activity_id,
+                aspect_dedup=None,
+                content_type="non_content",
+                non_content=True,
+                programmable=False,
+            )
+            on_triage_completed(db, document_id, page=page_number, precompute=precompute)
+            if activity_id:
+                update_activity(
+                    db,
+                    uuid.UUID(str(activity_id)),
+                    status="succeeded",
+                    stats={
+                        "question_budget": 0,
+                        "aspects_count": 0,
+                        "page_number": page_number,
+                        "newspaper_filter": label,
+                    },
+                    finished=True,
+                )
+            db.commit()
+            return result
+
     result = _triage_page(db, page_text=page_text, page_number=page_number)
 
     save_page_coverage(

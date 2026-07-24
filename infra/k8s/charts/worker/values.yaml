@@ -20,6 +20,10 @@ workloads:
     command: ["python", "run_eta_worker_cpu.py"]
     env:
       ETA_WORKER_WORKLOADS: cpu
+  newspaper:
+    enabled: false
+    command: ["python", "run_newspaper_ingest.py"]
+    env: {}
 
 resources: {}
 
