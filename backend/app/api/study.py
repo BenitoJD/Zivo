@@ -375,8 +375,10 @@ async def run_code_endpoint(
 
     try:
         return await run_code(body.source, body.language_id, body.stdin)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 # --------------------------------------------------- resume suite (ATS / optimize / build)

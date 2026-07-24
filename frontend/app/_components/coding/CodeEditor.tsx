@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   Accordion,
   Box,
@@ -8,13 +8,16 @@ import {
   Code,
   Group,
   Paper,
+  ScrollArea,
   Stack,
   Text,
   Textarea,
   Badge,
   Select,
+  Tabs,
   ThemeIcon,
   Title,
+  UnstyledButton,
 } from "@mantine/core";
 import {
   IconPlayerPlay,
@@ -23,6 +26,7 @@ import {
   IconX,
   IconFlag,
   IconArrowRight,
+  IconGripVertical,
 } from "@tabler/icons-react";
 import { useRouter } from "next/navigation";
 import {
@@ -32,27 +36,33 @@ import {
   type CodeRunResult,
   type CodingSubmitResult,
 } from "@/lib/api/queries";
+import { CodingAssistPanel } from "@/app/_components/coding/CodingAssistPanel";
+import { clampPanel } from "@/app/workspace/_components/studyLayout";
 
 /**
- * Shared LeetCode-style coding editor - statement panel, language select, code
- * Textarea, Run (debug against custom stdin), and Submit (grade against hidden
- * tests). Used by the workspace Coding study mode and the public sampler.
+ * Shared coding editor — statement / code / run / submit.
  *
- * Props:
- * - problem: the public problem payload (sample tests only - hidden tests never
- *   leave the server).
- * - onSubmitted: optional callback after a successful submit (e.g. to refresh
- *   the workspace list's per-problem status).
- * - onWorkspaceInvalidate: optional artifact id to invalidate after submit.
+ * - variant="ide": full-viewport LeetCode split (public solve page)
+ * - variant="embedded": stacked cards (workspace CodingView)
  */
+
+const LEFT_DEFAULT = 420;
+const LEFT_MIN = 280;
+const LEFT_MAX = 640;
+const CONSOLE_DEFAULT = 220;
+const CONSOLE_MIN = 140;
+const CONSOLE_MAX = 420;
+
 export function CodeEditor({
   problem,
   compact = false,
   onSubmitted,
+  variant = "embedded",
 }: {
   problem: CodingProblem;
   compact?: boolean;
   onSubmitted?: (result: CodingSubmitResult) => void;
+  variant?: "ide" | "embedded";
 }) {
   const router = useRouter();
   const { data: langData } = useCodingLanguagesQuery();
@@ -65,8 +75,14 @@ export function CodeEditor({
   const [running, setRunning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<CodingSubmitResult | null>(null);
+  const [consoleTab, setConsoleTab] = useState<string | null>("testcase");
+  const [leftTab, setLeftTab] = useState<string | null>("description");
+  const [mobileTab, setMobileTab] = useState<string | null>("description");
 
-  // Reseed the editor when the problem changes (different assertion id).
+  const [leftWidth, setLeftWidth] = useState(LEFT_DEFAULT);
+  const [consoleHeight, setConsoleHeight] = useState(CONSOLE_DEFAULT);
+  const dragRef = useRef<{ kind: "left" | "console"; start: number; value: number } | null>(null);
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- seed editor state from the fetched problem
     setCode(problem.starter_code ?? "");
@@ -74,14 +90,25 @@ export function CodeEditor({
     setRunResult(null);
     setSubmitResult(null);
     setStdin("");
+    setConsoleTab("testcase");
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reseed only when the problem id changes
   }, [problem.id]);
 
   const languages = langData?.languages ?? [];
+  const lastStatus =
+    submitResult?.error ||
+    (submitResult
+      ? submitResult.all_passed
+        ? `Submit: ${submitResult.passed}/${submitResult.total} passed`
+        : `Submit: ${submitResult.passed}/${submitResult.total} passed`
+      : null) ||
+    runResult?.status ||
+    null;
 
   async function handleRun() {
     setRunning(true);
     setRunResult(null);
+    setConsoleTab("result");
     try {
       setRunResult(await actions.runCode(code, langId, stdin));
     } catch (err) {
@@ -99,6 +126,7 @@ export function CodeEditor({
   async function handleSubmit() {
     setSubmitting(true);
     setSubmitResult(null);
+    setConsoleTab("result");
     try {
       const result = await actions.submit(code, langId);
       setSubmitResult(result);
@@ -117,62 +145,274 @@ export function CodeEditor({
     }
   }
 
+  function onResizePointerDown(kind: "left" | "console", e: ReactPointerEvent) {
+    e.preventDefault();
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    dragRef.current = {
+      kind,
+      start: kind === "left" ? e.clientX : e.clientY,
+      value: kind === "left" ? leftWidth : consoleHeight,
+    };
+  }
+
+  function onResizePointerMove(e: ReactPointerEvent) {
+    const drag = dragRef.current;
+    if (!drag) return;
+    if (drag.kind === "left") {
+      setLeftWidth(clampPanel(drag.value + (e.clientX - drag.start), LEFT_MIN, LEFT_MAX));
+    } else {
+      setConsoleHeight(clampPanel(drag.value - (e.clientY - drag.start), CONSOLE_MIN, CONSOLE_MAX));
+    }
+  }
+
+  function onResizePointerUp() {
+    dragRef.current = null;
+  }
+
+  const langSelect = (
+    <Select
+      size="xs"
+      radius="md"
+      w={{ base: "100%", xs: 240 }}
+      value={String(langId)}
+      onChange={(v) => setLangId(Number(v))}
+      data={languages.map((l) => ({ value: String(l.id), label: l.label }))}
+      searchable
+      allowDeselect={false}
+      placeholder="Language"
+    />
+  );
+
+  const runSubmit = (
+    <Group gap="xs" wrap="nowrap">
+      <Button
+        size="xs"
+        variant="light"
+        color="lavender"
+        radius="xl"
+        leftSection={<IconPlayerPlay size={14} />}
+        loading={running}
+        onClick={() => void handleRun()}
+      >
+        Run
+      </Button>
+      <Button
+        size="xs"
+        color="lavender"
+        radius="xl"
+        leftSection={<IconFlag size={14} />}
+        loading={submitting}
+        disabled={!code.trim()}
+        onClick={() => void handleSubmit()}
+      >
+        Submit
+      </Button>
+    </Group>
+  );
+
+  const descriptionPane = (
+    <DescriptionPane
+      problem={problem}
+      onUseSample={(s) => {
+        setStdin(s);
+        setConsoleTab("testcase");
+        if (variant === "ide" && compact) setMobileTab("code");
+      }}
+    />
+  );
+
+  const assistPane = (
+    <CodingAssistPanel
+      assertionId={problem.id}
+      code={code}
+      languageId={langId}
+      stdin={stdin}
+      lastStatus={lastStatus}
+    />
+  );
+
+  const editorPane = (
+    <Stack gap={0} h="100%" style={{ minHeight: 0 }}>
+      <Group justify="space-between" wrap="wrap" gap="xs" px="sm" py="xs"
+        style={{ borderBottom: "1px solid var(--mantine-color-default-border)" }}
+      >
+        {langSelect}
+        {runSubmit}
+      </Group>
+      <Box flex={1} style={{ minHeight: 0 }} p="sm">
+        <Textarea
+          value={code}
+          onChange={(e) => setCode(e.currentTarget.value)}
+          placeholder="Read stdin, print the answer to stdout."
+          spellCheck={false}
+          h="100%"
+          styles={{
+            root: { height: "100%" },
+            wrapper: { height: "100%" },
+            input: {
+              height: "100%",
+              fontFamily: "var(--mantine-font-family-monospace, monospace)",
+              fontSize: 13,
+              lineHeight: 1.55,
+              resize: "none",
+            },
+          }}
+        />
+      </Box>
+    </Stack>
+  );
+
+  const consolePane = (
+    <Tabs value={consoleTab} onChange={setConsoleTab} h="100%"
+      styles={{ root: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }, panel: { flex: 1, minHeight: 0, overflow: "auto" } }}
+    >
+      <Tabs.List px="sm">
+        <Tabs.Tab value="testcase">Testcase</Tabs.Tab>
+        <Tabs.Tab value="result">Result</Tabs.Tab>
+      </Tabs.List>
+      <Tabs.Panel value="testcase" p="sm">
+        <Textarea
+          value={stdin}
+          onChange={(e) => setStdin(e.currentTarget.value)}
+          placeholder="Custom stdin (used by Run, not Submit)"
+          autosize
+          minRows={4}
+          maxRows={10}
+          spellCheck={false}
+          styles={{ input: { fontFamily: "var(--mantine-font-family-monospace, monospace)", fontSize: 12 } }}
+        />
+      </Tabs.Panel>
+      <Tabs.Panel value="result" p="sm">
+        <Stack gap="sm">
+          {runResult ? <RunOutput result={runResult} /> : null}
+          {submitResult ? (
+            <SubmitOutput
+              result={submitResult}
+              onPracticeGap={(id) => router.push(`/practice/coding/${id}`)}
+            />
+          ) : null}
+          {!runResult && !submitResult ? (
+            <Text fz="xs" c="dimmed">Run or submit to see output here.</Text>
+          ) : null}
+        </Stack>
+      </Tabs.Panel>
+    </Tabs>
+  );
+
+  if (variant === "ide" && !compact) {
+    return (
+      <Box
+        h="100%"
+        display="flex"
+        style={{ minHeight: 0 }}
+        onPointerMove={onResizePointerMove}
+        onPointerUp={onResizePointerUp}
+        onPointerCancel={onResizePointerUp}
+      >
+        <Box
+          w={leftWidth}
+          h="100%"
+          style={{
+            flexShrink: 0,
+            borderRight: "1px solid var(--mantine-color-default-border)",
+            minWidth: 0,
+            display: "flex",
+            flexDirection: "column",
+            background: "var(--mantine-color-gray-0)",
+          }}
+        >
+          <Tabs
+            value={leftTab}
+            onChange={setLeftTab}
+            h="100%"
+            styles={{
+              root: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0 },
+              panel: { flex: 1, minHeight: 0, overflow: "hidden" },
+            }}
+          >
+            <Tabs.List px="sm">
+              <Tabs.Tab value="description">Description</Tabs.Tab>
+              <Tabs.Tab value="assistant">Assistant</Tabs.Tab>
+            </Tabs.List>
+            <Tabs.Panel value="description">
+              <ScrollArea h="100%" px="md" py="sm" offsetScrollbars>
+                {descriptionPane}
+              </ScrollArea>
+            </Tabs.Panel>
+            <Tabs.Panel value="assistant" h="100%">
+              {assistPane}
+            </Tabs.Panel>
+          </Tabs>
+        </Box>
+        <ResizeHandle orientation="vertical" onPointerDown={(e) => onResizePointerDown("left", e)} />
+        <Box flex={1} h="100%" display="flex" style={{ flexDirection: "column", minWidth: 0, minHeight: 0 }}>
+          <Box flex={1} style={{ minHeight: 0, overflow: "hidden" }}>
+            {editorPane}
+          </Box>
+          <ResizeHandle orientation="horizontal" onPointerDown={(e) => onResizePointerDown("console", e)} />
+          <Box
+            h={consoleHeight}
+            style={{
+              flexShrink: 0,
+              borderTop: "1px solid var(--mantine-color-default-border)",
+              background: "var(--mantine-color-body)",
+              minHeight: 0,
+            }}
+          >
+            {consolePane}
+          </Box>
+        </Box>
+      </Box>
+    );
+  }
+
+  if (variant === "ide" && compact) {
+    return (
+      <Tabs
+        value={mobileTab}
+        onChange={setMobileTab}
+        h="100%"
+        styles={{
+          root: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0 },
+          panel: { flex: 1, minHeight: 0, overflow: "hidden" },
+        }}
+      >
+        <Tabs.List px="sm">
+          <Tabs.Tab value="description">Description</Tabs.Tab>
+          <Tabs.Tab value="code">Code</Tabs.Tab>
+          <Tabs.Tab value="assistant">Assistant</Tabs.Tab>
+        </Tabs.List>
+        <Tabs.Panel value="description">
+          <ScrollArea h="100%" px="md" py="sm" offsetScrollbars>
+            {descriptionPane}
+          </ScrollArea>
+        </Tabs.Panel>
+        <Tabs.Panel value="code">
+          <Stack gap={0} h="100%" style={{ minHeight: 0 }}>
+            <Box flex={1} style={{ minHeight: 0 }}>{editorPane}</Box>
+            <Box h={200} style={{ borderTop: "1px solid var(--mantine-color-default-border)", flexShrink: 0 }}>
+              {consolePane}
+            </Box>
+          </Stack>
+        </Tabs.Panel>
+        <Tabs.Panel value="assistant" h="100%">
+          {assistPane}
+        </Tabs.Panel>
+      </Tabs>
+    );
+  }
+
+  // Embedded (workspace): stacked cards
   return (
     <Stack gap="md" pb="xl">
-      {/* Statement */}
       <Paper radius="lg" p={compact ? "md" : "lg"} withBorder style={{ borderColor: "var(--app-border, var(--mantine-color-gray-2))" }}>
-        <Group justify="space-between" wrap="wrap" gap="xs" mb="sm">
-          <Text ff="var(--font-serif)" fz={compact ? 20 : 24} fw={500}>
-            {problem.title}
-          </Text>
-          <Group gap={6}>
-            <DifficultyBadge difficulty={problem.difficulty} />
-            {problem.test_count ? (
-              <Badge variant="light" color="gray" radius="sm">{problem.test_count} hidden tests</Badge>
-            ) : null}
-            {problem.status === "solved" ? (
-              <Badge variant="light" color="sage" radius="sm" leftSection={<IconCheck size={10} />}>
-                Solved
-              </Badge>
-            ) : null}
-          </Group>
-        </Group>
-        {problem.tags?.length ? (
-          <Group gap={6} mb="sm">
-            {problem.tags.map((t) => (
-              <Badge key={t} variant="light" color="gray" radius="sm" size="sm">{t}</Badge>
-            ))}
-          </Group>
-        ) : null}
-        <Text fz="sm" lh={1.6} c="var(--mantine-color-text)" style={{ whiteSpace: "pre-wrap" }}>
-          {problem.statement}
-        </Text>
-        {problem.sample_tests?.length ? (
-          <Box mt="md">
-            <Text fz="xs" c="dimmed" mb={4} tt="uppercase" lts={0.5}>Sample cases</Text>
-            <Stack gap={6}>
-              {problem.sample_tests.map((t, i) => (
-                <SampleCase key={i} index={i} stdin={t.stdin} expected={t.expected_output} />
-              ))}
-            </Stack>
-          </Box>
-        ) : null}
+        {descriptionPane}
       </Paper>
-
-      {/* Editor */}
       <Paper radius="lg" p={compact ? "md" : "lg"} withBorder style={{ borderColor: "var(--app-border, var(--mantine-color-gray-2))" }}>
         <Stack gap="sm">
           <Group justify="space-between" wrap="wrap" gap="xs">
-            <Select
-              size="xs"
-              radius="md"
-              w={{ base: "100%", xs: 220 }}
-              value={String(langId)}
-              onChange={(v) => setLangId(Number(v))}
-              data={languages.map((l) => ({ value: String(l.id), label: l.label }))}
-              allowDeselect={false}
-            />
-            <Text fz="xs" c="dimmed">{problem.language_label}</Text>
+            {langSelect}
+            {runSubmit}
           </Group>
           <Textarea
             value={code}
@@ -184,7 +424,6 @@ export function CodeEditor({
             spellCheck={false}
             styles={{ input: { fontFamily: "var(--mantine-font-family-monospace, monospace)", fontSize: 13, lineHeight: 1.55 } }}
           />
-          {/* Custom stdin for the Run button */}
           <Textarea
             value={stdin}
             onChange={(e) => setStdin(e.currentTarget.value)}
@@ -195,30 +434,6 @@ export function CodeEditor({
             spellCheck={false}
             styles={{ input: { fontFamily: "var(--mantine-font-family-monospace, monospace)", fontSize: 12 } }}
           />
-          <Group gap="xs" wrap="wrap">
-            <Button
-              size="xs"
-              variant="light"
-              color="lavender"
-              radius="xl"
-              leftSection={<IconPlayerPlay size={14} />}
-              loading={running}
-              onClick={() => void handleRun()}
-            >
-              Run
-            </Button>
-            <Button
-              size="xs"
-              color="lavender"
-              radius="xl"
-              leftSection={<IconFlag size={14} />}
-              loading={submitting}
-              disabled={!code.trim()}
-              onClick={() => void handleSubmit()}
-            >
-              Submit &amp; run tests
-            </Button>
-          </Group>
           {runResult ? <RunOutput result={runResult} /> : null}
           {submitResult ? (
             <SubmitOutput
@@ -232,6 +447,95 @@ export function CodeEditor({
   );
 }
 
+function ResizeHandle({
+  orientation,
+  onPointerDown,
+}: {
+  orientation: "vertical" | "horizontal";
+  onPointerDown: (e: ReactPointerEvent) => void;
+}) {
+  const vertical = orientation === "vertical";
+  return (
+    <Box
+      onPointerDown={onPointerDown}
+      style={{
+        flexShrink: 0,
+        width: vertical ? 8 : "100%",
+        height: vertical ? "100%" : 8,
+        cursor: vertical ? "col-resize" : "row-resize",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "var(--mantine-color-body)",
+        touchAction: "none",
+        userSelect: "none",
+      }}
+      aria-hidden
+    >
+      <IconGripVertical
+        size={12}
+        color="var(--mantine-color-dimmed)"
+        style={{ transform: vertical ? undefined : "rotate(90deg)" }}
+      />
+    </Box>
+  );
+}
+
+function DescriptionPane({
+  problem,
+  onUseSample,
+}: {
+  problem: CodingProblem;
+  onUseSample: (stdin: string) => void;
+}) {
+  return (
+    <Stack gap="sm">
+      <Group justify="space-between" wrap="wrap" gap="xs">
+        <Text ff="var(--font-serif)" fz={22} fw={500}>
+          {problem.title}
+        </Text>
+        <Group gap={6}>
+          <DifficultyBadge difficulty={problem.difficulty} />
+          {problem.test_count ? (
+            <Badge variant="light" color="gray" radius="sm">{problem.test_count} hidden tests</Badge>
+          ) : null}
+          {problem.status === "solved" ? (
+            <Badge variant="light" color="sage" radius="sm" leftSection={<IconCheck size={10} />}>
+              Solved
+            </Badge>
+          ) : null}
+        </Group>
+      </Group>
+      {problem.tags?.length ? (
+        <Group gap={6}>
+          {problem.tags.map((t) => (
+            <Badge key={t} variant="light" color="gray" radius="sm" size="sm">{t}</Badge>
+          ))}
+        </Group>
+      ) : null}
+      <Text fz="sm" lh={1.6} c="var(--mantine-color-text)" style={{ whiteSpace: "pre-wrap" }}>
+        {problem.statement}
+      </Text>
+      {problem.sample_tests?.length ? (
+        <Box>
+          <Text fz="xs" c="dimmed" mb={4} tt="uppercase" lts={0.5}>Sample cases</Text>
+          <Stack gap={6}>
+            {problem.sample_tests.map((t, i) => (
+              <SampleCase
+                key={i}
+                index={i}
+                stdin={t.stdin}
+                expected={t.expected_output}
+                onUse={() => onUseSample(t.stdin)}
+              />
+            ))}
+          </Stack>
+        </Box>
+      ) : null}
+    </Stack>
+  );
+}
+
 function DifficultyBadge({ difficulty }: { difficulty: "easy" | "medium" | "hard" }) {
   const color = difficulty === "easy" ? "sage" : difficulty === "hard" ? "terracotta" : "lavender";
   return (
@@ -239,11 +543,26 @@ function DifficultyBadge({ difficulty }: { difficulty: "easy" | "medium" | "hard
   );
 }
 
-function SampleCase({ index, stdin, expected }: { index: number; stdin: string; expected: string }) {
+function SampleCase({
+  index,
+  stdin,
+  expected,
+  onUse,
+}: {
+  index: number;
+  stdin: string;
+  expected: string;
+  onUse?: () => void;
+}) {
   return (
     <Paper radius="md" p="xs" withBorder style={{ borderColor: "var(--mantine-color-gray-2)" }}>
-      <Group gap={6} mb={4}>
+      <Group gap={6} mb={4} justify="space-between">
         <Text fz="xs" fw={600} c="dimmed">Case {index + 1}</Text>
+        {onUse ? (
+          <UnstyledButton onClick={onUse}>
+            <Text fz="xs" c="lavender.7">Use as stdin</Text>
+          </UnstyledButton>
+        ) : null}
       </Group>
       <Stack gap={2}>
         <Text fz="xs" c="dimmed">Input</Text>
@@ -280,7 +599,6 @@ function SubmitOutput({
   const allPassed = result.all_passed;
   const firstFail = result.cases.find((c) => !c.ok);
   const lesson = result.lesson;
-  // Sandbox / infra errors must not surface a teach-gap that blames the code.
   const hasMentor = !result.error && Boolean(result.mentor_summary || lesson?.title);
 
   return (

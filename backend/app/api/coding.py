@@ -13,20 +13,28 @@ editorial reads use ``coding_curation.editorial_payload``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from sse_starlette.sse import EventSourceResponse
 
+from app.api.access import require_document
 from app.db import get_db
 from app.models import Account
-from app.api.access import require_document
 from app.services.answer_signal import resolve_subject_entity
 from app.services.auth import get_optional_user, require_admin, require_csrf, require_csrf_or_guest
-from app.services.code_execution import LANGUAGES, run_code, run_tests
+from app.services.code_execution import LANGUAGES, ensure_language, run_code, run_tests
+from app.services.coding_assist import (
+    assist_event_stream,
+    clear_assist_thread,
+    list_assist_messages,
+    prepare_assist_stream,
+)
 from app.services.coding_curation import (
     editorial_payload,
     seed_starter_bank,
@@ -36,7 +44,7 @@ from app.services.coding_curation import (
 )
 from app.services.coding_generation import public_payload, record_coding_submit
 from app.services.coding_teach_gap import teach_after_submit
-from app.services.guest_session import guest_session_for_read
+from app.services.guest_session import guest_session_for_read, optional_guest_session
 from app.services.rate_limit import rate_limit_dependency
 
 router = APIRouter()
@@ -97,6 +105,14 @@ class CuratePatchIn(BaseModel):
     published: bool | None = None
 
 
+class AssistIn(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    code: str | None = Field(default=None, max_length=50000)
+    language_id: int | None = None
+    stdin: str | None = Field(default=None, max_length=20000)
+    last_status: str | None = Field(default=None, max_length=500)
+
+
 # ---------------------------------------------------------------- helpers
 
 
@@ -105,7 +121,7 @@ def _load_coding_assertion(db: Session, assertion_id: uuid.UUID) -> dict:
     row = db.execute(
         text(
             """
-            SELECT a.id, a.payload, a.title,
+            SELECT a.id, a.payload, a.title, a.recorded_at,
                    (a.payload->>'artifact_id') AS artifact_id
             FROM intel.assertion a
             WHERE a.id = :id AND a.status = 'active'
@@ -124,8 +140,37 @@ def _load_coding_assertion(db: Session, assertion_id: uuid.UUID) -> dict:
         "id": row._mapping["id"],
         "payload": payload,
         "title": row._mapping["title"],
+        "recorded_at": row._mapping["recorded_at"],
         "artifact_id": payload.get("artifact_id"),
     }
+
+
+def _require_solvable_problem(
+    db: Session,
+    assertion_id: uuid.UUID,
+    user: Account | None,
+) -> dict:
+    """Load a coding problem the caller may practice (published, or admin draft)."""
+    problem = _load_coding_assertion(db, assertion_id)
+    facet = db.execute(
+        text(
+            """
+            SELECT published FROM qb.coding_assertion_facets WHERE assertion_id = :aid
+            """
+        ),
+        {"aid": assertion_id},
+    ).first()
+    if facet is not None and not bool(facet._mapping["published"]):
+        if not user or not user.is_admin:
+            raise HTTPException(status_code=404, detail="Not found")
+    return problem
+
+
+def _validate_language_id(language_id: int) -> int:
+    try:
+        return ensure_language(language_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _status_for(db: Session, assertion_id: uuid.UUID, subject_entity_id: uuid.UUID | None) -> str:
@@ -526,10 +571,101 @@ async def run_problem_code(
     """Compile + run the user's code against optional stdin (the 'Run' button)."""
     _ = user, guest_id
     _load_coding_assertion(db, assertion_id)
+    language_id = _validate_language_id(body.language_id)
     try:
-        return await run_code(body.source, body.language_id, body.stdin)
+        return await run_code(body.source, language_id, body.stdin)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------- assist (assertion-scoped tutor)
+
+
+@router.get("/{assertion_id}/assist/messages")
+def assist_messages(
+    assertion_id: uuid.UUID,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> list[dict]:
+    problem = _require_solvable_problem(db, assertion_id, user)
+    msgs = list_assist_messages(
+        db,
+        account_id=user.id if user else None,
+        assertion_id=assertion_id,
+        recorded_at=problem["recorded_at"],
+        guest_id=guest_id,
+        offset=offset,
+    )
+    return [
+        {
+            "id": str(m.id),
+            "role": m.role,
+            "content": m.content,
+            "citations": m.citations,
+        }
+        for m in msgs
+    ]
+
+
+@router.post(
+    "/{assertion_id}/assist/clear",
+    dependencies=[Depends(require_csrf_or_guest)],
+)
+def assist_clear(
+    assertion_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict[str, int]:
+    problem = _require_solvable_problem(db, assertion_id, user)
+    version = clear_assist_thread(
+        db,
+        account_id=user.id if user else None,
+        assertion_id=assertion_id,
+        recorded_at=problem["recorded_at"],
+        guest_id=guest_id,
+    )
+    return {"version": version}
+
+
+@router.post(
+    "/{assertion_id}/assist",
+    dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)],
+)
+async def assist_stream(
+    assertion_id: uuid.UUID,
+    body: AssistIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(optional_guest_session),
+) -> EventSourceResponse:
+    problem = _require_solvable_problem(db, assertion_id, user)
+    if body.language_id is not None:
+        _validate_language_id(body.language_id)
+    pub = public_payload(problem["payload"])
+    recorded_at = problem["recorded_at"]
+    # Close request-scoped session before the long-lived SSE generator runs.
+    db.close()
+    setup = await asyncio.to_thread(
+        prepare_assist_stream,
+        request=request,
+        user=user,
+        guest_id=guest_id,
+        assertion_id=assertion_id,
+        recorded_at=recorded_at,
+        public_problem=pub,
+        message=body.message,
+        code=body.code,
+        language_id=body.language_id,
+        stdin=body.stdin,
+        last_status=body.last_status,
+    )
+    return await assist_event_stream(setup)
 
 
 # ---------------------------------------------------------------- submit (hidden tests)
@@ -553,8 +689,11 @@ async def submit_problem(
     if not hidden_tests:
         raise HTTPException(status_code=409, detail="Problem has no hidden tests")
 
+    language_id = _validate_language_id(body.language_id)
     try:
-        verdict = await run_tests(body.source, body.language_id, hidden_tests)
+        verdict = await run_tests(body.source, language_id, hidden_tests)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -593,7 +732,7 @@ async def submit_problem(
             passed=all_passed,
             passed_count=passed,
             total_count=total,
-            language_id=body.language_id,
+            language_id=language_id,
             subject_entity_id=subject_entity_id,
         )
         db.commit()

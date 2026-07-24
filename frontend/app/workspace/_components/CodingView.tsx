@@ -83,6 +83,7 @@ export function CodingView({ artifactId, compact = false }: { artifactId: string
         <CodeEditor
           problem={problemQuery.data}
           compact={compact}
+          variant="embedded"
           onSubmitted={() => {
             // The list's status badges refresh via the invalidate in useCodingActions.
           }}

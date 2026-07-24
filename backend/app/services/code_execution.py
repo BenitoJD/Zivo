@@ -18,17 +18,30 @@ import httpx
 
 from app.config import get_settings
 
-# Judge0 language ids (from the CE language list) → the label we show in the editor.
-# Kept small on purpose; add ids here as we support more languages.
+# Curated top-10 from Judge0 CE active catalogue (classic CE ids that typical
+# self-hosted boxes still ship). Do not silently remap unknown ids — callers
+# must 400 when ensure_language raises.
 LANGUAGES: dict[int, str] = {
-    71: "Python (3.8)",
-    63: "JavaScript (Node.js)",
-    62: "Java (OpenJDK 13)",
-    54: "C++ (GCC 9)",
-    50: "C (GCC 9)",
-    60: "Go (1.13)",
+    71: "Python (3.8.1)",
+    54: "C++ (GCC 9.2.0)",
+    62: "Java (OpenJDK 13.0.1)",
+    63: "JavaScript (Node.js 12.14.0)",
+    50: "C (GCC 9.2.0)",
+    60: "Go (1.13.5)",
+    73: "Rust (1.40.0)",
+    74: "TypeScript (3.7.4)",
+    51: "C# (Mono 6.6.0.161)",
+    78: "Kotlin (1.3.70)",
 }
 DEFAULT_LANGUAGE_ID = 71
+
+
+def ensure_language(language_id: int) -> int:
+    """Return language_id if allowlisted; raise ValueError otherwise."""
+    lid = int(language_id)
+    if lid not in LANGUAGES:
+        raise ValueError(f"Unsupported language_id: {lid}")
+    return lid
 
 # Judge0 status ids: 1 = In Queue, 2 = Processing, 3 = Accepted; >3 are errors
 # (Wrong Answer only applies when we submit expected_output, which we don't — we compare
@@ -70,10 +83,10 @@ async def run_code(
     """Compile + run one submission, returning the normalized result.
 
     Never raises for a *program* failure (compile error, runtime error, timeout) — those come
-    back in the normalized dict. Raises RuntimeError only when the sandbox is unreachable.
+    back in the normalized dict. Raises ValueError for an unsupported language_id.
+    Raises RuntimeError only when the sandbox is unreachable.
     """
-    if language_id not in LANGUAGES:
-        language_id = DEFAULT_LANGUAGE_ID
+    language_id = ensure_language(language_id)
     base = get_settings().judge0_url.rstrip("/")
     payload = {
         "source_code": source or "",
