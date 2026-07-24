@@ -64,9 +64,14 @@ export function useTutorChat({
   const chatContextReady = queue?.rag_window_ready !== false;
 
   // Switching conversation surface (mode) clears the view until the new thread loads.
+  // Also abort any in-flight stream: otherwise chatBusy stays true and Read/Learn
+  // Send silently no-ops after a mid-stream hop.
   useEffect(() => {
-    chatHydratedRef.current = null;
+    chatAbortRef.current?.abort();
+    chatAbortRef.current = null;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrate chat thread from server once per surface (chat is appended to locally during streaming)
+    setChatBusy(false);
+    chatHydratedRef.current = null;
     setChatMessages([]);
   }, [artifactId, chatSurface]);
 
