@@ -148,7 +148,7 @@ def save_progress(db: Session, doc: Document, progress: dict[str, Any]) -> None:
 
 
 def get_study_mode(doc: Document) -> str:
-    """The learner's per-document choice: 'adaptive' (difficulty_edge) or 'classic'
+    """The learner's per-document choice: 'adaptive' (adaptive_v1) or 'classic'
     (sequence). Falls back to the global default policy when unset."""
     from app.config import get_settings
 
@@ -162,7 +162,7 @@ def get_study_mode(doc: Document) -> str:
 def set_study_mode(db: Session, doc: Document, mode: str) -> str:
     """Persist the learner's Adaptive/Classic choice for this document and return it.
     Both policies run over the same question pool, so no regeneration is needed."""
-    policy = "sequence" if str(mode).strip().lower() == "classic" else "difficulty_edge"
+    policy = "sequence" if str(mode).strip().lower() == "classic" else "adaptive_v1"
     save_progress(db, doc, {"selection_policy": policy})
     return "classic" if policy == "sequence" else "adaptive"
 
@@ -496,6 +496,35 @@ def _difficulty_for_ids(db: Session, ids: list[str]) -> dict[str, float]:
     return out
 
 
+def _exposure_for_ids(db: Session, ids: list[str]) -> dict[str, int]:
+    """Map assertion id -> first-try answer count (soft novelty prior for selection).
+
+    Missing / unseeded measurement vocabulary → empty map (novelty=1.0 for all).
+    Never hard-filters candidates; Adaptive Selection only soft-weights.
+    """
+    if not ids:
+        return {}
+    try:
+        from app.repositories.intel import concept_id
+        from app.services.answer_signal import ANSWER_CORRECT_METRIC_URI
+
+        metric = concept_id(db, ANSWER_CORRECT_METRIC_URI)
+    except ValueError:
+        return {}
+    rows = db.execute(
+        text(
+            """
+            SELECT source_assertion_id::text AS id, COUNT(*)::int AS n
+            FROM intel.measurement
+            WHERE metric_concept_id = :metric
+              AND source_assertion_id::text = ANY(:ids)
+            GROUP BY source_assertion_id
+            """
+        ),
+        {"metric": metric, "ids": ids},
+    ).mappings().all()
+    return {r["id"]: int(r["n"]) for r in rows}
+
 def select_next_assertion(
     db: Session,
     document_id: uuid.UUID,
@@ -504,11 +533,10 @@ def select_next_assertion(
     *,
     page_ids: list[str] | None = None,
 ) -> str | None:
-    """The loop's choosing step — swappable policy over the unanswered candidates.
+    """The loop's choosing step — Adaptive Selection Engine over unanswered candidates.
 
-    Default ("sequence") returns the first unanswered question, identical to the
-    legacy behaviour. "concept_reinforce" reacts to the learner's last answer.
-    Candidates stay in sequence order so any policy degrades safely to legacy.
+    See docs/ADAPTIVE_SELECTION_ENGINE.md. Classic (``sequence``) returns the first
+    unanswered id. Adaptive policies score the bank; all degrade safely to sequence.
     """
     page = int(progress.get("current_page") or 1)
     answered = {str(x) for x in progress.get("answered_ids") or []}
@@ -525,37 +553,56 @@ def select_next_assertion(
             candidates = preferred
 
     from app.config import get_settings
+    from app.services.adaptive_selection import (
+        build_learner_state,
+        normalize_policy,
+        select_next,
+    )
 
     # Per-document override (the learner's Adaptive/Classic choice) wins; otherwise
     # fall back to the global default policy.
-    policy = (
+    policy = normalize_policy(
         str(progress.get("selection_policy") or "").strip().lower()
-        or (get_settings().selection_policy or "sequence").lower()
+        or (get_settings().selection_policy or "sequence")
     )
+    serve_mode = "test" if str(progress.get("serve_mode") or "").lower() == "test" else "learn"
     if policy == "sequence" or len(candidates) == 1:
         return candidates[0]
 
-    from app.services.selection import build_learner_state, choose_next_assertion
-
     state = build_learner_state(progress)
-    # Load only the signal the active policy needs (default path stays query-free).
     difficulty_by_id: dict[str, float] = {}
     lineage_by_id: dict[str, str] = {}
-    if policy == "concept_reinforce":
+    concept_by_id: dict[str, str | None] = {}
+    exposure_by_id: dict[str, int] = {}
+
+    if policy in ("adaptive_v1", "difficulty_edge", "concept_reinforce"):
         concept_by_id = _concept_keys_for_ids(db, candidates)
-    elif policy == "difficulty_edge":
+    if policy in ("adaptive_v1", "difficulty_edge"):
         difficulty_by_id = _difficulty_for_ids(db, candidates)
-        concept_by_id = _concept_keys_for_ids(db, candidates)  # for per-concept ability
         if state.last_assertion_id:
             lineage_by_id = _lineage_successors(db, state.last_assertion_id, candidates)
-        # Cold lineage: miss → reinforce same concept (selector already supports it).
-        if state.last_correct is False and not lineage_by_id and state.last_concept_key:
+        # Cold lineage on legacy band policy: miss → reinforce same concept.
+        if (
+            policy == "difficulty_edge"
+            and state.last_correct is False
+            and not lineage_by_id
+            and state.last_concept_key
+        ):
             policy = "concept_reinforce"
-    else:
-        concept_by_id = {}
-    return choose_next_assertion(
-        policy, candidates, concept_by_id, state, difficulty_by_id, lineage_by_id
+        if policy == "adaptive_v1":
+            exposure_by_id = _exposure_for_ids(db, candidates)
+
+    verdict = select_next(
+        candidates,
+        state,
+        policy=policy,
+        mode=serve_mode,  # type: ignore[arg-type]
+        concept_by_id=concept_by_id,
+        difficulty_by_id=difficulty_by_id,
+        lineage_by_id=lineage_by_id,
+        exposure_by_id=exposure_by_id,
     )
+    return verdict.assertion_id
 
 
 def _candidates_matching_concept_label(

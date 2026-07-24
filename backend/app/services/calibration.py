@@ -2,7 +2,7 @@
 the real outcomes of real answers.
 
 This is the swappable *metric* inside the permanent loop (see docs/VISION.md and
-``app/services/selection.py``): online Elo today, IRT tomorrow — same socket, no
+``app/services/adaptive_selection.py``): online Elo today, IRT tomorrow — same socket, no
 caller changes. It never calls an LLM; every update is O(1) arithmetic on the
 answer write-path. And it reads only what a learner actually did, never a model's
 guess at difficulty (2025 research: LLMs write items well but cannot reliably judge
@@ -13,7 +13,7 @@ Ratings live on one shared logit scale in ``intel.projection``:
   • per-item   difficulty → ``subject_assertion_id``, type ``item.difficulty``
 
 A learner whose ability equals an item's difficulty has a 50% expected chance of a
-correct answer; the productive-struggle band (see selection.py) sits a little above
+correct answer; the productive-struggle band (see adaptive_selection.py) sits a little above
 that — challenging enough to force reconstruction, not so hard it's noise.
 """
 

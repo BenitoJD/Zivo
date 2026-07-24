@@ -781,6 +781,7 @@ def test_select_next_assertion_prefers_focus_concept() -> None:
 
 
 def test_select_next_assertion_miss_without_lineage_falls_back_to_reinforce() -> None:
+    from app.services.adaptive_selection import SelectionVerdict
     from app.services.question_pool import select_next_assertion
 
     doc_id = uuid.uuid4()
@@ -792,9 +793,11 @@ def test_select_next_assertion_miss_without_lineage_falls_back_to_reinforce() ->
         "current_page": 1,
         "answered_ids": [],
         "selection_policy": "difficulty_edge",
-        "last_assertion_id": last_id,
-        "last_correct": False,
-        "last_concept_key": "cell-membrane",
+        "last_confirmed_answer": {
+            "assertion_id": last_id,
+            "correct": False,
+            "concept_key": "cell-membrane",
+        },
     }
     db = MagicMock()
 
@@ -806,8 +809,15 @@ def test_select_next_assertion_miss_without_lineage_falls_back_to_reinforce() ->
             return_value={c: "cell-membrane" for c in candidates},
         ),
         patch("app.services.question_pool._lineage_successors", return_value={}),
-        patch("app.services.selection.choose_next_assertion", return_value=candidates[0]) as choose,
-        patch("app.services.selection.build_learner_state") as state_fn,
+        patch(
+            "app.services.adaptive_selection.select_next",
+            return_value=SelectionVerdict(
+                assertion_id=candidates[0],
+                rationale="concept_reinforce",
+                policy="concept_reinforce",
+            ),
+        ) as choose,
+        patch("app.services.adaptive_selection.build_learner_state") as state_fn,
     ):
         state_fn.return_value = MagicMock(
             last_assertion_id=last_id,
@@ -817,9 +827,8 @@ def test_select_next_assertion_miss_without_lineage_falls_back_to_reinforce() ->
         chosen = select_next_assertion(db, doc_id, doc, progress)
 
     assert chosen == candidates[0]
-    # Cold lineage on miss → concept_reinforce policy handed to chooser.
-    assert choose.call_args[0][0] == "concept_reinforce"
-
+    # Cold lineage on miss → concept_reinforce policy handed to engine.
+    assert choose.call_args.kwargs["policy"] == "concept_reinforce"
 
 def test_write_batch_lineage_links_same_concept_and_sequence() -> None:
     from app.graphs.generation_graph import _write_batch_lineage

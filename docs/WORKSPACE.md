@@ -7,6 +7,8 @@ UI is implemented with **Mantine** in `frontend/app/workspace/` — no custom co
 - **MCQ** hero fills the viewport
 - Meta bar: **Page N · Question X of Y** (Y = agent `question_budget` for that page)
 - Budget planner (research-backed): [QUESTION_BUDGET_ENGINE.md](QUESTION_BUDGET_ENGINE.md); page vs document N; cook plan ≠ refill batch
+- Quality Evaluation Engine: [QUALITY_EVALUATION_ENGINE.md](QUALITY_EVALUATION_ENGINE.md); cook gates + retirement
+- Adaptive Selection Engine: [ADAPTIVE_SELECTION_ENGINE.md](ADAPTIVE_SELECTION_ENGINE.md); learn-queue next-Q
 - Parallel cook / zero-wait Learn: [MCQ_PARALLEL_COOK.md](MCQ_PARALLEL_COOK.md) — never full-screen wait if a question is ready
 - Bottom tabs: MCQ · Source · Chat
 - Source/Chat open as full-height sheets
