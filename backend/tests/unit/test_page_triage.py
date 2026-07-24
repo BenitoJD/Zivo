@@ -202,11 +202,49 @@ def test_finalize_triage_shrinks_budget_after_dedup() -> None:
         return out
 
     with patch("app.services.mcq_dedup.embed_texts", side_effect=fake_embed):
-        result = _finalize_triage(aspects=aspects, budget=3, rationale="test")
+        result = _finalize_triage(aspects=aspects, rationale="test")
 
+    # Planner owns N: 2 unique central units → learn N_page=2 (not raw LLM yield).
     assert result["question_budget"] == 2
     assert len(result["aspects"]) == 2
     assert result["aspect_dedup"]["deduped_count"] == 2
+    assert result["budget_version"] == "qb.budget.v1"
+    assert result["budget_confidence"] == "high"
+
+
+def test_finalize_triage_ignores_raw_budget_uses_weights() -> None:
+    aspects = [
+        {"key": "a", "label": "A", "centrality": "central", "asked": False, "answered": False},
+        {"key": "b", "label": "B", "centrality": "support", "asked": False, "answered": False},
+        {"key": "c", "label": "C", "centrality": "skip", "asked": False, "answered": False},
+    ]
+
+    def identity_dedupe(items: list) -> tuple[list, dict]:
+        return items, {"raw_count": len(items), "deduped_count": len(items)}
+
+    with patch("app.graphs.page_triage_graph.dedupe_aspects", side_effect=identity_dedupe):
+        result = _finalize_triage(aspects=aspects, rationale="weighted")
+
+    # 1 + 0.5 + 0 → 1.5 → 2; skip dropped from cook list
+    assert result["question_budget"] == 2
+    assert [a["key"] for a in result["aspects"]] == ["a", "b"]
+    assert result["n_cov"] == 1.5
+
+
+def test_finalize_triage_support_only_is_honest_zero() -> None:
+    aspects = [
+        {"key": "a", "label": "Sidebar", "centrality": "support", "asked": False, "answered": False},
+    ]
+
+    def identity_dedupe(items: list) -> tuple[list, dict]:
+        return items, {"raw_count": 1, "deduped_count": 1}
+
+    with patch("app.graphs.page_triage_graph.dedupe_aspects", side_effect=identity_dedupe):
+        result = _finalize_triage(aspects=aspects, rationale="thin")
+
+    # round(0.5)=0 → non_content, not filler
+    assert result["question_budget"] == 0
+    assert result["non_content"] is True
 
 
 def test_triage_page_skips_llm_when_flag_off() -> None:

@@ -21,9 +21,12 @@ INITIAL_BATCH_SIZE = 5
 # by four quality-gate round-trips. Warm pool fills right after via remainder /
 # refill jobs (capped at REFILL_BATCH_SIZE).
 FIRST_QUESTION_BATCH_SIZE = 1
+# Pipeline chunk only (docs/QUESTION_BUDGET_ENGINE.md). Product cook target is
+# N_page from plan_page_budget / page_coverage.question_budget — never treat
+# REFILL_BATCH_SIZE as the page budget.
 REFILL_BATCH_SIZE = 5
 # Hard ceiling on any single generate.questions job. Callers sometimes pass
-# `remaining` (= full page budget); without this a 400-idea plan becomes one
+# `remaining` (= full page budget); without this a large N_page becomes one
 # multi-hour job instead of small rolling batches.
 MAX_GENERATE_BATCH_SIZE = REFILL_BATCH_SIZE
 REFILL_AFTER_ANSWERED = 2
@@ -34,6 +37,8 @@ REFILL_AFTER_ANSWERED = 2
 # Jobs law: You move. Questions are already there. Always.
 # Sized ABOVE one in-flight refill (~5) so a fast learner cannot empty the pool
 # while the next batch's draft+gates are still cooking.
+# Low-water / refill decide *when* to enqueue the next pipe chunk; N_page decides
+# *when cook stops*.
 READY_LOW_WATER = int(os.getenv("ZIVO_READY_LOW_WATER", "8"))
 # Start next-page triage/RAG/prep before the current page is nearly done so the
 # page turn never cold-starts. Was 0.70 — too late for fast learners.
@@ -179,6 +184,10 @@ def save_page_coverage(
     content_type: str | None = None,
     non_content: bool = False,
     programmable: bool = False,
+    budget_confidence: str | None = None,
+    budget_mode: str | None = None,
+    budget_version: str | None = None,
+    n_cov: float | None = None,
 ) -> None:
     doc = db.get(Document, document_id)
     if not doc:
@@ -199,6 +208,14 @@ def save_page_coverage(
     }
     if aspect_dedup:
         entry["aspect_dedup"] = aspect_dedup
+    if budget_confidence is not None:
+        entry["budget_confidence"] = budget_confidence
+    if budget_mode is not None:
+        entry["budget_mode"] = budget_mode
+    if budget_version is not None:
+        entry["budget_version"] = budget_version
+    if n_cov is not None:
+        entry["n_cov"] = n_cov
     save_progress(db, doc, {"page_coverage": {_page_key(page): entry}})
     db.commit()
     db.refresh(doc)
@@ -259,13 +276,32 @@ def get_question_budget(doc: Document, page: int) -> int:
     # of open-world: ask nothing on a cover page rather than force filler.
     if cov.get("non_content"):
         return 0
-    # No floor and no artificial ceiling: budget is exactly what triage/heuristic
-    # decided (count of distinct testable ideas). A missing budget means triage
-    # hasn't landed yet — seed a small speculative batch so generation can start,
-    # but a triaged value of 0 is honoured (distinguish missing from 0).
+    # Page cook target N_page from plan_page_budget (persisted at triage). A
+    # missing budget means triage hasn't landed yet — seed a small speculative
+    # batch (confidence=low) so generation can start; a triaged 0 is honoured.
     raw = cov.get("question_budget")
     budget = int(raw) if raw is not None else INITIAL_BATCH_SIZE
     return max(0, budget)
+
+
+def page_budgets_for_document(doc: Document) -> list[int]:
+    """N_page values for selected cookable pages (missing triage → skip)."""
+    pages = selected_page_list(doc)
+    progress = get_progress(doc)
+    coverage = progress.get("page_coverage") or {}
+    out: list[int] = []
+    for page in pages:
+        entry = coverage.get(_page_key(page))
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("non_content"):
+            out.append(0)
+            continue
+        raw = entry.get("question_budget")
+        if raw is None:
+            continue
+        out.append(max(0, int(raw)))
+    return out
 
 
 def effective_question_budget(
@@ -603,6 +639,8 @@ def build_learn_queue_state(
     doc: Document,
     progress: dict[str, Any],
 ) -> dict[str, Any]:
+    from app.services.question_budget import SESSION_SOFT, plan_document_budget
+
     page = int(progress.get("current_page") or 1)
     study_pages = selected_page_list(doc)
     page_from, page_to = page_range_bounds(doc)
@@ -611,9 +649,11 @@ def build_learn_queue_state(
     page_ids = page_assertion_ids(db, document_id, page)
     questions_generated = len(page_ids)
     questions_answered = sum(1 for row_id in page_ids if row_id in answered_set)
+    cov = get_page_coverage(doc, page)
     plan_budget = get_question_budget(doc, page)
     # FE compat: generation_cap used to be a generate-ahead pace; now equals plan.
     generation_cap = plan_budget
+    doc_plan = plan_document_budget(page_budgets_for_document(doc), mode="learn")
     # Loop's choosing step (policy-driven; defaults to sequence order).
     next_id = select_next_assertion(db, document_id, doc, progress, page_ids=page_ids)
     coverage_complete = is_coverage_complete(doc, page)
@@ -640,15 +680,18 @@ def build_learn_queue_state(
         "page_to": page_to,
         "current_assertion_id": next_id,
         "question_number": questions_answered + 1 if next_id else questions_answered,
-        # question_budget / plan_budget / generation_cap are the same page plan —
-        # generate toward the full triage/heuristic yield with no artificial ceiling.
+        # Page cook / UI Y = plan_budget (N_page). session_soft is serve pacing only.
         "question_budget": plan_budget,
         "plan_budget": plan_budget,
         "generation_cap": generation_cap,
+        "session_soft": SESSION_SOFT,
+        "document_budget": doc_plan.n_doc,
+        "budget_confidence": cov.get("budget_confidence"),
+        "budget_version": cov.get("budget_version"),
         "questions_answered": questions_answered,
         "questions_generated": questions_generated,
         "generation_pending": bool(progress.get("generation_pending")),
-        "page_triage_complete": bool(get_page_coverage(doc, page)),
+        "page_triage_complete": bool(cov),
         "coverage_complete": coverage_complete,
         "page_complete": page_complete,
         "non_content": non_content,

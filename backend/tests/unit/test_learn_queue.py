@@ -53,10 +53,12 @@ def test_build_learn_queue_state_resume_at_question_three() -> None:
 
     assert state["question_number"] == 3
     assert state["questions_answered"] == 2
-    # Learner-facing Y and generation_cap are the full triage/heuristic plan.
+    # Learner-facing page Y = plan_budget; session_soft is pacing-only.
     assert state["question_budget"] == 47
     assert state["plan_budget"] == 47
     assert state["generation_cap"] == 47
+    assert state["session_soft"] == 20
+    assert state["document_budget"] == 47
     assert state["current_assertion_id"] == "id-3"
     assert state["page_complete"] is False
     assert state["page_triage_complete"] is True
