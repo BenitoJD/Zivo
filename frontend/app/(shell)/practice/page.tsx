@@ -24,6 +24,7 @@ import {
 import { IconArrowRight, IconSearch } from "@tabler/icons-react";
 import { apiGet, ensureGuestSession } from "@/lib/api/client";
 import { Shell } from "@/app/practice/_components/Shell";
+import { LearnerPageHeader } from "@/app/_components/study/LearnerPageHeader";
 
 type ConceptSummary = { qid: string; label: string; description: string };
 type SearchResponse = { query: string; results: ConceptSummary[] };
@@ -69,32 +70,12 @@ export default function PracticeHubPage() {
     <Shell>
       <Container size="md" py={{ base: 48, md: 72 }} pb={{ base: 88, md: 72 }}>
         <Stack gap="xl">
-          {/* Header */}
-          <Stack gap={6} align="center" ta="center">
-            <Text size="xs" fw={600} tt="uppercase" lts={1.5} c="lavender.8">
-              Practice Library
-            </Text>
-            <Title
-              order={1}
-              fw={500}
-              style={{
-                fontFamily: "var(--font-serif), Georgia, serif",
-                letterSpacing: "-0.02em",
-                fontSize: "clamp(1.75rem, 6vw, 2.75rem)",
-                lineHeight: 1.15,
-              }}
-            >
-              Practice{" "}
-              <Box component="span" fs="italic" c="lavender.7">
-                anything
-              </Box>{" "}
-              in the world.
-            </Title>
-            <Text size="lg" c="gray.6" lh={1.6} maw={560} px="xs" style={{ fontSize: "clamp(0.95rem, 2.8vw, 1.125rem)" }}>
-              Search any concept - from photosynthesis to Bebop - and practice AI-generated
-              questions instantly. No sign-up needed.
-            </Text>
-          </Stack>
+          <LearnerPageHeader
+            eyebrow="Practice library"
+            title="Practice"
+            titleAccent="anything"
+            subtitle="Search a concept — or open Newspaper, Coding, or System Design. Same Learn chrome when you answer."
+          />
 
           {/* Search */}
           <Paper shadow="paper" radius="xl" p={6} withBorder bg="gray.0">

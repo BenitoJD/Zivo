@@ -1,12 +1,14 @@
 "use client";
 
 /**
- * Embedded MCQs on /learn/[slug] — guest grade via existing /api/mcq/grade.
+ * Embedded MCQs on /learn/[slug] — same McqHeroPanel as Learn/Test workspace.
+ * Guest grade via existing /api/mcq/grade.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { Stack, Text, Title } from "@mantine/core";
-import { McqCard, type GradeState } from "@/app/_components/mcq/McqCard";
+import { McqHeroPanel } from "@/app/workspace/_components/McqPanels";
+import { type GradeState } from "@/app/_components/mcq/McqCard";
 import { apiGet, apiPost, ensureGuestSession } from "@/lib/api/client";
 import type { McqGradeResponse } from "@/lib/types";
 
@@ -61,7 +63,7 @@ export function LearnMcqSection({ slug }: { slug: string }) {
         assertion_id: current.id,
         choice_index: isMulti ? (multiSelected[0] ?? -1) : Number(selected),
         ...(isMulti ? { choice_indices: multiSelected } : {}),
-        mode: "test",
+        mode: "learn",
       });
       const correct = Boolean(res.correct);
       setFeedback(res.feedback ?? (correct ? "Correct!" : "Not quite."));
@@ -96,7 +98,7 @@ export function LearnMcqSection({ slug }: { slug: string }) {
         Question {index + 1} of {items.length}
       </Text>
       {current ? (
-        <McqCard
+        <McqHeroPanel
           stem={current.question}
           options={current.options}
           selected={selected}
@@ -105,11 +107,14 @@ export function LearnMcqSection({ slug }: { slug: string }) {
           selectedIndices={multiSelected}
           onToggle={toggleMulti}
           feedback={feedback}
-          mode="test"
+          mcqLoading={false}
+          hasQuestion
+          mode="learn"
           gradeState={gradeState}
           submitting={submitting}
+          compact
           onSubmit={() => void handleSubmit()}
-          onNext={handleNext}
+          onContinue={handleNext}
         />
       ) : null}
     </Stack>

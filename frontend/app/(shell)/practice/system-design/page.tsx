@@ -15,13 +15,11 @@ import {
   Paper,
   Stack,
   Text,
-  ThemeIcon,
   Title,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import {
   IconArrowRight,
-  IconBuildingSkyscraper,
   IconPlayerPlay,
   IconRoute,
 } from "@tabler/icons-react";
@@ -34,6 +32,7 @@ import {
   type SdPathConcept,
 } from "@/lib/api/queries";
 import { Shell } from "@/app/practice/_components/Shell";
+import { LearnerPageHeader } from "@/app/_components/study/LearnerPageHeader";
 
 function stateLabel(state: SdConceptState): string {
   if (state === "strong") return "strong";
@@ -79,19 +78,13 @@ export default function SystemDesignDoorPage() {
     <Shell>
       <Container size="sm" py={{ base: 36, md: 64 }}>
         <Stack gap="xl">
-          <Group gap="sm" align="center">
-            <ThemeIcon variant="light" color="lavender" size={44} radius="xl">
-              <IconBuildingSkyscraper size={22} />
-            </ThemeIcon>
-            <Box>
-              <Title order={2} ff="var(--font-serif)" fw={500}>
-                System Design
-              </Title>
-              <Text c="dimmed" fz="sm">
-                Path → case → design → mentor truth → close the gap.
-              </Text>
-            </Box>
-          </Group>
+          <LearnerPageHeader
+            align="left"
+            compact
+            eyebrow="System design"
+            title="System Design"
+            subtitle="Path → case → design → mentor truth → close the gap."
+          />
 
           {loading ? (
             <Text c="dimmed">Loading your path…</Text>

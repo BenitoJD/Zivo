@@ -17,13 +17,12 @@ import {
   Stack,
   Text,
   ThemeIcon,
-  Title,
   UnstyledButton,
   Chip,
   ScrollArea,
   Anchor,
 } from "@mantine/core";
-import { IconCheck, IconCode, IconPlayerPlay } from "@tabler/icons-react";
+import { IconCheck, IconPlayerPlay } from "@tabler/icons-react";
 import { useRouter } from "next/navigation";
 import { ensureGuestSession } from "@/lib/api/client";
 import {
@@ -33,6 +32,7 @@ import {
   type CodingPublicFilters,
 } from "@/lib/api/queries";
 import { Shell } from "@/app/practice/_components/Shell";
+import { LearnerPageHeader } from "@/app/_components/study/LearnerPageHeader";
 
 export default function CodingPracticePage() {
   const router = useRouter();
@@ -54,19 +54,13 @@ export default function CodingPracticePage() {
       <Container size="md" py={{ base: 32, md: 56 }}>
         <Stack gap="lg">
           <Group justify="space-between" align="flex-start" wrap="wrap" gap="sm">
-            <Group gap="sm" align="center">
-              <ThemeIcon variant="light" color="lavender" size={44} radius="xl">
-                <IconCode size={22} />
-              </ThemeIcon>
-              <Box>
-                <Title order={2} ff="var(--font-serif)" fw={500}>
-                  Coding practice
-                </Title>
-                <Text c="dimmed" fz="sm">
-                  Curated problems + challenges from study material. Run tests, submit, earn the check.
-                </Text>
-              </Box>
-            </Group>
+            <LearnerPageHeader
+              align="left"
+              compact
+              eyebrow="Coding"
+              title="Coding practice"
+              subtitle="Curated problems + challenges from study material. Run tests, submit, earn the check."
+            />
             {isAdmin ? (
               <Anchor href="/workspace/coding" fz="sm" c="lavender.7">
                 Curate bank →

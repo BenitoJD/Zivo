@@ -3,9 +3,8 @@
 /**
  * Practice run page - answer MCQs for a concept, anonymously.
  *
- * Loads a batch of questions for the concept, renders them one at a time via the
- * shared McqCard, grades against /api/mcq/grade (guest cookie works as-is), and
- * tracks a running session score. When the batch is exhausted, shows a summary.
+ * Same McqHeroPanel as Learn/Test workspace. Grades via /api/mcq/grade
+ * (guest cookie works as-is). Session score until batch exhausted.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -17,14 +16,14 @@ import {
   Center,
   Container,
   Group,
-  Paper,
   Progress,
   Stack,
   Text,
-  Title,
 } from "@mantine/core";
 import { IconArrowLeft } from "@tabler/icons-react";
-import { McqCard, type GradeState } from "@/app/_components/mcq/McqCard";
+import { McqHeroPanel } from "@/app/workspace/_components/McqPanels";
+import { type GradeState } from "@/app/_components/mcq/McqCard";
+import { LearnerPageHeader } from "@/app/_components/study/LearnerPageHeader";
 import { apiGet, apiPost, ensureGuestSession } from "@/lib/api/client";
 import type { McqGradeResponse } from "@/lib/types";
 import { Shell } from "@/app/practice/_components/Shell";
@@ -106,7 +105,7 @@ export default function PracticeRunPage({ params }: { params: Promise<{ qid: str
         assertion_id: current.id,
         choice_index: isMulti ? (multiSelected[0] ?? -1) : Number(selected),
         ...(isMulti ? { choice_indices: multiSelected } : {}),
-        mode: "test",
+        mode: "learn",
       });
       const correct = Boolean(res.correct);
       const correctIndex = res.correct_index ?? (isMulti ? (multiSelected[0] ?? 0) : Number(selected));
@@ -168,7 +167,7 @@ export default function PracticeRunPage({ params }: { params: Promise<{ qid: str
         <Center style={{ height: "60vh" }}>
           <Stack align="center" gap="md">
             <Text c="terracotta.7">{error}</Text>
-            <Button variant="light" onClick={() => router.push(`/practice/c/${qid}`)}>
+            <Button variant="light" radius="xl" color="lavender" onClick={() => router.push(`/practice/c/${qid}`)}>
               Back to concept
             </Button>
           </Stack>
@@ -183,28 +182,17 @@ export default function PracticeRunPage({ params }: { params: Promise<{ qid: str
       <Shell>
         <Container size="sm" py={{ base: 48, md: 72 }}>
           <Stack align="center" gap="lg" ta="center">
-            <Text size="xs" fw={600} tt="uppercase" lts={1.5} c="lavender.8">
-              Session complete
-            </Text>
-            <Title
-              order={1}
-              fw={500}
-              style={{ fontFamily: "var(--font-serif), Georgia, serif", letterSpacing: "-0.02em" }}
-            >
-              You scored{" "}
-              <Box component="span" c="lavender.7">
-                {score.correct}
-              </Box>{" "}
-              / {score.answered}
-            </Title>
-            <Text size="lg" c="gray.6" lh={1.6}>
-              That&apos;s {pctScore}% correct on this concept.
-            </Text>
+            <LearnerPageHeader
+              eyebrow="Session complete"
+              title="You scored"
+              titleAccent={`${score.correct} / ${score.answered}`}
+              subtitle={`That's ${pctScore}% correct on this concept.`}
+            />
             <Group gap="sm" mt="md">
-              <Button radius="xl" onClick={restart}>
+              <Button radius="xl" color="sage" onClick={restart}>
                 Practice again
               </Button>
-              <Button radius="xl" variant="light" onClick={() => router.push(`/practice/c/${qid}`)}>
+              <Button radius="xl" variant="light" color="lavender" onClick={() => router.push(`/practice/c/${qid}`)}>
                 Back to concept
               </Button>
             </Group>
@@ -218,9 +206,8 @@ export default function PracticeRunPage({ params }: { params: Promise<{ qid: str
     <Shell>
       <Container size="md" py={{ base: 24, md: 36 }}>
         <Stack gap="lg">
-          {/* Top bar */}
           <Group justify="space-between" align="center">
-            <Anchor href={`/practice/c/${qid}`} size="sm" c="gray.6" underline="hover">
+            <Anchor href={`/practice/c/${qid}`} size="sm" c="dimmed" underline="hover">
               <Group gap={6}>
                 <IconArrowLeft size={14} />
                 Concept
@@ -240,9 +227,8 @@ export default function PracticeRunPage({ params }: { params: Promise<{ qid: str
 
           <Progress value={pct} size="xs" radius="xl" color="lavender" />
 
-          {/* Question card */}
-          <Paper shadow="paper-lg" radius="xl" p={{ base: "lg", md: "xl" }} withBorder>
-            <McqCard
+          <Box mih={320}>
+            <McqHeroPanel
               stem={current?.question ?? ""}
               options={current?.options ?? []}
               selected={selected}
@@ -251,18 +237,17 @@ export default function PracticeRunPage({ params }: { params: Promise<{ qid: str
               selectedIndices={multiSelected}
               onToggle={toggleMulti}
               feedback={feedback}
-              mode="test"
+              mcqLoading={!current}
+              hasQuestion={Boolean(current)}
+              mode="learn"
               gradeState={gradeState}
               submitting={submitting}
-              loading={!current}
-              loadingLabel="Preparing your questions…"
-              onSubmit={handleSubmit}
-              onNext={handleNext}
+              onSubmit={() => void handleSubmit()}
+              onContinue={handleNext}
             />
-          </Paper>
+          </Box>
         </Stack>
       </Container>
     </Shell>
   );
 }
-

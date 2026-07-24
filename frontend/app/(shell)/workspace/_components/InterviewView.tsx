@@ -9,7 +9,6 @@ import {
   Group,
   Paper,
   Progress,
-  Radio,
   RingProgress,
   Select,
   SimpleGrid,
@@ -38,9 +37,9 @@ import {
   type InterviewScores,
   type InterviewTurn,
 } from "@/lib/api/queries";
+import { McqHeroPanel } from "@/app/workspace/_components/McqPanels";
 import { WaitState } from "./WaitState";
 
-const LETTERS = "ABCDEFGH";
 const SCORE_LABELS: Record<keyof InterviewScores, string> = {
   problem_framing: "Framing",
   depth: "Depth",
@@ -232,6 +231,39 @@ export function InterviewView({ artifactId, compact = false }: { artifactId: str
   if (phase === "feedback") {
     const turn = data.transcript[data.transcript.length - 1];
     const last = data.status === "complete";
+    // MCQ feedback uses the same Learn McqHeroPanel chrome (serif stem, sage/terracotta options, Here's why).
+    if (turn?.kind === "mcq" && turn.options) {
+      return (
+        <Stack gap="lg" pb="xl">
+          <RoundHeader roundNo={roundNo} total={data.total_rounds} name={turn.round_name ?? ""} pct={progressPct} />
+          <McqHeroPanel
+            stem={turn.question}
+            options={turn.options}
+            selected={turn.selected_index != null ? String(turn.selected_index) : null}
+            onSelect={() => {}}
+            feedback={turn.feedback ?? null}
+            mcqLoading={false}
+            hasQuestion
+            mode="learn"
+            gradeState={{
+              correct: Boolean(turn.correct),
+              correctIndex: turn.correct_index ?? 0,
+            }}
+            submitting={busy}
+            compact={compact}
+            onSubmit={() => {}}
+            onContinue={doContinue}
+          />
+          {last ? (
+            <Group justify="center">
+              <Button color="sage" radius="xl" rightSection={<IconArrowRight size={16} />} loading={busy} onClick={doContinue}>
+                See results
+              </Button>
+            </Group>
+          ) : null}
+        </Stack>
+      );
+    }
     return (
       <Stack gap="lg" pb="xl">
         <RoundHeader roundNo={roundNo} total={data.total_rounds} name={turn?.round_name ?? ""} pct={progressPct} />
@@ -254,26 +286,36 @@ export function InterviewView({ artifactId, compact = false }: { artifactId: str
     doSubmit(q.kind === "mcq" ? Number(selected) : isCoding ? { source: code, language_id: langId } : typed.trim());
   const languages = langData?.languages ?? [];
 
+  if (q.kind === "mcq" && q.options) {
+    return (
+      <Stack gap="lg" pb="xl">
+        <RoundHeader roundNo={roundNo} total={data.total_rounds} name={q.round_name} pct={progressPct} />
+        <McqHeroPanel
+          stem={q.question}
+          options={q.options}
+          selected={selected}
+          onSelect={setSelected}
+          feedback={null}
+          mcqLoading={false}
+          hasQuestion
+          mode="learn"
+          gradeState={null}
+          submitting={busy}
+          compact={compact}
+          onSubmit={submit}
+          onContinue={() => {}}
+        />
+      </Stack>
+    );
+  }
+
   return (
     <Stack gap="lg" pb="xl">
       <RoundHeader roundNo={roundNo} total={data.total_rounds} name={q.round_name} pct={progressPct} />
       <Paper radius="lg" p={compact ? "md" : "lg"} withBorder style={{ borderColor: "var(--app-border, var(--mantine-color-gray-2))" }}>
         <Text ff="var(--font-serif)" fz={compact ? 18 : 22} fw={500} lh={1.5} mb="md" style={{ whiteSpace: "pre-wrap" }}>{q.question}</Text>
 
-        {q.kind === "mcq" && q.options ? (
-          <Radio.Group value={selected} onChange={setSelected}>
-            <Stack gap="xs">
-              {q.options.map((opt, i) => (
-                <Radio
-                  key={i}
-                  value={String(i)}
-                  color="lavender"
-                  label={<Text fz="sm"><Text span fw={600} c="lavender.6" mr={6}>{LETTERS[i]}</Text>{opt}</Text>}
-                />
-              ))}
-            </Stack>
-          </Radio.Group>
-        ) : isCoding ? (
+        {isCoding ? (
           <Stack gap="sm">
             <Group justify="space-between" wrap="wrap" gap="xs">
               <Select
@@ -374,37 +416,7 @@ function FeedbackCard({ turn, compact }: { turn: InterviewTurn; compact?: boolea
       </Paper>
     );
   }
-  if (turn.kind === "mcq") {
-    const correct = Boolean(turn.correct);
-    const options = turn.options ?? [];
-    return (
-      <Paper radius="lg" p={compact ? "md" : "lg"} withBorder style={{ borderColor: border }}>
-        <Group gap={8} mb="sm">
-          <ThemeIcon variant="light" color={correct ? "sage" : "terracotta"} radius="xl" size="md">
-            {correct ? <IconCheck size={16} /> : <IconX size={16} />}
-          </ThemeIcon>
-          <Text fw={600} c={correct ? "sage.7" : "terracotta.7"}>{correct ? "Correct" : "Not quite"}</Text>
-        </Group>
-        <Text fz="sm" fw={500} mb="xs">{turn.question}</Text>
-        <Stack gap={4} mb="sm" pl={4}>
-          {options.map((opt, i) => {
-            const isCorrect = turn.correct_index === i;
-            const isPicked = turn.selected_index === i;
-            const c = isCorrect ? "sage.7" : isPicked ? "terracotta.7" : "dimmed";
-            return (
-              <Group key={i} gap={8} wrap="nowrap">
-                <Text fz="sm" fw={600} c={c} w={18}>{LETTERS[i]}</Text>
-                <Text fz="sm" c={isCorrect || isPicked ? c : "var(--mantine-color-text)"} fw={isCorrect ? 600 : 400}>
-                  {opt}{isCorrect ? "  ✓" : isPicked ? "  ✗" : ""}
-                </Text>
-              </Group>
-            );
-          })}
-        </Stack>
-        <Text fz="sm" c="dimmed" lh={1.6}>{turn.feedback}</Text>
-      </Paper>
-    );
-  }
+  // MCQ feedback is handled by McqHeroPanel above — this branch is for typed/coding only.
 
   const scores = turn.scores;
   return (
