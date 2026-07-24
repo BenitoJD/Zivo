@@ -133,6 +133,16 @@ async def _reconcile(client, entity, db, *, limit: int = 80) -> None:
         newspaper_repo.set_sync_cursor(db, max_id)
 
 
+def _entity_ref(raw: str):
+    """Telethon wants int peer ids; string \"-100…\" fails with Cannot find entity."""
+    ref = (raw or "").strip()
+    if not ref:
+        return ""
+    if ref.lstrip("-").isdigit():
+        return int(ref)
+    return ref
+
+
 async def run() -> None:
     try:
         from telethon import TelegramClient, events
@@ -160,29 +170,49 @@ async def run() -> None:
     await client.start()
     logger.info("telegram client started")
 
-    def _channel_ref() -> str:
+    def _channel_settings() -> tuple[str, str]:
         with SessionLocal() as db:
             from app.repositories import newspaper as newspaper_repo
 
-            return (newspaper_repo.get_settings(db).get("channel_ref") or "").strip()
+            s = newspaper_repo.get_settings(db)
+            return (
+                (s.get("channel_ref") or "").strip(),
+                (s.get("channel_label") or "").strip(),
+            )
 
     async def resolve_entity():
-        ref = _channel_ref()
-        if not ref:
+        ref, label = _channel_settings()
+        if not ref and not label:
             logger.warning("newspaper channel_ref empty — set via admin /api/newspaper/admin/channel")
             return None
-        return await client.get_entity(ref)
+        target = _entity_ref(ref) if ref else ""
+        if target != "":
+            try:
+                return await client.get_entity(target)
+            except (ValueError, TypeError):
+                pass
+        # Warm entity cache from dialogs (needed after fresh StringSession on a new host).
+        async for d in client.iter_dialogs(limit=400):
+            if isinstance(target, int) and d.id == target:
+                return d.entity
+            if label and (d.name or "").strip() == label:
+                return d.entity
+            if ref and (d.name or "").strip() == ref:
+                return d.entity
+        raise ValueError(f"Cannot resolve newspaper channel ref={ref!r} label={label!r}")
 
     # Live handler — filter in-process against current channel id.
     @client.on(events.NewMessage)
     async def on_new(event):  # noqa: ANN001
-        ref = _channel_ref()
-        if not ref:
+        ref, _label = _channel_settings()
+        if not ref and not _label:
             return
         try:
-            entity = await client.get_entity(ref)
+            entity = await resolve_entity()
         except Exception:
             logger.exception("resolve channel failed")
+            return
+        if entity is None:
             return
         chat = await event.get_chat()
         if getattr(chat, "id", None) != getattr(entity, "id", None):
