@@ -14,11 +14,18 @@ export function readPreferredStudyMode(): PreferredStudyMode {
   }
 }
 
-/** Exam → Test (graded at end); Relaxed → Learn (instant feedback + tutor). */
+/** Exam → Test (graded at end); Relaxed → Learn (instant feedback + tutor).
+ *  Newspaper editions ignore this on open and always start Learn
+ *  (docs/QUESTION_BUDGET_ENGINE.md §0). */
 export function defaultWorkspaceMode(
   preferred: PreferredStudyMode = readPreferredStudyMode(),
 ): "learn" | "test" {
   return preferred === "exam" ? "test" : "learn";
+}
+
+/** Budget / learn-queue mode query value. */
+export function budgetModeQuery(mode: string): "learn" | "test" {
+  return mode === "test" ? "test" : "learn";
 }
 
 export function writeStudyPreferences(mode: PreferredStudyMode): void {

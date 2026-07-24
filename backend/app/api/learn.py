@@ -31,8 +31,10 @@ from app.services.question_pool import (
     page_range_bounds,
     selected_page_list,
     set_focus_concept,
+    set_serve_budget_mode,
     set_study_mode,
 )
+from app.services.question_budget import parse_budget_mode
 from app.services.learn_notify import wait_learn_notify
 
 router = APIRouter()
@@ -88,7 +90,12 @@ def _learn_queue_payload(
     artifact_id: uuid.UUID,
     doc: Document,
     user: Account | None,
+    *,
+    mode: str | None = None,
 ) -> dict:
+    serve_mode = parse_budget_mode(mode)
+    set_serve_budget_mode(db, doc, serve_mode)
+    db.refresh(doc)
     progress = get_progress(doc)
     if is_page_complete(db, doc, progress):
         page = int(progress.get("current_page") or 1)
@@ -101,7 +108,7 @@ def _learn_queue_payload(
             db.refresh(doc)
             progress = get_progress(doc)
 
-    state = build_learn_queue_state(db, artifact_id, doc, progress)
+    state = build_learn_queue_state(db, artifact_id, doc, progress, mode=serve_mode)
     ws = _workspace_state(db, doc, user)
 
     return {
@@ -117,13 +124,15 @@ def _learn_queue_handler(
     artifact_id: uuid.UUID,
     user: Account | None,
     guest_id: str | None,
+    *,
+    mode: str | None = None,
 ) -> dict:
     with SessionLocal() as db:
         doc = require_document(db, artifact_id, user, guest_id)
         if doc.status == "ready":
             ensure_question_pool(db, artifact_id)
             db.refresh(doc)
-        return _learn_queue_payload(db, artifact_id, doc, user)
+        return _learn_queue_payload(db, artifact_id, doc, user, mode=mode)
 
 
 def _learn_stream_tick(
@@ -132,29 +141,34 @@ def _learn_stream_tick(
     guest_id: str | None,
     *,
     ensure_pool: bool,
+    mode: str | None = None,
 ) -> dict:
     with SessionLocal() as db:
         doc = require_document(db, artifact_id, user, guest_id)
         if ensure_pool and doc.status == "ready":
             ensure_question_pool(db, artifact_id)
             db.refresh(doc)
-        return _learn_queue_payload(db, artifact_id, doc, user)
+        return _learn_queue_payload(db, artifact_id, doc, user, mode=mode)
 
 
 @router.get("/{artifact_id}/learn-queue")
 async def learn_queue(
     artifact_id: uuid.UUID,
+    mode: str | None = None,
     db: Session = Depends(get_db),
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> dict:
     db.close()
-    return await asyncio.to_thread(_learn_queue_handler, artifact_id, user, guest_id)
+    return await asyncio.to_thread(
+        _learn_queue_handler, artifact_id, user, guest_id, mode=mode
+    )
 
 
 @router.get("/{artifact_id}/learn-queue/stream")
 async def learn_queue_stream(
     artifact_id: uuid.UUID,
+    mode: str | None = None,
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ):
@@ -177,6 +191,7 @@ async def learn_queue_stream(
                     user,
                     guest_id,
                     ensure_pool=tick == 1,
+                    mode=mode,
                 )
             except HTTPException:
                 yield {"event": "error", "data": json.dumps({"detail": "not found"})}

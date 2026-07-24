@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -14,6 +14,13 @@ from app.services.document_learn_state import load_progress as load_learn_state_
 from app.services.document_learn_state import save_progress_row
 from app.services.mcq_assertion_facets import page_assertion_ids_from_facets
 from app.repositories import workspace as workspace_repo
+from app.services.question_budget import (
+    Mode,
+    parse_budget_mode,
+    plan_document_budget,
+    plan_page_budget,
+    units_from_aspect_dicts,
+)
 
 INITIAL_BATCH_SIZE = 5
 # First job writes ONE question so the learner can start immediately. Critic +
@@ -270,12 +277,25 @@ def reset_empty_page_streak(db: Session, document_id: uuid.UUID) -> None:
     save_progress(db, doc, {"empty_page_streak": 0})
 
 
-def get_question_budget(doc: Document, page: int) -> int:
+def get_question_budget(doc: Document, page: int, *, mode: Mode | None = None) -> int:
     cov = get_page_coverage(doc, page)
     # A deliberate zero verdict is honoured exactly (no floor) — the whole point
     # of open-world: ask nothing on a cover page rather than force filler.
     if cov.get("non_content"):
         return 0
+    serve_mode = mode if mode is not None else serve_budget_mode(doc)
+    # When serve mode differs from the cook plan (typically Test after Learn cook),
+    # re-plan from stored aspects so Y and refill target follow the multiplier.
+    persisted_mode = parse_budget_mode(cov.get("budget_mode") if isinstance(cov.get("budget_mode"), str) else None)
+    aspects = cov.get("aspects") if isinstance(cov.get("aspects"), list) else None
+    if aspects and serve_mode != persisted_mode:
+        units = units_from_aspect_dicts(aspects)
+        conf_raw = cov.get("budget_confidence")
+        conf: Literal["high", "medium", "low"] | None = None
+        if conf_raw in ("high", "medium", "low"):
+            conf = conf_raw
+        plan = plan_page_budget(units, mode=serve_mode, confidence=conf)
+        return plan.n_page
     # Page cook target N_page from plan_page_budget (persisted at triage). A
     # missing budget means triage hasn't landed yet — seed a small speculative
     # batch (confidence=low) so generation can start; a triaged 0 is honoured.
@@ -284,8 +304,9 @@ def get_question_budget(doc: Document, page: int) -> int:
     return max(0, budget)
 
 
-def page_budgets_for_document(doc: Document) -> list[int]:
+def page_budgets_for_document(doc: Document, *, mode: Mode | None = None) -> list[int]:
     """N_page values for selected cookable pages (missing triage → skip)."""
+    serve_mode = mode if mode is not None else serve_budget_mode(doc)
     pages = selected_page_list(doc)
     progress = get_progress(doc)
     coverage = progress.get("page_coverage") or {}
@@ -297,6 +318,15 @@ def page_budgets_for_document(doc: Document) -> list[int]:
         if entry.get("non_content"):
             out.append(0)
             continue
+        # Prefer mode-aware planner when aspects exist; else persisted cook N.
+        aspects = entry.get("aspects") if isinstance(entry.get("aspects"), list) else None
+        persisted_mode = parse_budget_mode(
+            entry.get("budget_mode") if isinstance(entry.get("budget_mode"), str) else None
+        )
+        if aspects and serve_mode != persisted_mode:
+            units = units_from_aspect_dicts(aspects)
+            out.append(plan_page_budget(units, mode=serve_mode).n_page)
+            continue
         raw = entry.get("question_budget")
         if raw is None:
             continue
@@ -304,14 +334,35 @@ def page_budgets_for_document(doc: Document) -> list[int]:
     return out
 
 
+def serve_budget_mode(doc: Document) -> Mode:
+    """Active Learn/Test budget mode for serve + refill (persisted on progress)."""
+    progress = get_progress(doc)
+    return parse_budget_mode(
+        progress.get("budget_serve_mode") if isinstance(progress.get("budget_serve_mode"), str) else None
+    )
+
+
+def set_serve_budget_mode(db: Session, doc: Document, mode: Mode) -> Mode:
+    """Remember serve mode so grade/refill paths match learn-queue ?mode=."""
+    resolved = parse_budget_mode(mode)
+    if serve_budget_mode(doc) == resolved:
+        return resolved
+    save_progress(db, doc, {"budget_serve_mode": resolved})
+    db.commit()
+    db.refresh(doc)
+    return resolved
+
+
 def effective_question_budget(
     doc: Document,
     page: int,
     progress: dict[str, Any] | None = None,
+    *,
+    mode: Mode | None = None,
 ) -> int:
     """Page generation target = full plan budget (no generate-ahead pacing)."""
     del progress  # kept for call-site compatibility
-    return get_question_budget(doc, page)
+    return get_question_budget(doc, page, mode=mode)
 
 
 def is_coverage_complete(doc: Document, page: int) -> bool:
@@ -638,9 +689,12 @@ def build_learn_queue_state(
     document_id: uuid.UUID,
     doc: Document,
     progress: dict[str, Any],
+    *,
+    mode: Mode | None = None,
 ) -> dict[str, Any]:
-    from app.services.question_budget import SESSION_SOFT, plan_document_budget
+    from app.services.question_budget import SESSION_SOFT
 
+    serve_mode = mode if mode is not None else serve_budget_mode(doc)
     page = int(progress.get("current_page") or 1)
     study_pages = selected_page_list(doc)
     page_from, page_to = page_range_bounds(doc)
@@ -650,10 +704,10 @@ def build_learn_queue_state(
     questions_generated = len(page_ids)
     questions_answered = sum(1 for row_id in page_ids if row_id in answered_set)
     cov = get_page_coverage(doc, page)
-    plan_budget = get_question_budget(doc, page)
+    plan_budget = get_question_budget(doc, page, mode=serve_mode)
     # FE compat: generation_cap used to be a generate-ahead pace; now equals plan.
     generation_cap = plan_budget
-    doc_plan = plan_document_budget(page_budgets_for_document(doc), mode="learn")
+    doc_plan = plan_document_budget(page_budgets_for_document(doc, mode=serve_mode), mode=serve_mode)
     # Loop's choosing step (policy-driven; defaults to sequence order).
     next_id = select_next_assertion(db, document_id, doc, progress, page_ids=page_ids)
     coverage_complete = is_coverage_complete(doc, page)
@@ -688,6 +742,7 @@ def build_learn_queue_state(
         "document_budget": doc_plan.n_doc,
         "budget_confidence": cov.get("budget_confidence"),
         "budget_version": cov.get("budget_version"),
+        "budget_mode": serve_mode,
         "questions_answered": questions_answered,
         "questions_generated": questions_generated,
         "generation_pending": bool(progress.get("generation_pending")),

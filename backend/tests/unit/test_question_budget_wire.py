@@ -72,6 +72,52 @@ def test_learn_queue_exposes_plan_vs_session_soft() -> None:
     assert state["document_budget"] == 9  # 7 + 2
     assert state["budget_confidence"] == "high"
     assert state["budget_version"] == BUDGET_VERSION
+    assert state["budget_mode"] == "learn"
+
+
+def test_learn_queue_test_mode_raises_document_budget() -> None:
+    """Test path passes mode=test into plan_document_budget (info floor)."""
+    doc = _doc(page=1, budget=1, pages=[1])
+    # One central aspect → Learn N=1; Test N=3. Doc budgets still hit N_info=32 in Test.
+    cov = doc.meta["question_progress"]["page_coverage"]["1"]
+    cov["aspects"] = [
+        {"key": "a", "label": "A", "centrality": "central", "asked": False, "answered": False}
+    ]
+    cov["budget_mode"] = "learn"
+    cov["n_cov"] = 1.0
+    progress = doc.meta["question_progress"]
+    db = MagicMock()
+
+    with (
+        patch("app.services.question_pool.page_assertion_ids", return_value=["q1"]),
+        patch("app.services.question_pool._count_available", return_value=1),
+        patch("app.services.question_pool.is_page_complete", return_value=False),
+        patch("app.services.question_pool.select_next_assertion", return_value="q1"),
+        patch("app.services.rag_window.get_rag_window", return_value=[]),
+        patch("app.services.rag_window.is_rag_window_ready", return_value=True),
+    ):
+        learn = build_learn_queue_state(db, doc.id, doc, progress, mode="learn")
+        test = build_learn_queue_state(db, doc.id, doc, progress, mode="test")
+
+    assert learn["plan_budget"] == 1
+    assert learn["document_budget"] == 1
+    assert learn["budget_mode"] == "learn"
+    assert test["plan_budget"] == 3  # m_test=3 on one central unit
+    assert test["document_budget"] == 32  # max(3, N_info)
+    assert test["budget_mode"] == "test"
+
+
+def test_get_question_budget_replans_for_test_mode() -> None:
+    doc = _doc(budget=1, pages=[3])
+    cov = doc.meta["question_progress"]["page_coverage"]["3"]
+    cov["aspects"] = [
+        {"key": "a", "centrality": "central"},
+        {"key": "b", "centrality": "central"},
+    ]
+    cov["budget_mode"] = "learn"
+    cov["question_budget"] = 2
+    assert get_question_budget(doc, 3, mode="learn") == 2
+    assert get_question_budget(doc, 3, mode="test") == 6
 
 
 def test_page_budgets_include_newspaper_zeros() -> None:

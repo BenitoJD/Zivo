@@ -164,8 +164,10 @@ def run_page_triage(
 
         verdict, rationale = newspaper_page_verdict(page_text)
         if verdict != "cook":
+            # Newspaper cook plans Learn by default (docs/QUESTION_BUDGET_ENGINE.md §0).
             result = _non_content_result(
                 rationale=f"Newspaper filter ({verdict}): {rationale}",
+                mode="learn",
             )
             _persist_triage_coverage(
                 db,
@@ -191,7 +193,12 @@ def run_page_triage(
             db.commit()
             return result
 
-    result = _triage_page(db, page_text=page_text, page_number=page_number)
+    # Product rule: newspaper editions cook with Learn (m=1). Test re-plans at
+    # serve time via learn-queue ?mode=test (see QUESTION_BUDGET_ENGINE.md §0).
+    triage_mode: Mode = "learn"
+    result = _triage_page(
+        db, page_text=page_text, page_number=page_number, mode=triage_mode
+    )
 
     content_type = result.get("content_type")
     if is_newspaper and not result.get("non_content"):
@@ -501,7 +508,9 @@ def _finalize_triage(
     }
 
 
-def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, Any]:
+def _triage_page(
+    db: Session, *, page_text: str, page_number: int, mode: Mode = "learn"
+) -> dict[str, Any]:
     from app.config import get_settings
     from app.services.chunk_map_cache import triage_cache_key
     from app.services.generation_cache import get as cache_get, put as cache_put
@@ -537,11 +546,16 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
 
     # Empty / junk → honest zero when allowed (no LLM either way).
     if allow_zero and (not excerpt or _looks_like_junk(excerpt)):
-        return _store(_non_content_result(rationale="Page has no coherent testable text."))
+        return _store(
+            _non_content_result(
+                rationale="Page has no coherent testable text.",
+                mode=mode,
+            )
+        )
 
     # Jobs default: instant heuristic plan. LLM only when explicitly re-enabled.
     if not use_llm:
-        return _store(_fallback_triage(page_text, page_number))
+        return _store(_fallback_triage(page_text, page_number, mode=mode))
 
     if excerpt:
         try:
@@ -597,12 +611,14 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
                                 content_type=content_type or "non_content",
                                 rationale=rationale,
                                 programmable=programmable,
+                                mode=mode,
                             )
                         )
                     return _store(
                         _finalize_triage(
                             aspects=aspects,
                             rationale=rationale,
+                            mode=mode,
                             content_type=content_type,
                             programmable=programmable,
                             words=words,
@@ -614,11 +630,12 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
                 # Legacy path (flag off): still formula-owned N; no floor/ceiling
                 # beyond the planner. Empty aspects → heuristic fallback.
                 if not aspects:
-                    return _store(_fallback_triage(page_text, page_number))
+                    return _store(_fallback_triage(page_text, page_number, mode=mode))
                 return _store(
                     _finalize_triage(
                         aspects=aspects,
                         rationale=rationale,
+                        mode=mode,
                         content_type=content_type,
                         programmable=programmable,
                         words=words,
@@ -634,4 +651,4 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
                 page_number,
                 exc_info=True,
             )
-    return _store(_fallback_triage(page_text, page_number))
+    return _store(_fallback_triage(page_text, page_number, mode=mode))

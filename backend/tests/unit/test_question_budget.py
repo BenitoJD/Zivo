@@ -36,6 +36,27 @@ def test_test_formative_multiplier() -> None:
     assert plan.n_page == 6
 
 
+def test_mode_learn_vs_test_n_differs() -> None:
+    """Same units: Test N is larger than Learn via formative multiplier."""
+    units = [Unit("a", "central"), Unit("b", "support")]
+    learn = plan_page_budget(units, mode="learn")
+    test = plan_page_budget(units, mode="test")
+    # Learn: 1+0.5 → 1.5 → 2; Test: 4.5 → banker's round → 4
+    assert learn.n_page == 2
+    assert test.n_page == 4
+    assert test.n_page > learn.n_page
+
+
+def test_parse_budget_mode_defaults_learn() -> None:
+    from app.services.question_budget import parse_budget_mode
+
+    assert parse_budget_mode(None) == "learn"
+    assert parse_budget_mode("") == "learn"
+    assert parse_budget_mode("LEARN") == "learn"
+    assert parse_budget_mode("test") == "test"
+    assert parse_budget_mode("Test") == "test"
+
+
 def test_non_content_is_zero() -> None:
     plan = plan_page_budget([Unit("a")], mode="learn", non_content=True)
     assert plan.n_page == 0
