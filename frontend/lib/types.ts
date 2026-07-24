@@ -54,6 +54,15 @@ export type McqState = {
   generation_cap?: number;
   /** Soft UX session cap (serve pacing only; does not shrink cook plan). */
   session_soft?: number;
+  /** Soft session length from Session Design Engine. */
+  n_session?: number;
+  /** True when session_items_answered >= n_session (soft break hint). */
+  session_break?: boolean;
+  session_items_answered?: number;
+  /** Mastery / Evidence-Stop: enough evidence to pause current concept. */
+  mastery_stop?: boolean;
+  revisit_due_hours?: number | null;
+  concept_revisit_hours?: Record<string, number> | null;
   /** Sum of page plans across selected cookable pages. */
   document_budget?: number;
   budget_confidence?: "high" | "medium" | "low" | string | null;

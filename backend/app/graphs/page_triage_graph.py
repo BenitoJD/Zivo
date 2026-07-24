@@ -164,26 +164,18 @@ def run_page_triage(
 
     reset_empty_page_streak(db, document_id)
 
-    # Newspaper editions: drop ads/junk/off-syllabus before triage so MCQs stay
-    # UPSC/Group-1 signal-only. Combined verdict also closes soft entertainment.
+    # Newspaper editions: Worthiness Engine owns ad/junk/off-syllabus skip.
     doc_for_signal = db.get(Document, document_id)
     is_newspaper = bool(doc_for_signal and (doc_for_signal.meta or {}).get("newspaper"))
     if is_newspaper:
-        from app.services.newspaper_ad_filter import newspaper_page_verdict
+        from app.services.content_worthiness import evaluate_worthiness
 
-        verdict, rationale = newspaper_page_verdict(page_text)
-        if verdict != "cook":
-            from app.services.content_worthiness import evaluate_worthiness
-
-            worth = evaluate_worthiness(
-                page_text=page_text,
-                ad_likely=(verdict == "ad"),
-                non_content=(verdict != "cook"),
-            )
+        worth = evaluate_worthiness(page_text=page_text, newspaper=True)
+        if not worth.worthy:
             # Newspaper cook plans Learn by default (docs/QUESTION_BUDGET_ENGINE.md §0).
             result = _non_content_result(
                 rationale=(
-                    f"Newspaper filter ({verdict}): {rationale}"
+                    f"Newspaper filter ({worth.reason}): {worth.details or worth.reason}"
                     f" [worthiness:{worth.reason}]"
                 ),
                 mode="learn",
@@ -378,20 +370,10 @@ def _normalize_aspect(item: Any, index: int, page_number: int) -> dict[str, Any]
 
 
 def _looks_like_junk(text: str) -> bool:
-    """Cheap pre-LLM gate: is this coherent language a learner could be quizzed on?
+    """Compat shim → Content Worthiness Engine (tests / legacy imports)."""
+    from app.services.content_worthiness import looks_like_junk
 
-    Conservative by design — only flags material that is clearly unusable
-    (empty, mostly non-letters like raw tables/OCR noise, or too few real words).
-    Used only when zero questions are permitted; legacy behaviour never calls it.
-    """
-    t = (text or "").strip()
-    if len(t) < 24:
-        return True
-    letters = sum(1 for c in t if c.isalpha())
-    if letters / max(len(t), 1) < 0.45:
-        return True
-    words = re.findall(r"[^\W\d_]{2,}", t, re.UNICODE)
-    return len(words) < 8
+    return looks_like_junk(text)
 
 
 def _non_content_result(
@@ -493,13 +475,34 @@ def _finalize_triage(
     substantial_paragraphs: int = 0,
     confidence: Literal["high", "medium", "low"] | None = None,
 ) -> dict[str, Any]:
-    """Dedup aspects, normalize KC keys, then let plan_page_budget own N."""
-    from app.services.kc_coverage import normalize_key
+    """Dedup aspects, normalize via KC engine, then let plan_page_budget own N."""
+    from app.services.kc_coverage import normalize_aspects, normalize_key
 
     deduped, meta = dedupe_aspects(aspects)
     for aspect in deduped:
         aspect.setdefault("centrality", "central")
-        aspect["key"] = normalize_key(str(aspect.get("key") or aspect.get("label") or ""))
+        cent = str(aspect.get("centrality") or "central").lower()
+        aspect["central"] = cent not in ("support", "peripheral")
+        if cent in ("support", "peripheral"):
+            aspect["peripheral"] = True
+    plan_aspects = normalize_aspects(deduped)
+    # Merge engine keys back onto triage aspect dicts (preserve angles, etc.).
+    unused = list(deduped)
+    normalized_dicts: list[dict[str, Any]] = []
+    for a in plan_aspects.aspects:
+        matched_idx = None
+        for i, d in enumerate(unused):
+            raw_key = str(d.get("key") or d.get("label") or "")
+            if normalize_key(raw_key) == a.key or str(d.get("label") or "") == a.label:
+                matched_idx = i
+                break
+        base = dict(unused.pop(matched_idx)) if matched_idx is not None else {}
+        base["key"] = a.key
+        base["label"] = a.label or base.get("label") or a.key
+        base["centrality"] = "central" if a.central else "support"
+        base["central"] = a.central
+        normalized_dicts.append(base)
+    deduped = normalized_dicts
     units = _units_from_aspects(deduped)
     plan = plan_page_budget(
         units if units else None,
@@ -573,14 +576,26 @@ def _triage_page(
             logger.debug("page triage DB cache write failed", exc_info=True)
         return result
 
-    # Empty / junk → honest zero when allowed (no LLM either way).
-    if allow_zero and (not excerpt or _looks_like_junk(excerpt)):
-        return _store(
-            _non_content_result(
-                rationale="Page has no coherent testable text.",
-                mode=mode,
-            )
+    # Empty / junk → Worthiness Engine owns honest zero (no parallel if-ladder).
+    if allow_zero:
+        from app.services.content_worthiness import evaluate_worthiness
+
+        worth = evaluate_worthiness(
+            page_text=excerpt or "",
+            empty=not bool(excerpt),
+            check_junk=True,
+            min_chars=24,
         )
+        if not worth.worthy:
+            return _store(
+                _non_content_result(
+                    rationale=(
+                        "Page has no coherent testable text."
+                        f" [worthiness:{worth.reason}]"
+                    ),
+                    mode=mode,
+                )
+            )
 
     # Jobs default: instant heuristic plan. LLM only when explicitly re-enabled.
     if not use_llm:

@@ -14,19 +14,23 @@ Index of durable policy engines (ADR 0004 seams). Budget plans N; Quality decide
 | 6 | Mastery / Evidence-Stop | [MASTERY_EVIDENCE_ENGINE.md](MASTERY_EVIDENCE_ENGINE.md) | `mastery_evidence.py` | grade → progress → learn-queue | yes | DONE |
 | 7 | Question Graph / Lineage | [QUESTION_GRAPH_ENGINE.md](QUESTION_GRAPH_ENGINE.md) | `question_graph.py` | cook lineage write | yes | DONE |
 | 8 | Misconception / Distractor | [MISCONCEPTION_DISTRACTOR_ENGINE.md](MISCONCEPTION_DISTRACTOR_ENGINE.md) | `misconception_distractor.py` | all quality cook paths | yes | DONE |
-| 9 | Content Worthiness Gate | [CONTENT_WORTHINESS_ENGINE.md](CONTENT_WORTHINESS_ENGINE.md) | `content_worthiness.py` | empty PDF + newspaper + heuristic skip | yes | DONE |
+| 9 | Content Worthiness Gate | [CONTENT_WORTHINESS_ENGINE.md](CONTENT_WORTHINESS_ENGINE.md) | `content_worthiness.py` | empty PDF + newspaper + junk skip (sole facade) | yes | DONE |
 | 10 | Grounding / Answerability | [GROUNDING_ANSWERABILITY_ENGINE.md](GROUNDING_ANSWERABILITY_ENGINE.md) | `grounding_answerability.py` | all quality cook paths | yes | DONE |
-| 11 | Spaced Revisit | [SPACED_REVISIT_ENGINE.md](SPACED_REVISIT_ENGINE.md) | `spaced_revisit.py` | grade → progress due map | yes | DONE |
-| 12 | Session Design | [SESSION_DESIGN_ENGINE.md](SESSION_DESIGN_ENGINE.md) | `session_design.py` | learn-queue session_soft | yes | DONE |
-| 13 | Item Health / Bank Hygiene | [ITEM_HEALTH_ENGINE.md](ITEM_HEALTH_ENGINE.md) | `item_health.py` | retirement ETA | yes | DONE |
+| 11 | Spaced Revisit | [SPACED_REVISIT_ENGINE.md](SPACED_REVISIT_ENGINE.md) | `spaced_revisit.py` | grade → ease/reps + due map → Selection prefer | yes | DONE |
+| 12 | Session Design | [SESSION_DESIGN_ENGINE.md](SESSION_DESIGN_ENGINE.md) | `session_design.py` | learn-queue `session_break` | yes | DONE |
+| 13 | Item Health / Bank Hygiene | [ITEM_HEALTH_ENGINE.md](ITEM_HEALTH_ENGINE.md) | `item_health.py` | retirement ETA (flag + retire) | yes | DONE |
+| 14 | Practice Selection | (sibling of Adaptive Selection) | `practice_selection.py` | coding + system-design next | yes | DONE |
 
 ## Pipeline sketch
 
 ```
 cook:  Worthiness → Budget → generate → Grounding + Distractor → Quality → Graph lineage → birth Calibration prior
-serve: Session Design → Selection (reads Calibration + Graph + KC) → learner
+serve: Session Design → Selection (reads Calibration + Graph + KC + Spaced due + Mastery stop) → learner
 grade: measurement → Calibration update → Mastery stop + Spaced revisit persisted
 hygiene: Item Health / retirement (CTT)
+practice hubs: Practice Selection (overlap×difficulty)
 ```
 
 Zero-wait refill (`REFILL_BATCH_SIZE`) stays outside Budget and Selection math.
+
+**Holy grail:** decisions live in engines; orchestration must not own if-else policy. See [AGENTS.md](../AGENTS.md#holy-grail-engines).

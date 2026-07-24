@@ -20,11 +20,12 @@ Related: [ENGINES.md](ENGINES.md), [ADR 0004](adr/0004-swappable-policy-seam.md)
 ## 1. Problem + API
 
 ### Input
-page text excerpt, triage flags (non_content, empty, ad_likely).
+page text excerpt, triage flags (non_content, empty, ad_likely), optional
+`newspaper=True` (syllabus/ad heuristics) and `check_junk=True` (letter/word gate).
 
 ### Output
 ```
-WorthinessVerdict { worthy: bool, reason: str, policy_version }
+WorthinessVerdict { worthy: bool, reason: str, policy, policy_version, details }
 ```
 
 
@@ -37,13 +38,15 @@ Version field: `qb.worth.v1`.
 | Source | Year | Link | Takeaway |
 |--------|------|------|----------|
 | Zivo Budget non_content | 2026 | QUESTION_BUDGET_ENGINE.md | Prefer N=0 over filler. |
-| Newspaper ad filter practice | 2026 | newspaper_ad_filter.py | Drop ad-like pages. |
+| Newspaper ad filter practice | 2026 | newspaper_ad_filter.py | Implementation detail behind this facade. |
 
 ---
 
 ## 3. Policy seam (ADR 0004)
 
-Callers depend on `app.services.content_worthiness` facade, not ad-hoc if-ladders. Unknown policy degrades safely.
+Callers depend on `app.services.content_worthiness.evaluate_worthiness` only.
+Do not call `newspaper_ad_filter` or invent junk if-ladders from triage/generation.
+Unknown policy degrades safely.
 
 ---
 
@@ -52,6 +55,7 @@ Callers depend on `app.services.content_worthiness` facade, not ad-hoc if-ladder
 - Do not change Budget `N_page` from this engine unless it owns coverage labeling only.
 - Do not block zero-wait refill.
 - Do not require LLM for the deterministic core.
+- Do not keep parallel skip paths in `page_triage_graph` / `generation_graph`.
 
 ---
 
@@ -59,5 +63,6 @@ Callers depend on `app.services.content_worthiness` facade, not ad-hoc if-ladder
 
 | Module | Role |
 |--------|------|
-| `content_worthiness.py` | evaluate_worthiness |
-| `page triage / pool` | skip generate when not worthy |
+| `content_worthiness.py` | `evaluate_worthiness`, `looks_like_junk` |
+| `newspaper_ad_filter.py` | newspaper heuristics (called only from facade) |
+| `page triage / generation / seo_cook` | skip generate when not worthy |

@@ -62,6 +62,40 @@ def test_worthiness_rejects_ads_and_short() -> None:
     ).worthy is True
 
 
+def test_worthiness_junk_and_newspaper_seam() -> None:
+    from app.services.content_worthiness import looks_like_junk
+
+    assert looks_like_junk("....,,,,;;;; 123 456 789 %%%%") is True
+    junk = evaluate_worthiness(
+        page_text="....,,,,;;;; 123 456 789 %%%% more noise !!",
+        check_junk=True,
+        min_chars=24,
+    )
+    assert junk.worthy is False and junk.reason == "junk_text"
+    ad = evaluate_worthiness(
+        page_text="Advertisement: buy now limited period offer call toll free flat for sale",
+        newspaper=True,
+    )
+    assert ad.worthy is False
+    assert ad.reason.startswith("newspaper_")
+
+
+def test_practice_selection_overlap() -> None:
+    from app.services.practice_selection import PracticeCandidate, pick_next
+
+    pick = pick_next(
+        [
+            PracticeCandidate("a", ("caching",), "easy"),
+            PracticeCandidate("b", ("queues", "caching"), "hard"),
+            PracticeCandidate("c", ("apis",), "medium"),
+        ],
+        ["caching"],
+        exclude_id="a",
+    )
+    assert pick.id == "b"
+    assert pick.score >= 10
+
+
 def test_grounding_overlap() -> None:
     page = "Chloroplasts perform photosynthesis using chlorophyll."
     ok = evaluate_grounding(

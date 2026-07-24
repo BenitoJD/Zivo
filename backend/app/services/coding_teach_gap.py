@@ -103,8 +103,10 @@ def pick_next_coding_id(
     tags: list[str],
     concept: str,
 ) -> uuid.UUID | None:
-    """Prefer unpublished-excluded published problems overlapping weak tags/concept."""
-    focus = set(_normalize_focus(list(weak_concepts) + list(tags), concept))
+    """Prefer published problems overlapping weak tags/concept (Practice Selection Engine)."""
+    from app.services.practice_selection import PracticeCandidate, pick_next
+
+    focus = list(_normalize_focus(list(weak_concepts) + list(tags), concept))
     rows = db.execute(
         text(
             """
@@ -120,19 +122,18 @@ def pick_next_coding_id(
         ),
         {"exclude": exclude},
     ).mappings().all()
-    best: tuple[int, uuid.UUID] | None = None
+    cands: list[PracticeCandidate] = []
     for r in rows:
-        keys = set(_normalize_focus(list(r["tags"] or []), str(r["concept"] or "")))
-        overlap = len(focus & keys)
-        score = overlap * 10 + {"easy": 1, "medium": 2, "hard": 3}.get(str(r["difficulty"] or ""), 0)
-        aid = r["id"]
-        if isinstance(aid, uuid.UUID):
-            uid = aid
-        else:
-            uid = uuid.UUID(str(aid))
-        if best is None or score > best[0]:
-            best = (score, uid)
-    return best[1] if best else None
+        keys = tuple(_normalize_focus(list(r["tags"] or []), str(r["concept"] or "")))
+        cands.append(
+            PracticeCandidate(
+                id=str(r["id"]),
+                concept_keys=keys,
+                difficulty=str(r["difficulty"] or "") or None,
+            )
+        )
+    pick = pick_next(cands, focus, exclude_id=str(exclude))
+    return uuid.UUID(pick.id) if pick.id else None
 
 
 async def teach_after_submit(

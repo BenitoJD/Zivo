@@ -390,20 +390,21 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
         }
 
     # Close parallel first-batch race: triage may still be running while this
-    # batch uses speculative aspects. Re-apply newspaper ad + syllabus gate here
-    # so ads/off-syllabus pages never cook MCQs.
+    # batch uses speculative aspects. Worthiness Engine owns newspaper gate.
     if (doc.meta or {}).get("newspaper"):
-        from app.services.newspaper_ad_filter import newspaper_page_verdict
+        from app.services.content_worthiness import evaluate_worthiness
 
-        verdict, rationale = newspaper_page_verdict(page_text)
-        if verdict != "cook":
+        worth = evaluate_worthiness(page_text=page_text, newspaper=True)
+        if not worth.worthy:
             save_page_coverage(
                 db,
                 document_id,
                 page=page_number,
                 question_budget=0,
                 aspects=[],
-                rationale=f"Newspaper filter ({verdict}): {rationale}",
+                rationale=(
+                    f"Newspaper filter ({worth.reason}): {worth.details or worth.reason}"
+                ),
                 content_type="non_content",
                 non_content=True,
                 programmable=False,
@@ -418,7 +419,7 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
                     stats={
                         "questions_saved": 0,
                         "page_number": page_number,
-                        "newspaper_filter": verdict,
+                        "newspaper_filter": worth.reason,
                         "non_content": True,
                     },
                     finished=True,
@@ -428,7 +429,7 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
                 "questions_saved": 0,
                 "page_number": page_number,
                 "non_content": True,
-                "newspaper_filter": verdict,
+                "newspaper_filter": worth.reason,
             }
 
     clear_stale_coverage_complete(db, document_id, page_number)

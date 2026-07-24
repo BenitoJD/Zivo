@@ -557,6 +557,8 @@ def list_problems(db: Session, *, difficulty: str | None = None) -> list[dict[st
 def recommend_problem(
     db: Session, account_id: uuid.UUID | None, guest_id: str | None
 ) -> dict[str, Any] | None:
+    from app.services.practice_selection import PracticeCandidate, score_candidate
+
     path = build_path(db, account_id, guest_id)
     focus = path.get("focus_key")
     where, params = _subject_filter(account_id, guest_id)
@@ -573,20 +575,24 @@ def recommend_problem(
         ).mappings().all()
     }
     problems = list_problems(db)
-    # Prefer unattempted problems tagged with focus concept.
-    ranked: list[dict[str, Any]] = []
+    # Prefer unattempted problems tagged with focus concept (Practice Selection score + attempt bias).
+    ranked: list[tuple[int, dict[str, Any]]] = []
+    focus_list = [str(focus)] if focus else []
     for p in problems:
-        keys = set(p.get("concept_keys") or [])
-        score = 0
-        if focus and focus in keys:
-            score += 10
+        base = score_candidate(
+            PracticeCandidate(
+                id=str(p["id"]),
+                concept_keys=tuple(p.get("concept_keys") or ()),
+                difficulty=p.get("difficulty"),
+            ),
+            focus_list,
+        )
+        # Attempt bias stays serve-path overlay (not a second ranker).
         if str(p["id"]) not in attempted:
-            score += 5
+            base += 5
         else:
-            score -= 3
-        # Easier first when not started on focus
-        score += {"easy": 2, "medium": 1, "hard": 0}.get(p.get("difficulty") or "", 0)
-        ranked.append((score, p))
+            base -= 3
+        ranked.append((base, p))
     ranked.sort(key=lambda x: (-x[0], x[1].get("sort_order") or 0))
     return ranked[0][1] if ranked else None
 
@@ -884,17 +890,14 @@ async def submit_and_grade(
 def _pick_next_problem_id(
     db: Session, *, concept_keys: list[str], exclude: uuid.UUID
 ) -> uuid.UUID | None:
+    from app.services.practice_selection import pick_from_rows
+
     problems = list_problems(db)
-    focus = set(concept_keys)
-    best: tuple[int, dict[str, Any]] | None = None
-    for p in problems:
-        if str(p["id"]) == str(exclude):
-            continue
-        keys = set(p.get("concept_keys") or [])
-        overlap = len(focus & keys)
-        score = overlap * 10 + {"easy": 1, "medium": 2, "hard": 3}.get(p.get("difficulty") or "", 0)
-        if best is None or score > best[0]:
-            best = (score, p)
-    if not best:
+    pick = pick_from_rows(
+        problems,
+        concept_keys,
+        exclude_id=str(exclude),
+    )
+    if not pick.id:
         return None
-    return uuid.UUID(best[1]["id"])
+    return uuid.UUID(pick.id)

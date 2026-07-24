@@ -1,16 +1,7 @@
-"""Self-improving loop: retire MCQ items real learners almost never get right.
+"""Self-improving loop: retire / flag MCQ items via Item Health Engine.
 
-An item that nearly everyone answers wrong on their FIRST try — over enough
-distinct learners — is far more likely BROKEN (wrong key, ambiguous, untestable)
-than merely hard. We flip its assertion status to 'retired' so it stops being
-served (reversible; every selection query filters status='active').
-
-Sourced from the immutable intel.measurement first-answer rows (one per
-learner+item), so the signal is honest. Conservative + flag-gated: closing the
-quality loop without throwing away legitimately-hard content.
-
-Thresholds come from quality_evaluation (CTT empirical stage) so cook gates and
-retirement share one policy seam.
+Orchestration only: load empirical stats, call ``evaluate_item_health``, act.
+SQL must not duplicate the engine's retire thresholds (holy grail / ADR 0004).
 """
 
 from __future__ import annotations
@@ -24,17 +15,13 @@ from app.config import get_settings
 from app.repositories.intel import concept_id
 from app.services.answer_signal import ANSWER_CORRECT_METRIC_URI
 from app.services.item_health import evaluate_item_health
-from app.services.quality_evaluation import (
-    EMPIRICAL_MAX_BROKEN_RATE,
-    EMPIRICAL_MIN_EXPOSURE,
-)
+from app.services.quality_evaluation import EMPIRICAL_MIN_EXPOSURE
 
 logger = logging.getLogger(__name__)
 
 
 def retire_broken_items(db: Session) -> int:
-    """Retire items whose measured first-try correct rate is near-zero over a
-    minimum exposure. Returns how many were retired (0 when disabled/none)."""
+    """Retire (and flag) items per Item Health Engine. Returns retired count."""
     settings = get_settings()
     if not settings.item_self_improve_enabled:
         return 0
@@ -43,8 +30,9 @@ def retire_broken_items(db: Session) -> int:
     except ValueError:
         return 0  # vocabulary not seeded — nothing to do
 
+    # Wide net: exposure floor only. Engine decides keep|flag|retire.
     min_exposure = int(settings.item_retire_min_exposure or EMPIRICAL_MIN_EXPOSURE)
-    max_rate = float(settings.item_retire_max_correct_rate or EMPIRICAL_MAX_BROKEN_RATE)
+    max_rate = getattr(settings, "item_retire_max_correct_rate", None)
 
     rows = db.execute(
         text(
@@ -58,39 +46,58 @@ def retire_broken_items(db: Session) -> int:
               AND a.status = 'active'
             GROUP BY m.source_assertion_id
             HAVING COUNT(*) >= :min_exposure
-               AND AVG(m.value_numeric) <= :max_rate
             """
         ),
         {
             "metric": metric,
             "min_exposure": min_exposure,
-            "max_rate": max_rate,
         },
     ).mappings().all()
 
-    ids: list[str] = []
+    retire_ids: list[str] = []
+    flag_ids: list[str] = []
     for row in rows:
-        health = evaluate_item_health(
-            p_correct=float(row["p_correct"]),
-            n_exposure=int(row["n_exposure"]),
-            min_exposure=min_exposure,
-            max_broken_rate=max_rate,
-        )
+        kwargs: dict = {
+            "p_correct": float(row["p_correct"]),
+            "n_exposure": int(row["n_exposure"]),
+            "min_exposure": min_exposure,
+        }
+        if max_rate is not None:
+            kwargs["max_broken_rate"] = float(max_rate)
+        health = evaluate_item_health(**kwargs)
         if health.action == "retire":
-            ids.append(str(row["aid"]))
+            retire_ids.append(str(row["aid"]))
+        elif health.action == "flag":
+            flag_ids.append(str(row["aid"]))
 
-    if not ids:
+    if flag_ids:
+        # Persist soft CTT flag on assertion payload (reversible; still active).
+        db.execute(
+            text(
+                """
+                UPDATE intel.assertion
+                SET payload = COALESCE(payload, '{}'::jsonb)
+                    || jsonb_build_object('item_health', 'flag', 'item_health_version', 'qb.health.v1')
+                WHERE id = ANY(:ids)
+                """
+            ),
+            {"ids": list(flag_ids)},
+        )
+        logger.info("item self-improve: flagged %d items", len(flag_ids))
+
+    if not retire_ids:
+        if flag_ids:
+            db.commit()
         return 0
 
     db.execute(
         text("UPDATE intel.assertion SET status = 'retired' WHERE id = ANY(:ids)"),
-        {"ids": list(ids)},
+        {"ids": list(retire_ids)},
     )
     db.commit()
     logger.info(
-        "item self-improve: retired %d broken items (exposure>=%d, correct_rate<=%.2f)",
-        len(ids),
+        "item self-improve: retired %d broken items (exposure>=%d)",
+        len(retire_ids),
         min_exposure,
-        max_rate,
     )
-    return len(ids)
+    return len(retire_ids)

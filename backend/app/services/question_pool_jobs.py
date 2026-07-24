@@ -908,6 +908,8 @@ def save_confirmed_answer(
     ability_se: float | None = None,
     mastery_stop: bool | None = None,
     revisit_hours: float | None = None,
+    revisit_ease: float | None = None,
+    revisit_repetitions: int | None = None,
 ) -> None:
     """Persist the learner's latest confirmed MCQ choice for tutor chat context.
 
@@ -925,13 +927,16 @@ def save_confirmed_answer(
         text("SELECT payload->>'primary_concept_key' FROM intel.assertion WHERE id = :id"),
         {"id": assertion_id},
     ).scalar()
+    progress = get_progress(doc)
     patch: dict[str, Any] = {
         "last_confirmed_answer": {
             "assertion_id": str(assertion_id),
             "choice_index": int(choice_index),
             "correct": bool(correct),
             "concept_key": concept_key,
-        }
+        },
+        # Session Design: count items answered this soft session.
+        "session_items_answered": int(progress.get("session_items_answered") or 0) + 1,
     }
     if learner_ability is not None:
         patch["learner_ability"] = float(learner_ability)
@@ -943,10 +948,21 @@ def save_confirmed_answer(
         patch["revisit_due_hours"] = float(revisit_hours)
         # Per-concept due map for Spaced Revisit Engine consumers.
         if concept_key:
-            progress = get_progress(doc)
             due = dict(progress.get("concept_revisit_hours") or {})
             due[str(concept_key)] = float(revisit_hours)
             patch["concept_revisit_hours"] = due
+    if revisit_ease is not None:
+        patch["revisit_ease"] = float(revisit_ease)
+        if concept_key:
+            ease_map = dict(progress.get("concept_revisit_ease") or {})
+            ease_map[str(concept_key)] = float(revisit_ease)
+            patch["concept_revisit_ease"] = ease_map
+    if revisit_repetitions is not None:
+        patch["revisit_repetitions"] = int(revisit_repetitions)
+        if concept_key:
+            reps_map = dict(progress.get("concept_revisit_repetitions") or {})
+            reps_map[str(concept_key)] = int(revisit_repetitions)
+            patch["concept_revisit_repetitions"] = reps_map
     if concept_key and item_difficulty is not None:
         from app.services.calibration_engine import DEFAULT_RATING, update_from_outcome
 

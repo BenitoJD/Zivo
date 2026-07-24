@@ -554,6 +554,31 @@ def select_next_assertion(
         if preferred:
             candidates = preferred
 
+    # Mastery / Evidence-Stop: when stop fires, diversify away from last concept.
+    if progress.get("mastery_stop"):
+        last = progress.get("last_confirmed_answer") or {}
+        stop_concept = str(last.get("concept_key") or "").strip()
+        if stop_concept:
+            concept_by = _concept_keys_for_ids(db, candidates)
+            diversified = [
+                rid for rid in candidates if concept_by.get(rid) != stop_concept
+            ]
+            if diversified:
+                candidates = diversified
+
+    # Spaced Revisit: prefer concepts with soonest due hours (consume due map).
+    due_map = progress.get("concept_revisit_hours") or {}
+    if isinstance(due_map, dict) and due_map and not focus:
+        due_sorted = sorted(
+            ((str(k), float(v)) for k, v in due_map.items() if k),
+            key=lambda kv: kv[1],
+        )
+        for due_key, _hours in due_sorted[:3]:
+            preferred = _candidates_matching_concept_label(db, candidates, due_key)
+            if preferred:
+                candidates = preferred
+                break
+
     from app.config import get_settings
     from app.services.adaptive_selection import (
         build_learner_state,
@@ -762,6 +787,8 @@ def build_learn_queue_state(
         soft_cap=SESSION_SOFT_DEFAULT,
         mode=serve_mode,
     )
+    session_items = int(progress.get("session_items_answered") or 0)
+    session_break = bool(session.n_session > 0 and session_items >= session.n_session)
     # Loop's choosing step (policy-driven; defaults to sequence order).
     next_id = select_next_assertion(db, document_id, doc, progress, page_ids=page_ids)
     coverage_complete = is_coverage_complete(doc, page)
@@ -794,8 +821,11 @@ def build_learn_queue_state(
         "generation_cap": generation_cap,
         "session_soft": session.soft_cap,
         "n_session": session.n_session,
+        "session_break": session_break,
+        "session_items_answered": session_items,
         "mastery_stop": bool(progress.get("mastery_stop")),
         "revisit_due_hours": progress.get("revisit_due_hours"),
+        "concept_revisit_hours": progress.get("concept_revisit_hours"),
         "learner_ability_se": progress.get("learner_ability_se"),
         "document_budget": doc_plan.n_doc,
         "budget_confidence": cov.get("budget_confidence"),

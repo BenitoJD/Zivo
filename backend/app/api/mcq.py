@@ -105,7 +105,20 @@ def _record_graded_answer(
     ability_se: float | None = None
     mastery_stop: bool | None = None
     revisit_hours: float | None = None
+    revisit_ease: float | None = None
+    revisit_repetitions: int | None = None
     if subject_entity_id is not None:
+        doc = db.get(Document, artifact_id)
+        progress = get_progress(doc) if doc else {}
+        concept_ease = dict(progress.get("concept_revisit_ease") or {})
+        concept_reps = dict(progress.get("concept_revisit_repetitions") or {})
+        prior_key = db.execute(
+            text(
+                "SELECT payload->>'primary_concept_key' FROM intel.assertion WHERE id = :id"
+            ),
+            {"id": body.assertion_id},
+        ).scalar()
+        prior_key = str(prior_key or "") or None
         signal = record_answer_signal(
             db,
             subject_entity_id=subject_entity_id,
@@ -117,6 +130,11 @@ def _record_graded_answer(
             mode=body.mode,
             guest_id=guest_id if not user else None,
             calibrate=get_settings().calibration_enabled,
+            prior_interval_hours=progress.get("revisit_due_hours"),
+            prior_ease=concept_ease.get(prior_key) if prior_key else progress.get("revisit_ease"),
+            prior_repetitions=(
+                concept_reps.get(prior_key) if prior_key else progress.get("revisit_repetitions")
+            ),
         )
         db.commit()
         if signal.inserted:
@@ -125,6 +143,8 @@ def _record_graded_answer(
             ability_se = signal.ability_se
             mastery_stop = signal.mastery_stop
             revisit_hours = signal.revisit_hours
+            revisit_ease = signal.revisit_ease
+            revisit_repetitions = signal.revisit_repetitions
 
     save_confirmed_answer(
         db,
@@ -137,6 +157,8 @@ def _record_graded_answer(
         ability_se=ability_se,
         mastery_stop=mastery_stop,
         revisit_hours=revisit_hours,
+        revisit_ease=revisit_ease,
+        revisit_repetitions=revisit_repetitions,
     )
     record_answer(db, artifact_id, body.assertion_id)
 

@@ -67,6 +67,8 @@ class AnswerSignal:
     ability_se: float | None = None
     mastery_stop: bool | None = None
     revisit_hours: float | None = None
+    revisit_ease: float | None = None
+    revisit_repetitions: int | None = None
 
 
 def record_answer_signal(
@@ -81,6 +83,9 @@ def record_answer_signal(
     mode: str = "learn",
     guest_id: str | None = None,
     calibrate: bool = False,
+    prior_interval_hours: float | None = None,
+    prior_ease: float | None = None,
+    prior_repetitions: int | None = None,
 ) -> AnswerSignal:
     """Idempotently record one answer; calibrate only when it is genuinely new.
 
@@ -130,6 +135,8 @@ def record_answer_signal(
     ability_se: float | None = None
     mastery_stop: bool | None = None
     revisit_hours: float | None = None
+    revisit_ease: float | None = None
+    revisit_repetitions: int | None = None
     if inserted and calibrate:
         # Best-effort: the immutable measurement row is already written, so a
         # calibration failure must never break grading — degrade to "no estimate
@@ -149,7 +156,21 @@ def record_answer_signal(
                 ability=ability, n=n, se_theta=ability_se, mode=mode
             )
             mastery_stop = stop.stop
-            revisit_hours = plan_revisit(last_correct=correct).next_due_hours
+            # Spaced Revisit: callers pass prior ease/reps via optional progress;
+            # when absent, engine defaults. Wire-through happens in record_confirmed.
+            plan = plan_revisit(
+                last_correct=correct,
+                prior_interval_hours=(
+                    float(prior_interval_hours)
+                    if prior_interval_hours is not None
+                    else 24.0
+                ),
+                ease=float(prior_ease) if prior_ease is not None else 2.5,
+                repetitions=int(prior_repetitions) if prior_repetitions is not None else 0,
+            )
+            revisit_hours = plan.next_due_hours
+            revisit_ease = plan.ease
+            revisit_repetitions = plan.repetitions
         except Exception:
             logger.warning(
                 "calibration failed for assertion %s; measurement kept", assertion_id, exc_info=True
@@ -163,4 +184,6 @@ def record_answer_signal(
         ability_se=ability_se,
         mastery_stop=mastery_stop,
         revisit_hours=revisit_hours,
+        revisit_ease=revisit_ease,
+        revisit_repetitions=revisit_repetitions,
     )

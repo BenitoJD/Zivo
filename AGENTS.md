@@ -8,6 +8,14 @@ Same deployment model as [zivo](https://github.com/BenitoJD/zivo): **K3s + Helm 
 
 **How we build (read before shipping):** coding rules → [docs/CONVENTIONS.md](docs/CONVENTIONS.md) · design decisions → [docs/adr/](docs/adr/0000-index.md) · UI → [Frontend UI](#frontend-ui) below. These three are the single source of truth; anything under `.cursor/skills/` that contradicts them is stale.
 
+## Holy grail (engines)
+
+**Code is the enemy.**
+**Code should run, not the coder.**
+**Do not cram in if-else into code. Don't simply code. Build engines.**
+
+Decisions (rank, metric, gate, schedule, next-step) live behind named engine facades with typed verdicts and `policy_version`. Orchestration loads signals, calls the facade, persists or serves. It does not own the if-else. Plumbing (auth, storage, parse, jobs, HTTP) stays services. Index: [docs/ENGINES.md](docs/ENGINES.md). Seam: [ADR 0004](docs/adr/0004-swappable-policy-seam.md).
+
 ## Readiness checklist
 
 | Area | Status | Notes |
@@ -28,7 +36,7 @@ Same deployment model as [zivo](https://github.com/BenitoJD/zivo): **K3s + Helm 
 | **Question evaluation** | Ready (engine) | `docs/QUALITY_EVALUATION_ENGINE.md` + `quality_evaluation.py` |
 | **Adaptive selection** | Ready (engine) | `docs/ADAPTIVE_SELECTION_ENGINE.md` + `adaptive_selection.py` |
 | **Calibration** | Ready (engine) | `docs/CALIBRATION_ENGINE.md` + `calibration_engine.py` |
-| **Engines index** | Ready | [docs/ENGINES.md](docs/ENGINES.md) - all 13 Year-1+ engines |
+| **Engines index** | Ready | [docs/ENGINES.md](docs/ENGINES.md) - 14 Year-1+ engines (holy grail) |
 | **Answer intelligence** | Ready (engine) | Measurements + Elo + mastery stop + spaced revisit on grade |
 | **Question graph** | Ready (engine) | `docs/QUESTION_GRAPH_ENGINE.md` + lineage at cook |
 
@@ -201,6 +209,7 @@ Design decisions are in [docs/adr/](docs/adr/0000-index.md). Quick pointers:
 - Schema changes: `backend/alembic/versions/` (+ update `backend/schema/*.sql` when baselining raw SQL).
 - New routes: `backend/app/api/`. · Background jobs: `backend/app/eta/`.
 - UI: **`frontend/app/` only** — see [Frontend UI](#frontend-ui) above.
+- Decisions: engines, not if-else in call sites — see [Holy grail](#holy-grail-engines).
 - Agent writing: no em dashes (`—`); see `.cursor/rules/no-em-dashes.mdc`.
 
 ## Skills
