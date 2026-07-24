@@ -558,11 +558,34 @@ async def submit_problem(
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    subject_entity_id = resolve_subject_entity(db, user, guest_id)
+    status = (
+        _status_for(db, assertion_id, subject_entity_id)
+        if subject_entity_id
+        else "new"
+    )
+
+    # Sandbox unreachable / timed out — do not record a fail or invent a teach-gap
+    # lesson that blames the learner's code.
+    if verdict.get("error"):
+        return {
+            "passed": 0,
+            "total": int(verdict.get("total") or len(hidden_tests)),
+            "all_passed": False,
+            "cases": [],
+            "error": verdict["error"],
+            "status": status,
+            "mentor_summary": None,
+            "weak_concepts": [],
+            "lesson": None,
+            "recommended_next_id": None,
+            "reference_solution": None,
+        }
+
     passed = int(verdict.get("passed") or 0)
     total = int(verdict.get("total") or len(hidden_tests))
     all_passed = passed == total and total > 0
 
-    subject_entity_id = resolve_subject_entity(db, user, guest_id)
     if subject_entity_id is not None:
         record_coding_submit(
             db,
@@ -574,6 +597,9 @@ async def submit_problem(
             subject_entity_id=subject_entity_id,
         )
         db.commit()
+        status = _status_for(db, assertion_id, subject_entity_id)
+    elif all_passed:
+        status = "solved"
 
     cases_out: list[dict] = []
     first_fail_shown = False
@@ -610,12 +636,8 @@ async def submit_problem(
         "total": total,
         "all_passed": all_passed,
         "cases": cases_out,
-        "error": verdict.get("error"),
-        "status": (
-            _status_for(db, assertion_id, subject_entity_id)
-            if subject_entity_id
-            else ("solved" if all_passed else "new")
-        ),
+        "error": None,
+        "status": status,
         "mentor_summary": teach["mentor_summary"],
         "weak_concepts": teach["weak_concepts"],
         "lesson": teach["lesson"],

@@ -280,7 +280,8 @@ function SubmitOutput({
   const allPassed = result.all_passed;
   const firstFail = result.cases.find((c) => !c.ok);
   const lesson = result.lesson;
-  const hasMentor = Boolean(result.mentor_summary || lesson?.title);
+  // Sandbox / infra errors must not surface a teach-gap that blames the code.
+  const hasMentor = !result.error && Boolean(result.mentor_summary || lesson?.title);
 
   return (
     <Stack gap="sm">

@@ -67,6 +67,9 @@ def find_topic(topics: list[dict[str, str]], topic_key: str) -> dict[str, str] |
 def save_outline(db: Session, document_id: uuid.UUID, topics: list[dict[str, str]]) -> None:
     """Persist a finished topic outline (status='ready'). Used by the worker + tests."""
     _OUTLINE_STORE.save(db, document_id, topics)
+    # Ready outline without a fingerprint looks stale to ensure_topics and would
+    # immediately re-enqueue generation — mark fresh whenever we persist ready.
+    mark_artifact_fresh(db, document_id, "topics")
 
 
 def load_explanation_row(
