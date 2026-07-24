@@ -1,25 +1,49 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { Box, Button, Group, PasswordInput, Stack, Text, TextInput } from "@mantine/core";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import {
+  Box,
+  Button,
+  Divider,
+  Group,
+  PasswordInput,
+  Stack,
+  Text,
+  TextInput,
+} from "@mantine/core";
 import { useForm } from "@mantine/form";
+import { IconBrandGoogle } from "@tabler/icons-react";
 import { useSubmitAuth, authFormRules, type AuthMode } from "@/lib/auth";
+import { apiGet, apiUrl } from "@/lib/api/client";
 
-/**
- * Shared auth form used by /login and /signup. Split-layout brand panel is
- * provided by the page; this is just the form card. On success it routes to
- * /workspace.
- */
-export function AuthForm({ mode }: { mode: AuthMode }) {
+function AuthFormInner({ mode }: { mode: AuthMode }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const submitAuth = useSubmitAuth(mode);
   const [submitting, setSubmitting] = useState(false);
+  const oauthError = searchParams.get("error") ?? "";
   const [error, setError] = useState("");
+  const displayError = error || oauthError;
+  const [googleEnabled, setGoogleEnabled] = useState(false);
   const form = useForm({
     initialValues: { username: "", password: "" },
     validate: authFormRules,
   });
+
+  useEffect(() => {
+    let cancelled = false;
+    void apiGet<{ enabled: boolean }>("/api/auth/google/status")
+      .then((res) => {
+        if (!cancelled) setGoogleEnabled(Boolean(res.enabled));
+      })
+      .catch(() => {
+        if (!cancelled) setGoogleEnabled(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function onSubmit() {
     if (form.validate().hasErrors) return;
@@ -39,13 +63,7 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
   return (
     <Stack gap="md">
       <Stack gap={4}>
-        <Text
-          size="sm"
-          fw={600}
-          tt="uppercase"
-          lts={2}
-          c="lavender.7"
-        >
+        <Text size="sm" fw={600} tt="uppercase" lts={2} c="lavender.7">
           {isLogin ? "Welcome back" : "Get started"}
         </Text>
         <Text size="xs" c="gray.6">
@@ -55,7 +73,29 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
         </Text>
       </Stack>
 
-      <Box component="form" onSubmit={(e) => { e.preventDefault(); void onSubmit(); }}>
+      {googleEnabled && (
+        <>
+          <Button
+            component="a"
+            href={apiUrl("/api/auth/google")}
+            variant="default"
+            size="md"
+            fullWidth
+            leftSection={<IconBrandGoogle size={18} stroke={1.5} />}
+          >
+            Continue with Google
+          </Button>
+          <Divider label="or" labelPosition="center" />
+        </>
+      )}
+
+      <Box
+        component="form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void onSubmit();
+        }}
+      >
         <Stack gap="md">
           <TextInput
             label="Username"
@@ -72,9 +112,9 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
             {...form.getInputProps("password")}
           />
 
-          {error && (
+          {displayError && (
             <Text size="sm" c="terracotta.7" fw={500}>
-              {error}
+              {displayError}
             </Text>
           )}
 
@@ -106,5 +146,18 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
         </Text>
       </Group>
     </Stack>
+  );
+}
+
+/**
+ * Shared auth form used by /login and /signup. Split-layout brand panel is
+ * provided by the page; this is just the form card. On success it routes to
+ * /workspace.
+ */
+export function AuthForm({ mode }: { mode: AuthMode }) {
+  return (
+    <Suspense fallback={null}>
+      <AuthFormInner mode={mode} />
+    </Suspense>
   );
 }

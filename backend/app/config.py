@@ -135,6 +135,13 @@ class Settings(BaseSettings):
     max_upload_bytes: int = _GB
     storage_limit_bytes: int = _GB
 
+    # Google OAuth (optional — empty disables /api/auth/google*)
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://localhost:3000/api/auth/google/callback"
+    # Browser origin for post-OAuth redirects (login/signup pages live here).
+    frontend_url: str = "http://localhost:3000"
+
     @field_validator("minio_public_secure", mode="before")
     @classmethod
     def _empty_public_secure_is_none(cls, value: object) -> object:
