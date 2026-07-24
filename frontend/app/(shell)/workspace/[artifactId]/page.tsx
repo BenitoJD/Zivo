@@ -742,6 +742,16 @@ export default function WorkspaceArtifactPage({
     setGradeState(null);
   }, [assertionQuery.data, assertionQuery.isError, assertionQuery.isPlaceholderData, displayAssertionId, invalidArtifactId]);
 
+  // After a transient assertion 502, keep retrying until the card loads so Learn
+  // does not stay on "Could not load question." until the learner refreshes.
+  useEffect(() => {
+    if (!assertionQuery.isError || !displayAssertionId) return;
+    const id = window.setInterval(() => {
+      void assertionQuery.refetch();
+    }, 2500);
+    return () => window.clearInterval(id);
+  }, [assertionQuery.isError, displayAssertionId, assertionQuery.refetch]);
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentionally reset grade/feedback on the active question change
     setGradeState(null);
@@ -1445,7 +1455,10 @@ export default function WorkspaceArtifactPage({
             }
             onSubmit={() => void submitMcq()}
             onContinue={() => void advanceMcq()}
-            onRetry={() => void refreshQueue()}
+            onRetry={() => {
+              if (assertionQuery.isError) void assertionQuery.refetch();
+              else void refreshQueue();
+            }}
             flagged={Boolean(displayAssertionId && flaggedIds[displayAssertionId])}
             flagBusy={flagBusy}
             onFlagQuestion={

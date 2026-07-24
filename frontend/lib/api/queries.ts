@@ -1034,6 +1034,11 @@ export function useAssertionQuery(assertionId: string | null | undefined) {
     enabled: Boolean(assertionId),
     placeholderData: keepPreviousData,
     staleTime: 60_000,
+    // Transient 502s during API rollouts left Learn stuck on "Could not load
+    // question." until a hard refresh. Retry + focus refetch recover quietly.
+    retry: 4,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
+    refetchOnWindowFocus: true,
   });
 }
 
