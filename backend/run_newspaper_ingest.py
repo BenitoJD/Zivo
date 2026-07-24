@@ -52,6 +52,28 @@ def past_lookback(
     return message_ist_date(dt) < lookback_start_date(now=now, days=days)
 
 
+def in_edition_lookback(
+    edition_day: date,
+    *,
+    now: datetime | None = None,
+    days: int = _RECONCILE_LOOKBACK_DAYS,
+) -> bool:
+    """True when parsed edition day falls in [lookback_start, today IST] inclusive."""
+    start = lookback_start_date(now=now, days=days)
+    today = message_ist_date(now)
+    return start <= edition_day <= today
+
+
+def _message_filename(message) -> str:  # noqa: ANN001
+    fname = ""
+    doc = getattr(message, "document", None)
+    for attr in getattr(doc, "attributes", None) or []:
+        fname = getattr(attr, "file_name", None) or fname
+    if not fname and getattr(message, "file", None):
+        fname = getattr(message.file, "name", "") or ""
+    return fname or ""
+
+
 async def _process_message(client, db, message) -> None:
     from app.services.newspaper import create_edition_from_pdf, ensure_brand_and_allowed
     from app.services.newspaper_naming import parse_edition_meta_async
@@ -147,14 +169,15 @@ async def _reconcile(
     lookback_days: int = _RECONCILE_LOOKBACK_DAYS,
     safety_max: int = _RECONCILE_SAFETY_MAX,
 ) -> None:
-    """Catch-up: all PDFs dropped in the last `lookback_days` IST days.
+    """Catch-up: PDFs whose *edition day* falls in the last `lookback_days` IST days.
 
-    Day-scoped scan is source of truth for recent IST days — sync_cursor is only a
-    tip watermark and must not hide same-day PDFs that arrived before the cursor
-    advanced. Process oldest→newest so lowest telegram msg_id wins (paper, day).
+    Edition day prefers filename/caption date (e.g. TH …24-07-2026.pdf); falls back to
+    message.date IST. Wrong-day filenames are excluded even if Telegram posted today.
+    sync_cursor is tip watermark only. Process oldest→newest (lowest msg_id wins).
     Live NewMessage handler stays arrival-order first-wins (unchanged).
     """
     from app.repositories import newspaper as newspaper_repo
+    from app.services.newspaper_naming import resolve_edition_date
 
     now = datetime.now(timezone.utc)
     start = lookback_start_date(now=now, days=lookback_days)
@@ -163,10 +186,27 @@ async def _reconcile(
     async for message in client.iter_messages(entity, limit=safety_max):
         if tip_id is None:
             tip_id = int(message.id)
+        # Stop walking the channel once Telegram post day is older than lookback.
         if past_lookback(message.date, now=now, days=lookback_days):
             break
-        if _is_pdf_message(message):
+        if not _is_pdf_message(message):
+            continue
+        fname = _message_filename(message)
+        edition_day = resolve_edition_date(
+            filename=fname,
+            caption=message.message or "",
+            message_date=message.date,
+        )
+        if in_edition_lookback(edition_day, now=now, days=lookback_days):
             candidates.append(message)
+        else:
+            logger.info(
+                "reconcile skip msg=%s edition_day=%s outside IST lookback start=%s file=%r",
+                getattr(message, "id", None),
+                edition_day,
+                start,
+                fname,
+            )
 
     # iter_messages is newest-first; ascending msg_id so earliest claims (paper, day).
     candidates.sort(key=lambda m: int(m.id))

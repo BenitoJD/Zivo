@@ -111,8 +111,10 @@ def _normalize_blob(filename: str, caption: str) -> str:
 
 
 def _parse_date(blob: str) -> date | None:
+    # Collapse fancy separators (‹ › / …) between digits so DD‹MM‹YYYY still parses.
+    normalized = re.sub(r"(?<=\d)[^\dA-Za-z]+(?=\d)", "-", (blob or "").replace(" ", "_"))
     for pat in _DATE_PATTERNS:
-        m = pat.search(blob.replace(" ", "_"))
+        m = pat.search(normalized)
         if not m:
             continue
         y = int(m.group("y"))
@@ -123,6 +125,22 @@ def _parse_date(blob: str) -> date | None:
         except ValueError:
             continue
     return None
+
+
+def resolve_edition_date(
+    *,
+    filename: str,
+    caption: str = "",
+    message_date: datetime | None = None,
+) -> date:
+    """Edition calendar day: filename/caption date wins; else message.date in IST."""
+    parsed = _parse_date(_normalize_blob(filename, caption))
+    if parsed is not None:
+        return parsed
+    md = message_date or datetime.now(timezone.utc)
+    if md.tzinfo is None:
+        md = md.replace(tzinfo=timezone.utc)
+    return md.astimezone(_IST).date()
 
 
 def _guess_location(tokens: list[str]) -> str:
@@ -539,13 +557,14 @@ def _date_and_tokens(
 ) -> tuple[str, list[str], date, str, str, str]:
     blob = _normalize_blob(filename, caption)
     tokens = [t for t in re.split(r"[_\-\s.]+", blob) if t]
-    edition_date = _parse_date(blob)
-    date_source = "heuristic"
-    if edition_date is None:
-        md = message_date
-        if md.tzinfo is None:
-            md = md.replace(tzinfo=timezone.utc)
-        edition_date = md.astimezone(_IST).date()
+    from_file = _parse_date(blob)
+    if from_file is not None:
+        edition_date = from_file
+        date_source = "filename"
+    else:
+        edition_date = resolve_edition_date(
+            filename=filename, caption=caption, message_date=message_date
+        )
         date_source = "message_date"
     location_raw = _guess_location(tokens)
     guessed_title = _guess_title(tokens)
