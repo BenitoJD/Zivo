@@ -1,8 +1,12 @@
+from urllib.parse import quote
+
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.db import get_db
 from app.models import Account as User
 from app.services.auth import (
@@ -16,6 +20,19 @@ from app.services.auth import (
     set_session_cookie,
     validate_password,
     validate_username,
+)
+from app.services.google_oauth import (
+    PENDING_COOKIE,
+    PENDING_COOKIE_MAX_AGE,
+    STATE_COOKIE,
+    build_google_authorize_url,
+    exchange_code_for_userinfo,
+    frontend_path,
+    google_oauth_configured,
+    mint_pending_token,
+    new_oauth_state,
+    read_pending_token,
+    require_google_oauth,
 )
 from app.services.guest import claim_guest_documents
 from app.services.guest_session import publish_guest_id, read_guest_id_from_cookie
@@ -37,6 +54,11 @@ class LoginRequest(BaseModel):
     remember_me: bool = False
 
 
+class GoogleCompleteRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=32)
+    accept_terms: bool
+
+
 class AuthResponse(BaseModel):
     username: str
     csrf_token: str
@@ -51,6 +73,21 @@ class SessionResponse(BaseModel):
     username: str | None = None
     csrf_token: str | None = None
     is_admin: bool = False
+
+
+class GoogleStatusResponse(BaseModel):
+    enabled: bool
+
+
+def _oauth_error_redirect(message: str) -> RedirectResponse:
+    settings = get_settings()
+    url = frontend_path(settings, f"/login?error={quote(message)}")
+    return RedirectResponse(url=url, status_code=302)
+
+
+def _clear_oauth_cookies(response: Response) -> None:
+    response.delete_cookie(STATE_COOKIE, path="/")
+    response.delete_cookie(PENDING_COOKIE, path="/")
 
 
 @router.post("/guest")
@@ -77,8 +114,6 @@ def signup(
         raise HTTPException(status_code=400, detail="Passwords do not match")
     validate_username(body.username)
     validate_password(body.password)
-
-    from app.models import Account as User
 
     if db.query(User).filter(User.username == body.username).first():
         raise HTTPException(status_code=409, detail="Username taken")
@@ -116,6 +151,146 @@ def login(
         user.id, int(getattr(user, "session_version", 0) or 0), remember=body.remember_me
     )
     set_session_cookie(response, token, remember=body.remember_me)
+    return AuthResponse(username=user.username, csrf_token=csrf, is_admin=user.is_admin)
+
+
+@router.get("/google/status", response_model=GoogleStatusResponse)
+def google_status() -> GoogleStatusResponse:
+    return GoogleStatusResponse(enabled=google_oauth_configured(get_settings()))
+
+
+@router.get("/google")
+def google_start(response: Response) -> RedirectResponse:
+    settings = get_settings()
+    require_google_oauth(settings)
+    state = new_oauth_state()
+    response = RedirectResponse(url=build_google_authorize_url(settings, state), status_code=302)
+    response.set_cookie(
+        key=STATE_COOKIE,
+        value=state,
+        httponly=True,
+        secure=settings.is_production,
+        samesite="lax",
+        max_age=600,
+        path="/",
+    )
+    return response
+
+
+@router.get("/google/callback")
+def google_callback(
+    response: Response,
+    db: Session = Depends(get_db),
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    zivo_google_oauth_state: str | None = Cookie(default=None, alias=STATE_COOKIE),
+    zivo_demo_id: str | None = Cookie(default=None, alias=DEMO_COOKIE),
+) -> RedirectResponse:
+    settings = get_settings()
+    if error:
+        return _oauth_error_redirect("Google sign-in was cancelled")
+    if not code or not state or not zivo_google_oauth_state or state != zivo_google_oauth_state:
+        return _oauth_error_redirect("Google sign-in failed (invalid state)")
+
+    try:
+        info = exchange_code_for_userinfo(settings, code)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else "Google sign-in failed"
+        return _oauth_error_redirect(detail)
+
+    google_sub = info["google_sub"]
+    email = info["email"]
+
+    existing = db.query(User).filter(User.google_sub == google_sub).first()
+    if existing:
+        claim_guest_documents(db, existing.id, read_guest_id_from_cookie(zivo_demo_id))
+        token, _csrf = create_session_token(
+            existing.id, int(getattr(existing, "session_version", 0) or 0)
+        )
+        redirect = RedirectResponse(url=frontend_path(settings, "/workspace"), status_code=302)
+        set_session_cookie(redirect, token, remember=True)
+        _clear_oauth_cookies(redirect)
+        return redirect
+
+    # Email already used by a password account — do not auto-link (takeover risk).
+    email_owner = db.query(User).filter(User.email == email).first()
+    if email_owner and not email_owner.google_sub:
+        return _oauth_error_redirect("Email already registered — sign in with password")
+
+    pending = mint_pending_token(settings, google_sub=google_sub, email=email)
+    redirect = RedirectResponse(url=frontend_path(settings, "/signup/google"), status_code=302)
+    redirect.set_cookie(
+        key=PENDING_COOKIE,
+        value=pending,
+        httponly=True,
+        secure=settings.is_production,
+        samesite="lax",
+        max_age=PENDING_COOKIE_MAX_AGE,
+        path="/",
+    )
+    redirect.delete_cookie(STATE_COOKIE, path="/")
+    return redirect
+
+
+@router.get("/google/pending")
+def google_pending(
+    zivo_google_pending: str | None = Cookie(default=None, alias=PENDING_COOKIE),
+) -> dict[str, str | bool]:
+    """Probe whether a Google signup is waiting for a username."""
+    settings = get_settings()
+    if not zivo_google_pending:
+        return {"pending": False}
+    try:
+        _sub, email = read_pending_token(settings, zivo_google_pending)
+    except HTTPException:
+        return {"pending": False}
+    return {"pending": True, "email": email}
+
+
+@router.post("/google/complete", response_model=AuthResponse)
+def google_complete(
+    body: GoogleCompleteRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+    zivo_google_pending: str | None = Cookie(default=None, alias=PENDING_COOKIE),
+    zivo_demo_id: str | None = Cookie(default=None, alias=DEMO_COOKIE),
+) -> AuthResponse:
+    settings = get_settings()
+    if not zivo_google_pending:
+        raise HTTPException(status_code=401, detail="Google signup expired — try again")
+    if not body.accept_terms:
+        raise HTTPException(status_code=400, detail="Terms must be accepted")
+    validate_username(body.username)
+
+    google_sub, email = read_pending_token(settings, zivo_google_pending)
+
+    if db.query(User).filter(User.google_sub == google_sub).first():
+        raise HTTPException(status_code=409, detail="Google account already linked")
+    if db.query(User).filter(User.username == body.username).first():
+        raise HTTPException(status_code=409, detail="Username taken")
+    if db.query(User).filter(User.email == email).first():
+        raise HTTPException(status_code=409, detail="Email already registered — sign in with password")
+
+    user = User(
+        username=body.username,
+        password_hash=None,
+        email=email,
+        google_sub=google_sub,
+    )
+    try:
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Username or email taken") from None
+
+    claim_guest_documents(db, user.id, read_guest_id_from_cookie(zivo_demo_id))
+
+    token, csrf = create_session_token(user.id, int(getattr(user, "session_version", 0) or 0))
+    set_session_cookie(response, token, remember=True)
+    _clear_oauth_cookies(response)
     return AuthResponse(username=user.username, csrf_token=csrf, is_admin=user.is_admin)
 
 

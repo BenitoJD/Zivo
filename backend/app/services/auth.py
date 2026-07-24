@@ -174,7 +174,7 @@ def require_csrf_or_guest(
 
 def authenticate_user(db: Session, username: str, password: str) -> Account | None:
     user = db.query(User).filter(User.username == username).first()
-    if not user:
+    if not user or not user.password_hash:
         bcrypt.checkpw(b"timing-oracle-guard", _DUMMY_HASH.encode("utf-8"))
         return None
     if not verify_password(password, user.password_hash):

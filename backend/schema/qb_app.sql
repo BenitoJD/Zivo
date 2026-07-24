@@ -7,13 +7,19 @@ CREATE SCHEMA IF NOT EXISTS qb;
 CREATE TABLE IF NOT EXISTS qb.account (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   username        VARCHAR(32) NOT NULL UNIQUE,
-  password_hash   VARCHAR(255) NOT NULL,
+  password_hash   VARCHAR(255),
+  email           VARCHAR(320),
+  google_sub      VARCHAR(64),
   is_admin        BOOLEAN NOT NULL DEFAULT false,
   session_version INTEGER NOT NULL DEFAULT 0,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS account_username_idx ON qb.account (username);
+CREATE UNIQUE INDEX IF NOT EXISTS account_email_uidx
+  ON qb.account (email) WHERE email IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS account_google_sub_uidx
+  ON qb.account (google_sub) WHERE google_sub IS NOT NULL;
 
 -- Links qb.account -> intel.entity (person) for measurement / projection
 CREATE TABLE IF NOT EXISTS qb.account_entity (
