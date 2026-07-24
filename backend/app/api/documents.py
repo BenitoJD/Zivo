@@ -194,6 +194,12 @@ def get_document_pages(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> dict:
+    """Return per-page text for the reader / page-picker previews.
+
+    Prefer indexed chunks when present. Before page selection (no ingest yet),
+    fall back to ``parse_document`` so DOCX/PPTX/text still get usable
+    thumbnails — PDFs use client-side pdf.js instead.
+    """
     doc = require_document(db, document_id, user, guest_id)
     from app.services.newspaper import is_newspaper_document
 
@@ -210,7 +216,24 @@ def get_document_pages(
     for c in chunks:
         existing = pages.get(c.page_start)
         pages[c.page_start] = f"{existing}\n\n{c.text}" if existing else c.text
-    return {"pages": [{"page": p, "text": t} for p, t in sorted(pages.items())]}
+    if pages:
+        return {"pages": [{"page": p, "text": t} for p, t in sorted(pages.items())]}
+
+    from app.services.parse import parse_document
+    from app.services.storage import fetch_object
+
+    try:
+        raw = fetch_object(doc.storage_key)
+        parsed = parse_document(doc.content_type or "", raw)
+    except Exception:
+        logger.exception("page preview parse failed for %s", document_id)
+        return {"pages": []}
+    return {
+        "pages": [
+            {"page": int(item.get("page") or i), "text": str(item.get("text") or "")}
+            for i, item in enumerate(parsed, start=1)
+        ]
+    }
 
 
 async def _read_upload_capped(request: Request, file: UploadFile) -> bytes:

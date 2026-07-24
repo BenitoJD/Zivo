@@ -400,6 +400,8 @@ export function StudyRangeReselectOverlay({
   isCompact,
   isPdf,
   pdfDoc,
+  pageTexts,
+  pageTextsLoading,
   thumbCanvasRefs,
   confirming,
   setupError,
@@ -422,6 +424,8 @@ export function StudyRangeReselectOverlay({
   isCompact: boolean;
   isPdf: boolean;
   pdfDoc: PDFDocumentProxy | null;
+  pageTexts?: Record<number, string>;
+  pageTextsLoading?: boolean;
   thumbCanvasRefs: React.MutableRefObject<Record<number, HTMLCanvasElement | null>>;
   confirming: boolean;
   setupError: string | null;
@@ -506,6 +510,8 @@ export function StudyRangeReselectOverlay({
             isDark={isDark}
             isPdf={isPdf}
             pdfDoc={pdfDoc}
+            pageTexts={pageTexts}
+            pageTextsLoading={pageTextsLoading}
             thumbCanvasRefs={thumbCanvasRefs}
             confirming={confirming}
             setupError={setupError}
