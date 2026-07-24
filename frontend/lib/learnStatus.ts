@@ -10,9 +10,18 @@ export type LearnWaitContext = {
   pageTriageComplete?: boolean;
   ragWindowReady?: boolean;
   questionsGenerated?: number;
+  questionsAnswered?: number;
   questionBudget?: number;
   poolAvailable?: number;
 };
+
+/** True when Learn already has a card the learner can open (never full-screen wait). */
+export function learnHasUnansweredReady(ctx: LearnWaitContext): boolean {
+  if ((ctx.poolAvailable ?? 0) > 0) return true;
+  const generated = ctx.questionsGenerated ?? 0;
+  const answered = ctx.questionsAnswered ?? 0;
+  return generated > answered;
+}
 
 export type LearnWaitStatus = {
   title: string;
@@ -54,12 +63,15 @@ export function learnWaitStatus(ctx: LearnWaitContext, tick: number): LearnWaitS
   if (ctx.generationPending) {
     const generated = ctx.questionsGenerated ?? 0;
     const poolAvailable = ctx.poolAvailable ?? 0;
-    // Pool already has the next card — caller should not be in wait chrome.
+    // Pool / unanswered already has a card — caller should not be in wait chrome.
     // Keep copy focused on first-question / truly-empty cases only.
-    if (poolAvailable > 0 && generated > 0) {
+    if (learnHasUnansweredReady(ctx)) {
       return {
         title: "Opening your question",
-        detail: "Almost there",
+        detail:
+          poolAvailable > 0
+            ? `${poolAvailable} ready · opening now`
+            : "Almost there",
         rotateKey: "open-ready",
       };
     }
@@ -72,12 +84,10 @@ export function learnWaitStatus(ctx: LearnWaitContext, tick: number): LearnWaitS
         rotateKey: "gen-first",
       };
     }
-    // Learner should already be answering when generated > 0; this copy is only
-    // for the rare wait when a card is not yet loadable. Never imply they must
-    // wait for the full page budget.
+    // Generated but none unanswered (answered through the pool) while more cook.
     return {
-      title: line.title,
-      detail: `${generated} ready · writing a few more in the background`,
+      title: "Writing your next question",
+      detail: line.detail,
       rotateKey: "gen-more",
     };
   }

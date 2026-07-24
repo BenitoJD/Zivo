@@ -499,6 +499,7 @@ def test_generate_quality_mcq_batch_gates_rest_in_parallel() -> None:
         patch("app.config.get_settings", return_value=settings),
         patch.object(mq, "_quality_gate_one", side_effect=_fake_gate),
         patch.object(mq, "GENERATION_CONCURRENCY", 4),
+        patch.object(mq, "PIPELINE_DRAFT_SPLIT", False),
         patch.object(mq, "is_mcq_too_similar", return_value=(False, 0.0)),
         patch.object(mq, "run_heuristic_checks", return_value=[]),
         patch.object(mq, "has_fatal_heuristic_flaws", return_value=False),
@@ -520,3 +521,103 @@ def test_generate_quality_mcq_batch_gates_rest_in_parallel() -> None:
     # Serial first + parallel rest.
     assert gate_calls[0] == "k0"
     assert set(gate_calls[1:]) == {"k1", "k2"}
+
+
+def test_pipeline_draft_split_overlaps_rest_draft_with_first_gate() -> None:
+    """Rest-of-batch draft runs while Q1 quality-gates (stage overlap)."""
+    import threading
+    import time
+
+    from app.services import mcq_quality as mq
+
+    db = MagicMock()
+    targets = [{"key": f"k{i}", "label": f"L{i}"} for i in range(3)]
+    base = {
+        "options": ["A option here", "B option here", "C option here", "D option here"],
+        "correct_index": 0,
+        "explanation": "Because chlorophyll.",
+    }
+    drafts_by_key = {
+        f"k{i}": {
+            **base,
+            "question": f"Q{i} about photosynthesis mechanisms?",
+            "primary_concept_key": f"k{i}",
+        }
+        for i in range(3)
+    }
+
+    gate_entered = threading.Event()
+    rest_draft_saw_gate = threading.Event()
+    accepted_order: list[str] = []
+    draft_calls: list[int] = []
+
+    def _fake_drafts(session, **kwargs):
+        ts = kwargs["targets"]
+        draft_calls.append(len(ts))
+        if len(ts) == 1:
+            return [drafts_by_key[ts[0]["key"]]]
+        # Rest draft (worker): must observe Q1 gate already running.
+        assert gate_entered.wait(timeout=2.0)
+        rest_draft_saw_gate.set()
+        time.sleep(0.05)
+        return [drafts_by_key[t["key"]] for t in ts]
+
+    def _fake_gate(session, **kwargs):
+        key = (kwargs.get("target") or {}).get("key")
+        if key == "k0":
+            gate_entered.set()
+            # Hold the gate open so the rest-draft worker must overlap.
+            deadline = time.time() + 1.0
+            while time.time() < deadline and not rest_draft_saw_gate.is_set():
+                time.sleep(0.01)
+            assert rest_draft_saw_gate.is_set(), "rest draft must overlap Q1 gate"
+        return ("accept", kwargs["draft"], None, 0.0, [], None, False)
+
+    settings = MagicMock()
+    settings.verify_answer_key = False
+    settings.mcq_candidates_per_aspect = 1
+    session_cm = MagicMock()
+    session_cm.__enter__.return_value = MagicMock()
+    session_cm.__exit__.return_value = False
+
+    with (
+        patch("app.services.generation_cache.get", return_value=None),
+        patch("app.services.generation_cache.put"),
+        patch("app.services.generation_cache.batch_drafts_key", return_value="k"),
+        patch.object(mq, "_generate_batch_drafts", side_effect=_fake_drafts),
+        patch("app.services.llm_registry.default_chat_model_id", return_value=None),
+        patch("app.services.llm_registry.draft_chat_model_id", return_value=None),
+        patch("app.config.get_settings", return_value=settings),
+        patch.object(mq, "_quality_gate_one", side_effect=_fake_gate),
+        patch.object(mq, "GENERATION_CONCURRENCY", 4),
+        patch.object(mq, "PIPELINE_DRAFT_SPLIT", True),
+        patch.object(mq, "is_mcq_too_similar", return_value=(False, 0.0)),
+        patch.object(mq, "run_heuristic_checks", return_value=[]),
+        patch.object(mq, "has_fatal_heuristic_flaws", return_value=False),
+        patch.object(mq, "prior_mcq_embeddings", return_value=[]),
+        patch.object(mq, "embed_signature_cached", return_value=[0.0]),
+        patch.object(mq, "mcq_signature", return_value="sig"),
+        patch("app.db.SessionLocal", return_value=session_cm),
+    ):
+        out = mq.generate_quality_mcq_batch(
+            db,
+            page_text="Page text about biology and photosynthesis.",
+            page_number=1,
+            targets=targets,
+            on_accept=lambda t, d: accepted_order.append(str(t["key"])) or True,
+        )
+
+    assert [t["key"] for t, _ in out] == ["k0", "k1", "k2"]
+    assert accepted_order[0] == "k0"
+    assert rest_draft_saw_gate.is_set()
+    assert 1 in draft_calls and 2 in draft_calls
+
+
+def test_generate_questions_handler_is_high_priority() -> None:
+    import app.eta  # noqa: F401
+    from app.eta.registry import get_handler
+    from app.models import JobPriority
+
+    handler = get_handler("generate.questions")
+    assert handler is not None
+    assert handler.priority == JobPriority.HIGH
