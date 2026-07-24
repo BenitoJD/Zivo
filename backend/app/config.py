@@ -99,6 +99,9 @@ class Settings(BaseSettings):
     #    "concept_reinforce" (adaptive — reacts to the last answer), or
     #    "difficulty_edge" (targets the productive-struggle band from calibration).
     selection_policy: str = "difficulty_edge"
+    # Quality Evaluation Engine policy (docs/QUALITY_EVALUATION_ENGINE.md).
+    # code_driven_v1 = Haladyna-mapped flaw codes + deterministic decide_verdict.
+    quality_policy: str = "code_driven_v1"
     # 4. Calibrate per-item difficulty + per-learner ability from real answer
     #    outcomes (online Elo → intel.projection). Off by default so the moat fills
     #    only when enabled; "difficulty_edge" selection needs this on to have data.

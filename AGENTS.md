@@ -25,7 +25,7 @@ Same deployment model as [zivo](https://github.com/BenitoJD/zivo): **K3s + Helm 
 | **VPS base** | Ready | K3s, Traefik, cert-manager, GH runner at `103.194.228.47` |
 | **VPS app stack** | Empty | Run deploy after code is on `main` |
 | **Question generation** | **Next** | Upload source → MCQs + explanations + difficulty |
-| **Question evaluation** | Not started | Quality / ambiguity / discrimination scoring |
+| **Question evaluation** | Ready (engine) | `docs/QUALITY_EVALUATION_ENGINE.md` + `quality_evaluation.py`; cook gates + retirement |
 | **Answer intelligence** | In progress | First-attempt measurements, online Elo calibration, adaptive selection; batch lineage edges written at generation |
 | **Question graph** | In progress | Concepts in `intel.*`; mastery via `qb.artifact_workspace` |
 

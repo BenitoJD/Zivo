@@ -36,6 +36,13 @@ from app.services.mcq_parsing import (
     _parse_mcq_blocks,
     _normalize_mcq_payload,
 )
+from app.services.quality_evaluation import (
+    QualitySignals,
+    critique_passes,
+    decide_verdict,
+    merge_critique_for_rewrite,
+    should_run_critic,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,37 +92,10 @@ def _content_style_line(content_type: str | None) -> str:
     return f"\nMATERIAL TYPE — {style}\n" if style else ""
 
 
-def _critique_passes(critique: dict[str, Any]) -> bool:
-    if not critique.get("pass"):
-        return False
-    fatal = critique.get("fatal_flaws") or []
-    if any(code in FATAL_FLAW_CODES for code in fatal):
-        return False
-    flaw_count = int(critique.get("flaw_count") or 0)
-    return flaw_count <= 1
-
-
-def _merge_critique_for_rewrite(
-    heuristic_flaws: list[dict[str, str]],
-    critique: dict[str, Any] | None,
-) -> dict[str, Any]:
-    flaws = list(heuristic_flaws)
-    hints: list[str] = []
-    if critique:
-        flaws.extend(critique.get("flaws") or [])
-        fatal = critique.get("fatal_flaws") or []
-        for code in fatal:
-            flaws.append({"code": code, "message": code.replace("_", " ")})
-        hint = (critique.get("rewrite_hints") or "").strip()
-        if hint:
-            hints.append(hint)
-    for f in heuristic_flaws:
-        hints.append(f"{f.get('code')}: {f.get('message')}")
-    return {
-        "flaws": flaws,
-        "rewrite_hints": " ".join(hints[:6]),
-        "fatal_flaws": [f.get("code") for f in flaws if f.get("code") in FATAL_FLAW_CODES],
-    }
+# Decision core lives in quality_evaluation (ADR 0004 seam). Thin aliases keep
+# existing tests and call sites stable.
+_critique_passes = critique_passes
+_merge_critique_for_rewrite = merge_critique_for_rewrite
 
 
 def _generate_draft_mcq(
@@ -619,20 +599,37 @@ def generate_quality_mcq(
             continue
 
         heuristic_flaws = run_heuristic_checks(draft, prior_mcqs=prior_mcqs)
-        if has_fatal_heuristic_flaws(heuristic_flaws):
-            last_critique_bundle = _merge_critique_for_rewrite(heuristic_flaws, None)
-            continue
-
         from app.config import get_settings
 
-        if get_settings().verify_answer_key:
-            key_flaw = verify_answer_key(db, mcq=draft, page_text=page_text, model_id=model_id)
-            if key_flaw is not None:
-                last_critique_bundle = _merge_critique_for_rewrite([key_flaw], None)
-                continue
+        key_flaw: dict[str, str] | None = None
+        verify_ran = False
+        too_similar = False
+        max_sim = 0.0
+        # Defer embed until structure/key look viable (same order as before).
+        if not has_fatal_heuristic_flaws(heuristic_flaws):
+            if get_settings().verify_answer_key:
+                key_flaw = verify_answer_key(db, mcq=draft, page_text=page_text, model_id=model_id)
+                verify_ran = True
+            if key_flaw is None:
+                too_similar, max_sim = is_mcq_too_similar(draft, prior_mcqs)
 
-        if not heuristic_flaws:
-            too_similar, max_sim = is_mcq_too_similar(draft, prior_mcqs)
+        rewrite_left = max(0, max_attempts - attempt - 1)
+        # Soft heuristic-only drafts still run critic below; hard fails skip LLM.
+        hard_fail = decide_verdict(
+            QualitySignals(
+                heuristic_flaws=heuristic_flaws,
+                verify_flaw=key_flaw,
+                too_similar=too_similar,
+                max_similarity=max_sim,
+                rewrite_budget_remaining=0,
+                verify_ran=verify_ran,
+            )
+        )
+        if hard_fail.decision == "fail" and (
+            has_fatal_heuristic_flaws(heuristic_flaws)
+            or key_flaw is not None
+            or too_similar
+        ):
             if too_similar:
                 last_critique_bundle = {
                     "flaws": [
@@ -641,11 +638,19 @@ def generate_quality_mcq(
                             "message": f"Embedding similarity {max_sim:.2f} to a prior question",
                         }
                     ],
-                    "rewrite_hints": "Test a different fact and use a clearly different stem from all prior questions.",
+                    "rewrite_hints": (
+                        "Test a different fact and use a clearly different stem "
+                        "from all prior questions."
+                    ),
                     "fatal_flaws": ["too_similar_to_prior"],
                 }
-                continue
+            elif key_flaw is not None:
+                last_critique_bundle = merge_critique_for_rewrite([key_flaw], None)
+            else:
+                last_critique_bundle = merge_critique_for_rewrite(heuristic_flaws, None)
+            continue
 
+        if not heuristic_flaws and key_flaw is None and not too_similar:
             draft["quality"] = {
                 "pass": True,
                 "flaw_count": 0,
@@ -653,6 +658,14 @@ def generate_quality_mcq(
                 "fast_path": True,
                 "heuristic_flaws": [],
                 "max_similarity_to_prior": max_sim,
+                "policy_version": hard_fail.policy_version,
+                "scores": {
+                    "structure": hard_fail.scores.structure,
+                    "key": hard_fail.scores.key,
+                    "distractors": hard_fail.scores.distractors,
+                    "clarity": hard_fail.scores.clarity,
+                    "overall": hard_fail.scores.overall,
+                },
             }
             if target_aspect and target_aspect.get("cognitive_angle"):
                 draft["cognitive_angle"] = target_aspect["cognitive_angle"]
@@ -671,33 +684,38 @@ def generate_quality_mcq(
         combined_count = len(heuristic_flaws) + len(extra_flaws) + len(critique.get("fatal_flaws") or [])
         critique = {**critique, "flaw_count": max(int(critique.get("flaw_count") or 0), combined_count)}
 
-        if _critique_passes(critique):
-            too_similar, max_sim = is_mcq_too_similar(draft, prior_mcqs)
-            if too_similar:
-                last_critique_bundle = {
-                    "flaws": [
-                        {
-                            "code": "too_similar_to_prior",
-                            "message": f"Embedding similarity {max_sim:.2f} to a prior question",
-                        }
-                    ],
-                    "rewrite_hints": "Test a different fact and use a clearly different stem from all prior questions.",
-                    "fatal_flaws": ["too_similar_to_prior"],
-                }
-                continue
-
+        verdict = decide_verdict(
+            QualitySignals(
+                heuristic_flaws=heuristic_flaws,
+                verify_flaw=key_flaw,
+                critic=critique,
+                too_similar=too_similar,
+                max_similarity=max_sim,
+                rewrite_budget_remaining=rewrite_left,
+                verify_ran=verify_ran,
+            )
+        )
+        if verdict.decision == "pass":
             draft["quality"] = {
                 "pass": True,
                 "flaw_count": critique.get("flaw_count", 0),
                 "attempts": attempt + 1,
                 "heuristic_flaws": heuristic_flaws,
                 "max_similarity_to_prior": max_sim,
+                "policy_version": verdict.policy_version,
+                "scores": {
+                    "structure": verdict.scores.structure,
+                    "key": verdict.scores.key,
+                    "distractors": verdict.scores.distractors,
+                    "clarity": verdict.scores.clarity,
+                    "overall": verdict.scores.overall,
+                },
             }
             if target_aspect and target_aspect.get("cognitive_angle"):
                 draft["cognitive_angle"] = target_aspect["cognitive_angle"]
             return draft
 
-        last_critique_bundle = _merge_critique_for_rewrite(heuristic_flaws, critique)
+        last_critique_bundle = merge_critique_for_rewrite(heuristic_flaws, critique)
 
     return None
 
@@ -869,39 +887,54 @@ def _quality_gate_one(
 ) -> tuple[str, dict[str, Any] | None, str | None, float, list[dict[str, Any]], dict[str, Any] | None, bool]:
     """Run heuristic → embed → verify → critic(+rewrite) for one draft.
 
+    Quality decisions go through ``quality_evaluation.decide_verdict`` (policy seam).
     Returns ``(status, draft|None, reject_reason|None, max_sim, heuristic_flaws,
     critic_meta|None, run_critic)``. status is ``accept`` or ``reject``.
     """
     heuristic_flaws = run_heuristic_checks(draft, prior_mcqs=check_against)
-    if has_fatal_heuristic_flaws(heuristic_flaws):
-        reason = next(
-            (str(f.get("code") or "?") for f in heuristic_flaws if f.get("code") in FATAL_FLAW_CODES),
-            "heuristic",
-        )
-        return ("reject", None, reason, 0.0, heuristic_flaws, None, False)
-
     too_similar, max_sim = is_mcq_too_similar(
         draft,
         check_against,
         prior_embeddings=prior_embeddings,
     )
-    if too_similar:
-        return ("reject", None, "too_similar_to_prior", max_sim, heuristic_flaws, None, False)
-
-    if verify_enabled:
+    key_flaw: dict[str, str] | None = None
+    verify_ran = False
+    if verify_enabled and not has_fatal_heuristic_flaws(heuristic_flaws) and not too_similar:
         key_flaw = verify_answer_key(db, mcq=draft, page_text=page_text, model_id=model_id)
-        if key_flaw is not None:
-            return (
-                "reject",
-                None,
-                str(key_flaw.get("code") or "verify_failed"),
-                max_sim,
-                heuristic_flaws,
-                None,
-                False,
-            )
+        verify_ran = True
 
-    run_critic = force_critic or bool(heuristic_flaws) or random.random() < CRITIC_SAMPLE_RATE
+    # Early reject without critic spend when engine already fails hard.
+    early = decide_verdict(
+        QualitySignals(
+            heuristic_flaws=heuristic_flaws,
+            verify_flaw=key_flaw,
+            too_similar=too_similar,
+            max_similarity=max_sim,
+            rewrite_budget_remaining=0,
+            verify_ran=verify_ran,
+        )
+    )
+    if early.decision == "fail" and (
+        too_similar
+        or key_flaw is not None
+        or has_fatal_heuristic_flaws(heuristic_flaws)
+    ):
+        return (
+            "reject",
+            None,
+            early.reject_reason or "heuristic",
+            max_sim,
+            heuristic_flaws,
+            None,
+            False,
+        )
+
+    run_critic = should_run_critic(
+        force_critic=force_critic,
+        heuristic_flaws=heuristic_flaws,
+        sample_roll=random.random(),
+        sample_rate=CRITIC_SAMPLE_RATE,
+    )
     critic_meta: dict[str, Any] | None = None
     if run_critic:
         critique = critique_mcq(
@@ -914,14 +947,25 @@ def _quality_gate_one(
             model_id=model_id,
         )
         critic_meta = critique
-        if not _critique_passes(critique):
+        verdict = decide_verdict(
+            QualitySignals(
+                heuristic_flaws=heuristic_flaws,
+                verify_flaw=key_flaw,
+                critic=critique,
+                too_similar=too_similar,
+                max_similarity=max_sim,
+                rewrite_budget_remaining=1,
+                verify_ran=verify_ran,
+            )
+        )
+        if verdict.decision == "revise":
             rewritten = _rewrite_mcq(
                 db,
                 draft=draft,
                 page_text=page_text,
                 page_number=page_number,
                 target_aspect=target,
-                critique_bundle=_merge_critique_for_rewrite(heuristic_flaws, critique),
+                critique_bundle=merge_critique_for_rewrite(heuristic_flaws, critique),
                 prior_mcqs=check_against,
                 model_id=model_id,
             )
@@ -929,43 +973,16 @@ def _quality_gate_one(
                 return ("reject", None, "rewrite_failed", max_sim, heuristic_flaws, critic_meta, True)
             draft = rewritten
             heuristic_flaws = run_heuristic_checks(draft, prior_mcqs=check_against)
-            if has_fatal_heuristic_flaws(heuristic_flaws):
-                reason = next(
-                    (
-                        str(f.get("code") or "?")
-                        for f in heuristic_flaws
-                        if f.get("code") in FATAL_FLAW_CODES
-                    ),
-                    "heuristic",
-                )
-                return ("reject", None, reason, max_sim, heuristic_flaws, critic_meta, True)
             too_similar, max_sim = is_mcq_too_similar(
                 draft,
                 check_against,
                 prior_embeddings=prior_embeddings,
             )
-            if too_similar:
-                return (
-                    "reject",
-                    None,
-                    "too_similar_to_prior",
-                    max_sim,
-                    heuristic_flaws,
-                    critic_meta,
-                    True,
-                )
-            if verify_enabled:
+            key_flaw = None
+            verify_ran = False
+            if verify_enabled and not has_fatal_heuristic_flaws(heuristic_flaws) and not too_similar:
                 key_flaw = verify_answer_key(db, mcq=draft, page_text=page_text, model_id=model_id)
-                if key_flaw is not None:
-                    return (
-                        "reject",
-                        None,
-                        str(key_flaw.get("code") or "verify_failed"),
-                        max_sim,
-                        heuristic_flaws,
-                        critic_meta,
-                        True,
-                    )
+                verify_ran = True
             critique = critique_mcq(
                 db,
                 mcq=draft,
@@ -976,8 +993,27 @@ def _quality_gate_one(
                 model_id=model_id,
             )
             critic_meta = critique
-            if not _critique_passes(critique):
-                return ("reject", None, "critic_rejected", max_sim, heuristic_flaws, critic_meta, True)
+            verdict = decide_verdict(
+                QualitySignals(
+                    heuristic_flaws=heuristic_flaws,
+                    verify_flaw=key_flaw,
+                    critic=critique,
+                    too_similar=too_similar,
+                    max_similarity=max_sim,
+                    rewrite_budget_remaining=0,
+                    verify_ran=verify_ran,
+                )
+            )
+        if verdict.decision != "pass":
+            return (
+                "reject",
+                None,
+                verdict.reject_reason or "critic_rejected",
+                max_sim,
+                heuristic_flaws,
+                critic_meta,
+                True,
+            )
 
     return ("accept", draft, None, max_sim, heuristic_flaws, critic_meta, run_critic)
 
