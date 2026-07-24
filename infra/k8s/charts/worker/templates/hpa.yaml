@@ -1,6 +1,7 @@
 {{- range $name, $wl := .Values.workloads }}
-{{- if $wl.enabled }}
-{{- if $.Values.autoscaling.enabled }}
+{{- if and $wl.enabled $.Values.autoscaling.enabled }}
+{{- /* Newspaper is a singleton Telethon watcher — never HPA-scale it. */}}
+{{- if ne $name "newspaper" }}
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
