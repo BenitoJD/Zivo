@@ -59,6 +59,8 @@ export function PageSelectionScreen({
   pdfDoc,
   pdfLoading,
   pdfError,
+  pageTexts,
+  pageTextsLoading,
   thumbCanvasRefs,
   confirming,
   setupError,
@@ -81,6 +83,9 @@ export function PageSelectionScreen({
   pdfDoc: PDFDocumentProxy | null;
   pdfLoading: boolean;
   pdfError: string | null;
+  /** Non-PDF study-page text (DOCX/PPTX/paste) for thumbnail previews. */
+  pageTexts?: Record<number, string>;
+  pageTextsLoading?: boolean;
   thumbCanvasRefs: React.MutableRefObject<Record<number, HTMLCanvasElement | null>>;
   confirming: boolean;
   setupError: string | null;
@@ -149,6 +154,8 @@ export function PageSelectionScreen({
           isDark={isDark}
           isPdf={isPdf}
           pdfDoc={pdfDoc}
+          pageTexts={pageTexts}
+          pageTextsLoading={pageTextsLoading}
           thumbCanvasRefs={thumbCanvasRefs}
           confirming={confirming}
           setupError={setupError}
@@ -215,6 +222,8 @@ export function PageSelectionBody({
   isDark,
   isPdf,
   pdfDoc,
+  pageTexts,
+  pageTextsLoading,
   thumbCanvasRefs,
   confirming,
   setupError,
@@ -234,6 +243,8 @@ export function PageSelectionBody({
   isDark: boolean;
   isPdf: boolean;
   pdfDoc: PDFDocumentProxy | null;
+  pageTexts?: Record<number, string>;
+  pageTextsLoading?: boolean;
   thumbCanvasRefs: React.MutableRefObject<Record<number, HTMLCanvasElement | null>>;
   confirming: boolean;
   setupError: string | null;
@@ -276,6 +287,8 @@ export function PageSelectionBody({
           isDark={isDark}
           isPdf={isPdf}
           pdfDoc={pdfDoc}
+          pageTexts={pageTexts}
+          pageTextsLoading={pageTextsLoading}
           thumbCanvasRefs={thumbCanvasRefs}
           onPageToggle={onPageToggle}
         />
@@ -537,6 +550,8 @@ function PageThumbnailGrid({
   isDark,
   isPdf,
   pdfDoc,
+  pageTexts,
+  pageTextsLoading,
   thumbCanvasRefs,
   dockReserve = 0,
   onPageToggle,
@@ -546,6 +561,8 @@ function PageThumbnailGrid({
   isDark: boolean;
   isPdf: boolean;
   pdfDoc: PDFDocumentProxy | null;
+  pageTexts?: Record<number, string>;
+  pageTextsLoading?: boolean;
   thumbCanvasRefs: React.MutableRefObject<Record<number, HTMLCanvasElement | null>>;
   dockReserve?: number;
   onPageToggle: (page: number, shiftKey: boolean) => void;
@@ -615,6 +632,8 @@ function PageThumbnailGrid({
           isDark={isDark}
           isPdf={isPdf}
           pdfDoc={pdfDoc}
+          previewText={pageTexts?.[page]}
+          pageTextsLoading={pageTextsLoading}
           thumbWidth={cellThumbWidth}
           compact={compactGrid}
           scrollRoot={scrollRoot}
@@ -665,6 +684,8 @@ function PageThumbnailCell({
   isDark,
   isPdf,
   pdfDoc,
+  previewText,
+  pageTextsLoading,
   thumbWidth,
   compact,
   scrollRoot,
@@ -676,6 +697,8 @@ function PageThumbnailCell({
   isDark: boolean;
   isPdf: boolean;
   pdfDoc: PDFDocumentProxy | null;
+  previewText?: string;
+  pageTextsLoading?: boolean;
   thumbWidth: number;
   compact?: boolean;
   scrollRoot: HTMLDivElement | null;
@@ -852,9 +875,46 @@ function PageThumbnailCell({
                 />
               </Box>
             ) : (
-              <Center h={frameHeight} w="100%">
-                <IconFileText size={40} stroke={1.25} color="var(--mantine-color-dimmed)" />
-              </Center>
+              <Box
+                ref={frameRef}
+                w="100%"
+                h={frameHeight}
+                px={compact ? 8 : 10}
+                py={compact ? 8 : 10}
+                bg={isDark ? "dark.6" : "gray.0"}
+                style={{
+                  borderRadius: innerRadius,
+                  overflow: "hidden",
+                  boxSizing: "border-box",
+                }}
+              >
+                {previewText?.trim() ? (
+                  <Text
+                    c={isDark ? "gray.4" : "dark.4"}
+                    lh={1.35}
+                    style={{
+                      fontFamily: "var(--font-serif), Georgia, serif",
+                      fontSize: compact ? 8.5 : 9.5,
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      overflow: "hidden",
+                      display: "-webkit-box",
+                      WebkitLineClamp: compact ? 14 : 18,
+                      WebkitBoxOrient: "vertical",
+                    }}
+                  >
+                    {previewText.trim().slice(0, 520)}
+                  </Text>
+                ) : (
+                  <Center h="100%">
+                    {pageTextsLoading ? (
+                      <Loader size="xs" color="gray" />
+                    ) : (
+                      <IconFileText size={40} stroke={1.25} color="var(--mantine-color-dimmed)" />
+                    )}
+                  </Center>
+                )}
+              </Box>
             )}
           </Box>
         </Box>

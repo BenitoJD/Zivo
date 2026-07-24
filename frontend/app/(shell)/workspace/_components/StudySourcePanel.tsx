@@ -46,21 +46,28 @@ export function StudySourcePanel({
   filename,
   pageRange,
   currentPage,
+  artifactId,
   isPdf,
   pdfLoading,
   pdfError,
   pdfDoc,
   studyPages,
+  pageTexts,
+  pageTextsLoading,
   open,
 }: {
   filename?: string;
   pageRange?: { from: number; to: number };
   currentPage?: number;
+  artifactId?: string;
   isPdf: boolean;
   pdfLoading: boolean;
   pdfError: string | null;
   pdfDoc: PDFDocumentProxy | null;
   studyPages: number[];
+  /** Non-PDF page text keyed by page number (from /api/documents/.../pages). */
+  pageTexts?: Record<number, string>;
+  pageTextsLoading?: boolean;
   open: boolean;
 }) {
   const isDark = useIsDark();
@@ -254,9 +261,56 @@ export function StudySourcePanel({
   }
 
   if (!isPdf) {
+    const texts = pageTexts ?? {};
+    const hasAnyText = displayPages.some((p) => (texts[p] || "").trim());
     return (
-      <ScrollArea flex={1} offsetScrollbars type="auto">
-        <SourceStage filename={filename} pageRange={pageRange} compact inDrawer />
+      <ScrollArea flex={1} offsetScrollbars type="auto" h="100%">
+        <Stack gap="md" px="md" pt="sm" pb="xl">
+          <SourceStage filename={filename} pageRange={pageRange} compact inDrawer />
+          {pageTextsLoading && !hasAnyText ? (
+            <Center py="xl">
+              <Loader size="sm" color="lavender" />
+            </Center>
+          ) : hasAnyText ? (
+            <Stack gap="xl">
+              {displayPages.map((p) => {
+                const text = (texts[p] || "").trim();
+                if (!text) return null;
+                return (
+                  <Stack key={p} gap="sm">
+                    {(displayPages.length > 1 || studyPages.length > 1) && (
+                      <Text size="xs" tt="uppercase" fw={700} c="dimmed" style={{ letterSpacing: "0.06em" }}>
+                        Page {p}
+                      </Text>
+                    )}
+                    {text.split(/\n{2,}/).map((para, j) =>
+                      para.trim() ? (
+                        <Text
+                          key={j}
+                          fz="sm"
+                          lh={1.65}
+                          c="var(--mantine-color-text)"
+                          style={{
+                            fontFamily: "var(--font-serif), Georgia, serif",
+                            whiteSpace: "pre-wrap",
+                          }}
+                        >
+                          {para.trim()}
+                        </Text>
+                      ) : null,
+                    )}
+                  </Stack>
+                );
+              })}
+            </Stack>
+          ) : (
+            <Text c="dimmed" size="sm" ta="center" py="lg">
+              {artifactId
+                ? "Couldn’t load text for this source yet."
+                : "No text preview for this source."}
+            </Text>
+          )}
+        </Stack>
       </ScrollArea>
     );
   }

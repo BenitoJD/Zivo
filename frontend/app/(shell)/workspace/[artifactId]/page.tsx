@@ -119,6 +119,8 @@ export default function WorkspaceArtifactPage({
   const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
+  const [pageTexts, setPageTexts] = useState<Record<number, string>>({});
+  const [pageTextsLoading, setPageTextsLoading] = useState(false);
   const thumbCanvasRefs = useRef<Record<number, HTMLCanvasElement | null>>({});
 
   const [queue, setQueue] = useState<McqState | null>(null);
@@ -444,6 +446,38 @@ export default function WorkspaceArtifactPage({
       cancelled = true;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- depend on artifact?.id (stable); the artifact object changes identity on every edit and would needlessly reload the PDF
+  }, [artifactId, invalidArtifactId, isPdf, isNewspaper, artifact?.id]);
+
+  useEffect(() => {
+    if (invalidArtifactId || !artifact || isPdf || isNewspaper) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clear non-PDF preview state when switching sources
+      setPageTexts({});
+      setPageTextsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setPageTextsLoading(true);
+    void apiGet<{ pages: { page: number; text: string }[] }>(`/api/documents/${artifactId}/pages`)
+      .then((data) => {
+        if (cancelled) return;
+        const next: Record<number, string> = {};
+        for (const item of data.pages || []) {
+          next[Number(item.page)] = String(item.text || "");
+        }
+        setPageTexts(next);
+      })
+      .catch(() => {
+        if (!cancelled) setPageTexts({});
+      })
+      .finally(() => {
+        if (!cancelled) setPageTextsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- artifact?.id only; full artifact object churns on poll
   }, [artifactId, invalidArtifactId, isPdf, isNewspaper, artifact?.id]);
 
   useEffect(() => {
@@ -1002,6 +1036,8 @@ export default function WorkspaceArtifactPage({
         pdfDoc={pdfDoc}
         pdfLoading={pdfLoading}
         pdfError={pdfError}
+        pageTexts={pageTexts}
+        pageTextsLoading={pageTextsLoading}
         thumbCanvasRefs={thumbCanvasRefs}
         confirming={confirming}
         setupError={setupError}
@@ -1638,11 +1674,14 @@ export default function WorkspaceArtifactPage({
                 filename={artifact.filename}
                 pageRange={selectedRange}
                 currentPage={queue?.current_page}
+                artifactId={artifact.id}
                 isPdf={isPdf}
                 pdfLoading={pdfLoading}
                 pdfError={pdfError}
                 pdfDoc={pdfDoc}
                 studyPages={studyPages}
+                pageTexts={pageTexts}
+                pageTextsLoading={pageTextsLoading}
                 open={sourceOpen}
               />
             </FloatingPanel>
@@ -1687,11 +1726,14 @@ export default function WorkspaceArtifactPage({
               filename={artifact.filename}
               pageRange={selectedRange}
               currentPage={queue?.current_page}
+              artifactId={artifact.id}
               isPdf={isPdf}
               pdfLoading={pdfLoading}
               pdfError={pdfError}
               pdfDoc={pdfDoc}
               studyPages={studyPages}
+              pageTexts={pageTexts}
+              pageTextsLoading={pageTextsLoading}
               open={visible}
             />
           )}
@@ -1726,6 +1768,8 @@ export default function WorkspaceArtifactPage({
           isCompact={isNarrow}
           isPdf={isPdf}
           pdfDoc={pdfDoc}
+          pageTexts={pageTexts}
+          pageTextsLoading={pageTextsLoading}
           thumbCanvasRefs={thumbCanvasRefs}
           confirming={confirming}
           setupError={setupError}
