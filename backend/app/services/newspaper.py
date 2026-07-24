@@ -217,7 +217,9 @@ def create_edition_from_pdf(
     )
 
     selected = {"from": 1, "to": page_count, "pages": list(range(1, page_count + 1))}
-    from app.services.question_pool_jobs import reset_for_new_page_range
+    # Import via question_pool facade (not question_pool_jobs) to avoid circular
+    # import when jobs module loads pool mid-init.
+    from app.services.question_pool import reset_for_new_page_range
 
     reset_for_new_page_range(db, doc, selected)
     newspaper_repo.update_edition_status(db, edition_id, status="indexing", document_id=doc.id)

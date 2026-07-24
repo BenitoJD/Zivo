@@ -62,3 +62,22 @@ def test_filename_date_primary_for_edition_day() -> None:
         )
         == date(2026, 7, 24)
     )
+
+
+def test_create_edition_imports_reset_via_question_pool_facade() -> None:
+    """Deep-import of question_pool_jobs from newspaper caused circular ImportError
+    on _cancel_queued_generate_jobs during reconcile ingest. Keep facade path.
+    """
+    import inspect
+
+    from app.services import newspaper
+    from app.services.question_pool import reset_for_new_page_range
+    from app.services import question_pool_jobs
+
+    src = inspect.getsource(newspaper.create_edition_from_pdf)
+    assert "from app.services.question_pool_jobs import" not in src
+    assert "from app.services.question_pool import reset_for_new_page_range" in src
+    # Import order that used to fail mid-init: jobs must fully export cancel helpers.
+    assert callable(question_pool_jobs._cancel_queued_generate_jobs)
+    assert newspaper.create_edition_from_pdf
+    assert reset_for_new_page_range is question_pool_jobs.reset_for_new_page_range
