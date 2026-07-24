@@ -197,6 +197,7 @@ Design decisions are in [docs/adr/](docs/adr/0000-index.md). Quick pointers:
 - Schema changes: `backend/alembic/versions/` (+ update `backend/schema/*.sql` when baselining raw SQL).
 - New routes: `backend/app/api/`. · Background jobs: `backend/app/eta/`.
 - UI: **`frontend/app/` only** — see [Frontend UI](#frontend-ui) above.
+- Agent writing: no em dashes (`—`); see `.cursor/rules/no-em-dashes.mdc`.
 
 ## Skills
 

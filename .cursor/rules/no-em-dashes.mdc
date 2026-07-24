@@ -1,0 +1,32 @@
+---
+description: Ban em dashes (U+2014) in all agent-written content
+alwaysApply: true
+---
+
+# No em dashes
+
+Never write the em dash character (`—`, U+2014) in agent-authored text.
+
+## Applies to
+
+- Code comments and docstrings
+- UI / user-facing copy agents write or edit
+- Docs, ADRs, READMEs, AGENTS.md, skills, and rules agents edit
+- Commit messages and PR bodies
+- Chat responses when this rule governs output
+
+## Prefer instead
+
+| Intent | Use |
+|--------|-----|
+| Pause / aside | comma, period, or parentheses |
+| Introduce clause | colon |
+| Compound / range | hyphen (`-`) or en dash (`–`, U+2013) |
+
+## Examples
+
+- Bad: `Upload source — then generate MCQs`
+- Good: `Upload source, then generate MCQs`
+- Good: `Upload source: then generate MCQs`
+
+Do not introduce new em dashes. Leave existing ones alone unless you are already editing that sentence.
