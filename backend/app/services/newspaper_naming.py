@@ -38,6 +38,7 @@ _BRAND_TOKEN_FAMILIES: dict[str, frozenset[str]] = {
     "the-economic-times": frozenset({"et", "economictimes", "theeconomictimes"}),
     "new-indian-express": frozenset({"nie", "newindianexpress", "indianexpress"}),
     "deccan-chronicle": frozenset({"dc", "deccanchronicle"}),
+    "new-hans": frozenset({"hans", "newhans"}),
 }
 _TOKEN_TO_BRAND: dict[str, str] = {
     tok: slug for slug, toks in _BRAND_TOKEN_FAMILIES.items() for tok in toks
@@ -71,6 +72,12 @@ _LOCATION_TOKENS = {
     "hubli",
     "erode",
     "coimbatore",
+    "vijayawada",
+    "visakhapatnam",
+    "vishakapatnam",
+    "tirupati",
+    "vellore",
+    "ranchi",
     "international",
     "epaper",
     "ebook",
@@ -236,19 +243,18 @@ def _learnable_alias_keys(
     tokens: list[str],
 ) -> list[str]:
     """Only brand-family tokens present in the filename — never cities/dates/noise."""
+    loc_norms = {_norm_key(t) for t in _LOCATION_TOKENS}
     family = _BRAND_TOKEN_FAMILIES.get(paper_slug, frozenset())
     if not family:
-        # Unknown brand: only learn the full guessed title if it's multi-char and
-        # not a location/date — never a bare city token.
-        key = _norm_key(guessed_title)
-        if (
-            key
-            and len(key) >= 3
-            and key not in {_norm_key(t) for t in _LOCATION_TOKENS}
-            and not key.isdigit()
-            and not re.fullmatch(r"\d{6,8}", key)
-        ):
-            return [guessed_title]
+        # Unknown brand: learn guessed title only if it has no location/date noise.
+        parts = [
+            p
+            for p in re.split(r"\s+", (guessed_title or "").strip())
+            if p and _norm_key(p) not in loc_norms and not _norm_key(p).isdigit()
+        ]
+        key = _norm_key(" ".join(parts))
+        if key and len(key) >= 3 and not re.fullmatch(r"\d{6,8}", key):
+            return [" ".join(parts)]
         return []
 
     candidates: list[str] = []
@@ -257,7 +263,7 @@ def _learnable_alias_keys(
         norm = _norm_key(raw)
         if not norm or norm in seen:
             continue
-        if norm in {_norm_key(t) for t in _LOCATION_TOKENS}:
+        if norm in loc_norms:
             continue
         if norm.isdigit() or re.fullmatch(r"\d{6,8}", norm):
             continue
