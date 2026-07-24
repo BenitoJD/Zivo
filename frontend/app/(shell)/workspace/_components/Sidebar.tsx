@@ -1,11 +1,12 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import {
   ActionIcon,
   Box,
   Button,
   Center,
+  Collapse,
   Group,
   NavLink,
   Progress,
@@ -16,11 +17,14 @@ import {
   UnstyledButton,
   useMantineColorScheme,
 } from "@mantine/core";
+import { useDisclosure } from "@mantine/hooks";
 import {
+  IconArticle,
   IconBook2,
   IconBriefcase,
   IconBuildingCastle,
   IconBulb,
+  IconChevronDown,
   IconCode,
   IconFileCv,
   IconCards,
@@ -36,8 +40,10 @@ import {
   IconNotebook,
   IconPlus,
   IconChartBar,
+  IconRss,
   IconSettings,
   IconSun,
+  IconTool,
   IconTrash,
   IconWriting,
   IconBrain,
@@ -46,36 +52,37 @@ import { BrandMark } from "@/app/_components/BrandMark";
 import type { SourceDocument } from "@/lib/types";
 import { useStudyNav, type StudyMode } from "@/app/workspace/_components/studyNav";
 
-/** Mode navigator content shared by the mini + expanded sidebar (below the sources). */
-// Each mode carries its own vibrant hue so the rail reads as a colorful, legible
-// palette (calm-paper page, but the icons pop). Shade 6 stays readable on both
-// the cream light surface and the ink dark surface.
+/**
+ * Mode navigator below sources when an artifact is open.
+ * Study = gold chrome (Read / Learn / Test). Tools = quieter secondary modes.
+ * Icons stay monochrome (ink / lavender active) - no rainbow chrome.
+ */
 const MODE_GROUPS: {
   heading: string;
-  items: { value: StudyMode; label: string; icon: typeof IconBook2; color: string }[];
+  items: { value: StudyMode; label: string; icon: typeof IconBook2 }[];
 }[] = [
   {
     heading: "Study",
     items: [
-      { value: "read", label: "Read", icon: IconBook2, color: "indigo" },
-      { value: "learn", label: "Learn", icon: IconBulb, color: "orange" },
-      { value: "test", label: "Test", icon: IconClipboardList, color: "grape" },
-      { value: "progress", label: "Progress", icon: IconChartBar, color: "lavender" },
-      { value: "brainstorm", label: "Brainstorm", icon: IconBrain, color: "sage" },
+      { value: "read", label: "Read", icon: IconBook2 },
+      { value: "learn", label: "Learn", icon: IconBulb },
+      { value: "test", label: "Test", icon: IconClipboardList },
     ],
   },
   {
     heading: "Tools",
     items: [
-      { value: "explain", label: "Explain", icon: IconMessage2, color: "teal" },
-      { value: "notes", label: "Notes", icon: IconNotebook, color: "cyan" },
-      { value: "cards", label: "Cards", icon: IconCards, color: "pink" },
-      { value: "palace", label: "Palace", icon: IconBuildingCastle, color: "violet" },
-      { value: "quiz", label: "Quiz", icon: IconListCheck, color: "lime" },
-      { value: "interview", label: "Interview", icon: IconBriefcase, color: "yellow" },
-      { value: "coding", label: "Coding", icon: IconCode, color: "forest" },
-      { value: "resume", label: "Resume", icon: IconFileCv, color: "red" },
-      { value: "mains", label: "Mains", icon: IconWriting, color: "blue" },
+      { value: "progress", label: "Progress", icon: IconChartBar },
+      { value: "brainstorm", label: "Brainstorm", icon: IconBrain },
+      { value: "explain", label: "Explain", icon: IconMessage2 },
+      { value: "notes", label: "Notes", icon: IconNotebook },
+      { value: "cards", label: "Cards", icon: IconCards },
+      { value: "palace", label: "Palace", icon: IconBuildingCastle },
+      { value: "quiz", label: "Quiz", icon: IconListCheck },
+      { value: "interview", label: "Interview", icon: IconBriefcase },
+      { value: "coding", label: "Coding", icon: IconCode },
+      { value: "resume", label: "Resume", icon: IconFileCv },
+      { value: "mains", label: "Mains", icon: IconWriting },
     ],
   },
 ];
@@ -188,10 +195,10 @@ function MiniRailButton({
 /** Mini (collapsed) mode navigator - a column of mode icons under the source icons. */
 function MiniModeNav({ mode, onChange }: { mode: StudyMode; onChange: (m: StudyMode) => void }) {
   return (
-    <Stack gap={6} align="center" w="100%" pt={6} mt={2} style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}>
+    <Stack gap={8} align="center" w="100%" pt={8} mt={4} style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}>
       {MODE_GROUPS.flatMap((g) => g.items).map((it) => (
         <MiniRailButton key={it.value} label={it.label} active={mode === it.value} onClick={() => onChange(it.value)}>
-          <it.icon size={18} stroke={1.7} style={{ color: `var(--mantine-color-${it.color}-6)` }} />
+          <it.icon size={18} stroke={1.7} />
         </MiniRailButton>
       ))}
     </Stack>
@@ -201,21 +208,21 @@ function MiniModeNav({ mode, onChange }: { mode: StudyMode; onChange: (m: StudyM
 /** Expanded mode navigator - grouped, labelled rows, placed below the source list. */
 function ExpandedModeNav({ mode, onChange }: { mode: StudyMode; onChange: (m: StudyMode) => void }) {
   return (
-    <Box mt="sm" pt="sm" style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}>
+    <Box mt="md" pt="md" style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}>
       <style>{`
         .zv-mode-row {
           display: flex; align-items: center; gap: 10px; width: 100%;
-          padding: 8px 10px; border-radius: 11px; color: var(--mantine-color-dimmed);
+          padding: 9px 12px; border-radius: 12px; color: var(--mantine-color-dimmed);
           transition: background 150ms ease, color 150ms ease;
         }
         .zv-mode-row:hover { background: var(--mantine-color-default-hover); color: var(--mantine-color-text); }
         .zv-mode-row[data-active="true"] { background: var(--mantine-color-lavender-0); color: var(--mantine-color-lavender-7); font-weight: 600; }
-        [data-mantine-color-scheme="dark"] .zv-mode-row[data-active="true"] { background: var(--mantine-color-lavender-2); color: var(--mantine-color-lavender-9); }
+        [data-mantine-color-scheme="dark"] .zv-mode-row[data-active="true"] { background: var(--mantine-color-lavender-1); color: var(--mantine-color-lavender-9); }
         @media (prefers-reduced-motion: reduce) { .zv-mode-row { transition: none !important; } }
       `}</style>
-      <Stack gap="sm">
+      <Stack gap="md">
         {MODE_GROUPS.map((g) => (
-          <Stack key={g.heading} gap={3}>
+          <Stack key={g.heading} gap={4}>
             <Text size="xs" tt="uppercase" fw={700} c="dimmed" lts={1.4} px="sm" mb={2} style={{ fontSize: 11 }}>
               {g.heading}
             </Text>
@@ -229,11 +236,7 @@ function ExpandedModeNav({ mode, onChange }: { mode: StudyMode; onChange: (m: St
                   onClick={() => onChange(it.value)}
                   aria-current={active ? "page" : undefined}
                 >
-                  <it.icon
-                    size={18}
-                    stroke={active ? 2 : 1.7}
-                    style={{ flexShrink: 0, color: `var(--mantine-color-${it.color}-6)` }}
-                  />
+                  <it.icon size={18} stroke={active ? 2 : 1.6} style={{ flexShrink: 0 }} />
                   <Text size="sm" style={{ fontWeight: "inherit" }}>{it.label}</Text>
                 </UnstyledButton>
               );
@@ -406,6 +409,19 @@ export function Sidebar({
   // When an artifact study view is mounted, host its mode navigator here (below
   // the sources) rather than as a separate rail.
   const { active: studyActive, mode: studyMode, setMode: setStudyMode } = useStudyNav();
+
+  const onAdminRoute =
+    pathname === "/workspace/models" ||
+    pathname === "/workspace/newspaper" ||
+    pathname === "/workspace/learn";
+  const [adminOpen, { toggle: toggleAdmin, open: openAdmin }] = useDisclosure(onAdminRoute);
+  useEffect(() => {
+    if (onAdminRoute) openAdmin();
+  }, [onAdminRoute, openAdmin]);
+
+  const navLinkStyles = {
+    root: { borderRadius: "var(--mantine-radius-md)", paddingTop: 8, paddingBottom: 8 },
+  } as const;
 
   return (
     <>
@@ -657,7 +673,7 @@ export function Sidebar({
             px="sm"
             pt={isMobile ? "md" : "xs"}
           >
-            <Group gap={7} align="center" px="sm" mb={8} mt={2}>
+            <Group gap={7} align="center" px="sm" mb={10} mt={2}>
               <Text size="xs" tt="uppercase" fw={700} c="dimmed" lts={1.4} style={{ fontSize: 11 }}>
                 Sources
               </Text>
@@ -684,7 +700,7 @@ export function Sidebar({
                 </Text>
               </Stack>
             ) : (
-              <Stack gap={2}>
+              <Stack gap={4}>
                 {documents.map((d) => (
                   <SourceRow
                     key={d.id}
@@ -711,8 +727,9 @@ export function Sidebar({
       >
         {wide ? (
           <Box p={isMobile ? "sm" : "md"} w="100%" pb={isMobile ? "calc(var(--mantine-spacing-sm) + env(safe-area-inset-bottom))" : undefined}>
-            {username && (
-              <Stack gap={6} mb={isMobile ? "sm" : "md"} px={4}>
+            {/* Storage only when it has something to say - a flat 0% bar is noise. */}
+            {username && storagePct > 0 && (
+              <Stack gap={6} mb="md" px={4}>
                 <Group justify="space-between">
                   <Text c="dimmed" fw={500} style={{ fontSize: 11 }}>
                     Storage
@@ -721,75 +738,104 @@ export function Sidebar({
                     {storagePct}%
                   </Text>
                 </Group>
-                <Progress value={storagePct} size={4} radius="xl" color="lavender" />
+                <Progress value={storagePct} size={5} radius="xl" color="lavender" />
               </Stack>
             )}
-            <NavLink
-              label="Progress"
-              description="Answers, accuracy, concepts"
-              leftSection={<IconChartBar size={18} stroke={1.5} />}
-              active={pathname === "/workspace/progress"}
-              onClick={onOpenProgress}
-              mb="xs"
-              styles={{ root: { borderRadius: "var(--mantine-radius-md)" } }}
-            />
-            {onOpenCodingBank && (
+
+            <Stack gap={4} mb="sm">
+              <Text size="xs" tt="uppercase" fw={700} c="dimmed" lts={1.4} px="xs" mb={2} style={{ fontSize: 11 }}>
+                Practice
+              </Text>
               <NavLink
-                label="Coding bank"
-                description="Browse and practice problems"
-                leftSection={<IconCode size={18} stroke={1.5} />}
-                active={
-                  pathname.startsWith("/workspace/coding") || pathname.startsWith("/practice/coding")
-                }
-                onClick={onOpenCodingBank}
-                mb="xs"
-                styles={{ root: { borderRadius: "var(--mantine-radius-md)" } }}
+                label="Progress"
+                leftSection={<IconChartBar size={18} stroke={1.6} />}
+                active={pathname === "/workspace/progress"}
+                onClick={onOpenProgress}
+                styles={navLinkStyles}
               />
-            )}
-            {onOpenNewspaperPractice && (
-              <NavLink
-                label="Newspaper"
-                description="Daily papers as questions"
-                leftSection={<IconNews size={18} stroke={1.5} />}
-                active={pathname.startsWith("/practice/newspaper")}
-                onClick={onOpenNewspaperPractice}
-                mb="sm"
-                styles={{ root: { borderRadius: "var(--mantine-radius-md)" } }}
-              />
-            )}
+              {onOpenCodingBank && (
+                <NavLink
+                  label="Coding"
+                  leftSection={<IconCode size={18} stroke={1.6} />}
+                  active={
+                    pathname.startsWith("/workspace/coding") || pathname.startsWith("/practice/coding")
+                  }
+                  onClick={onOpenCodingBank}
+                  styles={navLinkStyles}
+                />
+              )}
+              {onOpenNewspaperPractice && (
+                <NavLink
+                  label="Newspaper"
+                  leftSection={<IconNews size={18} stroke={1.6} />}
+                  active={pathname.startsWith("/practice/newspaper")}
+                  onClick={onOpenNewspaperPractice}
+                  styles={navLinkStyles}
+                />
+              )}
+            </Stack>
+
             {isAdmin && (
-              <NavLink
-                label="LLM models"
-                description="Enable or disable chat models"
-                leftSection={<IconCpu size={18} stroke={1.5} />}
-                active={pathname === "/workspace/models"}
-                onClick={onOpenModels}
-                mb="sm"
-                styles={{ root: { borderRadius: "var(--mantine-radius-md)" } }}
-              />
+              <Box mb="sm">
+                <UnstyledButton
+                  onClick={toggleAdmin}
+                  aria-expanded={adminOpen}
+                  w="100%"
+                  px="xs"
+                  py={8}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    borderRadius: "var(--mantine-radius-md)",
+                    color: "var(--mantine-color-dimmed)",
+                  }}
+                >
+                  <IconTool size={16} stroke={1.6} />
+                  <Text size="xs" tt="uppercase" fw={700} lts={1.4} style={{ flex: 1, fontSize: 11, textAlign: "left" }}>
+                    Admin
+                  </Text>
+                  <IconChevronDown
+                    size={14}
+                    stroke={1.8}
+                    style={{
+                      transform: adminOpen ? "rotate(180deg)" : "rotate(0deg)",
+                      transition: reduceMotion ? undefined : "transform 180ms cubic-bezier(0.32, 0.72, 0, 1)",
+                    }}
+                  />
+                </UnstyledButton>
+                <Collapse in={adminOpen}>
+                  <Stack gap={2} mt={2}>
+                    <NavLink
+                      label="Models"
+                      leftSection={<IconCpu size={18} stroke={1.6} />}
+                      active={pathname === "/workspace/models"}
+                      onClick={onOpenModels}
+                      styles={navLinkStyles}
+                    />
+                    {onOpenNewspaper && (
+                      <NavLink
+                        label="Paper source"
+                        leftSection={<IconRss size={18} stroke={1.6} />}
+                        active={pathname === "/workspace/newspaper"}
+                        onClick={onOpenNewspaper}
+                        styles={navLinkStyles}
+                      />
+                    )}
+                    {onOpenLearnAdmin && (
+                      <NavLink
+                        label="Learn posts"
+                        leftSection={<IconArticle size={18} stroke={1.6} />}
+                        active={pathname === "/workspace/learn"}
+                        onClick={onOpenLearnAdmin}
+                        styles={navLinkStyles}
+                      />
+                    )}
+                  </Stack>
+                </Collapse>
+              </Box>
             )}
-            {isAdmin && onOpenNewspaper && (
-              <NavLink
-                label="Newspaper source"
-                description="Channel + which papers"
-                leftSection={<IconNews size={18} stroke={1.5} />}
-                active={pathname === "/workspace/newspaper"}
-                onClick={onOpenNewspaper}
-                mb="sm"
-                styles={{ root: { borderRadius: "var(--mantine-radius-md)" } }}
-              />
-            )}
-            {isAdmin && onOpenLearnAdmin && (
-              <NavLink
-                label="Learn content"
-                description="Cook kill-switch + unpublish"
-                leftSection={<IconBook2 size={18} stroke={1.5} />}
-                active={pathname === "/workspace/learn"}
-                onClick={onOpenLearnAdmin}
-                mb="sm"
-                styles={{ root: { borderRadius: "var(--mantine-radius-md)" } }}
-              />
-            )}
+
             <Button
               fullWidth
               size={isMobile ? "md" : "sm"}
