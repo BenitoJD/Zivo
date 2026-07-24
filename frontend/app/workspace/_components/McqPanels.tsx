@@ -370,7 +370,14 @@ export function McqHeroPanel({
     // Known waits feel ~30% shorter than unknown waits (HCI research). Falls
     // back to an animated indeterminate bar when no budget is known yet.
     const generated = queue?.questions_generated ?? 0;
-    const budget = queue?.question_budget ?? 0;
+    const planBudget = queue?.plan_budget ?? queue?.question_budget ?? 0;
+    const generationCap = queue?.generation_cap ?? 0;
+    // While writing the first batch, fill toward the generate-ahead cap; once the
+    // plan is known and larger, the ring tracks the real page plan.
+    const budget =
+      generationCap > 0 && (planBudget <= 0 || generated <= generationCap)
+        ? generationCap
+        : planBudget;
     // Stage-weighted overall progress, driven by live backend signals, so the ring
     // always reflects real pipeline movement (read -> plan -> write) instead of
     // sitting at 0% until the first question lands.

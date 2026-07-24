@@ -96,3 +96,23 @@ def test_finalize_triage_shrinks_budget_after_dedup() -> None:
     assert result["question_budget"] == 2
     assert len(result["aspects"]) == 2
     assert result["aspect_dedup"]["deduped_count"] == 2
+
+
+def test_triage_page_skips_llm_when_flag_off() -> None:
+    settings = MagicMock()
+    settings.llm_page_triage = False
+    settings.allow_zero_questions = False
+    text = "First idea here.\n\nSecond distinct idea.\n\nThird idea on the page."
+    db = MagicMock()
+    with (
+        patch("app.config.get_settings", return_value=settings),
+        patch.object(ptg, "_complete_chat_sync") as llm,
+        patch("app.services.generation_cache.get", return_value=None),
+        patch("app.services.generation_cache.put"),
+    ):
+        result = ptg._triage_page(db, page_text=text, page_number=3)
+
+    llm.assert_not_called()
+    assert result["question_budget"] >= 1
+    assert len(result["aspects"]) >= 1
+    assert result.get("non_content") is not True

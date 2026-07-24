@@ -53,9 +53,10 @@ def test_build_learn_queue_state_resume_at_question_three() -> None:
 
     assert state["question_number"] == 3
     assert state["questions_answered"] == 2
-    # Before the first answer (answered_on_page unset) the pre-build is modest
-    # (INITIAL_GENERATION_AHEAD); the deep buffer unlocks once the learner engages.
-    assert state["question_budget"] == 10
+    # Learner-facing Y is the triage/heuristic plan, not the generate-ahead cap.
+    assert state["question_budget"] == 47
+    assert state["plan_budget"] == 47
+    assert state["generation_cap"] == 10
     assert state["current_assertion_id"] == "id-3"
     assert state["page_complete"] is False
     assert state["page_triage_complete"] is True

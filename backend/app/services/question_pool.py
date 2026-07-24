@@ -208,24 +208,6 @@ def get_question_budget(doc: Document, page: int) -> int:
     # of open-world: ask nothing on a cover page rather than force filler.
     if cov.get("non_content"):
         return 0
-    # Settings "Questions per source" — total target for the selected range,
-    # spread across pages (ceil) so it does not apply the full count per page.
-    preferred = (doc.meta or {}).get("preferred_question_budget")
-    if preferred is not None:
-        try:
-            total = int(preferred)
-            selected = (doc.meta or {}).get("selected_range") or {}
-            pages = selected.get("pages")
-            if isinstance(pages, list) and pages:
-                n_pages = len(pages)
-            else:
-                fr = int(selected.get("from") or 1)
-                to = int(selected.get("to") or fr)
-                n_pages = max(1, to - fr + 1)
-            per_page = 0 if total <= 0 else max(1, (total + n_pages - 1) // n_pages)
-            return max(0, min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, per_page))
-        except (TypeError, ValueError):
-            pass
     # No floor: the budget is exactly what triage decided (the count of distinct
     # testable ideas), capped only at the absolute max. A missing budget means
     # triage hasn't landed yet — seed a small speculative batch so generation can
@@ -573,7 +555,8 @@ def build_learn_queue_state(
     page_ids = page_assertion_ids(db, document_id, page)
     questions_generated = len(page_ids)
     questions_answered = sum(1 for row_id in page_ids if row_id in answered_set)
-    budget = effective_question_budget(doc, page, progress)
+    plan_budget = get_question_budget(doc, page)
+    generation_cap = effective_question_budget(doc, page, progress)
     # Loop's choosing step (policy-driven; defaults to sequence order).
     next_id = select_next_assertion(db, document_id, doc, progress, page_ids=page_ids)
     coverage_complete = is_coverage_complete(doc, page)
@@ -600,7 +583,11 @@ def build_learn_queue_state(
         "page_to": page_to,
         "current_assertion_id": next_id,
         "question_number": questions_answered + 1 if next_id else questions_answered,
-        "question_budget": budget,
+        # question_budget = learner-facing plan (triage/heuristic). generation_cap
+        # is the demand-driven generate-ahead limit — not what "X of Y" should show.
+        "question_budget": plan_budget,
+        "plan_budget": plan_budget,
+        "generation_cap": generation_cap,
         "questions_answered": questions_answered,
         "questions_generated": questions_generated,
         "generation_pending": bool(progress.get("generation_pending")),
@@ -613,7 +600,7 @@ def build_learn_queue_state(
         "pool_available": sum(1 for row_id in page_ids if row_id not in answered_set),
         "generated_on_page": questions_generated,
         "answered_on_page": questions_answered,
-        "max_per_page": budget,
+        "max_per_page": plan_budget,
         "rag_window_pages": rag_pages,
         "rag_window_ready": rag_ready,
         "study_mode": get_study_mode(doc),

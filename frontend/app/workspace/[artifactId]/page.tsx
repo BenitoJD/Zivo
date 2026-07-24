@@ -76,7 +76,7 @@ import {
 import { PetPlayground } from "@/app/_components/pets/PetPlayground";
 import { indexingStage } from "@/lib/constants";
 import { getCachedPdfDocument, loadPdfForArtifact } from "@/lib/pdf";
-import { defaultWorkspaceMode, readPreferredMcqCount } from "@/lib/studyPreferences";
+import { defaultWorkspaceMode } from "@/lib/studyPreferences";
 import {
   normalizeMcqOptions,
   sanitizeMcqStem,
@@ -738,7 +738,6 @@ export default function WorkspaceArtifactPage({
         from,
         to,
         pages: sortedSelection,
-        preferred_question_budget: readPreferredMcqCount(),
       });
       await queryClient.invalidateQueries({ queryKey: queryKeys.artifact(artifactId) });
       await queryClient.invalidateQueries({ queryKey: queryKeys.artifactPages(artifactId) });

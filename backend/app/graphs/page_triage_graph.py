@@ -296,38 +296,46 @@ def _finalize_triage(
 
 
 def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, Any]:
-    cached = _triage_cache.get(page_text, page_number)
-    if cached is not None:
-        return cached
-
+    from app.config import get_settings
     from app.services.chunk_map_cache import triage_cache_key
     from app.services.generation_cache import get as cache_get, put as cache_put
 
-    db_key = triage_cache_key(page_text, page_number)
-    db_hit = cache_get(db, kind="page_triage", cache_key=db_key)
+    settings = get_settings()
+    allow_zero = settings.allow_zero_questions
+    use_llm = bool(settings.llm_page_triage)
+    excerpt = truncate_to_tokens(page_text, _TRIAGE_PAGE_MAX_TOKENS) if page_text else ""
+
+    # Separate cache namespaces so flipping llm_page_triage never serves a stale
+    # LLM plan as a "heuristic" result (or the reverse).
+    cache_kind = "page_triage" if use_llm else "page_triage_heuristic"
+    # In-process LRU is shared; prefix the logical key via page_number namespace.
+    cache_page_key = page_number if use_llm else -page_number
+
+    cached = _triage_cache.get(page_text, cache_page_key)
+    if cached is not None:
+        return cached
+
+    db_key = f"{cache_kind}:{triage_cache_key(page_text, page_number)}"
+    db_hit = cache_get(db, kind=cache_kind, cache_key=db_key)
     if isinstance(db_hit, dict) and db_hit:
-        _triage_cache.put(page_text, page_number, db_hit)
+        _triage_cache.put(page_text, cache_page_key, db_hit)
         return dict(db_hit)
 
     def _store(result: dict[str, Any]) -> dict[str, Any]:
-        _triage_cache.put(page_text, page_number, result)
+        _triage_cache.put(page_text, cache_page_key, result)
         try:
-            cache_put(db, kind="page_triage", cache_key=db_key, value=result)
+            cache_put(db, kind=cache_kind, cache_key=db_key, value=result)
         except Exception:
             logger.debug("page triage DB cache write failed", exc_info=True)
         return result
 
-    from app.config import get_settings
-
-    allow_zero = get_settings().allow_zero_questions
-
-    excerpt = truncate_to_tokens(page_text, _TRIAGE_PAGE_MAX_TOKENS) if page_text else ""
-
-    # Open-world pre-LLM gate: when zero is permitted, short-circuit obviously
-    # non-content material (empty/junk) without spending an LLM call. Legacy
-    # behaviour (flag off) never reaches this and keeps the >=5 floor below.
+    # Empty / junk → honest zero when allowed (no LLM either way).
     if allow_zero and (not excerpt or _looks_like_junk(excerpt)):
         return _store(_non_content_result(rationale="Page has no coherent testable text."))
+
+    # Jobs default: instant heuristic plan. LLM only when explicitly re-enabled.
+    if not use_llm:
+        return _store(_fallback_triage(page_text, page_number))
 
     if excerpt:
         try:

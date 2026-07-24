@@ -7,7 +7,6 @@ import {
   Divider,
   Group,
   Modal,
-  NumberInput,
   Paper,
   SegmentedControl,
   Stack,
@@ -21,7 +20,6 @@ import {
   IconBook,
   IconCat,
   IconFlame,
-  IconListNumbers,
   IconMoon,
   IconSparkles,
   IconSun,
@@ -29,7 +27,6 @@ import {
 import { CAT_ENABLED_KEY } from "@/app/_components/pets/PetPlayground";
 import {
   type PreferredStudyMode,
-  readPreferredMcqCount,
   readPreferredStudyMode,
   writeStudyPreferences,
 } from "@/lib/studyPreferences";
@@ -96,7 +93,6 @@ export function SettingsModal({ opened, onClose, username, onReplayOnboarding }:
   const isMobile = useMediaQuery(MOBILE_MAX_MQ, false, { getInitialValueInEffect: true });
 
   const [studyMode, setStudyMode] = useState<PreferredStudyMode>(() => readPreferredStudyMode());
-  const [mcqCount, setMcqCount] = useState<number>(() => readPreferredMcqCount());
   // Live (Mantine broadcasts to every PetPlayground) - flip and the cats appear
   // or vanish app-wide at once, no Save needed.
   const [catEnabled, setCatEnabled] = useLocalStorage({ key: CAT_ENABLED_KEY, defaultValue: false });
@@ -105,7 +101,7 @@ export function SettingsModal({ opened, onClose, username, onReplayOnboarding }:
   const displayName = username ? `@${username}` : "Guest";
 
   const saveSettings = () => {
-    writeStudyPreferences(studyMode, mcqCount);
+    writeStudyPreferences(studyMode);
     onClose();
   };
 
@@ -204,25 +200,6 @@ export function SettingsModal({ opened, onClose, username, onReplayOnboarding }:
                 onLabel="ON"
                 offLabel="OFF"
                 aria-label={catEnabled ? "Turn study cat off" : "Turn study cat on"}
-              />
-            }
-          />
-          <Divider color="var(--mantine-color-default-border)" />
-          <SettingRow
-            icon={<IconListNumbers size={18} stroke={1.7} />}
-            color="teal"
-            title="Questions per source"
-            desc="Target question count when you confirm pages on a new upload."
-            control={
-              <NumberInput
-                value={mcqCount}
-                onChange={(v) => setMcqCount(typeof v === "number" ? v : 5)}
-                min={3}
-                max={30}
-                step={1}
-                w={72}
-                size="xs"
-                styles={{ input: { textAlign: "center", fontWeight: 600 } }}
               />
             }
           />

@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     # 1. Allow a page to honestly yield ZERO questions (cover pages, TOCs, junk,
     #    non-content) instead of forcing the old minimum-5 floor.
     allow_zero_questions: bool = False
+    # Page triage budget/aspects: default OFF the LLM critical path (paragraph /
+    # word heuristic). Set true only to restore LLM planning.
+    llm_page_triage: bool = False
     # 2. Let generation adapt its question style + truth model to the material's
     #    content_type (expository/narrative/argumentative/procedural/reference).
     content_aware_generation: bool = False
