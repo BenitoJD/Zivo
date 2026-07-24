@@ -8,7 +8,7 @@ import logging
 import re
 import uuid
 from collections import OrderedDict
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy.orm import Session
 
@@ -17,8 +17,13 @@ from app.services.llm_router import acomplete_chat
 from app.services.llm_sync import run_coro_in_worker
 from app.services.mcq_dedup import dedupe_aspects
 from app.services.prompts import get_prompt
+from app.services.question_budget import (
+    Centrality,
+    Mode,
+    Unit,
+    plan_page_budget,
+)
 from app.services.question_pool import (
-    INITIAL_BATCH_SIZE,
     on_triage_completed,
     save_page_coverage,
 )
@@ -124,18 +129,12 @@ def run_page_triage(
             note_empty_page_triage(db, document_id, vision_usable=vision_usable)
 
         result = _non_content_result(rationale=rationale)
-        save_page_coverage(
+        _persist_triage_coverage(
             db,
             document_id,
-            page=page_number,
-            question_budget=result["question_budget"],
-            aspects=result["aspects"],
-            rationale=result.get("rationale", ""),
-            triage_activity_id=activity_id,
-            aspect_dedup=result.get("aspect_dedup"),
-            content_type=result.get("content_type"),
-            non_content=True,
-            programmable=False,
+            page_number=page_number,
+            result=result,
+            activity_id=activity_id,
         )
         on_triage_completed(db, document_id, page=page_number, precompute=precompute)
         if activity_id:
@@ -168,18 +167,12 @@ def run_page_triage(
             result = _non_content_result(
                 rationale=f"Newspaper filter ({verdict}): {rationale}",
             )
-            save_page_coverage(
+            _persist_triage_coverage(
                 db,
                 document_id,
-                page=page_number,
-                question_budget=0,
-                aspects=[],
-                rationale=result.get("rationale", ""),
-                triage_activity_id=activity_id,
-                aspect_dedup=None,
-                content_type="non_content",
-                non_content=True,
-                programmable=False,
+                page_number=page_number,
+                result=result,
+                activity_id=activity_id,
             )
             on_triage_completed(db, document_id, page=page_number, precompute=precompute)
             if activity_id:
@@ -206,18 +199,14 @@ def run_page_triage(
 
         content_type = NEWSPAPER_EXAM_CONTENT_TYPE
 
-    save_page_coverage(
+    if content_type is not None:
+        result = {**result, "content_type": content_type}
+    _persist_triage_coverage(
         db,
         document_id,
-        page=page_number,
-        question_budget=result["question_budget"],
-        aspects=result["aspects"],
-        rationale=result.get("rationale", ""),
-        triage_activity_id=activity_id,
-        aspect_dedup=result.get("aspect_dedup"),
-        content_type=content_type,
-        non_content=bool(result.get("non_content")),
-        programmable=bool(result.get("programmable")),
+        page_number=page_number,
+        result=result,
+        activity_id=activity_id,
     )
     on_triage_completed(db, document_id, page=page_number, precompute=precompute)
 
@@ -274,10 +263,73 @@ def _parse_triage_json(raw: str) -> dict[str, Any] | None:
         return None
 
 
+def _persist_triage_coverage(
+    db: Session,
+    document_id: uuid.UUID,
+    *,
+    page_number: int,
+    result: dict[str, Any],
+    activity_id: str | None,
+) -> None:
+    """Write page_coverage including planner metadata (budget_version, confidence)."""
+    save_page_coverage(
+        db,
+        document_id,
+        page=page_number,
+        question_budget=int(result.get("question_budget") or 0),
+        aspects=list(result.get("aspects") or []),
+        rationale=str(result.get("rationale") or ""),
+        triage_activity_id=activity_id,
+        aspect_dedup=result.get("aspect_dedup"),
+        content_type=result.get("content_type"),
+        non_content=bool(result.get("non_content")),
+        programmable=bool(result.get("programmable")),
+        budget_confidence=result.get("budget_confidence"),
+        budget_mode=result.get("budget_mode"),
+        budget_version=result.get("budget_version"),
+        n_cov=result.get("n_cov"),
+    )
+
+
+def _parse_centrality(raw: Any) -> Centrality:
+    value = str(raw or "central").strip().lower()
+    if value in ("central", "support", "skip"):
+        return value  # type: ignore[return-value]
+    return "central"
+
+
+def _units_from_aspects(aspects: list[dict[str, Any]]) -> list[Unit]:
+    return [
+        Unit(
+            key=str(a.get("key") or f"aspect-{i + 1}"),
+            centrality=_parse_centrality(a.get("centrality")),
+        )
+        for i, a in enumerate(aspects)
+    ]
+
+
+def _select_aspects_for_plan(
+    aspects: list[dict[str, Any]], *, n_page: int
+) -> list[dict[str, Any]]:
+    """Prefer central units; keep enough aspects for coverage without exceeding plan."""
+    cookable = [a for a in aspects if _parse_centrality(a.get("centrality")) != "skip"]
+    centrals = [a for a in cookable if _parse_centrality(a.get("centrality")) == "central"]
+    supports = [a for a in cookable if _parse_centrality(a.get("centrality")) == "support"]
+    ordered = centrals + supports
+    keep = max(n_page, len(centrals))
+    return ordered[:keep] if keep else ordered
+
+
 def _normalize_aspect(item: Any, index: int, page_number: int) -> dict[str, Any] | None:
     if isinstance(item, str) and item.strip():
         key = re.sub(r"[^a-z0-9]+", "-", item.strip().lower())[:48].strip("-") or f"aspect-{index}"
-        return {"key": key, "label": item.strip(), "asked": False, "answered": False}
+        return {
+            "key": key,
+            "label": item.strip(),
+            "centrality": "central",
+            "asked": False,
+            "answered": False,
+        }
     if isinstance(item, dict):
         label = (item.get("label") or item.get("name") or "").strip()
         if not label:
@@ -285,7 +337,13 @@ def _normalize_aspect(item: Any, index: int, page_number: int) -> dict[str, Any]
         key = (item.get("key") or "").strip()
         if not key:
             key = re.sub(r"[^a-z0-9]+", "-", label.lower())[:48].strip("-") or f"aspect-{index}"
-        aspect: dict[str, Any] = {"key": key, "label": label, "asked": False, "answered": False}
+        aspect: dict[str, Any] = {
+            "key": key,
+            "label": label,
+            "centrality": _parse_centrality(item.get("centrality")),
+            "asked": False,
+            "answered": False,
+        }
         angle = (item.get("cognitive_angle") or "").strip()
         if angle:
             aspect["cognitive_angle"] = angle
@@ -315,8 +373,10 @@ def _non_content_result(
     content_type: str = "non_content",
     rationale: str = "",
     programmable: bool = False,
+    mode: Mode = "learn",
 ) -> dict[str, Any]:
     """A deliberate, honest zero-question verdict (distinct from a parse failure)."""
+    plan = plan_page_budget(None, mode=mode, non_content=True, confidence="high")
     return {
         "question_budget": 0,
         "aspects": [],
@@ -325,14 +385,16 @@ def _non_content_result(
         "content_type": content_type or "non_content",
         "programmable": bool(programmable),
         "non_content": True,
+        "budget_confidence": plan.confidence,
+        "budget_mode": plan.mode,
+        "budget_version": plan.budget_version,
+        "n_cov": plan.n_cov,
     }
 
 
-def _fallback_triage(page_text: str, page_number: int) -> dict[str, Any]:
-    # No floor. Idea count tracks substance (~one per 120 words), using
-    # substantial paragraphs as labels — never raw ``\\n\\n`` count. DOCX/PDF
-    # extracts often emit hundreds of tiny blocks; treating each as an idea
-    # planned 400+ MCQs for one page and blocked the learner.
+def _fallback_triage(page_text: str, page_number: int, *, mode: Mode = "learn") -> dict[str, Any]:
+    # Density prior (~one idea / 120 words) with substantial paragraphs as labels —
+    # never raw ``\\n\\n`` count. Planner owns N after units are built.
     _MIN_SUBSTANTIAL_WORDS = 12
     words = len(page_text.split()) if page_text else 0
     paragraphs = [p.strip() for p in page_text.split("\n\n") if p.strip()] if page_text else []
@@ -354,6 +416,7 @@ def _fallback_triage(page_text: str, page_number: int) -> dict[str, Any]:
             {
                 "key": f"page-{page_number}-p{i + 1}",
                 "label": label,
+                "centrality": "central",
                 "asked": False,
                 "answered": False,
             }
@@ -364,6 +427,7 @@ def _fallback_triage(page_text: str, page_number: int) -> dict[str, Any]:
             {
                 "key": f"page-{page_number}-main",
                 "label": "Main ideas on this page",
+                "centrality": "central",
                 "asked": False,
                 "answered": False,
             }
@@ -372,37 +436,68 @@ def _fallback_triage(page_text: str, page_number: int) -> dict[str, Any]:
     # completes (is_page_complete treats 0 generated + not non_content as "not done"
     # and would otherwise strand the learner here with nothing to answer).
     if not aspects:
-        return _non_content_result(rationale="Heuristic triage: no testable text on this page.")
+        return _non_content_result(
+            rationale="Heuristic triage: no testable text on this page.",
+            mode=mode,
+        )
     return _finalize_triage(
         aspects=aspects,
-        budget=len(aspects),
         rationale="Heuristic triage from page length.",
+        mode=mode,
+        words=words,
+        substantial_paragraphs=len(substantial),
+        confidence="medium",
     )
 
 
 def _finalize_triage(
     *,
     aspects: list[dict[str, Any]],
-    budget: int,
     rationale: str,
+    mode: Mode = "learn",
     content_type: str | None = None,
     programmable: bool = False,
+    words: int = 0,
+    substantial_paragraphs: int = 0,
+    confidence: Literal["high", "medium", "low"] | None = None,
 ) -> dict[str, Any]:
+    """Dedup aspects, then let plan_page_budget own N (LLM never sets the count)."""
     deduped, meta = dedupe_aspects(aspects)
-    new_budget = min(budget, len(deduped)) if deduped else 0
-    if new_budget == 0 and deduped:
-        new_budget = len(deduped)
+    for aspect in deduped:
+        aspect.setdefault("centrality", "central")
+    units = _units_from_aspects(deduped)
+    plan = plan_page_budget(
+        units if units else None,
+        mode=mode,
+        non_content=False,
+        words=words,
+        substantial_paragraphs=substantial_paragraphs,
+        confidence=confidence,
+    )
+    if plan.n_page == 0:
+        return _non_content_result(
+            content_type=content_type or "non_content",
+            rationale=(rationale or "Planner: no cookable units on this page.").strip(),
+            programmable=programmable,
+            mode=mode,
+        )
+
+    selected = _select_aspects_for_plan(deduped, n_page=plan.n_page)
     dedup_note = ""
     if meta["raw_count"] != meta["deduped_count"]:
         dedup_note = f" {meta['deduped_count']} unique aspects after dedup ({meta['raw_count']} raw)."
     return {
-        "question_budget": new_budget,
-        "aspects": deduped[:new_budget] if new_budget else deduped,
+        "question_budget": plan.n_page,
+        "aspects": selected,
         "rationale": (rationale + dedup_note).strip(),
         "aspect_dedup": meta,
         "content_type": content_type,
         "programmable": bool(programmable),
         "non_content": False,
+        "budget_confidence": plan.confidence,
+        "budget_mode": plan.mode,
+        "budget_version": plan.budget_version,
+        "n_cov": plan.n_cov,
     }
 
 
@@ -479,9 +574,6 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
                 content_type = (str(parsed.get("content_type") or "").strip().lower() or None)
                 usable = parsed.get("usable")
                 programmable = bool(parsed.get("programmable"))
-                raw_yield = parsed.get("testable_yield")
-                if raw_yield is None:
-                    raw_yield = parsed.get("question_budget")
                 aspects_raw = parsed.get("aspects") or []
                 aspects: list[dict[str, Any]] = []
                 for i, item in enumerate(aspects_raw):
@@ -489,12 +581,17 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
                     if norm:
                         aspects.append(norm)
                 rationale = (parsed.get("rationale") or "").strip()
+                words = len(page_text.split()) if page_text else 0
+                substantial = sum(
+                    1
+                    for p in (page_text.split("\n\n") if page_text else [])
+                    if p.strip() and len(p.split()) >= 12
+                )
 
                 if allow_zero:
-                    # Honest zero: the model judged non-content, unusable, or had
-                    # nothing worth asking. This is a valid high-quality verdict.
-                    budget = int(raw_yield or 0)
-                    if content_type == "non_content" or usable is False or budget <= 0 or not aspects:
+                    # Honest zero: model judged non-content / unusable / no units.
+                    # N itself comes from plan_page_budget — never raw LLM yield.
+                    if content_type == "non_content" or usable is False or not aspects:
                         return _store(
                             _non_content_result(
                                 content_type=content_type or "non_content",
@@ -502,35 +599,31 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
                                 programmable=programmable,
                             )
                         )
-                    budget = max(1, budget)
-                    if budget < len(aspects):
-                        budget = len(aspects)
                     return _store(
                         _finalize_triage(
-                            aspects=aspects[:budget],
-                            budget=budget,
+                            aspects=aspects,
                             rationale=rationale,
                             content_type=content_type,
                             programmable=programmable,
+                            words=words,
+                            substantial_paragraphs=substantial,
+                            confidence="high",
                         )
                     )
 
-                # Legacy path (flag off): no floor / no artificial ceiling — honour
-                # the model's count of distinct testable ideas. The number of
-                # questions tracks the material, not a quota.
-                budget = int(raw_yield) if raw_yield is not None else INITIAL_BATCH_SIZE
-                budget = max(0, budget)
+                # Legacy path (flag off): still formula-owned N; no floor/ceiling
+                # beyond the planner. Empty aspects → heuristic fallback.
                 if not aspects:
                     return _store(_fallback_triage(page_text, page_number))
-                if budget < len(aspects):
-                    budget = len(aspects)
                 return _store(
                     _finalize_triage(
-                        aspects=aspects[:budget],
-                        budget=budget,
+                        aspects=aspects,
                         rationale=rationale,
                         content_type=content_type,
                         programmable=programmable,
+                        words=words,
+                        substantial_paragraphs=substantial,
+                        confidence="high",
                     )
                 )
         except Exception:

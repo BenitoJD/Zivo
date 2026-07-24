@@ -48,10 +48,16 @@ export type McqState = {
   max_per_page?: number;
   question_number?: number;
   question_budget?: number;
-  /** Alias of question_budget — triage/heuristic plan for the page. */
+  /** Alias of question_budget — page cook plan N_page. */
   plan_budget?: number;
   /** Same as plan_budget (FE compat; was generate-ahead pace). */
   generation_cap?: number;
+  /** Soft UX session cap (serve pacing only; does not shrink cook plan). */
+  session_soft?: number;
+  /** Sum of page plans across selected cookable pages. */
+  document_budget?: number;
+  budget_confidence?: "high" | "medium" | "low" | string | null;
+  budget_version?: string | null;
   questions_answered?: number;
   questions_generated?: number;
   coverage_complete?: boolean;
