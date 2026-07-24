@@ -75,6 +75,7 @@ _LONGFORM_GENERATION_LOG_TAGS = frozenset(
         "flashcards_generate",
         "memory_palace_generate",
         "quiz_generate",
+        "seo_write",
     }
 )
 

@@ -205,3 +205,22 @@ def coach_mcq_page(payload: dict) -> dict:
     with SessionLocal() as db:
         coached = coach_page_assertions(db, document_id=document_id, page_number=page_number)
     return {"document_id": str(document_id), "page_number": page_number, "coached": coached}
+
+
+@eta(name="seo.cook_batch", workload=JobWorkload.io)
+def seo_cook_batch(payload: dict) -> dict:
+    """Cook available SEO candidates under soft max (LLM rewrite + MCQs)."""
+    from app.services.seo_cook import cook_batch
+
+    limit = int(payload.get("limit") or 3)
+    with SessionLocal() as db:
+        return cook_batch(db, limit=limit)
+
+
+@eta(name="seo.ensure_sd_daily", workload=JobWorkload.io)
+def seo_ensure_sd_daily(payload: dict) -> dict:
+    """Ensure ≥1 system_design post published today (IST)."""
+    from app.services.seo_cook import ensure_sd_daily
+
+    with SessionLocal() as db:
+        return ensure_sd_daily(db)

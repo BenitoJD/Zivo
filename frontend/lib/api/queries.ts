@@ -48,6 +48,8 @@ export const queryKeys = {
   newspaperQuestions: (id: string) => ["newspaper", "questions", id] as const,
   newspaperChannel: () => ["newspaper", "channel"] as const,
   newspaperBrands: () => ["newspaper", "brands"] as const,
+  seoLearnSettings: () => ["seo-learn", "settings"] as const,
+  seoLearnAdminPosts: () => ["seo-learn", "admin-posts"] as const,
 };
 
 export type StudyReport = {
@@ -864,6 +866,42 @@ export function useNewspaperBrandsQuery(enabled = true) {
   return useQuery({
     queryKey: queryKeys.newspaperBrands(),
     queryFn: () => apiGet<NewspaperBrands>("/api/newspaper/admin/brands"),
+    enabled,
+    retry: false,
+  });
+}
+
+export type SeoLearnSettings = {
+  cook_enabled: boolean;
+  soft_max_per_day: number;
+  updated_at: string | null;
+};
+
+export type SeoLearnAdminPost = {
+  id: string;
+  slug: string;
+  title: string;
+  stream: string;
+  status: string;
+  author_name: string;
+  source_kind: string;
+  published_at: string | null;
+  created_at: string | null;
+};
+
+export function useSeoLearnSettingsQuery(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.seoLearnSettings(),
+    queryFn: () => apiGet<SeoLearnSettings>("/api/learn/admin/settings"),
+    enabled,
+    retry: false,
+  });
+}
+
+export function useSeoLearnAdminPostsQuery(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.seoLearnAdminPosts(),
+    queryFn: () => apiGet<{ items: SeoLearnAdminPost[] }>("/api/learn/admin/posts"),
     enabled,
     retry: false,
   });

@@ -160,3 +160,8 @@ CREATE INDEX IF NOT EXISTS ix_sd_session_account_active
 CREATE INDEX IF NOT EXISTS ix_sd_session_guest_active
   ON qb.sd_session (guest_id, status, updated_at DESC)
   WHERE guest_id IS NOT NULL;
+
+-- -----------------------------------------------------------------------------
+-- SEO /learn (see qb_infra.sql + Alembic 032_seo_learn_content for full DDL)
+-- Posts FK qb.documents; authored mirror lives with infra newspaper tables.
+-- -----------------------------------------------------------------------------

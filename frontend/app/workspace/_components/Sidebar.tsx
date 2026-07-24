@@ -371,6 +371,7 @@ export type SidebarProps = {
   onOpenModels: () => void;
   onOpenNewspaper?: () => void;
   onOpenNewspaperPractice?: () => void;
+  onOpenLearnAdmin?: () => void;
   onOpenProgress: () => void;
   onOpenCodingBank?: () => void;
   onDeleteSource: (doc: SourceDocument) => void;
@@ -394,6 +395,7 @@ export function Sidebar({
   onOpenModels,
   onOpenNewspaper,
   onOpenNewspaperPractice,
+  onOpenLearnAdmin,
   onOpenProgress,
   onOpenCodingBank,
   onDeleteSource,
@@ -771,6 +773,17 @@ export function Sidebar({
                 leftSection={<IconNews size={18} stroke={1.5} />}
                 active={pathname === "/workspace/newspaper"}
                 onClick={onOpenNewspaper}
+                mb="sm"
+                styles={{ root: { borderRadius: "var(--mantine-radius-md)" } }}
+              />
+            )}
+            {isAdmin && onOpenLearnAdmin && (
+              <NavLink
+                label="Learn content"
+                description="Cook kill-switch + unpublish"
+                leftSection={<IconBook2 size={18} stroke={1.5} />}
+                active={pathname === "/workspace/learn"}
+                onClick={onOpenLearnAdmin}
                 mb="sm"
                 styles={{ root: { borderRadius: "var(--mantine-radius-md)" } }}
               />
