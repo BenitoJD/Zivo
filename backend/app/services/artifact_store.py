@@ -122,11 +122,12 @@ class ArtifactStore:
     ) -> None:
         """Upsert a status-only row (status + error + extra_cols), payload untouched."""
         extra_keys = list(self.extra_cols.keys())
-        cols = list(self.key_cols[1:]) + extra_keys + ["status", "error", "updated_at"]
+        # document_id is always first key col; param name is :id (see _key_params).
+        cols = list(self.key_cols) + extra_keys + ["status", "error", "updated_at"]
         col_list = ", ".join(cols)
         placeholders = []
-        for c in self.key_cols[1:]:
-            placeholders.append(f":{c}")
+        for c in self.key_cols:
+            placeholders.append(f":{c if c != self._KEY_DOC_ID else 'id'}")
         for c in extra_keys:
             placeholders.append(f":{self.extra_cols[c]}")
         placeholders += [":status", ":error", "now()"]
@@ -157,7 +158,8 @@ class ArtifactStore:
             raise ValueError("save() requires a payload_col")
 
         extra_keys = list(self.extra_cols.keys())
-        cols = list(self.key_cols[1:]) + extra_keys + [self.payload_col, "status", "error", "updated_at"]
+        # document_id is always first key col; param name is :id (see _key_params).
+        cols = list(self.key_cols) + extra_keys + [self.payload_col, "status", "error", "updated_at"]
         col_list = ", ".join(cols)
 
         payload_param = "payload"
@@ -169,8 +171,8 @@ class ArtifactStore:
             payload_value = payload
 
         placeholders = []
-        for c in self.key_cols[1:]:
-            placeholders.append(f":{c}")
+        for c in self.key_cols:
+            placeholders.append(f":{c if c != self._KEY_DOC_ID else 'id'}")
         for c in extra_keys:
             placeholders.append(f":{self.extra_cols[c]}")
         placeholders += [payload_sql, "'ready'", "NULL", "now()"]

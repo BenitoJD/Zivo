@@ -290,7 +290,13 @@ def _persist(
         return None
 
     assertion_id = uuid.uuid4()
-    title = str(problem.get("title") or problem.get("concept") or "Coding problem")[:200]
+    title = str(problem.get("title") or "").strip()
+    if len(title) < 3:
+        title = str(problem.get("concept") or "").strip()
+    if len(title) < 3:
+        # Reject single-letter / empty LLM titles rather than pollute the bank.
+        return None
+    title = title[:200]
     difficulty = (str(problem.get("difficulty") or "medium").strip().lower() or "medium")
     language_id = int(problem.get("language_id") or DEFAULT_LANGUAGE_ID)
     statement = str(problem.get("statement") or "")

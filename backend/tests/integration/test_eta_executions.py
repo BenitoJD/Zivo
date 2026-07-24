@@ -104,8 +104,14 @@ def test_dag_creates_dependency_edges(db) -> None:
     execution = submit_dag(db, spec=spec)
     jobs = list_execution_jobs(db, execution.id)
     assert len(jobs) == 2
-    deps = db.query(EtaJobDependency).all()
+    job_ids = {j.id for j in jobs}
+    deps = (
+        db.query(EtaJobDependency)
+        .filter(EtaJobDependency.job_id.in_(job_ids))
+        .all()
+    )
     assert len(deps) == 1
+    assert deps[0].depends_on_job_id in job_ids
 
 
 def test_parent_job_ids_propagated_to_payload(db) -> None:
