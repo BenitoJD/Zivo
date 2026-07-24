@@ -69,6 +69,39 @@ def set_channel(db: Session, *, channel_ref: str, channel_label: str = "") -> di
     return get_settings(db)
 
 
+def update_channel_ref_keep_cursor(
+    db: Session, *, channel_ref: str, channel_label: str | None = None
+) -> dict[str, Any]:
+    """Persist a discovered peer id without wiping sync_cursor (unlike set_channel)."""
+    ref = channel_ref.strip()
+    if not ref:
+        return get_settings(db)
+    if channel_label is None:
+        db.execute(
+            text(
+                """
+                UPDATE qb.newspaper_settings
+                SET channel_ref = :ref, updated_at = now()
+                WHERE id = 1
+                """
+            ),
+            {"ref": ref},
+        )
+    else:
+        db.execute(
+            text(
+                """
+                UPDATE qb.newspaper_settings
+                SET channel_ref = :ref, channel_label = :label, updated_at = now()
+                WHERE id = 1
+                """
+            ),
+            {"ref": ref, "label": channel_label.strip()},
+        )
+    db.commit()
+    return get_settings(db)
+
+
 def set_sync_cursor(db: Session, cursor: int | None) -> None:
     db.execute(
         text("UPDATE qb.newspaper_settings SET sync_cursor = :c, updated_at = now() WHERE id = 1"),

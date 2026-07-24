@@ -133,6 +133,10 @@ async def _reconcile(client, entity, db, *, limit: int = 80) -> None:
         newspaper_repo.set_sync_cursor(db, max_id)
 
 
+# Private-channel title substring used when channel_label exact match misses.
+_FALLBACK_TITLE_SUBSTR = "MyBookZon ENGLISH"
+
+
 def _entity_ref(raw: str):
     """Telethon wants int peer ids; string \"-100…\" fails with Cannot find entity."""
     ref = (raw or "").strip()
@@ -143,10 +147,52 @@ def _entity_ref(raw: str):
     return ref
 
 
+def _dialog_id_matches(dialog_id: int, entity_id: int | None, target) -> bool:
+    """Match marked peer id (-100…) or bare Channel.id against configured ref."""
+    if not isinstance(target, int):
+        return False
+    if dialog_id == target:
+        return True
+    if entity_id is not None and int(entity_id) == target:
+        return True
+    # Bare channel id vs marked -100XXXXXXXXX peer id.
+    if target < 0 and str(target).startswith("-100"):
+        try:
+            bare = int(str(target)[4:])
+        except ValueError:
+            return False
+        return entity_id is not None and int(entity_id) == bare
+    if target > 0 and dialog_id < 0 and str(dialog_id).startswith("-100"):
+        try:
+            return int(str(dialog_id)[4:]) == target
+        except ValueError:
+            return False
+    return False
+
+
+def _dialog_title_matches(dialog_name: str, *, label: str, ref: str) -> str | None:
+    """Return match reason if dialog title matches label / ref / MyBookZon fallback."""
+    name = (dialog_name or "").strip()
+    if not name:
+        return None
+    if label and name == label.strip():
+        return "title_exact_label"
+    if ref and name == ref.strip():
+        return "title_exact_ref"
+    lower = name.lower()
+    if _FALLBACK_TITLE_SUBSTR.lower() in lower:
+        return "title_contains_mybookzon_english"
+    if label and "mybookzon" in label.lower() and "mybookzon english" in lower:
+        return "title_contains_label_hint"
+    return None
+
+
 async def run() -> None:
     try:
         from telethon import TelegramClient, events
         from telethon.sessions import StringSession
+        from telethon.tl.types import Channel, InputPeerChannel
+        from telethon.utils import get_peer_id
     except ImportError as exc:
         raise SystemExit(
             "telethon is required for newspaper ingest — pip install telethon"
@@ -170,6 +216,9 @@ async def run() -> None:
     await client.start()
     logger.info("telegram client started")
 
+    # Cache resolved entity — avoid re-iterating dialogs (flood) on every event.
+    _cache: dict = {"entity": None, "ref": None, "label": None}
+
     def _channel_settings() -> tuple[str, str]:
         with SessionLocal() as db:
             from app.repositories import newspaper as newspaper_repo
@@ -180,25 +229,103 @@ async def run() -> None:
                 (s.get("channel_label") or "").strip(),
             )
 
+    def _maybe_persist_peer_id(ref: str, label: str, entity) -> None:
+        """If dialogs revealed a stable marked peer id, store it without wiping cursor."""
+        try:
+            peer_id = str(get_peer_id(entity))
+        except Exception:
+            return
+        if not peer_id or peer_id == ref:
+            return
+        # Only rewrite when current ref missing/non-numeric or differs from discovered id.
+        if ref and _entity_ref(ref) == _entity_ref(peer_id):
+            return
+        with SessionLocal() as db:
+            from app.repositories import newspaper as newspaper_repo
+
+            newspaper_repo.update_channel_ref_keep_cursor(
+                db,
+                channel_ref=peer_id,
+                channel_label=label or None,
+            )
+        logger.info(
+            "updated newspaper channel_ref %r → %r (keep sync_cursor)",
+            ref,
+            peer_id,
+        )
+        _cache["ref"] = peer_id
+
+    async def _entity_from_dialog(dialog, *, path: str):
+        entity = dialog.entity
+        title = (dialog.name or "").strip()
+        # Prefer InputPeerChannel(access_hash) so Telethon can address private channels.
+        if isinstance(entity, Channel) and getattr(entity, "access_hash", None) is not None:
+            peer = InputPeerChannel(
+                channel_id=int(entity.id),
+                access_hash=int(entity.access_hash),
+            )
+            resolved = await client.get_entity(peer)
+            logger.info(
+                "resolved newspaper channel via %s (InputPeerChannel) id=%s title=%r",
+                path,
+                get_peer_id(resolved),
+                title,
+            )
+            return resolved
+        logger.info(
+            "resolved newspaper channel via %s (dialog.entity) id=%s title=%r",
+            path,
+            getattr(entity, "id", None),
+            title,
+        )
+        return entity
+
     async def resolve_entity():
         ref, label = _channel_settings()
         if not ref and not label:
             logger.warning("newspaper channel_ref empty — set via admin /api/newspaper/admin/channel")
             return None
+        if (
+            _cache["entity"] is not None
+            and _cache["ref"] == ref
+            and _cache["label"] == label
+        ):
+            return _cache["entity"]
+
         target = _entity_ref(ref) if ref else ""
         if target != "":
             try:
-                return await client.get_entity(target)
-            except (ValueError, TypeError):
-                pass
+                entity = await client.get_entity(target)
+                logger.info(
+                    "resolved newspaper channel via get_entity ref=%r id=%s",
+                    ref,
+                    getattr(entity, "id", None),
+                )
+                _cache.update({"entity": entity, "ref": ref, "label": label})
+                return entity
+            except Exception as exc:
+                logger.warning(
+                    "get_entity(%r) failed (%s: %s) — falling back to dialogs",
+                    target,
+                    type(exc).__name__,
+                    exc,
+                )
+
         # Warm entity cache from dialogs (needed after fresh StringSession on a new host).
         async for d in client.iter_dialogs(limit=400):
-            if isinstance(target, int) and d.id == target:
-                return d.entity
-            if label and (d.name or "").strip() == label:
-                return d.entity
-            if ref and (d.name or "").strip() == ref:
-                return d.entity
+            ent_id = getattr(d.entity, "id", None)
+            if _dialog_id_matches(int(d.id), int(ent_id) if ent_id is not None else None, target):
+                entity = await _entity_from_dialog(d, path="dialogs_id")
+                _cache.update({"entity": entity, "ref": ref, "label": label})
+                _maybe_persist_peer_id(ref, label, entity)
+                return entity
+            title_path = _dialog_title_matches(d.name or "", label=label, ref=ref)
+            if title_path:
+                entity = await _entity_from_dialog(d, path=f"dialogs_{title_path}")
+                _cache.update({"entity": entity, "ref": ref, "label": label})
+                _maybe_persist_peer_id(ref, label, entity)
+                return entity
+
         raise ValueError(f"Cannot resolve newspaper channel ref={ref!r} label={label!r}")
 
     # Live handler — filter in-process against current channel id.
