@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from app.services.calibration_engine import (  # noqa: F401
     ABILITY_PROJECTION_URI,
+    BIRTH_PRIOR_POLICY,
     CALIBRATION_VERSION,
     DEFAULT_CALIBRATION_POLICY,
     DEFAULT_RATING,
@@ -15,9 +16,13 @@ from app.services.calibration_engine import (  # noqa: F401
     ELO_SCALE,
     K_ITEM,
     K_LEARNER,
+    PRIOR_CLAMP,
+    BirthDifficultyVerdict,
     CalibrationVerdict,
     EloUpdate,
+    birth_difficulty_prior,
     dynamic_k,
+    estimate_birth_difficulty,
     elo_update,
     expected_correct,
     fisher_info_1pl,
@@ -31,6 +36,7 @@ from app.services.calibration_engine import (  # noqa: F401
 
 __all__ = [
     "ABILITY_PROJECTION_URI",
+    "BIRTH_PRIOR_POLICY",
     "CALIBRATION_VERSION",
     "DEFAULT_CALIBRATION_POLICY",
     "DEFAULT_RATING",
@@ -38,9 +44,13 @@ __all__ = [
     "ELO_SCALE",
     "K_ITEM",
     "K_LEARNER",
+    "PRIOR_CLAMP",
+    "BirthDifficultyVerdict",
     "CalibrationVerdict",
     "EloUpdate",
+    "birth_difficulty_prior",
     "dynamic_k",
+    "estimate_birth_difficulty",
     "elo_update",
     "expected_correct",
     "fisher_info_1pl",

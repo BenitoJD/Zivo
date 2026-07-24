@@ -29,7 +29,7 @@ def test_learn_mode_uses_current_page_not_rag_window() -> None:
     with (
         patch("app.services.chat_retrieval.fetch_chunks_for_page_range", return_value=page_chunks) as fetch,
         patch("app.services.chat_retrieval.embed_query") as embed,
-        patch("app.services.chat_retrieval.rerank_chunks") as rerank,
+        patch("app.services.rerank.rerank_chunks") as rerank,
     ):
         out = retrieve_document_chunks(
             db,
@@ -41,4 +41,5 @@ def test_learn_mode_uses_current_page_not_rag_window() -> None:
     assert out == page_chunks
     fetch.assert_called_once_with(db, document_ids=[doc_id], page_start=5, page_end=5)
     embed.assert_not_called()
+    # Rank seam lives in tutor_retrieval; learn fast-path must not call cross-encoder.
     rerank.assert_not_called()

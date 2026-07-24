@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.repositories.intel import update_activity
 from app.services.llm_router import acomplete_chat
 from app.services.llm_sync import run_coro_in_worker
+from app.services.aspect_discovery import parse_centrality, pick_for_plan
 from app.services.mcq_dedup import dedupe_aspects
 from app.services.prompts import get_prompt
 from app.services.question_budget import (
@@ -310,10 +311,7 @@ def _persist_triage_coverage(
 
 
 def _parse_centrality(raw: Any) -> Centrality:
-    value = str(raw or "central").strip().lower()
-    if value in ("central", "support", "skip"):
-        return value  # type: ignore[return-value]
-    return "central"
+    return parse_centrality(raw)
 
 
 def _units_from_aspects(aspects: list[dict[str, Any]]) -> list[Unit]:
@@ -329,13 +327,8 @@ def _units_from_aspects(aspects: list[dict[str, Any]]) -> list[Unit]:
 def _select_aspects_for_plan(
     aspects: list[dict[str, Any]], *, n_page: int
 ) -> list[dict[str, Any]]:
-    """Prefer central units; keep enough aspects for coverage without exceeding plan."""
-    cookable = [a for a in aspects if _parse_centrality(a.get("centrality")) != "skip"]
-    centrals = [a for a in cookable if _parse_centrality(a.get("centrality")) == "central"]
-    supports = [a for a in cookable if _parse_centrality(a.get("centrality")) == "support"]
-    ordered = centrals + supports
-    keep = max(n_page, len(centrals))
-    return ordered[:keep] if keep else ordered
+    """Prefer central units - Aspect Discovery Engine owns the pick."""
+    return list(pick_for_plan(aspects, n_page=n_page).aspects)
 
 
 def _normalize_aspect(item: Any, index: int, page_number: int) -> dict[str, Any] | None:

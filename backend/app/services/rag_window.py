@@ -12,8 +12,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.models import Document
 from app.services.chunks import indexed_pages_for_document
 from app.services.question_pool import get_progress, selected_page_list
-
-MAX_RAG_PAGES = 6
+from app.services.tutor_retrieval import MAX_RAG_PAGES, plan_rag_window
 
 _INGESTED_PAGES_KEY = "ingested_pages"
 
@@ -62,24 +61,13 @@ def chat_rag_window(
     *,
     max_pages: int = MAX_RAG_PAGES,
 ) -> list[int]:
-    """Pages to index for chat RAG around the learner's current page."""
-    if not study_pages:
-        return [max(1, int(current_page))]
+    """Pages to index for chat RAG around the learner's current page.
 
-    study = sorted({int(p) for p in study_pages if int(p) >= 1})
-    current = max(1, int(current_page))
-    if current not in study:
-        future = [p for p in study if p >= current]
-        current = future[0] if future else study[-1]
-
-    look_ahead = 1 if current < 3 else 2
-    window_end = current + look_ahead
-    candidates = [p for p in study if p <= window_end]
-    if not candidates:
-        return [current]
-    if len(candidates) <= max_pages:
-        return candidates
-    return candidates[-max_pages:]
+    Policy lives in Tutor Retrieval Engine (``plan_rag_window``).
+    """
+    return list(
+        plan_rag_window(current_page, study_pages, max_pages=max_pages).pages
+    )
 
 
 def rag_window_meta(pages: list[int]) -> dict[str, Any]:

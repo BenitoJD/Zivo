@@ -34,7 +34,7 @@ cook:  optional birth difficulty prior (cold-start) → same difficulty scale
 | `ability`, `difficulty` | Current ratings on shared logit scale |
 | `correct` | Binary outcome |
 | `ability_n`, `difficulty_n` | Observation counts (for dynamic K / SE) |
-| Optional prior | Birth difficulty from item features |
+| Optional prior | Birth difficulty from item features (`birth_prior_v1`) |
 
 ### Output
 
@@ -54,6 +54,19 @@ CalibrationVerdict {
 ```
 
 Reads Selection needs:
+
+Birth prior (cook-time, cold-start):
+
+```
+BirthDifficultyVerdict {
+  difficulty: float        # logit, clamped to ±PRIOR_CLAMP
+  policy: "birth_prior_v1"
+  policy_version: "qb.calibration.v1"
+}
+```
+
+Facade: `birth_difficulty_prior(mcq)` / compat `estimate_birth_difficulty(mcq)`.
+Orchestration seeds via `seed_item_difficulty`; outcomes remain authority after first grade.
 
 ```
 get_ability(entity) -> (rating, n, se)

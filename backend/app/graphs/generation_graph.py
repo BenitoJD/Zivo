@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.graphs.page_triage_graph import run_page_triage
 from app.models import Document
 from app.repositories.intel import update_activity
+from app.services.aspect_discovery import next_unasked, speculative_targets
 from app.services.mcq_dedup import prior_mcq_from_payload
 from app.services.mcq_quality import generate_quality_mcq_batch
 from app.services.question_pool import (
@@ -289,52 +290,17 @@ def _prior_mcqs_on_page(
 def _next_aspects(doc: Document, page_number: int, n: int) -> list[dict[str, Any]]:
     """The next up-to-n aspects on this page that have not been asked yet."""
     cov = get_page_coverage(doc, page_number)
-    out: list[dict[str, Any]] = []
-    for aspect in cov.get("aspects") or []:
-        if not aspect.get("asked"):
-            out.append(aspect)
-            if len(out) >= n:
-                break
-    return out
+    return list(next_unasked(cov.get("aspects") or [], n=n).aspects)
 
 
 def _speculative_aspects(page_text: str, page_number: int, n: int) -> list[dict[str, Any]]:
     """Lightweight aspect targets when triage hasn't landed yet.
 
-    Mirrors the heuristic in page_triage_graph._fallback_triage (paragraph-based)
-    so the first batch can start generating immediately instead of blocking on
-    the triage LLM call. Real triage overwrites page_coverage later and refines
-    the plan for subsequent batches — the speculative aspects only seed the
-    first questions. Each target is marked ``speculative=True`` so it's clear
-    in coverage which aspects came from the fast path.
+    Aspect Discovery Engine owns the pick. Real triage overwrites page_coverage
+    later and refines the plan for subsequent batches.
     """
-    if not page_text:
-        return []
-    paragraphs = [p.strip() for p in page_text.split("\n\n") if p.strip()]
-    n = max(1, n)
-    targets: list[dict[str, Any]] = []
-    for i, para in enumerate(paragraphs[:n]):
-        label = para[:120].replace("\n", " ")
-        targets.append(
-            {
-                "key": f"page-{page_number}-spec-{i + 1}",
-                "label": label,
-                "asked": False,
-                "answered": False,
-                "speculative": True,
-            }
-        )
-    if not targets:
-        targets.append(
-            {
-                "key": f"page-{page_number}-spec-main",
-                "label": "Main ideas on this page",
-                "asked": False,
-                "answered": False,
-                "speculative": True,
-            }
-        )
-    return targets
+    return list(speculative_targets(page_text, page_number, n).aspects)
+
 
 
 def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]) -> dict[str, Any]:
@@ -690,10 +656,9 @@ def _seed_birth_difficulty(db: Session, assertion_id: uuid.UUID, payload: dict[s
     if not get_settings().difficulty_prior_enabled:
         return
     try:
-        from app.services.calibration import seed_item_difficulty
-        from app.services.item_difficulty import estimate_birth_difficulty
+        from app.services.calibration import birth_difficulty_prior, seed_item_difficulty
 
-        seed_item_difficulty(db, assertion_id, estimate_birth_difficulty(payload))
+        seed_item_difficulty(db, assertion_id, birth_difficulty_prior(payload).difficulty)
     except Exception:
         # Birth-difficulty prior is an optimization; never block the assertion.
         # Log at debug so a silent, persistent failure is still discoverable.

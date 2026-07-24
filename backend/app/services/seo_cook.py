@@ -14,14 +14,13 @@ from sqlalchemy.orm import Session
 from app.repositories import seo as seo_repo
 from app.services.content_worthiness import evaluate_worthiness
 from app.services.seo_dedupe import (
-    check_dedupe,
     embed_title_lede,
     topic_fingerprint,
     unique_slug,
 )
+from app.services.seo_gate import evaluate_dedupe, evaluate_usefulness
 from app.services.seo_mcq import attach_or_generate_mcqs
 from app.services.seo_pii import scrub_pii
-from app.services.seo_triage import triage_usefulness
 from app.services.seo_writer import write_article
 
 logger = logging.getLogger(__name__)
@@ -166,9 +165,9 @@ def cook_one(db: Session, cand: Candidate) -> dict[str, Any]:
     if seo_repo.attempt_exists(db, cand.source_kind, cand.source_key):
         return {"skipped": True, "reason": "already_attempted"}
 
-    useful, reason = triage_usefulness(cand.text, filename=cand.filename)
-    if not useful:
-        return _skip(db, cand, f"triage:{reason}")
+    usefulness = evaluate_usefulness(cand.text, filename=cand.filename)
+    if not usefulness.useful:
+        return _skip(db, cand, f"triage:{usefulness.reason}")
 
     scrubbed = scrub_pii(cand.text)
     article = write_article(
@@ -192,14 +191,14 @@ def cook_one(db: Session, cand: Candidate) -> dict[str, Any]:
     elif cand.source_kind == "topic_queue":
         fp = f"topic:{cand.source_key}"
 
-    ok, dedupe_reason = check_dedupe(
+    dedupe = evaluate_dedupe(
         db,
         fingerprint=fp,
         title=article["title"],
         lede=article["lede"],
     )
-    if not ok:
-        return _skip(db, cand, f"dedupe:{dedupe_reason}")
+    if not dedupe.ok:
+        return _skip(db, cand, f"dedupe:{dedupe.reason}")
 
     slug = unique_slug(db, article["title"])
     embedding = embed_title_lede(article["title"], article["lede"])

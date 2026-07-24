@@ -33,6 +33,20 @@ def test_update_from_outcome_bumps_n_and_se() -> None:
     assert v.k_learner > K_LEARNER  # cold boost
 
 
+def test_birth_difficulty_prior_is_named_sub_policy() -> None:
+    from app.services.calibration_engine import (
+        BIRTH_PRIOR_POLICY,
+        birth_difficulty_prior,
+    )
+
+    v = birth_difficulty_prior(
+        {"question": "What is X?", "options": ["a", "b", "c", "d"]}
+    )
+    assert v.policy == BIRTH_PRIOR_POLICY
+    assert v.policy_version == CALIBRATION_VERSION
+    assert -2.0 <= v.difficulty <= 2.0
+
+
 def test_se_falls_as_info_grows() -> None:
     assert se_from_info(1.0) < se_from_info(0.25)
 

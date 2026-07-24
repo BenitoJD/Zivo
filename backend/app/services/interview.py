@@ -26,6 +26,13 @@ from sqlalchemy.orm import Session
 from app.models import Document, DocumentChunk
 from app.services.llm_json import extract_json_obj
 from app.services.llm_router import complete_chat
+from app.services.open_response import (
+    INTERVIEW_DIMENSIONS as RUBRIC_DIMENSIONS,
+    build_interview_report,
+    clamp_interview_score as _clamp_score,
+    empty_interview_scores,
+    shape_interview_scores,
+)
 from app.services.token_budget import truncate_to_tokens
 
 # Resumes are short; a small token budget keeps generation fast and cheap.
@@ -98,7 +105,7 @@ CATEGORY_META: dict[str, dict[str, str]] = {
     "other": {"label": "Other", "blurb": "A balanced general interview"},
 }
 
-RUBRIC_DIMENSIONS = ("problem_framing", "depth", "tradeoffs", "communication")
+# RUBRIC_DIMENSIONS from Open Response Measurement Engine.
 
 # Built-in, self-contained stdin→stdout problems used when the LLM can't produce a gradable
 # coding question — so the DSA round is always a real coding round, never a silent downgrade.
@@ -441,16 +448,15 @@ async def _evaluate(db: Session, current: dict, answer: Any) -> dict[str, Any]:
         })
         return turn
 
-    # typed answer → rubric scoring
+    # typed answer -> rubric scoring (Open Response Measurement Engine)
     answer_text = str(answer or "").strip()
     turn["answer"] = answer_text
     if not answer_text:
-        turn.update({"scores": {d: 1 for d in RUBRIC_DIMENSIONS},
-                     "feedback": "No answer was given, so there's nothing to evaluate. "
-                                 "Try to at least outline your approach next time."})
+        empty = empty_interview_scores()
+        turn.update(empty.result)
         return turn
     user = (
-        f"Round: {current.get('round_name','')} — focus: {current.get('focus','')}\n"
+        f"Round: {current.get('round_name','')} - focus: {current.get('focus','')}\n"
         f"Question: {current.get('question','')}\n\n"
         f"Candidate's answer:\n{answer_text}"
     )
@@ -474,7 +480,9 @@ async def _evaluate(db: Session, current: dict, answer: Any) -> dict[str, Any]:
             db, log_tag="interview_eval",
         )
         data = _parse_json_obj(raw)
-        scores = {d: _clamp_score(data.get("scores", {}).get(d)) for d in RUBRIC_DIMENSIONS}
+        scores = shape_interview_scores(
+            data.get("scores") if isinstance(data.get("scores"), dict) else {}
+        ).result["scores"]
         feedback = (data.get("feedback") or "").strip() or "Answer recorded."
         cache_put(db, kind="interview_eval", cache_key=eval_key, value={"scores": scores, "feedback": feedback})
     except Exception:
@@ -484,43 +492,10 @@ async def _evaluate(db: Session, current: dict, answer: Any) -> dict[str, Any]:
     return turn
 
 
-def _clamp_score(v: Any) -> int:
-    try:
-        return max(1, min(4, int(round(float(v)))))
-    except (TypeError, ValueError):
-        return 2
-
-
-# ---------------------------------------------------------------- report
 def build_report(config: list, transcript: list) -> dict[str, Any]:
-    """Per-round + overall score, normalised to a 0-100 scale for display."""
-    rounds_out: list[dict[str, Any]] = []
-    overall_pcts: list[float] = []
-    for rnd in config:
-        turns = [t for t in transcript if t.get("round_name") == rnd["name"]]
-        if not turns:
-            continue
-        if rnd["kind"] == "coding":
-            passed = sum(t.get("passed", 0) for t in turns)
-            total = sum(t.get("total", 0) for t in turns)
-            pct = round(100 * passed / total) if total else 0
-            detail = f"{passed}/{total} tests passed"
-        elif rnd["kind"] == "mcq":
-            correct = sum(1 for t in turns if t.get("correct"))
-            pct = round(100 * correct / len(turns))
-            detail = f"{correct}/{len(turns)} correct"
-        else:
-            # average rubric (1-4) across dimensions & questions → 0-100
-            vals = [s for t in turns for s in (t.get("scores") or {}).values()]
-            avg = sum(vals) / len(vals) if vals else 0
-            pct = round(100 * (avg - 1) / 3) if vals else 0
-            detail = f"avg {avg:.1f}/4 across {len(turns)} question(s)"
-        rounds_out.append({"name": rnd["name"], "kind": rnd["kind"], "score": pct, "detail": detail})
-        overall_pcts.append(pct)
-    overall = round(sum(overall_pcts) / len(overall_pcts)) if overall_pcts else 0
-    strengths = [r["name"] for r in rounds_out if r["score"] >= 67]
-    focus = [r["name"] for r in rounds_out if r["score"] < 50]
-    return {"overall": overall, "rounds": rounds_out, "strengths": strengths, "focus_areas": focus}
+    """Per-round + overall score - Open Response Measurement Engine."""
+    return build_interview_report(config, transcript).result
+
 
 
 # ---------------------------------------------------------------- helpers

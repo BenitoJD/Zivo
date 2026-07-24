@@ -2,12 +2,16 @@
 
 Design: docs/CALIBRATION_ENGINE.md
 Version: qb.calibration.v1
+
+Sub-policy ``birth_prior_v1``: cold-start item difficulty from MCQ features
+(``estimate_birth_difficulty``). Outcomes remain the authority after first grade.
 """
 
 from __future__ import annotations
 
 import json
 import math
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,6 +24,7 @@ from app.repositories.intel import concept_id
 
 CALIBRATION_VERSION = "qb.calibration.v1"
 DEFAULT_CALIBRATION_POLICY = "elo_online_v1"
+BIRTH_PRIOR_POLICY = "birth_prior_v1"
 
 ABILITY_PROJECTION_URI = "/vocab/projection/student.ability"
 DIFFICULTY_PROJECTION_URI = "/vocab/projection/item.difficulty"
@@ -31,6 +36,21 @@ K_ITEM = 0.10
 # Dynamic K: k = k_base * (1 + K_COLD_BOOST / (1 + n))
 K_COLD_BOOST = 2.0
 INFO_EPS = 1e-6
+
+# Keep the birth prior modest: real outcomes should dominate within a handful of answers.
+PRIOR_CLAMP = 2.0
+
+# Higher-order cognition (apply/analyse/explain-why) tends to be harder than recall.
+_HARD_VERBS = re.compile(
+    r"\b(appl(?:y|ies|ied)|predict|compare|contrast|analy[sz]e|evaluate|infer|"
+    r"distinguish|deriv(?:e|es|ed)|justif(?:y|ies)|synthesi[sz]e|interpret|why|how)\b",
+    re.IGNORECASE,
+)
+_EASY_VERBS = re.compile(
+    r"\b(define|identif(?:y|ies)|name|list|recall|state|label|who|when|where|"
+    r"what\s+is|which\s+of)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -53,6 +73,66 @@ class CalibrationVerdict:
     policy: str = DEFAULT_CALIBRATION_POLICY
     policy_version: str = CALIBRATION_VERSION
     info: float = 0.0
+
+
+@dataclass(frozen=True)
+class BirthDifficultyVerdict:
+    """Cold-start item difficulty prior (logit scale). Outcomes override later."""
+
+    difficulty: float
+    policy: str = BIRTH_PRIOR_POLICY
+    policy_version: str = CALIBRATION_VERSION
+    clamp: float = PRIOR_CLAMP
+
+
+def estimate_birth_difficulty(
+    mcq: dict,
+    *,
+    policy: str | None = None,
+) -> float:
+    """Estimate item difficulty (logit) from MCQ features. Compat float wrapper."""
+    return birth_difficulty_prior(mcq, policy=policy).difficulty
+
+
+def birth_difficulty_prior(
+    mcq: dict,
+    *,
+    policy: str | None = None,
+) -> BirthDifficultyVerdict:
+    """Named Calibration sub-policy for cook-time difficulty seeding.
+
+    Combines modest a-priori weights (not tuned to any sample):
+
+      1. cognitive level - higher-order verbs harder than recall;
+      2. guess rate - more options lower the floor (centered at 4);
+      3. distractor plausibility - homogeneous option lengths harder;
+      4. stem complexity - longer / multi-clause stems slightly harder.
+
+    Returns clamped logit in ``[-PRIOR_CLAMP, PRIOR_CLAMP]``, 0 ≈ average item.
+    """
+    pol = (policy or BIRTH_PRIOR_POLICY).strip().lower() or BIRTH_PRIOR_POLICY
+    question = str(mcq.get("question") or mcq.get("stem") or "")
+    options = [str(o) for o in (mcq.get("options") or mcq.get("choices") or []) if str(o).strip()]
+    angle = str(mcq.get("cognitive_angle") or "")
+    haystack = f"{angle}\n{question}"
+
+    score = 0.0
+    if _HARD_VERBS.search(haystack):
+        score += 0.6
+    if _EASY_VERBS.search(haystack):
+        score -= 0.6
+    if options:
+        score += (len(options) - 4) * 0.25
+    if len(options) >= 3:
+        lengths = [len(o) for o in options]
+        mean = sum(lengths) / len(lengths)
+        if mean > 0:
+            spread = (max(lengths) - min(lengths)) / mean
+            score += max(-0.5, min(0.5, 0.6 - spread))
+    words = len(question.split())
+    score += max(-0.3, min(0.5, (words - 18) / 40.0))
+    difficulty = max(-PRIOR_CLAMP, min(PRIOR_CLAMP, score))
+    return BirthDifficultyVerdict(difficulty=difficulty, policy=pol)
 
 
 def expected_correct(

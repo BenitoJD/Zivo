@@ -36,7 +36,7 @@ Decisions (rank, metric, gate, schedule, next-step) live behind named engine fac
 | **Question evaluation** | Ready (engine) | `docs/QUALITY_EVALUATION_ENGINE.md` + `quality_evaluation.py` |
 | **Adaptive selection** | Ready (engine) | `docs/ADAPTIVE_SELECTION_ENGINE.md` + `adaptive_selection.py` |
 | **Calibration** | Ready (engine) | `docs/CALIBRATION_ENGINE.md` + `calibration_engine.py` |
-| **Engines index** | Ready | [docs/ENGINES.md](docs/ENGINES.md) - 14 Year-1+ engines (holy grail) |
+| **Engines index** | Ready | [docs/ENGINES.md](docs/ENGINES.md) - 18 Year-1+ engines (holy grail) |
 | **Answer intelligence** | Ready (engine) | Measurements + Elo + mastery stop + spaced revisit on grade |
 | **Question graph** | Ready (engine) | `docs/QUESTION_GRAPH_ENGINE.md` + lineage at cook |
 

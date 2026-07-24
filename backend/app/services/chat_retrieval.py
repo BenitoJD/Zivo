@@ -9,8 +9,12 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.services.embed import embed_query
-from app.services.rerank import rerank_chunks
 from app.services.retrieval import fetch_chunks_for_page_range, merge_chunks, search_chunks
+from app.services.tutor_retrieval import (
+    DEFAULT_FETCH_LIMIT,
+    DEFAULT_TOP_N,
+    finish_ranked_chunks,
+)
 
 _PAGE_REF_RE = re.compile(
     r"\b(?:on|at)\s+page\s+(\d+)(?:\s*[-–]\s*(\d+))?\b"
@@ -20,14 +24,9 @@ _PAGE_REF_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Over-fetch then rerank down. Raw cosine top-k is noisy; retrieving 20 and
-# keeping the top N after cross-encoder rerank both cuts context tokens and
-# improves relevance. MCQ grading already slices [:4] so it benefits for free.
-_FETCH_LIMIT = 20
-# Keep more context for the tutor — 4 was thin for broad / cross-section questions
-# across disciplines; 6 stays well within the 16k-token chat budget. (Over-fetch is
-# 20, reranked down when chat rerank is on.)
-_TOP_N = 6
+# Over-fetch then rank down via Tutor Retrieval Engine.
+_FETCH_LIMIT = DEFAULT_FETCH_LIMIT
+_TOP_N = DEFAULT_TOP_N
 
 
 def _chat_rerank_enabled() -> bool:
@@ -36,11 +35,13 @@ def _chat_rerank_enabled() -> bool:
 
 
 def _finish_chunks(query: str, chunks: list[dict], *, top_n: int = _TOP_N) -> list[dict]:
-    if len(chunks) <= top_n:
-        return chunks
-    if _chat_rerank_enabled():
-        return rerank_chunks(query, chunks, top_n=top_n)
-    return chunks[:top_n]
+    verdict = finish_ranked_chunks(
+        query,
+        chunks,
+        top_n=top_n,
+        rerank_enabled=_chat_rerank_enabled(),
+    )
+    return list(verdict.chunks)
 
 
 def _extract_page_range(query: str) -> tuple[int | None, int | None]:

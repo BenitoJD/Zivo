@@ -27,34 +27,22 @@ from app.services.chunks import load_document_chunk_texts
 from app.services.llm_json import extract_json_obj
 from app.services.llm_registry import vision_chat_model_id
 from app.services.llm_router import complete_chat
+from app.services.open_response import (
+    DEFAULT_MAINS_STRICTNESS,
+    MAINS_AXES as AXES,
+    MAINS_AXIS_ANCHORS as _AXIS_ANCHORS,
+    MAINS_AXIS_MAX as AXIS_MAX,
+    MAINS_STRICTNESS as STRICTNESS,
+    clamp_int as _clamp_int,
+    shape_mains_result,
+    unreadable_mains_result,
+)
 from app.services.token_budget import SUMMARIZE_SINGLE_SHOT_MAX_TOKENS, truncate_to_tokens
 from app.services.vision import build_user_message, is_image_document
 
 logger = logging.getLogger(__name__)
 
-STRICTNESS = ("exam", "coaching", "gentle")
-DEFAULT_STRICTNESS = "coaching"
-
-# Fixed diagnostic axes (0..AXIS_MAX dot-meters). The overall `marks` is separate
-# and out of the question's `marks_max` — axes describe the answer, they don't sum.
-AXES: tuple[tuple[str, str], ...] = (
-    ("directive", "Directive"),
-    ("structure", "Structure"),
-    ("coverage", "Coverage"),
-    ("substantiation", "Substantiation"),
-    ("presentation", "Presentation"),
-)
-AXIS_MAX = 5
-
-# Behavioral anchors per axis — the grader scores against observable descriptors, not a
-# vague 0-5 Likert (anchored analytic rubrics beat holistic scoring on reliability).
-_AXIS_ANCHORS = {
-    "directive": "Did the answer DO what the directive demanded (e.g. 'critically examine' needs a weighed judgement, not mere description)? 0 = ignores it, 2-3 = partly, 5 = fully meets the demand.",
-    "structure": "Intro that frames (not restates the question), a logically ordered body, and a conclusion that adds a verdict/way-forward. 0 = formless, 5 = builds a clear argument.",
-    "coverage": "How much of the question's FULL demand and its relevant dimensions are addressed. 0 = one-track/off-topic, 5 = every part + multiple relevant dimensions.",
-    "substantiation": "Are claims backed with examples, data, reports, articles, or cases (not bare assertion)? 0 = unsupported, 5 = well-evidenced throughout.",
-    "presentation": "Legibility, headings, crisp expression, near the word limit. Score expression only; do NOT heavily penalise a content-strong answer here.",
-}
+DEFAULT_STRICTNESS = DEFAULT_MAINS_STRICTNESS
 
 _STRICTNESS_GUIDE = {
     "exam": (
@@ -489,121 +477,24 @@ async def _grade(
     # caller reverts to awaiting_answer so the user can resubmit).
     if "marks" not in parsed:
         raise ValueError("unparseable grade output")
-    shaped = _shape_result(parsed, scheme, strictness)
+    shaped = shape_mains_result(parsed, scheme, strictness).result
     cache_put(db, kind="mains_grade", cache_key=grade_key, value=shaped)
     return shaped
 
 
 # ---------------------------------------------------------------------------
-# shaping / clamping
+# shaping / clamping - Open Response Measurement Engine
 # ---------------------------------------------------------------------------
 
 def _shape_result(data: dict[str, Any], scheme: dict, strictness: str = DEFAULT_STRICTNESS) -> dict[str, Any]:
-    marks_max = int(scheme.get("marks_max") or 10)
-    marks = _clamp_int(data.get("marks"), 0, marks_max)
-    axis_scores = data.get("axes") if isinstance(data.get("axes"), dict) else {}
-    axis_notes = data.get("axis_notes") if isinstance(data.get("axis_notes"), dict) else {}
-    axes = [
-        {
-            "key": key,
-            "label": label,
-            "score": _clamp_int(axis_scores.get(key), 0, AXIS_MAX),
-            "max": AXIS_MAX,
-            "comment": str(axis_notes.get(key, "") or "").strip(),
-        }
-        for key, label in AXES
-    ]
-    # Match scheme hits by the 1-based index the grader returns (see _grade prompt).
-    # Exact-text matching failed whenever the model paraphrased a point → all "missed".
-    hits_by_index = {
-        int(h["index"]): bool(h.get("hit"))
-        for h in (data.get("scheme_hits") or [])
-        if isinstance(h, dict) and isinstance(h.get("index"), (int, float))
-    }
-    points = [p for p in (scheme.get("model_points") or []) if str(p.get("point", "")).strip()]
-    scheme_hits = [
-        {
-            "point": str(p.get("point", "")).strip(),
-            "marks": int(p.get("marks") or 0),
-            "hit": hits_by_index.get(i + 1, False),
-        }
-        for i, p in enumerate(points)
-    ]
-    return {
-        "marks": marks,
-        "marks_max": marks_max,
-        "band": _band(marks, marks_max, strictness),
-        "axes": axes,
-        "scheme_hits": scheme_hits,
-        "keep_doing": _str_list(data.get("keep_doing"))[:3],
-        "improve": _str_list(data.get("improve"))[:3],
-        "examiner_note": str(data.get("examiner_note", "") or "").strip(),
-        "highlights": _shape_highlights(data.get("highlights")),
-    }
+    return shape_mains_result(data, scheme, strictness).result
 
 
 def _unreadable_result(scheme: dict) -> dict[str, Any]:
-    marks_max = int(scheme.get("marks_max") or 10)
-    return {
-        "marks": 0,
-        "marks_max": marks_max,
-        "band": "Needs work",
-        "axes": [{"key": k, "label": l, "score": 0, "max": AXIS_MAX, "comment": ""} for k, l in AXES],
-        "scheme_hits": [
-            {"point": str(p.get("point", "")).strip(), "marks": int(p.get("marks") or 0), "hit": False}
-            for p in (scheme.get("model_points") or [])
-            if str(p.get("point", "")).strip()
-        ],
-        "keep_doing": [],
-        "improve": ["Make sure the answer is legible and in focus, or type it out, then resubmit."],
-        "examiner_note": "We couldn't read any answer to grade.",
-        "highlights": [],
-    }
+    return unreadable_mains_result(scheme).result
 
 
 def _band(marks: int, marks_max: int, strictness: str = DEFAULT_STRICTNESS) -> str:
-    pct = (marks / marks_max * 100) if marks_max else 0
-    # Strictness-calibrated cutoffs: an "exam" 70% and a "gentle" 70% shouldn't wear the
-    # same label. Exam sets a hard bar (top band rare, mirroring real exam marking).
-    hi, mid, lo = {
-        "exam": (75, 60, 42),
-        "coaching": (70, 55, 40),
-        "gentle": (62, 48, 33),
-    }.get(strictness, (70, 55, 40))
-    if pct >= hi:
-        return "Excellent"
-    if pct >= mid:
-        return "Good"
-    if pct >= lo:
-        return "Average"
-    return "Needs work"
+    from app.services.open_response import mains_band
 
-
-def _clamp_int(value: Any, lo: int, hi: int) -> int:
-    try:
-        return max(lo, min(hi, int(round(float(value)))))
-    except (TypeError, ValueError):
-        return lo
-
-
-def _str_list(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(v).strip() for v in value if str(v or "").strip()]
-
-
-def _shape_highlights(value: Any) -> list[dict[str, str]]:
-    if not isinstance(value, list):
-        return []
-    out: list[dict[str, str]] = []
-    for h in value[:4]:
-        if not isinstance(h, dict):
-            continue
-        quote = str(h.get("quote", "") or "").strip()
-        if not quote:
-            continue
-        kind = str(h.get("kind", "") or "").strip().lower()
-        if kind not in ("strong", "weak", "error"):
-            kind = "weak"
-        out.append({"quote": quote, "kind": kind, "comment": str(h.get("comment", "") or "").strip()})
-    return out
+    return mains_band(marks, marks_max, strictness)
