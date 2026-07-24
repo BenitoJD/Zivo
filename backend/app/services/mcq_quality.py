@@ -67,12 +67,19 @@ def _content_style_line(content_type: str | None) -> str:
     Returns '' unless content-aware generation is enabled, so the universal MCQ
     rubric is unchanged by default. When on, it shifts the *kind* of thinking and
     the truth model (e.g. interpretation for narrative) without touching the gate.
+
+    Exception: newspaper_upsc always applies — newspaper editions must frame
+    stems like UPSC / Group-1 Prelims regardless of the content_aware flag.
     """
     from app.config import get_settings
+    from app.services.prompts import content_type_style
 
+    ct = (content_type or "").strip().lower()
+    if ct == "newspaper_upsc":
+        style = content_type_style(ct)
+        return f"\nMATERIAL TYPE — {style}\n" if style else ""
     if not get_settings().content_aware_generation:
         return ""
-    from app.services.prompts import content_type_style
 
     style = content_type_style(content_type)
     return f"\nMATERIAL TYPE — {style}\n" if style else ""

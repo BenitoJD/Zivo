@@ -483,6 +483,17 @@ _CONTENT_TYPE_STYLE: dict[str, str] = {
     "argumentative": "This is argumentative/opinion material. Test the structure of the argument — claims, reasons, assumptions, implications. The answer is true relative to the argument as made; name the position or author in the stem rather than referencing \"the text\".",
     "procedural": "This is procedural/how-to material. Test application and ordering — what to do, why a step matters, what happens if it is skipped.",
     "reference_data": "This is reference/data material. Test reading and reasoning over the values or relationships, not rote memorization of a single cell.",
+    "newspaper_upsc": (
+        "Source is Indian newspaper current affairs for UPSC CSE Prelims GS and "
+        "State PSC Group-1 / central Group-A style practice. Prefer statement-based "
+        "stems (\"Consider the following statements:\" + numbered claims + "
+        "\"Which of the statements given above is/are correct?\" with combination "
+        "options like \"1 only\", \"1 and 2 only\"). Use standard single-best-answer "
+        "MCQs next; assertion–reason sparingly and only when causal logic is clear. "
+        "Difficulty from concept depth (scheme vs constitutional principle vs "
+        "mechanism), never from trick wording. Ground every fact in the report; "
+        "no celebrity/sports/lifestyle trivia."
+    ),
 }
 
 

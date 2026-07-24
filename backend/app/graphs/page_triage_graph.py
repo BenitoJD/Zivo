@@ -156,15 +156,17 @@ def run_page_triage(
 
     reset_empty_page_streak(db, document_id)
 
-    # Newspaper editions: drop ads/junk before normal triage so MCQs stay signal-only.
+    # Newspaper editions: drop ads/junk/off-syllabus before triage so MCQs stay
+    # UPSC/Group-1 signal-only. Combined verdict also closes soft entertainment.
     doc_for_signal = db.get(Document, document_id)
-    if doc_for_signal and (doc_for_signal.meta or {}).get("newspaper"):
-        from app.services.newspaper_ad_filter import classify_page_text
+    is_newspaper = bool(doc_for_signal and (doc_for_signal.meta or {}).get("newspaper"))
+    if is_newspaper:
+        from app.services.newspaper_ad_filter import newspaper_page_verdict
 
-        label, rationale = classify_page_text(page_text)
-        if label != "editorial":
+        verdict, rationale = newspaper_page_verdict(page_text)
+        if verdict != "cook":
             result = _non_content_result(
-                rationale=f"Newspaper filter ({label}): {rationale}",
+                rationale=f"Newspaper filter ({verdict}): {rationale}",
             )
             save_page_coverage(
                 db,
@@ -189,7 +191,7 @@ def run_page_triage(
                         "question_budget": 0,
                         "aspects_count": 0,
                         "page_number": page_number,
-                        "newspaper_filter": label,
+                        "newspaper_filter": verdict,
                     },
                     finished=True,
                 )
@@ -197,6 +199,12 @@ def run_page_triage(
             return result
 
     result = _triage_page(db, page_text=page_text, page_number=page_number)
+
+    content_type = result.get("content_type")
+    if is_newspaper and not result.get("non_content"):
+        from app.services.newspaper_ad_filter import NEWSPAPER_EXAM_CONTENT_TYPE
+
+        content_type = NEWSPAPER_EXAM_CONTENT_TYPE
 
     save_page_coverage(
         db,
@@ -207,7 +215,7 @@ def run_page_triage(
         rationale=result.get("rationale", ""),
         triage_activity_id=activity_id,
         aspect_dedup=result.get("aspect_dedup"),
-        content_type=result.get("content_type"),
+        content_type=content_type,
         non_content=bool(result.get("non_content")),
         programmable=bool(result.get("programmable")),
     )

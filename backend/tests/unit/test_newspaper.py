@@ -1,8 +1,14 @@
-"""Newspaper ad filter + naming heuristics + LLM paper-id learning."""
+"""Newspaper ad filter + exam relevance + naming heuristics + LLM paper-id learning."""
 
 from datetime import datetime, timezone
 
-from app.services.newspaper_ad_filter import classify_page_text, is_editorial
+from app.services.newspaper_ad_filter import (
+    classify_exam_relevance,
+    classify_page_text,
+    is_editorial,
+    newspaper_page_verdict,
+    should_cook_newspaper_page,
+)
 from app.services.newspaper_naming import parse_edition_meta
 
 
@@ -14,6 +20,18 @@ def test_ad_page_detected() -> None:
     label, _ = classify_page_text(text)
     assert label == "ad"
     assert not is_editorial(text)
+    assert newspaper_page_verdict(text)[0] == "ad"
+    assert not should_cook_newspaper_page(text)
+
+
+def test_property_classified_detected() -> None:
+    text = (
+        "Flat for sale in Andheri. EMI starts at 45k. Sq ft rates from 28000. "
+        "Walk-in interview for sales. Call toll free for site visit tomorrow."
+    )
+    label, _ = classify_page_text(text)
+    assert label == "ad"
+    assert newspaper_page_verdict(text)[0] == "ad"
 
 
 def test_editorial_page_ok() -> None:
@@ -26,11 +44,54 @@ def test_editorial_page_ok() -> None:
     label, _ = classify_page_text(text)
     assert label == "editorial"
     assert is_editorial(text)
+    ok, theme, _ = classify_exam_relevance(text)
+    assert ok
+    assert theme == "economy"
+    assert should_cook_newspaper_page(text)
 
 
 def test_low_signal_short() -> None:
     label, _ = classify_page_text("hi")
     assert label == "low_signal"
+    assert newspaper_page_verdict("hi")[0] == "low_signal"
+
+
+def test_sports_gossip_off_syllabus() -> None:
+    text = (
+        "Bollywood celebrity gossip dominated the red carpet at fashion week. "
+        "The IPL match scorecard showed a high run rate after 16 overs and "
+        "four quick wickets. Fans celebrated the box office weekend elsewhere."
+    )
+    ok, _, _ = classify_exam_relevance(text)
+    assert not ok
+    assert newspaper_page_verdict(text)[0] in {"off_syllabus", "ad"}
+    assert not should_cook_newspaper_page(text)
+
+
+def test_polity_page_relevant() -> None:
+    text = (
+        "The Supreme Court examined whether the ordinance issued by the Union "
+        "Cabinet complies with the Constitution and fundamental rights doctrine. "
+        "Parliament is expected to debate the bill when the Lok Sabha resumes. "
+        "Legal scholars said the judgment could reshape federalism debates."
+    )
+    assert is_editorial(text)
+    ok, theme, _ = classify_exam_relevance(text)
+    assert ok
+    assert theme == "polity"
+    assert newspaper_page_verdict(text)[0] == "cook"
+
+
+def test_lifestyle_without_gs_rejected() -> None:
+    text = (
+        "A new lifestyle column recommends weekend recipe ideas and cooking tips "
+        "for busy professionals who want lighter dinners. Readers shared photos "
+        "of their favourite desserts and asked for more fashion week coverage "
+        "from the previous season's runway looks in the metro edition."
+    )
+    ok, _, _ = classify_exam_relevance(text)
+    assert not ok
+    assert not should_cook_newspaper_page(text)
 
 
 def test_parse_edition_uses_message_date_when_no_date(monkeypatch) -> None:

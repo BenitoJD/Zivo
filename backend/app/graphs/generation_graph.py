@@ -25,6 +25,7 @@ from app.services.question_pool import (
     mark_aspect_asked,
     mark_aspects_asked,
     on_batch_completed,
+    save_page_coverage,
     set_coverage_complete,
 )
 from app.services.retrieval import fetch_chunks_for_page_range, search_chunks
@@ -388,6 +389,48 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
             "error": "page_not_indexed",
         }
 
+    # Close parallel first-batch race: triage may still be running while this
+    # batch uses speculative aspects. Re-apply newspaper ad + syllabus gate here
+    # so ads/off-syllabus pages never cook MCQs.
+    if (doc.meta or {}).get("newspaper"):
+        from app.services.newspaper_ad_filter import newspaper_page_verdict
+
+        verdict, rationale = newspaper_page_verdict(page_text)
+        if verdict != "cook":
+            save_page_coverage(
+                db,
+                document_id,
+                page=page_number,
+                question_budget=0,
+                aspects=[],
+                rationale=f"Newspaper filter ({verdict}): {rationale}",
+                content_type="non_content",
+                non_content=True,
+                programmable=False,
+            )
+            set_coverage_complete(db, document_id, page_number)
+            on_batch_completed(db, document_id, page=page_number, saved=0)
+            if activity_id:
+                update_activity(
+                    db,
+                    uuid.UUID(str(activity_id)),
+                    status="succeeded",
+                    stats={
+                        "questions_saved": 0,
+                        "page_number": page_number,
+                        "newspaper_filter": verdict,
+                        "non_content": True,
+                    },
+                    finished=True,
+                )
+            db.commit()
+            return {
+                "questions_saved": 0,
+                "page_number": page_number,
+                "non_content": True,
+                "newspaper_filter": verdict,
+            }
+
     clear_stale_coverage_complete(db, document_id, page_number)
     doc = db.get(Document, document_id)
     if not doc:
@@ -449,6 +492,10 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
     stable_context = get_cacheable_page_context(db, document_id, page_number, page_text)
     aspect_hints = _aspect_retrieval_hints(db, document_id, page_number, targets, page_text)
     content_type = get_page_coverage(doc, page_number).get("content_type")
+    if (doc.meta or {}).get("newspaper"):
+        from app.services.newspaper_ad_filter import NEWSPAPER_EXAM_CONTENT_TYPE
+
+        content_type = NEWSPAPER_EXAM_CONTENT_TYPE
     # Persist each question the moment it passes the gate (not in bulk at the end), so
     # the learner gets the first question after ~one critique instead of waiting for the
     # whole batch — the rest stream in while they answer. Same critic, same dedup.
