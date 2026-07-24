@@ -15,6 +15,46 @@ from app.services.question_pool import get_progress, selected_page_list
 
 MAX_RAG_PAGES = 6
 
+_INGESTED_PAGES_KEY = "ingested_pages"
+
+
+def ingested_pages_for_document(doc: Document) -> set[int]:
+    raw = (doc.meta or {}).get(_INGESTED_PAGES_KEY) or []
+    if not isinstance(raw, list):
+        return set()
+    return {int(p) for p in raw if int(p) >= 1}
+
+
+def mark_page_ingested(db: Session, doc: Document, page: int) -> None:
+    """Record that ingest.page finished for this page — even when text was empty.
+
+    Empty pages write no chunks, so indexed_pages alone can never include them.
+    Without this mark, triage defers forever and the RAG window never becomes ready.
+    """
+    page = int(page)
+    if page < 1:
+        return
+    meta = dict(doc.meta or {})
+    pages = sorted(ingested_pages_for_document(doc) | {page})
+    if meta.get(_INGESTED_PAGES_KEY) == pages:
+        return
+    meta[_INGESTED_PAGES_KEY] = pages
+    doc.meta = meta
+    flag_modified(doc, "meta")
+    db.add(doc)
+
+
+def pages_ready_for_document(
+    db: Session, document_id: uuid.UUID, doc: Document | None = None
+) -> set[int]:
+    """Pages ingest has finished for: embedded chunks ∪ empty-but-ingested."""
+    if doc is None:
+        doc = db.get(Document, document_id)
+    indexed = indexed_pages_for_document(db, document_id)
+    if not doc:
+        return indexed
+    return indexed | ingested_pages_for_document(doc)
+
 
 def chat_rag_window(
     current_page: int,
@@ -82,15 +122,15 @@ def sync_rag_window(
     window via ``doc.meta['rag_window']`` instead of physical deletion.
     """
     allowed = {int(p) for p in target_pages}
-    indexed = indexed_pages_for_document(db, document_id)
-    return sorted(p for p in allowed if p not in indexed)
+    ready = pages_ready_for_document(db, document_id)
+    return sorted(p for p in allowed if p not in ready)
 
 
 def rag_window_index_progress(db: Session, document_id: uuid.UUID, target_pages: list[int]) -> int:
     if not target_pages:
         return 100
-    indexed = indexed_pages_for_document(db, document_id)
-    done = sum(1 for p in target_pages if p in indexed)
+    ready = pages_ready_for_document(db, document_id)
+    done = sum(1 for p in target_pages if p in ready)
     return int(100 * done / len(target_pages))
 
 
@@ -116,8 +156,8 @@ def is_rag_window_ready(db: Session, document_id: uuid.UUID, doc: Document | Non
         return True
     if not target:
         return True
-    indexed = indexed_pages_for_document(db, document_id)
-    return all(p in indexed for p in target)
+    ready = pages_ready_for_document(db, document_id, doc)
+    return all(p in ready for p in target)
 
 
 def refresh_rag_window_status(db: Session, document_id: uuid.UUID) -> bool:

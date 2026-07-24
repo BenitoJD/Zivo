@@ -1011,6 +1011,17 @@ export default function WorkspaceArtifactPage({
     Boolean(queue?.page_complete) && !queue?.current_assertion_id && !queue?.document_complete;
   const showDocumentComplete = Boolean(queue?.document_complete) && !reselectOpen;
   const showNoQuestions = Boolean(queue?.no_questions_reason) && !reselectOpen;
+  const showPromptReselect = Boolean(queue?.prompt_reselect_pages) && !reselectOpen;
+  const reselectPromptCopy =
+    queue?.prompt_reselect_reason === "unreadable_content"
+      ? {
+          title: "We can see content — but can't study it",
+          body: "This looks full, but we can't study it as text. Choose pages with selectable text.",
+        }
+      : {
+          title: "These pages look empty",
+          body: "Several pages here have no readable content. See content on these pages, or are they blank? Pick only pages with actual text to study.",
+        };
   // Test mode is summative: hold all feedback until the set is finished, then show
   // one score + a full review. (Learn keeps its encouraging per-page completion.)
   const testCorrect = answeredHistory.filter((c) => c.gradeState.correct).length;
@@ -1111,6 +1122,18 @@ export default function WorkspaceArtifactPage({
                 });
               }}
             />
+          ) : showPromptReselect ? (
+            <Stack align="center" gap="sm" py="xl" ta="center">
+              <Text ff="var(--font-serif)" fz={isNarrow ? 22 : 28} fw={500} c="var(--mantine-color-text)">
+                {reselectPromptCopy.title}
+              </Text>
+              <Text c="dimmed" maw={420}>
+                {reselectPromptCopy.body}
+              </Text>
+              <Button variant="light" color="lavender" radius="xl" mt="xs" onClick={openReselectPages}>
+                Choose pages
+              </Button>
+            </Stack>
           ) : showNoQuestions ? (
             <Stack align="center" gap="sm" py="xl" ta="center">
               <Text ff="var(--font-serif)" fz={isNarrow ? 22 : 28} fw={500} c="var(--mantine-color-text)">

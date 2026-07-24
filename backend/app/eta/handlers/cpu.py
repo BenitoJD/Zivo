@@ -212,6 +212,11 @@ def ingest_page_job(payload: dict) -> dict:
         vectors = embed_texts(texts) if texts else []
         if chunks and vectors:
             upsert_page_chunks(db, document_id, page_number, chunks, vectors)
+        # Always mark ingest complete — empty pages write no chunks, but triage/RAG
+        # must still treat them as ready (otherwise scans defer forever).
+        from app.services.rag_window import mark_page_ingested
+
+        mark_page_ingested(db, doc, page_number)
         db.commit()
         refresh_rag_window_status(db, document_id)
         from app.services.question_pool import maybe_enqueue_early_page_triage

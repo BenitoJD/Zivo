@@ -80,8 +80,9 @@ def test_not_ready_when_escaped_window_and_new_pages_unindexed(monkeypatch) -> N
     assert rw.is_rag_window_ready(None, doc.id, doc) is False
 
 
-def test_ready_once_the_new_window_is_indexed(monkeypatch) -> None:
-    """After the ingest catches up, the same state reports ready and the loop proceeds."""
-    monkeypatch.setattr(rw, "indexed_pages_for_document", lambda db, doc_id: set(range(2, 13)))
-    doc = _doc(current_page=10, window_pages=[4, 5, 6, 7, 8, 9], ready_flag=True)
+def test_ready_when_current_page_is_ingested_empty(monkeypatch) -> None:
+    """Empty scan pages write no chunks but still count as ready once ingested."""
+    monkeypatch.setattr(rw, "indexed_pages_for_document", lambda db, doc_id: set())
+    doc = _doc(current_page=5, window_pages=[4, 5, 6], ready_flag=False)
+    doc.meta["ingested_pages"] = [4, 5, 6]
     assert rw.is_rag_window_ready(None, doc.id, doc) is True

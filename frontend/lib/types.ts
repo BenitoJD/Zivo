@@ -49,6 +49,9 @@ export type McqState = {
   non_content?: boolean;
   no_questions_reason?: string | null;
   document_complete?: boolean;
+  /** Ask learner to reselect pages (empty streak or unreadable scans). */
+  prompt_reselect_pages?: boolean;
+  prompt_reselect_reason?: "empty_pages_streak" | "unreadable_content" | string | null;
   pool_available?: number;
   rag_window_pages?: number[];
   rag_window_ready?: boolean;

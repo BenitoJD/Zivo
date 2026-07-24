@@ -60,6 +60,7 @@ _GENERATION_LOG_TAGS = frozenset(
         "rewrite_mcq",
         "topics_extract",
         "topics_rollup",
+        "page_vision_judge",
     }
 )
 # Long-form generations (study notes, explanations, flashcard decks, memory palaces)
@@ -103,6 +104,7 @@ STRUCTURED_LOG_TAGS = frozenset(
         # for consistent, reproducible marks. (mains_gen stays warm for question variety.)
         "mains_grade",
         "mains_ocr",
+        "page_vision_judge",
     }
 )
 
@@ -128,6 +130,7 @@ LOG_TAG_MAX_TOKENS: dict[str, int] = {
     "mains_gen": 1400,
     "mains_grade": 1800,
     "mains_ocr": 3000,
+    "page_vision_judge": 256,
 }
 
 

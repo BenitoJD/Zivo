@@ -68,6 +68,15 @@ def run_page_triage(
     activity_id: str | None = None,
     precompute: bool = False,
 ) -> dict[str, Any]:
+    from app.models import Document
+    from app.services.question_pool import (
+        note_empty_page_triage,
+        reset_empty_page_streak,
+        should_skip_empty_page_vision,
+    )
+    from app.services.rag_window import pages_ready_for_document
+    from app.services.vision import judge_page_has_content
+
     chunks = fetch_chunks_for_page_range(
         db,
         document_ids=[document_id],
@@ -76,22 +85,13 @@ def run_page_triage(
     )
     page_text = "\n\n".join(c["text"] for c in chunks if c.get("text")).strip()
 
-    # Guard the indexing race. Eager lookahead triage (EAGER_TRIAGE_LOOKAHEAD
-    # pages ahead of the reader) can reach a page BEFORE its text is ingested —
-    # the RAG window indexes lazily, a few pages at a time. With no chunks yet,
-    # page_text is empty and triage would persist a FALSE non_content verdict,
-    # permanently marking a content-rich page "empty". The learn queue then
-    # auto-skips every such page and can declare the whole document complete
-    # after only a couple of genuinely-studied pages. Defer instead: write NO
-    # coverage so the page is re-triaged (with real text) once the window
-    # indexes it. A genuinely blank page is indexed-but-textless and still flows
-    # through to a real non_content verdict below.
+    # Guard the indexing race. Eager lookahead triage can reach a page BEFORE
+    # ingest finishes. Defer (write no coverage) until the page is ready —
+    # either chunks exist, or ingest marked it in meta.ingested_pages (empty scan).
     if not page_text:
-        from app.services.rag_window import indexed_pages_for_document
-
-        if page_number not in set(indexed_pages_for_document(db, document_id)):
+        if page_number not in pages_ready_for_document(db, document_id):
             logger.info(
-                "page triage deferred: page %s not indexed yet (doc %s)",
+                "page triage deferred: page %s not ingested yet (doc %s)",
                 page_number,
                 document_id,
             )
@@ -105,6 +105,56 @@ def run_page_triage(
                 "deferred": True,
             }
 
+        # Empty extractable text: one vision glance, then skip (cannot quiz without text).
+        # Vision changes the ask: blank → quiet skip; usable → stop and ask human;
+        # five blanks → stop and ask. After we asked, skip further vision calls.
+        vision_usable = False
+        rationale = "No extractable text on this page."
+        doc = db.get(Document, document_id)
+        if doc and should_skip_empty_page_vision(doc):
+            rationale = "Skipped vision — already asked learner to reselect pages."
+        else:
+            verdict = judge_page_has_content(db, document_id, page_number)
+            vision_usable = bool(verdict.get("usable"))
+            rationale = str(verdict.get("rationale") or "").strip() or (
+                "Page looks like it has content, but no extractable text."
+                if vision_usable
+                else "Vision glance: no useful study content."
+            )
+            note_empty_page_triage(db, document_id, vision_usable=vision_usable)
+
+        result = _non_content_result(rationale=rationale)
+        save_page_coverage(
+            db,
+            document_id,
+            page=page_number,
+            question_budget=result["question_budget"],
+            aspects=result["aspects"],
+            rationale=result.get("rationale", ""),
+            triage_activity_id=activity_id,
+            aspect_dedup=result.get("aspect_dedup"),
+            content_type=result.get("content_type"),
+            non_content=True,
+            programmable=False,
+        )
+        on_triage_completed(db, document_id, page=page_number, precompute=precompute)
+        if activity_id:
+            update_activity(
+                db,
+                uuid.UUID(str(activity_id)),
+                status="succeeded",
+                stats={
+                    "question_budget": 0,
+                    "aspects_count": 0,
+                    "page_number": page_number,
+                    "vision_usable": vision_usable,
+                },
+                finished=True,
+            )
+        db.commit()
+        return result
+
+    reset_empty_page_streak(db, document_id)
     result = _triage_page(db, page_text=page_text, page_number=page_number)
 
     save_page_coverage(

@@ -79,7 +79,7 @@ def test_run_page_triage_defers_unindexed_page_instead_of_non_content() -> None:
     db = MagicMock()
     with (
         patch.object(ptg, "fetch_chunks_for_page_range", return_value=[]),
-        patch("app.services.rag_window.indexed_pages_for_document", return_value=set()),
+        patch("app.services.rag_window.pages_ready_for_document", return_value=set()),
         patch.object(ptg, "save_page_coverage") as save_cov,
     ):
         result = ptg.run_page_triage(db, uuid.uuid4(), page_number=12, precompute=True)
@@ -87,6 +87,81 @@ def test_run_page_triage_defers_unindexed_page_instead_of_non_content() -> None:
     assert result.get("deferred") is True
     assert result["non_content"] is False
     save_cov.assert_not_called()
+
+
+def test_run_page_triage_empty_ingested_blank_vision_is_non_content() -> None:
+    doc_id = uuid.uuid4()
+    doc = MagicMock()
+    doc.id = doc_id
+    db = MagicMock()
+    db.get.return_value = doc
+    judge = MagicMock(return_value={"usable": False, "rationale": "Blank page."})
+
+    with (
+        patch.object(ptg, "fetch_chunks_for_page_range", return_value=[]),
+        patch("app.services.rag_window.pages_ready_for_document", return_value={7}),
+        patch("app.services.vision.judge_page_has_content", judge),
+        patch("app.services.question_pool.should_skip_empty_page_vision", return_value=False),
+        patch("app.services.question_pool.note_empty_page_triage") as note,
+        patch.object(ptg, "save_page_coverage") as save_cov,
+        patch.object(ptg, "on_triage_completed"),
+    ):
+        result = ptg.run_page_triage(db, doc_id, page_number=7)
+
+    assert result["non_content"] is True
+    assert result["question_budget"] == 0
+    judge.assert_called_once()
+    note.assert_called_once_with(db, doc_id, vision_usable=False)
+    save_cov.assert_called_once()
+    assert save_cov.call_args.kwargs["non_content"] is True
+
+
+def test_run_page_triage_empty_ingested_usable_vision_asks_human() -> None:
+    doc_id = uuid.uuid4()
+    doc = MagicMock()
+    doc.id = doc_id
+    db = MagicMock()
+    db.get.return_value = doc
+    judge = MagicMock(return_value={"usable": True, "rationale": "Diagram-heavy slide."})
+
+    with (
+        patch.object(ptg, "fetch_chunks_for_page_range", return_value=[]),
+        patch("app.services.rag_window.pages_ready_for_document", return_value={3}),
+        patch("app.services.vision.judge_page_has_content", judge),
+        patch("app.services.question_pool.should_skip_empty_page_vision", return_value=False),
+        patch("app.services.question_pool.note_empty_page_triage") as note,
+        patch.object(ptg, "save_page_coverage"),
+        patch.object(ptg, "on_triage_completed"),
+    ):
+        result = ptg.run_page_triage(db, doc_id, page_number=3)
+
+    assert result["non_content"] is True
+    note.assert_called_once_with(db, doc_id, vision_usable=True)
+    judge.assert_called_once()
+
+
+def test_run_page_triage_skips_vision_after_reselect_prompt() -> None:
+    doc_id = uuid.uuid4()
+    doc = MagicMock()
+    doc.id = doc_id
+    db = MagicMock()
+    db.get.return_value = doc
+    judge = MagicMock()
+
+    with (
+        patch.object(ptg, "fetch_chunks_for_page_range", return_value=[]),
+        patch("app.services.rag_window.pages_ready_for_document", return_value={9}),
+        patch("app.services.vision.judge_page_has_content", judge),
+        patch("app.services.question_pool.should_skip_empty_page_vision", return_value=True),
+        patch("app.services.question_pool.note_empty_page_triage") as note,
+        patch.object(ptg, "save_page_coverage"),
+        patch.object(ptg, "on_triage_completed"),
+    ):
+        result = ptg.run_page_triage(db, doc_id, page_number=9)
+
+    assert result["non_content"] is True
+    judge.assert_not_called()
+    note.assert_not_called()
 
 
 def test_finalize_triage_shrinks_budget_after_dedup() -> None:

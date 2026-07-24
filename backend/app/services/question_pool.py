@@ -42,6 +42,9 @@ TRANSITION_GENERATION_RATIO = float(os.getenv("ZIVO_TRANSITION_GENERATION_RATIO"
 # batches stay on-demand + next-page prefetch. Wider than 3 so long docs stay
 # ahead of the earlier transition window without speculative MCQ generation.
 EAGER_TRIAGE_LOOKAHEAD = int(os.getenv("ZIVO_EAGER_TRIAGE_LOOKAHEAD", "5"))
+# Empty-text pages after vision glance: this many quiet blanks in a row → ask the
+# learner to reselect pages (and stop burning more vision calls until they do).
+EMPTY_PAGE_RESELECT_STREAK = int(os.getenv("ZIVO_EMPTY_PAGE_RESELECT_STREAK", "5"))
 # After this many failed generation attempts, an aspect is abandoned (marked asked)
 # so a permanently un-generatable aspect — every draft rejected by the verifier,
 # critic, or dedup — can't block the page from ever completing (which would strand
@@ -64,6 +67,9 @@ def default_progress(doc: Document) -> dict[str, Any]:
         "generation_pending": False,
         "page_coverage": {},
         "transition_prep_done": {},
+        "empty_page_streak": 0,
+        "prompt_reselect_pages": False,
+        "prompt_reselect_reason": None,
     }
 
 
@@ -88,6 +94,9 @@ def get_progress(doc: Document) -> dict[str, Any]:
     progress.setdefault("generation_pending", False)
     progress.setdefault("page_coverage", {})
     progress.setdefault("transition_prep_done", {})
+    progress.setdefault("empty_page_streak", 0)
+    progress.setdefault("prompt_reselect_pages", False)
+    progress.setdefault("prompt_reselect_reason", None)
     return progress
 
 
@@ -194,6 +203,50 @@ def save_page_coverage(
 def is_non_content_page(doc: Document, page: int) -> bool:
     """True when triage deliberately judged this page to have zero testable content."""
     return bool(get_page_coverage(doc, page).get("non_content"))
+
+
+def should_skip_empty_page_vision(doc: Document) -> bool:
+    """Once we already asked the learner to reselect, stop burning vision calls."""
+    return bool(get_progress(doc).get("prompt_reselect_pages"))
+
+
+def note_empty_page_triage(
+    db: Session,
+    document_id: uuid.UUID,
+    *,
+    vision_usable: bool,
+) -> dict[str, Any]:
+    """Bump blank streak / set reselect prompt after an empty-text page triage."""
+    doc = db.get(Document, document_id)
+    if not doc:
+        return {}
+    progress = get_progress(doc)
+    if vision_usable:
+        patch: dict[str, Any] = {
+            "empty_page_streak": int(progress.get("empty_page_streak") or 0) + 1,
+            "prompt_reselect_pages": True,
+            "prompt_reselect_reason": "unreadable_content",
+        }
+    else:
+        streak = int(progress.get("empty_page_streak") or 0) + 1
+        patch = {"empty_page_streak": streak}
+        if streak >= EMPTY_PAGE_RESELECT_STREAK or progress.get("prompt_reselect_pages"):
+            patch["prompt_reselect_pages"] = True
+            patch["prompt_reselect_reason"] = (
+                progress.get("prompt_reselect_reason") or "empty_pages_streak"
+            )
+    save_progress(db, doc, patch)
+    return patch
+
+
+def reset_empty_page_streak(db: Session, document_id: uuid.UUID) -> None:
+    """A page with real extractable text resets the blank streak."""
+    doc = db.get(Document, document_id)
+    if not doc:
+        return
+    if int(get_progress(doc).get("empty_page_streak") or 0) == 0:
+        return
+    save_progress(db, doc, {"empty_page_streak": 0})
 
 
 def get_question_budget(doc: Document, page: int) -> int:
@@ -597,6 +650,8 @@ def build_learn_queue_state(
         "non_content": non_content,
         "no_questions_reason": no_questions_reason,
         "document_complete": document_complete,
+        "prompt_reselect_pages": bool(progress.get("prompt_reselect_pages")),
+        "prompt_reselect_reason": progress.get("prompt_reselect_reason"),
         "pool_available": sum(1 for row_id in page_ids if row_id not in answered_set),
         "generated_on_page": questions_generated,
         "answered_on_page": questions_answered,

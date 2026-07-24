@@ -89,6 +89,37 @@ def count_pdf_pages(data: bytes) -> int:
         return max(1, doc.page_count)
 
 
+def render_pdf_page_png(
+    data: bytes,
+    page_number: int,
+    *,
+    max_edge: int = 1600,
+    max_bytes: int = 4 * 1024 * 1024,
+) -> bytes | None:
+    """Render one 1-indexed PDF page to a size-capped PNG for vision models."""
+    page_number = max(1, int(page_number))
+    try:
+        with fitz.open(stream=data, filetype="pdf") as doc:
+            if page_number > doc.page_count:
+                return None
+            page = doc[page_number - 1]
+            rect = page.rect
+            long_edge = max(float(rect.width), float(rect.height), 1.0)
+            scale = min(2.0, max_edge / long_edge)
+            pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+            png = pix.tobytes("png")
+            # Shrink if still over the vision payload cap.
+            while len(png) > max_bytes and scale > 0.35:
+                scale *= 0.75
+                pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+                png = pix.tobytes("png")
+            if len(png) > max_bytes:
+                return None
+            return png
+    except Exception:
+        return None
+
+
 def _parse_docx(data: bytes) -> list[dict]:
     doc = DocxDocument(io.BytesIO(data))
     paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
