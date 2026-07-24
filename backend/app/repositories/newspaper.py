@@ -147,6 +147,29 @@ def upsert_alias(db: Session, *, alias_key: str, paper_slug: str, paper_title: s
     )
 
 
+def delete_alias(db: Session, alias_key: str) -> None:
+    key = re.sub(r"[^a-z0-9]+", "", (alias_key or "").lower())
+    if not key:
+        return
+    db.execute(
+        text("DELETE FROM qb.newspaper_paper_alias WHERE alias_key = :k"),
+        {"k": key},
+    )
+
+
+def delete_all_aliases(db: Session) -> int:
+    result = db.execute(text("DELETE FROM qb.newspaper_paper_alias"))
+    return int(result.rowcount or 0)
+
+
+def delete_edition_row(db: Session, edition_id: uuid.UUID) -> None:
+    """Hard-delete edition row so (paper, day) can be re-ingested."""
+    db.execute(
+        text("DELETE FROM qb.newspaper_edition WHERE id = :id"),
+        {"id": edition_id},
+    )
+
+
 def get_edition(db: Session, edition_id: uuid.UUID) -> dict[str, Any] | None:
     row = db.execute(
         text(
@@ -171,6 +194,7 @@ def get_edition_by_paper_day(
                    telegram_msg_id, location_raw, status, created_at, updated_at
             FROM qb.newspaper_edition
             WHERE paper_slug = :slug AND edition_date = :d
+              AND status <> 'purged'
             """
         ),
         {"slug": paper_slug, "d": edition_date},

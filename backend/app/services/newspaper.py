@@ -234,6 +234,31 @@ def create_edition_from_pdf(
     return edition_id
 
 
+def purge_edition(db: Session, edition_id: uuid.UUID, *, hard_delete: bool = False) -> bool:
+    """Purge one edition's document (+ MinIO). hard_delete removes the row for re-ingest."""
+    from app.services.storage import delete_object
+
+    row = newspaper_repo.get_edition(db, edition_id)
+    if not row:
+        return False
+    doc_id = row.get("document_id")
+    if doc_id:
+        doc = db.get(Document, doc_id)
+        if doc:
+            key = purge_document(db, doc)
+            try:
+                delete_object(key)
+            except Exception:
+                logger.debug("minio delete failed for %s", key, exc_info=True)
+            purge_ingest_tmp(doc_id)
+    if hard_delete:
+        newspaper_repo.delete_edition_row(db, edition_id)
+    else:
+        newspaper_repo.update_edition_status(db, edition_id, status="purged")
+    db.commit()
+    return True
+
+
 def purge_expired_editions(db: Session) -> int:
     from app.services.storage import delete_object
 

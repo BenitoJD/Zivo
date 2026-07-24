@@ -1,7 +1,11 @@
 """Adaptive newspaper PDF naming — aliases first, then LLM, then heuristic.
 
 Filenames and captions change over time. Never hardcode paper abbreviations
-(TH/ET/…). Learn mappings into ``qb.newspaper_paper_alias`` after LLM classifies.
+as the primary identity path (TH/ET/…). Learn mappings into
+``qb.newspaper_paper_alias`` only after a high-confidence, conflict-free LLM hit.
+
+Brand-token families below are a *poison guard* only: they block cross-brand
+alias learning (e.g. BS → The Hindu), not a classifier lookup table.
 """
 
 from __future__ import annotations
@@ -20,8 +24,24 @@ from app.services.llm_json import extract_json_obj
 logger = logging.getLogger(__name__)
 
 _IST = ZoneInfo("Asia/Kolkata")
-# Models often under-score clear abbreviations (TH→The Hindu at ~0.4).
+# Accept inventing a new brand; learning aliases needs ``_LLM_LEARN_CONFIDENCE``.
 _LLM_MIN_CONFIDENCE = 0.35
+_LLM_LEARN_CONFIDENCE = 0.8
+
+# Conflict guard — tokens that clearly name a brand. Used to reject cross-maps.
+_BRAND_TOKEN_FAMILIES: dict[str, frozenset[str]] = {
+    "the-hindu": frozenset({"th", "thehindu", "hindu"}),
+    "business-standard": frozenset({"bs", "businessstandard"}),
+    "hindustan-times": frozenset({"ht", "hindustantimes"}),
+    "financial-express": frozenset({"fe", "financialexpress"}),
+    "mint": frozenset({"mint", "livemint"}),
+    "the-economic-times": frozenset({"et", "economictimes", "theeconomictimes"}),
+    "new-indian-express": frozenset({"nie", "newindianexpress", "indianexpress"}),
+    "deccan-chronicle": frozenset({"dc", "deccanchronicle"}),
+}
+_TOKEN_TO_BRAND: dict[str, str] = {
+    tok: slug for slug, toks in _BRAND_TOKEN_FAMILIES.items() for tok in toks
+}
 
 # Common city / noise tokens to strip when guessing paper title from a filename.
 _LOCATION_TOKENS = {
@@ -133,6 +153,10 @@ def _guess_title(tokens: list[str]) -> str:
     return " ".join(parts)
 
 
+def _norm_key(raw: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (raw or "").lower())
+
+
 def _alias_lookup_keys(*, guessed_title: str, blob: str, tokens: list[str]) -> list[str]:
     keys = [guessed_title, blob]
     if tokens:
@@ -140,7 +164,7 @@ def _alias_lookup_keys(*, guessed_title: str, blob: str, tokens: list[str]) -> l
     seen: set[str] = set()
     out: list[str] = []
     for k in keys:
-        norm = re.sub(r"[^a-z0-9]+", "", (k or "").lower())
+        norm = _norm_key(k)
         if not norm or norm in seen:
             continue
         seen.add(norm)
@@ -148,8 +172,12 @@ def _alias_lookup_keys(*, guessed_title: str, blob: str, tokens: list[str]) -> l
     return out
 
 
-def _match_known_brand(db: Session, paper_title: str) -> tuple[str, str]:
-    """Map LLM title onto an existing brand when possible; else slugify."""
+def _match_known_brand(db: Session, paper_title: str) -> tuple[str, str, bool]:
+    """Map LLM title onto an existing brand by exact slug/title only.
+
+    Returns (slug, title, exact_catalog_hit). Soft/partial substring matches are
+    intentionally rejected — they poisoned aliases (e.g. BS → The Hindu).
+    """
     title = re.sub(r"\s+", " ", (paper_title or "").strip()) or "Newspaper"
     slug, canon = newspaper_repo.make_paper_identity(title)
     title_l = title.lower()
@@ -157,11 +185,87 @@ def _match_known_brand(db: Session, paper_title: str) -> tuple[str, str]:
         b_title = str(b.get("paper_title") or "")
         b_slug = str(b.get("paper_slug") or "")
         if b_slug == slug or b_title.lower() == title_l:
-            return b_slug, b_title or canon
-        if title_l in b_title.lower() or b_title.lower() in title_l:
-            if len(b_title) >= 4:
-                return b_slug, b_title
-    return slug, canon
+            return b_slug, b_title or canon, True
+    return slug, canon, False
+
+
+def _filename_brand_slugs(tokens: list[str], *, blob: str = "") -> set[str]:
+    """Brand families clearly named by filename tokens (conflict guard)."""
+    found: set[str] = set()
+    norms = {_norm_key(t) for t in tokens if t}
+    blob_n = _norm_key(blob)
+    if blob_n:
+        norms.add(blob_n)
+
+    loc_norms = {_norm_key(t) for t in _LOCATION_TOKENS}
+
+    for norm in norms:
+        brand = _TOKEN_TO_BRAND.get(norm)
+        if brand:
+            found.add(brand)
+            continue
+        # Glued forms: bsahmedabad24072026, thdelhi, …
+        for tok, slug in _TOKEN_TO_BRAND.items():
+            if len(tok) < 2 or not norm.startswith(tok) or norm == tok:
+                continue
+            rest = norm[len(tok) :]
+            if rest.isdigit() or any(rest.startswith(loc) for loc in loc_norms):
+                found.add(slug)
+    return found
+
+
+def _identity_conflicts_filename(
+    *, paper_slug: str, tokens: list[str], blob: str
+) -> str | None:
+    """Return conflicting brand slug if filename clearly names another paper."""
+    named = _filename_brand_slugs(tokens, blob=blob)
+    if not named:
+        return None
+    if paper_slug in named and len(named) == 1:
+        return None
+    others = named - {paper_slug}
+    if others:
+        return sorted(others)[0]
+    return None
+
+
+def _learnable_alias_keys(
+    *,
+    paper_slug: str,
+    guessed_title: str,
+    tokens: list[str],
+) -> list[str]:
+    """Only brand-family tokens present in the filename — never cities/dates/noise."""
+    family = _BRAND_TOKEN_FAMILIES.get(paper_slug, frozenset())
+    if not family:
+        # Unknown brand: only learn the full guessed title if it's multi-char and
+        # not a location/date — never a bare city token.
+        key = _norm_key(guessed_title)
+        if (
+            key
+            and len(key) >= 3
+            and key not in {_norm_key(t) for t in _LOCATION_TOKENS}
+            and not key.isdigit()
+            and not re.fullmatch(r"\d{6,8}", key)
+        ):
+            return [guessed_title]
+        return []
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for raw in [guessed_title, *tokens]:
+        norm = _norm_key(raw)
+        if not norm or norm in seen:
+            continue
+        if norm in {_norm_key(t) for t in _LOCATION_TOKENS}:
+            continue
+        if norm.isdigit() or re.fullmatch(r"\d{6,8}", norm):
+            continue
+        if norm not in family:
+            continue
+        seen.add(norm)
+        candidates.append(raw)
+    return candidates
 
 
 def _learn_aliases(
@@ -171,14 +275,27 @@ def _learn_aliases(
     paper_title: str,
     guessed_title: str,
     tokens: list[str],
+    confidence: float,
+    exact_catalog_hit: bool,
+    blob: str,
 ) -> None:
-    """Cache learned mappings so the next identical naming pattern skips LLM."""
-    keys = [guessed_title]
-    if tokens:
-        keys.append(tokens[0])
-    for key in keys:
-        if not (key or "").strip():
-            continue
+    """Cache learned mappings — high confidence + no cross-brand conflict only."""
+    if confidence < _LLM_LEARN_CONFIDENCE and not (
+        exact_catalog_hit and confidence >= _LLM_MIN_CONFIDENCE
+    ):
+        logger.info(
+            "skip alias learn paper=%s confidence=%s exact=%s",
+            paper_slug,
+            confidence,
+            exact_catalog_hit,
+        )
+        return
+    if _identity_conflicts_filename(paper_slug=paper_slug, tokens=tokens, blob=blob):
+        logger.info("skip alias learn paper=%s — filename brand conflict", paper_slug)
+        return
+    for key in _learnable_alias_keys(
+        paper_slug=paper_slug, guessed_title=guessed_title, tokens=tokens
+    ):
         newspaper_repo.upsert_alias(
             db, alias_key=key, paper_slug=paper_slug, paper_title=paper_title
         )
@@ -200,11 +317,15 @@ async def _llm_identify_paper_async(
     *,
     filename: str,
     caption: str,
-) -> tuple[str, str] | None:
+    tokens: list[str] | None = None,
+    blob: str = "",
+) -> tuple[str, str, float, bool] | None:
     """Ask LLM what newspaper this PDF is. No hardcoded abbreviation tables.
 
     Caller must hold the LLM slot (``complete_chat`` / ``run_coro_in_worker`` /
     ``llm_slot_async``).
+
+    Returns (slug, title, confidence, exact_catalog_hit) or None.
     """
     from app.services.llm_registry import default_chat_model_id
     from app.services.llm_router import acomplete_chat
@@ -216,7 +337,10 @@ async def _llm_identify_paper_async(
         "Never treat a city or date as the newspaper name. "
         "Prefer matching a known catalog brand when the file clearly refers to it. "
         "When the filename clearly matches a known brand (including common initials), "
-        "set confidence >= 0.8. Reply with JSON only — no prose."
+        "set confidence >= 0.8. "
+        "Never map a clear other-brand abbreviation onto a different catalog brand "
+        "(e.g. BS/Business Standard, HT, FE, Mint, ET are not The Hindu). "
+        "Reply with JSON only — no prose."
     )
     user = (
         f"Known brands in our catalog:\n{_known_brands_prompt(db)}\n\n"
@@ -249,22 +373,31 @@ async def _llm_identify_paper_async(
     if not title:
         logger.info("newspaper paper-id empty title confidence=%s", confidence)
         return None
-    matched = _match_known_brand(db, title)
-    # Exact/soft catalog match → accept even if model under-scores confidence.
-    brands = newspaper_repo.list_brands(db)
-    known_hit = any(
-        matched[0] == str(b.get("paper_slug") or "")
-        or title.lower() == str(b.get("paper_title") or "").lower()
-        for b in brands
+    slug, canon, exact_hit = _match_known_brand(db, title)
+    tok_list = tokens if tokens is not None else [
+        t for t in re.split(r"[_\-\s.]+", _normalize_blob(filename, caption)) if t
+    ]
+    blob_s = blob or _normalize_blob(filename, caption)
+    conflict = _identity_conflicts_filename(
+        paper_slug=slug, tokens=tok_list, blob=blob_s
     )
-    if not known_hit and confidence < _LLM_MIN_CONFIDENCE:
+    if conflict:
+        logger.info(
+            "newspaper paper-id rejected title=%r slug=%s — filename names %s",
+            title,
+            slug,
+            conflict,
+        )
+        return None
+    # Exact catalog match may under-score confidence; soft/partial never accepted.
+    if not exact_hit and confidence < _LLM_MIN_CONFIDENCE:
         logger.info(
             "newspaper paper-id rejected title=%r confidence=%s",
             title,
             confidence,
         )
         return None
-    return matched
+    return slug, canon, confidence, exact_hit
 
 
 def _llm_identify_paper_sync(
@@ -272,13 +405,21 @@ def _llm_identify_paper_sync(
     *,
     filename: str,
     caption: str,
-) -> tuple[str, str] | None:
+    tokens: list[str] | None = None,
+    blob: str = "",
+) -> tuple[str, str, float, bool] | None:
     """Sync path — ``run_coro_in_worker`` owns the LLM slot."""
     from app.services.llm_sync import run_coro_in_worker
 
     try:
         return run_coro_in_worker(
-            _llm_identify_paper_async(db, filename=filename, caption=caption)
+            _llm_identify_paper_async(
+                db,
+                filename=filename,
+                caption=caption,
+                tokens=tokens,
+                blob=blob,
+            )
         )
     except Exception:
         logger.exception("newspaper paper-id sync LLM failed")
@@ -296,12 +437,24 @@ def _finish_parse(
     guessed_title: str,
     blob: str,
     tokens: list[str],
-    llm_identity: tuple[str, str] | None,
+    llm_identity: tuple[str, str] | tuple[str, str, float, bool] | None,
     allow_llm: bool,
 ) -> ParsedEdition:
     for raw in _alias_lookup_keys(guessed_title=guessed_title, blob=blob, tokens=tokens):
         alias = newspaper_repo.resolve_alias(db, raw)
         if alias:
+            conflict = _identity_conflicts_filename(
+                paper_slug=alias[0], tokens=tokens, blob=blob
+            )
+            if conflict:
+                logger.warning(
+                    "ignoring poisoned alias key=%r -> %s (filename names %s)",
+                    raw,
+                    alias[0],
+                    conflict,
+                )
+                newspaper_repo.delete_alias(db, raw)
+                continue
             return ParsedEdition(
                 paper_slug=alias[0],
                 paper_title=alias[1],
@@ -311,8 +464,35 @@ def _finish_parse(
             )
 
     identity = llm_identity
+    confidence = _LLM_LEARN_CONFIDENCE
+    exact_hit = True
+    if identity is not None and len(identity) == 4:
+        slug, title, confidence, exact_hit = identity  # type: ignore[misc]
+        identity = (slug, title)
+    elif identity is not None and len(identity) == 2:
+        # Test/injected identity — treat as exact high-confidence unless conflict.
+        slug, title = identity  # type: ignore[misc]
+        conflict = _identity_conflicts_filename(
+            paper_slug=slug, tokens=tokens, blob=blob
+        )
+        if conflict:
+            logger.info(
+                "injected identity %s rejected — filename names %s",
+                slug,
+                conflict,
+            )
+            identity = None
+        else:
+            confidence = _LLM_LEARN_CONFIDENCE
+            exact_hit = True
+
     if identity is None and allow_llm:
-        identity = _llm_identify_paper_sync(db, filename=filename, caption=caption)
+        rich = _llm_identify_paper_sync(
+            db, filename=filename, caption=caption, tokens=tokens, blob=blob
+        )
+        if rich:
+            slug, title, confidence, exact_hit = rich
+            identity = (slug, title)
 
     if identity:
         slug, title = identity
@@ -322,6 +502,9 @@ def _finish_parse(
             paper_title=title,
             guessed_title=guessed_title,
             tokens=tokens,
+            confidence=confidence,
+            exact_catalog_hit=exact_hit,
+            blob=blob,
         )
         return ParsedEdition(
             paper_slug=slug,
@@ -424,7 +607,7 @@ async def parse_edition_meta_async(
 
     async with llm_slot_async():
         llm_identity = await _llm_identify_paper_async(
-            db, filename=filename, caption=caption
+            db, filename=filename, caption=caption, tokens=tokens, blob=blob
         )
     return _finish_parse(
         db,

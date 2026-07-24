@@ -1,5 +1,6 @@
 """Newspaper ad filter + exam relevance + naming heuristics + LLM paper-id learning."""
 
+import re
 from datetime import datetime, timezone
 
 from app.services.newspaper_ad_filter import (
@@ -9,7 +10,7 @@ from app.services.newspaper_ad_filter import (
     newspaper_page_verdict,
     should_cook_newspaper_page,
 )
-from app.services.newspaper_naming import parse_edition_meta
+from app.services.newspaper_naming import _norm_key, parse_edition_meta
 
 
 def test_ad_page_detected() -> None:
@@ -171,7 +172,104 @@ def test_parse_th_via_llm_identity_learns_alias(monkeypatch) -> None:
     assert parsed.edition_date.isoformat() == "2026-07-24"
     assert "bangalore" in parsed.location_raw.lower()
     assert parsed.source.startswith("llm+")
-    assert any(k.upper() == "TH" or k == "TH" for k, _, _ in learned)
+    assert any(_norm_key(k) == "th" for k, _, _ in learned)
+    assert not any(_norm_key(k) == "bangalore" for k, _, _ in learned)
+
+
+def test_bs_cannot_map_to_the_hindu(monkeypatch) -> None:
+    """BS Ahmedabad must not become The Hindu — conflict guard rejects."""
+    learned: list[str] = []
+    deleted: list[str] = []
+
+    monkeypatch.setattr(
+        "app.services.newspaper_naming.newspaper_repo.resolve_alias",
+        lambda db, raw: None,
+    )
+    monkeypatch.setattr(
+        "app.services.newspaper_naming.newspaper_repo.upsert_alias",
+        lambda db, *, alias_key, paper_slug, paper_title: learned.append(alias_key),
+    )
+    monkeypatch.setattr(
+        "app.services.newspaper_naming.newspaper_repo.delete_alias",
+        lambda db, raw: deleted.append(raw),
+    )
+    monkeypatch.setattr(
+        "app.services.newspaper_naming.newspaper_repo.make_paper_identity",
+        lambda title: ("bs", "BS"),
+    )
+
+    parsed = parse_edition_meta(
+        object(),
+        filename="BS  Ahmedabad  24-07-2026.pdf",
+        caption="",
+        message_date=datetime(2026, 7, 24, tzinfo=timezone.utc),
+        llm_identity=("the-hindu", "The Hindu"),
+    )
+    assert parsed.paper_slug != "the-hindu"
+    assert parsed.source.startswith("heuristic+")
+    assert learned == []
+
+
+def test_poisoned_bs_alias_ignored_and_deleted(monkeypatch) -> None:
+    """Stale bs→the-hindu alias must not win when filename clearly says BS."""
+    deleted: list[str] = []
+
+    def resolve(db, raw):
+        key = re.sub(r"[^a-z0-9]+", "", (raw or "").lower())
+        if key == "bs":
+            return ("the-hindu", "The Hindu")
+        return None
+
+    monkeypatch.setattr(
+        "app.services.newspaper_naming.newspaper_repo.resolve_alias",
+        resolve,
+    )
+    monkeypatch.setattr(
+        "app.services.newspaper_naming.newspaper_repo.delete_alias",
+        lambda db, raw: deleted.append(raw),
+    )
+    monkeypatch.setattr(
+        "app.services.newspaper_naming.newspaper_repo.make_paper_identity",
+        lambda title: ("bs", "BS"),
+    )
+    monkeypatch.setattr(
+        "app.services.newspaper_naming.newspaper_repo.upsert_alias",
+        lambda db, *, alias_key, paper_slug, paper_title: None,
+    )
+
+    parsed = parse_edition_meta(
+        object(),
+        filename="BS Ahmedabad 24-07-2026.pdf",
+        caption="",
+        message_date=datetime(2026, 7, 24, tzinfo=timezone.utc),
+        skip_llm=True,
+    )
+    assert parsed.paper_slug != "the-hindu"
+    assert any(re.sub(r"[^a-z0-9]+", "", d.lower()) == "bs" for d in deleted)
+
+
+def test_low_confidence_does_not_learn_alias(monkeypatch) -> None:
+    learned: list[str] = []
+
+    monkeypatch.setattr(
+        "app.services.newspaper_naming.newspaper_repo.resolve_alias",
+        lambda db, raw: None,
+    )
+    monkeypatch.setattr(
+        "app.services.newspaper_naming.newspaper_repo.upsert_alias",
+        lambda db, *, alias_key, paper_slug, paper_title: learned.append(alias_key),
+    )
+
+    parsed = parse_edition_meta(
+        object(),
+        filename="TH -Delhi -24-07-2026.pdf",
+        caption="",
+        message_date=datetime(2026, 7, 24, tzinfo=timezone.utc),
+        llm_identity=("the-hindu", "The Hindu", 0.2, True),  # type: ignore[arg-type]
+    )
+    assert parsed.paper_slug == "the-hindu"
+    # exact catalog hit + confidence below min → still no learn (0.2 < 0.35)
+    assert learned == []
 
 
 def test_heuristic_does_not_poison_alias_table(monkeypatch) -> None:
@@ -199,3 +297,19 @@ def test_heuristic_does_not_poison_alias_table(monkeypatch) -> None:
     )
     assert parsed.paper_slug == "th"
     assert upserts == []
+
+
+def test_soft_match_brand_rejected(monkeypatch) -> None:
+    from app.services.newspaper_naming import _match_known_brand
+
+    monkeypatch.setattr(
+        "app.services.newspaper_naming.newspaper_repo.make_paper_identity",
+        lambda title: ("hindu-daily", "Hindu Daily"),
+    )
+    monkeypatch.setattr(
+        "app.services.newspaper_naming.newspaper_repo.list_brands",
+        lambda db: [{"paper_slug": "the-hindu", "paper_title": "The Hindu", "enabled": True}],
+    )
+    slug, title, exact = _match_known_brand(object(), "Hindu Daily")
+    assert exact is False
+    assert slug == "hindu-daily"
