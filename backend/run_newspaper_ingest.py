@@ -21,7 +21,7 @@ def _env(name: str, default: str = "") -> str:
 
 
 async def _process_message(client, db, message) -> None:
-    from app.services.newspaper import create_edition_from_pdf
+    from app.services.newspaper import create_edition_from_pdf, ensure_brand_and_allowed
     from app.services.newspaper_naming import parse_edition_meta_async
     from app.repositories import newspaper as newspaper_repo
 
@@ -42,6 +42,30 @@ async def _process_message(client, db, message) -> None:
         db, filename=fname or "edition.pdf", caption=caption, message_date=msg_date
     )
 
+    # Gate before multi‑MB download: allowlist + one edition per paper/day.
+    if not ensure_brand_and_allowed(
+        db, paper_slug=parsed.paper_slug, paper_title=parsed.paper_title
+    ):
+        logger.info(
+            "skip paper %s (%s) — not on allowlist msg=%s",
+            parsed.paper_slug,
+            fname,
+            message.id,
+        )
+        return
+    existing = newspaper_repo.get_edition_by_paper_day(
+        db, paper_slug=parsed.paper_slug, edition_date=parsed.edition_date
+    )
+    if existing:
+        logger.info(
+            "skip duplicate %s %s (already %s) msg=%s",
+            parsed.paper_slug,
+            parsed.edition_date,
+            existing.get("status"),
+            message.id,
+        )
+        return
+
     from io import BytesIO
 
     buf = BytesIO()
@@ -61,7 +85,6 @@ async def _process_message(client, db, message) -> None:
         telegram_msg_id=int(message.id),
         location_raw=parsed.location_raw,
     )
-    newspaper_repo.set_sync_cursor(db, int(message.id))
     if edition_id:
         logger.info(
             "ingested %s %s via %s → %s",

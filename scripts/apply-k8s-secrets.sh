@@ -32,5 +32,8 @@ kubectl -n zivo create secret generic zivo-secrets \
   --from-literal=OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" \
   --from-literal=OPENROUTER_API_BASE="${OPENROUTER_API_BASE:-}" \
   --from-literal=OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
-  --from-literal=OPENAI_API_BASE="${OPENAI_API_BASE:-}"
+  --from-literal=OPENAI_API_BASE="${OPENAI_API_BASE:-}" \
+  --from-literal=TELEGRAM_API_ID="${TELEGRAM_API_ID:-}" \
+  --from-literal=TELEGRAM_API_HASH="${TELEGRAM_API_HASH:-}" \
+  --from-literal=TELEGRAM_SESSION="${TELEGRAM_SESSION:-}"
 echo "zivo-secrets updated"

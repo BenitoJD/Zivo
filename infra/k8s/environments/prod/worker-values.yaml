@@ -22,13 +22,9 @@ workloads:
     env:
       ETA_WORKER_WORKLOADS: cpu
   newspaper:
-    # Flip to true after:
-    # 1) TELEGRAM_API_ID / TELEGRAM_API_HASH / TELEGRAM_SESSION in zivo-secrets
-    # 2) /workspace/newspaper: channel_label=MyBookZon ENGLISH (PREMIUM),
-    #    channel_ref=stable Telegram peer id (numeric preferred)
-    # 3) Migration 031: allowlist_only + The Hindu enabled
-    # Filenames → paper brand via LLM (learns aliases); earliest msg/day wins.
-    enabled: false
+    # Telethon → MyBookZon; The Hindu allowlist; LLM paper-id.
+    # Requires TELEGRAM_* in zivo-secrets + channel_ref in DB.
+    enabled: true
     replicaCount: 1
     command: ["python", "run_newspaper_ingest.py"]
     env: {}

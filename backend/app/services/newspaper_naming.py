@@ -20,7 +20,8 @@ from app.services.llm_json import extract_json_obj
 logger = logging.getLogger(__name__)
 
 _IST = ZoneInfo("Asia/Kolkata")
-_LLM_MIN_CONFIDENCE = 0.55
+# Models often under-score clear abbreviations (TH→The Hindu at ~0.4).
+_LLM_MIN_CONFIDENCE = 0.35
 
 # Common city / noise tokens to strip when guessing paper title from a filename.
 _LOCATION_TOKENS = {
@@ -214,13 +215,14 @@ async def _llm_identify_paper_async(
         "Expand common abbreviations using world knowledge (e.g. brand initials). "
         "Never treat a city or date as the newspaper name. "
         "Prefer matching a known catalog brand when the file clearly refers to it. "
-        "Reply with JSON only."
+        "When the filename clearly matches a known brand (including common initials), "
+        "set confidence >= 0.8. Reply with JSON only — no prose."
     )
     user = (
         f"Known brands in our catalog:\n{_known_brands_prompt(db)}\n\n"
         f"Filename: {filename or '(none)'}\n"
         f"Caption: {caption or '(none)'}\n\n"
-        'Return JSON: {"paper_title":"<canonical English newspaper name>",'
+        'Return JSON only: {"paper_title":"<canonical English newspaper name>",'
         '"confidence":<0.0-1.0>}'
     )
     try:
@@ -244,14 +246,25 @@ async def _llm_identify_paper_async(
         confidence = float(data.get("confidence") if data.get("confidence") is not None else 0)
     except (TypeError, ValueError):
         confidence = 0.0
-    if not title or confidence < _LLM_MIN_CONFIDENCE:
+    if not title:
+        logger.info("newspaper paper-id empty title confidence=%s", confidence)
+        return None
+    matched = _match_known_brand(db, title)
+    # Exact/soft catalog match → accept even if model under-scores confidence.
+    brands = newspaper_repo.list_brands(db)
+    known_hit = any(
+        matched[0] == str(b.get("paper_slug") or "")
+        or title.lower() == str(b.get("paper_title") or "").lower()
+        for b in brands
+    )
+    if not known_hit and confidence < _LLM_MIN_CONFIDENCE:
         logger.info(
             "newspaper paper-id rejected title=%r confidence=%s",
             title,
             confidence,
         )
         return None
-    return _match_known_brand(db, title)
+    return matched
 
 
 def _llm_identify_paper_sync(

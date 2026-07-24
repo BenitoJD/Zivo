@@ -60,3 +60,5 @@ output/
 .cursor/*.png
 .cursor/*.txt
 .claude/settings.local.json
+backend/.telegram_login_state
+backend/.telegram_login_session
