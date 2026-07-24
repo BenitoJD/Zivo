@@ -40,7 +40,7 @@ export type McqState = {
   question_budget?: number;
   /** Alias of question_budget — triage/heuristic plan for the page. */
   plan_budget?: number;
-  /** Demand-driven generate-ahead cap (not the "X of Y" total). */
+  /** Same as plan_budget (FE compat; was generate-ahead pace). */
   generation_cap?: number;
   questions_answered?: number;
   questions_generated?: number;

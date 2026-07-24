@@ -18,7 +18,6 @@ from app.services.llm_sync import run_coro_in_worker
 from app.services.mcq_dedup import dedupe_aspects
 from app.services.prompts import get_prompt
 from app.services.question_pool import (
-    ABSOLUTE_MAX_QUESTIONS_PER_PAGE,
     INITIAL_BATCH_SIZE,
     on_triage_completed,
     save_page_coverage,
@@ -231,11 +230,11 @@ def _non_content_result(
 
 
 def _fallback_triage(page_text: str, page_number: int) -> dict[str, Any]:
-    # No floor (bottom 0) and a 150 cap: the count tracks how much testable content
+    # No floor and no artificial ceiling: count tracks how much testable content
     # the page actually has — one aspect per paragraph, else ~one per 120 words.
     words = len(page_text.split()) if page_text else 0
     paragraphs = [p.strip() for p in page_text.split("\n\n") if p.strip()] if page_text else []
-    aspect_count = min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, max(0, len(paragraphs), words // 120))
+    aspect_count = max(0, len(paragraphs), words // 120)
     aspects = []
     for i, para in enumerate(paragraphs[:aspect_count]):
         label = para[:120].replace("\n", " ")
@@ -391,9 +390,9 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
                                 programmable=programmable,
                             )
                         )
-                    budget = max(1, min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, budget))
+                    budget = max(1, budget)
                     if budget < len(aspects):
-                        budget = min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, len(aspects))
+                        budget = len(aspects)
                     return _store(
                         _finalize_triage(
                             aspects=aspects[:budget],
@@ -404,15 +403,15 @@ def _triage_page(db: Session, *, page_text: str, page_number: int) -> dict[str, 
                         )
                     )
 
-                # Legacy path (flag off): no floor — honour the model's count of
-                # distinct testable ideas, capped only at the absolute max. The
-                # number of questions tracks the material, not a quota.
+                # Legacy path (flag off): no floor / no artificial ceiling — honour
+                # the model's count of distinct testable ideas. The number of
+                # questions tracks the material, not a quota.
                 budget = int(raw_yield) if raw_yield is not None else INITIAL_BATCH_SIZE
-                budget = max(0, min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, budget))
+                budget = max(0, budget)
                 if not aspects:
                     return _store(_fallback_triage(page_text, page_number))
                 if budget < len(aspects):
-                    budget = min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, len(aspects))
+                    budget = len(aspects)
                 return _store(
                     _finalize_triage(
                         aspects=aspects[:budget],

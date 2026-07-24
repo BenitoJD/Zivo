@@ -53,12 +53,10 @@ def test_build_learn_queue_state_resume_at_question_three() -> None:
 
     assert state["question_number"] == 3
     assert state["questions_answered"] == 2
-    # Learner-facing Y is the triage/heuristic plan, not the generate-ahead cap.
+    # Learner-facing Y and generation_cap are the full triage/heuristic plan.
     assert state["question_budget"] == 47
     assert state["plan_budget"] == 47
-    from app.services.question_pool import INITIAL_GENERATION_AHEAD
-
-    assert state["generation_cap"] == INITIAL_GENERATION_AHEAD
+    assert state["generation_cap"] == 47
     assert state["current_assertion_id"] == "id-3"
     assert state["page_complete"] is False
     assert state["page_triage_complete"] is True

@@ -74,11 +74,11 @@ def test_get_question_budget_from_triage() -> None:
             "page_coverage": {"34": {"question_budget": 47, "aspects": []}},
         }
     }
-    # Honoured as-is now (cap is 150, no 40 ceiling, no floor).
+    # Honoured as-is (no floor, no artificial ceiling).
     assert get_question_budget(doc, 34) == 47
 
 
-def test_get_question_budget_no_floor_and_150_cap() -> None:
+def test_get_question_budget_no_floor_or_ceiling() -> None:
     def _doc(budget: int) -> MagicMock:
         d = MagicMock()
         d.meta = {"question_progress": {"page_coverage": {"7": {"question_budget": budget, "aspects": []}}}}
@@ -87,8 +87,8 @@ def test_get_question_budget_no_floor_and_150_cap() -> None:
     # A triaged budget below the old floor of 5 is honoured exactly...
     assert get_question_budget(_doc(2), 7) == 2
     assert get_question_budget(_doc(0), 7) == 0
-    # ...and the cap is 150, not 40.
-    assert get_question_budget(_doc(300), 7) == 150
+    # ...and dense pages keep the full plan (no 150 clamp).
+    assert get_question_budget(_doc(300), 7) == 300
 
 
 def test_get_question_budget_ignores_legacy_preferred_meta() -> None:
@@ -102,38 +102,26 @@ def test_get_question_budget_ignores_legacy_preferred_meta() -> None:
     assert get_question_budget(doc, 1) == 40
 
 
-def test_effective_budget_modest_before_engagement_then_deep() -> None:
-    from app.services.question_pool import (
-        GENERATION_AHEAD_BUFFER,
-        INITIAL_GENERATION_AHEAD,
-    )
-
+def test_effective_budget_equals_full_plan() -> None:
     doc = MagicMock()
-    doc.meta = {"question_progress": {"page_coverage": {"3": {"question_budget": 150, "aspects": []}}}}
-    # Before the first answer: warm opening pool (Jobs: open stretch never cliffs).
-    assert effective_question_budget(doc, 3, {"answered_on_page": 0}) == INITIAL_GENERATION_AHEAD
-    # Once engaged: a deep buffer stays well ahead of consumption...
-    assert effective_question_budget(doc, 3, {"answered_on_page": 20}) == min(
-        150, 20 + GENERATION_AHEAD_BUFFER
-    )
-    # ...still capped at the page budget near the end.
-    assert effective_question_budget(doc, 3, {"answered_on_page": 130}) == 150
+    doc.meta = {"question_progress": {"page_coverage": {"3": {"question_budget": 200, "aspects": []}}}}
+    # No generate-ahead pacing — always the full page plan.
+    assert effective_question_budget(doc, 3, {"answered_on_page": 0}) == 200
+    assert effective_question_budget(doc, 3, {"answered_on_page": 20}) == 200
+    assert effective_question_budget(doc, 3, {"answered_on_page": 130}) == 200
+    assert effective_question_budget(doc, 3, None) == 200
 
 
 def test_pool_ahead_defaults_are_deep_enough_for_seamless() -> None:
-    """Jobs law knobs: deep low-water + early transition + warm open."""
+    """Jobs law knobs: deep low-water + early transition (batch mechanics, not page caps)."""
     from app.services.question_pool import (
         EAGER_TRIAGE_LOOKAHEAD,
-        GENERATION_AHEAD_BUFFER,
-        INITIAL_GENERATION_AHEAD,
         READY_LOW_WATER,
         TRANSITION_GENERATION_RATIO,
         TRANSITION_PREFETCH_RATIO,
     )
 
     assert READY_LOW_WATER >= 20
-    assert INITIAL_GENERATION_AHEAD >= 15
-    assert GENERATION_AHEAD_BUFFER >= 40
     assert TRANSITION_PREFETCH_RATIO <= 0.45
     assert TRANSITION_GENERATION_RATIO <= 0.15
     assert EAGER_TRIAGE_LOOKAHEAD >= 5

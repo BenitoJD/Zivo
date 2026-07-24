@@ -183,7 +183,7 @@ Return exactly one JSON object (no markdown fence required):
 {{"content_type": "expository|narrative|argumentative|procedural|reference_data|non_content", "usable": <bool>, "programmable": <bool>, "testable_yield": <integer>, "aspects": [{{"key": "slug-id", "label": "Short aspect name", "cognitive_angle": "recall|detail|mechanism|application|comparison|exception|interpretation"}}], "rationale": "one sentence"}}
 
 Rules:
-- testable_yield = how many genuinely good questions this material honestly supports. Minimum 0, maximum {max_budget}. Return 0 (with aspects: []) for non_content or unusable material — this is correct, not a failure.
+- testable_yield = how many genuinely good questions this material honestly supports. Minimum 0; no artificial maximum — count every distinct testable idea. Return 0 (with aspects: []) for non_content or unusable material — this is correct, not a failure.
 - testable_yield must equal the number of aspects.
 - aspects: distinct, non-overlapping probes — vary cognitive_angle across the set; choose angles that fit the content_type (e.g. interpretation for narrative/argumentative).
 - key: lowercase slug, unique per aspect.""",
@@ -458,10 +458,12 @@ def _load_prompt_template(db: Session, key: str) -> str:
 def get_prompt(db: Session, key: str, **fmt: object) -> str:
     text = _load_prompt_template(db, key)
     if fmt:
-        from app.services.question_pool import ABSOLUTE_MAX_QUESTIONS_PER_PAGE
+        # Older DB rows may still contain {max_budget}; ignore it (no page ceiling).
+        class _Fmt(dict):
+            def __missing__(self, name: str) -> str:
+                return ""
 
-        fmt = {**fmt, "max_budget": ABSOLUTE_MAX_QUESTIONS_PER_PAGE}
-        return text.format(**fmt)
+        return text.format_map(_Fmt(fmt))
     # No str.format() pass requested: collapse any format-escaped braces so JSON
     # examples in the template render as valid single-brace JSON. Otherwise a model
     # that copies the example literally (e.g. GLM) emits `{{...}}`, which fails

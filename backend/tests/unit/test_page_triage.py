@@ -29,6 +29,21 @@ def test_normalize_aspect_from_string() -> None:
     assert aspect["asked"] is False
 
 
+def test_fallback_triage_dense_page_no_ceiling() -> None:
+    # 200 distinct paragraphs → plan keeps all 200 (no 150 clamp). Dedup is
+    # mocked so similarity clustering cannot shrink the heuristic yield.
+    text = "\n\n".join(f"Unique concept {i} about topic number {i}." for i in range(200))
+
+    def identity_dedupe(aspects: list) -> tuple[list, dict]:
+        return aspects, {"raw_count": len(aspects), "deduped_count": len(aspects)}
+
+    with patch("app.graphs.page_triage_graph.dedupe_aspects", side_effect=identity_dedupe):
+        result = _fallback_triage(text, page_number=9)
+    assert result["question_budget"] == 200
+    assert len(result["aspects"]) == 200
+    assert result.get("non_content") is not True
+
+
 def test_fallback_triage_dense_page() -> None:
     text = " ".join(["word"] * 600)
     result = _fallback_triage(text, page_number=34)

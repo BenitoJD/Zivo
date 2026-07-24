@@ -37,20 +37,11 @@ TRANSITION_PREFETCH_RATIO = float(os.getenv("ZIVO_TRANSITION_PREFETCH_RATIO", "0
 # Begin generating the next page's first batch even earlier than full transition
 # prep, once the learner has shown real engagement on the current page.
 TRANSITION_GENERATION_RATIO = float(os.getenv("ZIVO_TRANSITION_GENERATION_RATIO", "0.15"))
-# How far ahead of what's been ANSWERED we keep generating, once the learner is
-# engaged. Deep enough that a fast reader never catches up on a long page, while
-# staying demand-driven (we never pre-build the whole 150 up front).
-GENERATION_AHEAD_BUFFER = int(os.getenv("ZIVO_GENERATION_AHEAD_BUFFER", "40"))
-# Before the FIRST answer, warm a deeper opening pool than a single batch — the
-# open stretch is where empty-pool spinners hurt most. Still far below full-page
-# spend so a bounce does not burn a full triage budget.
-INITIAL_GENERATION_AHEAD = int(os.getenv("ZIVO_INITIAL_GENERATION_AHEAD", "15"))
 # Eagerly triage the current page + this many pages ahead at init, so the document
 # is understood before the reader arrives. Triage only (cheap, ~1 call/page);
 # batches stay on-demand + next-page prefetch. Wider than 3 so long docs stay
 # ahead of the earlier transition window without speculative MCQ generation.
 EAGER_TRIAGE_LOOKAHEAD = int(os.getenv("ZIVO_EAGER_TRIAGE_LOOKAHEAD", "5"))
-ABSOLUTE_MAX_QUESTIONS_PER_PAGE = int(os.getenv("ZIVO_MAX_QUESTIONS_PER_PAGE", "150"))
 # After this many failed generation attempts, an aspect is abandoned (marked asked)
 # so a permanently un-generatable aspect — every draft rejected by the verifier,
 # critic, or dedup — can't block the page from ever completing (which would strand
@@ -211,13 +202,13 @@ def get_question_budget(doc: Document, page: int) -> int:
     # of open-world: ask nothing on a cover page rather than force filler.
     if cov.get("non_content"):
         return 0
-    # No floor: the budget is exactly what triage decided (the count of distinct
-    # testable ideas), capped only at the absolute max. A missing budget means
-    # triage hasn't landed yet — seed a small speculative batch so generation can
-    # start, but a triaged value of 0 is honoured (distinguish missing from 0).
+    # No floor and no artificial ceiling: budget is exactly what triage/heuristic
+    # decided (count of distinct testable ideas). A missing budget means triage
+    # hasn't landed yet — seed a small speculative batch so generation can start,
+    # but a triaged value of 0 is honoured (distinguish missing from 0).
     raw = cov.get("question_budget")
     budget = int(raw) if raw is not None else INITIAL_BATCH_SIZE
-    return max(0, min(ABSOLUTE_MAX_QUESTIONS_PER_PAGE, budget))
+    return max(0, budget)
 
 
 def effective_question_budget(
@@ -225,14 +216,9 @@ def effective_question_budget(
     page: int,
     progress: dict[str, Any] | None = None,
 ) -> int:
-    """Cap generation ahead of observed learner consumption."""
-    cap = get_question_budget(doc, page)
-    if progress is None:
-        return cap
-    answered = int(progress.get("answered_on_page") or 0)
-    if answered <= 0:
-        return min(cap, INITIAL_GENERATION_AHEAD)
-    return min(cap, answered + GENERATION_AHEAD_BUFFER)
+    """Page generation target = full plan budget (no generate-ahead pacing)."""
+    del progress  # kept for call-site compatibility
+    return get_question_budget(doc, page)
 
 
 def is_coverage_complete(doc: Document, page: int) -> bool:
@@ -535,14 +521,14 @@ def is_page_complete(
     # strand the learner when the pool still has cards to show.
     if next_assertion_id(db, doc.id, progress, page_ids=page_ids):
         return False
-    budget = effective_question_budget(doc, page, progress)
+    budget = get_question_budget(doc, page)
     generated = len(page_ids) if page_ids is not None else count_assertions_on_page(db, doc.id, page)
     if generated == 0:
         return False
     coverage_done = is_coverage_complete(doc, page)
     # generation_pending is doc-level and can be set by next-page prefetch. Only
     # treat it as "still cooking THIS page" when we still have room under the
-    # demand-driven cap and coverage is not done — otherwise advance.
+    # page plan and coverage is not done — otherwise advance.
     if (
         progress.get("generation_pending")
         and not coverage_done
@@ -569,7 +555,8 @@ def build_learn_queue_state(
     questions_generated = len(page_ids)
     questions_answered = sum(1 for row_id in page_ids if row_id in answered_set)
     plan_budget = get_question_budget(doc, page)
-    generation_cap = effective_question_budget(doc, page, progress)
+    # FE compat: generation_cap used to be a generate-ahead pace; now equals plan.
+    generation_cap = plan_budget
     # Loop's choosing step (policy-driven; defaults to sequence order).
     next_id = select_next_assertion(db, document_id, doc, progress, page_ids=page_ids)
     coverage_complete = is_coverage_complete(doc, page)
@@ -596,8 +583,8 @@ def build_learn_queue_state(
         "page_to": page_to,
         "current_assertion_id": next_id,
         "question_number": questions_answered + 1 if next_id else questions_answered,
-        # question_budget = learner-facing plan (triage/heuristic). generation_cap
-        # is the demand-driven generate-ahead limit — not what "X of Y" should show.
+        # question_budget / plan_budget / generation_cap are the same page plan —
+        # generate toward the full triage/heuristic yield with no artificial ceiling.
         "question_budget": plan_budget,
         "plan_budget": plan_budget,
         "generation_cap": generation_cap,
