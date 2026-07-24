@@ -141,7 +141,7 @@ export default function NewspaperAdminPage() {
 
   if (session.isLoading || channelQ.isLoading || brandsQ.isLoading) {
     return (
-      <Center mih={240}>
+      <Center flex={1} mih={240}>
         <Loader color="lavender" />
       </Center>
     );
@@ -149,124 +149,137 @@ export default function NewspaperAdminPage() {
 
   if (forbidden) {
     return (
-      <Center mih={240}>
+      <Center flex={1} mih={240}>
         <Text c="dimmed">Admin only.</Text>
       </Center>
     );
   }
 
+  // AppShell main is overflow:hidden + flex column — page must own scroll
+  // (same pattern as /workspace and /workspace/progress).
   return (
-    <Box p={{ base: "md", md: "xl" }} maw={640} mx="auto" w="100%">
-      <Stack gap="xl">
-        <Stack gap={4}>
-          <Text size="xs" fw={600} tt="uppercase" lts={1.2} c="lavender.8">
-            Newspaper
-          </Text>
-          <Title order={2} ff="var(--font-serif)" fw={500}>
-            Source &amp; papers
-          </Title>
-        </Stack>
-
-        <Paper radius="xl" p="lg" withBorder bg="gray.0" shadow="paper">
-          <Stack gap="md">
-            <Text fw={600} ff="var(--font-serif)">
-              Telegram channel
+    <Box
+      flex={1}
+      mih={0}
+      style={{
+        overflowY: "auto",
+        overflowX: "hidden",
+        WebkitOverflowScrolling: "touch",
+        background: "var(--mantine-color-body)",
+      }}
+    >
+      <Box p={{ base: "md", md: "xl" }} maw={640} mx="auto" w="100%">
+        <Stack gap="xl">
+          <Stack gap={4}>
+            <Text size="xs" fw={600} tt="uppercase" lts={1.2} c="lavender.8">
+              Newspaper
             </Text>
-            <Text size="sm" c="dimmed">
-              Paste numeric peer id (preferred), @username, or invite link. Example label:
-              MyBookZon ENGLISH (PREMIUM). No redeploy needed.
-            </Text>
-            <TextInput
-              label="Channel"
-              placeholder="@mychannel or -100…"
-              value={ref}
-              onChange={(e) => setRefEdit(e.currentTarget.value)}
-              radius="md"
-            />
-            <TextInput
-              label="Label (optional)"
-              placeholder="MyBookZon ENGLISH (PREMIUM)"
-              value={label}
-              onChange={(e) => setLabelEdit(e.currentTarget.value)}
-              radius="md"
-            />
-            {channelQ.data?.updated_at ? (
-              <Text size="xs" c="dimmed">
-                Last updated {channelQ.data.updated_at}
-                {channelQ.data.sync_cursor != null
-                  ? ` · cursor ${channelQ.data.sync_cursor}`
-                  : ""}
-              </Text>
-            ) : null}
-            <Button
-              radius="xl"
-              loading={busy}
-              disabled={!ref.trim()}
-              onClick={() => void saveChannel()}
-            >
-              Save channel
-            </Button>
+            <Title order={2} ff="var(--font-serif)" fw={500}>
+              Source &amp; papers
+            </Title>
           </Stack>
-        </Paper>
 
-        <Paper radius="xl" p="lg" withBorder bg="gray.0" shadow="paper">
-          <Stack gap="md">
-            <Group justify="space-between" align="flex-start" wrap="nowrap">
-              <Box>
-                <Text fw={600} ff="var(--font-serif)">
-                  Papers you want
-                </Text>
-                <Text size="sm" c="dimmed">
-                  Turn on “only selected” then enable papers. Filenames change — ingest uses LLM
-                  to map TH/Mint/… then remembers aliases. New brands appear after a post (off by
-                  default).
-                </Text>
-              </Box>
-              <Switch
-                checked={allowlistOnly}
-                onChange={(e) => void toggleAllowlist(e.currentTarget.checked)}
-                disabled={modeBusy}
-                label="Only selected"
-                labelPosition="left"
-              />
-            </Group>
-
-            {brands.length === 0 ? (
+          <Paper radius="xl" p="lg" withBorder bg="gray.0" shadow="paper">
+            <Stack gap="md">
+              <Text fw={600} ff="var(--font-serif)">
+                Telegram channel
+              </Text>
               <Text size="sm" c="dimmed">
-                No papers discovered yet. After ingest sees a PDF, it appears here.
+                Paste numeric peer id (preferred), @username, or invite link. Example label:
+                MyBookZon ENGLISH (PREMIUM). No redeploy needed.
               </Text>
-            ) : (
-              <Stack gap="xs">
-                {brands.map((b) => (
-                  <Paper key={b.slug} radius="md" p="sm" withBorder bg="var(--mantine-color-body)">
-                    <Group justify="space-between" wrap="nowrap">
-                      <Box style={{ minWidth: 0 }}>
-                        <Text fw={500} truncate>
-                          {b.title}
-                        </Text>
-                        <Text size="xs" c="dimmed" truncate>
-                          {b.slug}
-                        </Text>
-                      </Box>
-                      <Switch
-                        checked={b.enabled}
-                        disabled={brandBusy === b.slug || !allowlistOnly}
-                        onChange={(e) => void toggleBrand(b, e.currentTarget.checked)}
-                        aria-label={`Enable ${b.title}`}
-                      />
-                    </Group>
-                  </Paper>
-                ))}
-                {!allowlistOnly ? (
-                  <Text size="xs" c="dimmed">
-                    Switches apply when “Only selected” is on. Right now every paper is allowed.
+              <TextInput
+                label="Channel"
+                placeholder="@mychannel or -100…"
+                value={ref}
+                onChange={(e) => setRefEdit(e.currentTarget.value)}
+                radius="md"
+              />
+              <TextInput
+                label="Label (optional)"
+                placeholder="MyBookZon ENGLISH (PREMIUM)"
+                value={label}
+                onChange={(e) => setLabelEdit(e.currentTarget.value)}
+                radius="md"
+              />
+              {channelQ.data?.updated_at ? (
+                <Text size="xs" c="dimmed">
+                  Last updated {channelQ.data.updated_at}
+                  {channelQ.data.sync_cursor != null
+                    ? ` · cursor ${channelQ.data.sync_cursor}`
+                    : ""}
+                </Text>
+              ) : null}
+              <Button
+                radius="xl"
+                loading={busy}
+                disabled={!ref.trim()}
+                onClick={() => void saveChannel()}
+              >
+                Save channel
+              </Button>
+            </Stack>
+          </Paper>
+
+          <Paper radius="xl" p="lg" withBorder bg="gray.0" shadow="paper">
+            <Stack gap="md">
+              <Group justify="space-between" align="flex-start" wrap="nowrap">
+                <Box>
+                  <Text fw={600} ff="var(--font-serif)">
+                    Papers you want
                   </Text>
-                ) : null}
-              </Stack>
-            )}
-          </Stack>
-        </Paper>
-      </Stack>
+                  <Text size="sm" c="dimmed">
+                    Turn on “only selected” then enable papers. Filenames change — ingest uses LLM
+                    to map TH/Mint/… then remembers aliases. New brands appear after a post (off by
+                    default).
+                  </Text>
+                </Box>
+                <Switch
+                  checked={allowlistOnly}
+                  onChange={(e) => void toggleAllowlist(e.currentTarget.checked)}
+                  disabled={modeBusy}
+                  label="Only selected"
+                  labelPosition="left"
+                />
+              </Group>
+
+              {brands.length === 0 ? (
+                <Text size="sm" c="dimmed">
+                  No papers discovered yet. After ingest sees a PDF, it appears here.
+                </Text>
+              ) : (
+                <Stack gap="xs">
+                  {brands.map((b) => (
+                    <Paper key={b.slug} radius="md" p="sm" withBorder bg="var(--mantine-color-body)">
+                      <Group justify="space-between" wrap="nowrap">
+                        <Box style={{ minWidth: 0 }}>
+                          <Text fw={500} truncate>
+                            {b.title}
+                          </Text>
+                          <Text size="xs" c="dimmed" truncate>
+                            {b.slug}
+                          </Text>
+                        </Box>
+                        <Switch
+                          checked={b.enabled}
+                          disabled={brandBusy === b.slug || !allowlistOnly}
+                          onChange={(e) => void toggleBrand(b, e.currentTarget.checked)}
+                          aria-label={`Enable ${b.title}`}
+                        />
+                      </Group>
+                    </Paper>
+                  ))}
+                  {!allowlistOnly ? (
+                    <Text size="xs" c="dimmed">
+                      Switches apply when “Only selected” is on. Right now every paper is allowed.
+                    </Text>
+                  ) : null}
+                </Stack>
+              )}
+            </Stack>
+          </Paper>
+        </Stack>
+      </Box>
     </Box>
   );
 }
