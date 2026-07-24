@@ -370,23 +370,18 @@ export function McqHeroPanel({
   }, [waiting, graded, hasSelection, submitting, optionsLocked, checking, selected, safeOptions.length, multiSelect, onSelect, onToggle, onSubmit, onContinue]);
 
   if (waiting) {
-    // Determinate progress during generation: turn the vague spinner into a
-    // moving bar the user can watch fill toward the page's question budget.
-    // Known waits feel ~30% shorter than unknown waits (HCI research). Falls
-    // back to an animated indeterminate bar when no budget is known yet.
+    // Determinate progress during generation: ring fills toward the FIRST
+    // question (then the learner leaves this wait), not the full page budget —
+    // a 400-idea plan must not pin the ring at ~48% for an hour.
     const generated = queue?.questions_generated ?? 0;
-    const budget = queue?.plan_budget ?? queue?.question_budget ?? queue?.generation_cap ?? 0;
-    // Stage-weighted overall progress, driven by live backend signals, so the ring
-    // always reflects real pipeline movement (read -> plan -> write) instead of
-    // sitting at 0% until the first question lands.
     const readingPhase = artifactStatus === "indexing" || queue?.rag_window_ready === false;
     const planningPhase = !readingPhase && !queue?.page_triage_complete;
     const progressPct = readingPhase
       ? Math.min(28, Math.round((indexProgress ?? 0) * 0.28))
       : planningPhase
         ? 40
-        : budget > 0
-          ? Math.min(100, 48 + Math.round((generated / budget) * 52))
+        : generated > 0
+          ? 92
           : 52;
     const RING = compact ? 124 : 140;
     const R = RING / 2 - 12;

@@ -23,6 +23,24 @@ _METADATA_IP = ipaddress.ip_address("169.254.169.254")
 
 _WS_RE = re.compile(r"[ \t]+\n")
 _BLANK_RE = re.compile(r"\n{3,}")
+# Soft page breaks at structural headings so DOCX/paste/URL study units track
+# document outline (Part / Chapter / markdown #) instead of only char budgets.
+_SECTION_START_RE = re.compile(
+    r"^(?:"
+    r"#{1,6}\s+\S"  # markdown heading
+    r"|(?:Part|Chapter|Section|Unit|Module)\s+\d+"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_section_start(paragraph: str) -> bool:
+    stripped = paragraph.strip()
+    first = stripped.split("\n", 1)[0].strip()
+    if not first or not _SECTION_START_RE.match(first):
+        return False
+    # Title line (or title + tiny blurb) — not a long body that opens with "Part 1".
+    return len(stripped) <= 160
 
 
 @dataclass(frozen=True)
@@ -165,6 +183,9 @@ def paginate_reader_text(text: str, chars_per_page: int = READER_PAGE_CHARS) -> 
     current: list[str] = []
     current_len = 0
     page_num = 1
+    # Don't open a new page for TOC-style "Part N" lines until the current page
+    # already holds real study content (~half a short screen of text).
+    min_chars_before_heading_break = 600
 
     def flush() -> None:
         nonlocal page_num, current, current_len
@@ -176,6 +197,13 @@ def paginate_reader_text(text: str, chars_per_page: int = READER_PAGE_CHARS) -> 
         current_len = 0
 
     for para in paragraphs:
+        if (
+            current
+            and current_len >= min_chars_before_heading_break
+            and _looks_like_section_start(para)
+        ):
+            flush()
+
         if len(para) > chars_per_page:
             flush()
             start = 0

@@ -37,7 +37,11 @@ export function GenerationStages({
   const readDone = !reading;
   const planning = readDone && !pageTriageComplete;
   const planDone = readDone && Boolean(pageTriageComplete);
-  const writing = planDone && (Boolean(generationPending) || generated < Math.max(budget, 1));
+  // Writing stage is "get the first card ready" — more questions refill in the
+  // background while the learner studies. Do not keep this stage active until
+  // the full page budget is filled (that can be dozens/hundreds of MCQs).
+  const writing =
+    planDone && generated < 1 && (Boolean(generationPending) || budget > 0);
 
   type State = "done" | "active" | "todo";
   const s1: State = reading ? "active" : "done";
@@ -64,7 +68,7 @@ export function GenerationStages({
           : s2 === "active"
             ? "Counting the distinct ideas worth testing here"
             : budget > 0
-              ? `Found ${budget} ideas worth testing - that sets your quiz size`
+              ? `About ${budget} ideas to cover - questions arrive a few at a time`
               : "Done",
     },
     {
@@ -73,9 +77,13 @@ export function GenerationStages({
       sub:
         s3 === "todo"
           ? "Up next"
-          : budget > 0
-            ? `${generated} of ${budget} ready`
-            : "Drafting and checking each one",
+          : s3 === "done"
+            ? generated > 0
+              ? "First ones ready - more while you study"
+              : "Done"
+            : generated > 0
+              ? `${generated} ready - more on the way`
+              : "Writing your first question so you can start",
     },
   ];
 

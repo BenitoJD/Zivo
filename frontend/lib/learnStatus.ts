@@ -53,7 +53,6 @@ export function learnWaitStatus(ctx: LearnWaitContext, tick: number): LearnWaitS
 
   if (ctx.generationPending) {
     const generated = ctx.questionsGenerated ?? 0;
-    const budget = ctx.questionBudget ?? 0;
     const line =
       GENERATING_LINES[((tick % GENERATING_LINES.length) + GENERATING_LINES.length) % GENERATING_LINES.length];
     if (generated === 0) {
@@ -63,9 +62,14 @@ export function learnWaitStatus(ctx: LearnWaitContext, tick: number): LearnWaitS
         rotateKey: "gen-first",
       };
     }
-    const progress =
-      budget > 0 ? `${generated} ready · working toward ${budget} on this page` : `${generated} ready · writing more`;
-    return { title: line.title, detail: progress, rotateKey: "gen-more" };
+    // Learner should already be answering when generated > 0; this copy is only
+    // for the rare wait when a card is not yet loadable. Never imply they must
+    // wait for the full page budget.
+    return {
+      title: line.title,
+      detail: `${generated} ready · writing a few more in the background`,
+      rotateKey: "gen-more",
+    };
   }
 
   if (ctx.mcqLoading) {

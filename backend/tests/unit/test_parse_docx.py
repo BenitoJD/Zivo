@@ -92,3 +92,18 @@ def test_parse_plain_text_soft_paginates() -> None:
     text = "\n\n".join(f"Para {i}. " + ("word " * 100) for i in range(10))
     pages = parse_document("text/plain", text.encode("utf-8"))
     assert len(pages) > 1
+
+
+def test_avidpay_like_docx_is_multi_page() -> None:
+    """Regression: long Word KT notes must not collapse to a single study page."""
+    from pathlib import Path
+
+    path = Path("/Users/benito/Desktop/AvidPay KT - Complete Reference.docx")
+    if not path.is_file():
+        return
+    data = path.read_bytes()
+    ct = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    pages = parse_document(ct, data)
+    assert len(pages) >= 8
+    assert all(pages[i]["page"] == i + 1 for i in range(len(pages)))
+    assert any("Part 1" in p["text"] for p in pages)

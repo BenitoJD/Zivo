@@ -102,6 +102,70 @@ def count_document_pages(content_type: str, data: bytes) -> int:
     return max(1, len(parse_document(content_type, data)))
 
 
+def refresh_document_page_count(db, doc) -> int:
+    """Ensure ``meta.page_count`` matches the file (heals pre-soft-paginate DOCX).
+
+    Cheap for PDF (fitz page count). For Word/text/paste, re-parses once when the
+    stored count is missing or still ``1`` on a non-trivial file — those were the
+    docs that got stuck as a single mega-page before soft pagination shipped.
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from app.services.storage import fetch_object
+
+    meta = dict(doc.meta or {})
+    stored = meta.get("page_count")
+    try:
+        stored_i = int(stored) if stored is not None else None
+    except (TypeError, ValueError):
+        stored_i = None
+
+    ct = (doc.content_type or "").lower()
+    if ct.startswith("image/"):
+        return stored_i or 1
+
+    # Already a real multi-page count — trust it.
+    if stored_i is not None and stored_i > 1:
+        return stored_i
+
+    # Tiny files are genuinely one page; skip a MinIO round-trip.
+    if int(getattr(doc, "size_bytes", 0) or 0) < 2500 and stored_i == 1:
+        return 1
+
+    try:
+        data = fetch_object(doc.storage_key)
+        counted = count_document_pages(doc.content_type, data)
+    except Exception:
+        return stored_i or 1
+
+    if counted == stored_i:
+        return counted or 1
+
+    meta["page_count"] = counted
+    # Old DOCX path stored the whole file as page 1 and auto-selected [1].
+    # Clear that so the learner picks a real study range on the healed pages.
+    selected = meta.get("selected_range") if isinstance(meta.get("selected_range"), dict) else None
+    if counted > 1 and selected:
+        pages = selected.get("pages")
+        only_page_one = (
+            (isinstance(pages, list) and pages == [1])
+            or (
+                int(selected.get("from") or 0) == 1
+                and int(selected.get("to") or 0) == 1
+                and not pages
+            )
+        )
+        if only_page_one:
+            meta.pop("selected_range", None)
+            if getattr(doc, "status", None) in {"ready", "indexing"}:
+                doc.status = "pending"
+                doc.index_progress = 0
+    doc.meta = meta
+    flag_modified(doc, "meta")
+    db.commit()
+    return counted
+
+
 def render_pdf_page_png(
     data: bytes,
     page_number: int,
@@ -158,14 +222,17 @@ def _paragraph_page_break_before(paragraph: Paragraph) -> bool:
 
 
 def _split_paragraph_by_page_breaks(paragraph: Paragraph) -> list[str]:
-    """Split one paragraph on hard page breaks; always returns ≥1 segment."""
+    """Split one paragraph on hard + Word-rendered page breaks; always ≥1 segment."""
     if not paragraph.runs:
         return [paragraph.text or ""]
 
     segments: list[str] = [""]
     for run in paragraph.runs:
         for child in run._element:
-            if child.tag == qn("w:br") and child.get(qn("w:type")) == "page":
+            # Hard break (Insert → Page Break) and Word's last layout break.
+            if child.tag == qn("w:lastRenderedPageBreak") or (
+                child.tag == qn("w:br") and child.get(qn("w:type")) == "page"
+            ):
                 segments.append("")
             elif child.tag == qn("w:t"):
                 segments[-1] += child.text or ""

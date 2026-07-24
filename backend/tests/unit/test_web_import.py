@@ -45,6 +45,34 @@ def test_paginate_reader_text_splits_long_articles() -> None:
     assert pages[0]["page"] == 1
 
 
+def test_paginate_reader_text_breaks_on_part_headings() -> None:
+    text = (
+        ("Intro paragraph with enough words to stay on page one before the break. " * 20)
+        + "\n\nPart 1 · Daily Operations\n\n"
+        + ("Body under part one continues with more study text here. " * 15)
+        + "\n\nPart 2 · Infrastructure\n\n"
+        + ("Body under part two continues with more study text here. " * 15)
+    )
+    pages = paginate_reader_text(text, chars_per_page=5000)
+    assert len(pages) >= 3
+    assert any(p["text"].lstrip().startswith("Part 1") for p in pages[1:])
+    assert any(p["text"].lstrip().startswith("Part 2") for p in pages[1:])
+
+
+def test_paginate_reader_text_keeps_toc_parts_together() -> None:
+    # TOC lines look like Part headings but sit on a short page — must not each
+    # become their own empty study page.
+    text = (
+        "Avid Pay Complete KT\n\n"
+        + "\n\n".join(f"Part {i} · Title {i}" for i in range(1, 6))
+        + "\n\n"
+        + ("Real section body with plenty of words for studying this topic. " * 40)
+    )
+    pages = paginate_reader_text(text, chars_per_page=5000)
+    toc_only = [p for p in pages if p["text"].startswith("Part ") and len(p["text"]) < 80]
+    assert toc_only == []
+
+
 def test_article_from_pasted_text_requires_minimum_length() -> None:
     with pytest.raises(WebImportError):
         article_from_pasted_text("too short")

@@ -113,18 +113,67 @@ def test_effective_budget_equals_full_plan() -> None:
 
 
 def test_pool_ahead_defaults_are_deep_enough_for_seamless() -> None:
-    """Jobs law knobs: deep low-water + early transition (batch mechanics, not page caps)."""
+    """Jobs law knobs: warm low-water + early transition; batches stay small."""
     from app.services.question_pool import (
         EAGER_TRIAGE_LOOKAHEAD,
+        FIRST_QUESTION_BATCH_SIZE,
+        MAX_GENERATE_BATCH_SIZE,
         READY_LOW_WATER,
+        REFILL_BATCH_SIZE,
         TRANSITION_GENERATION_RATIO,
         TRANSITION_PREFETCH_RATIO,
     )
 
-    assert READY_LOW_WATER >= 20
+    assert FIRST_QUESTION_BATCH_SIZE == 1
+    assert MAX_GENERATE_BATCH_SIZE == REFILL_BATCH_SIZE == 5
+    assert READY_LOW_WATER >= REFILL_BATCH_SIZE
     assert TRANSITION_PREFETCH_RATIO <= 0.45
     assert TRANSITION_GENERATION_RATIO <= 0.15
     assert EAGER_TRIAGE_LOOKAHEAD >= 5
+
+
+def test_enqueue_page_batch_caps_huge_remaining() -> None:
+    """A 400-idea plan must not become one 400-question generate job."""
+    from app.services.question_pool_jobs import enqueue_page_batch
+
+    doc_id = uuid.uuid4()
+    doc = MagicMock()
+    doc.id = doc_id
+    doc.status = "ready"
+    doc.account_id = None
+    doc.meta = {
+        "selected_range": {"from": 1, "to": 1},
+        "question_progress": {
+            "current_page": 1,
+            "page_coverage": {
+                "1": {
+                    "question_budget": 422,
+                    "aspects": [{"key": "x", "label": "X", "asked": False}],
+                }
+            },
+        },
+    }
+    db = MagicMock()
+    db.get.return_value = doc
+    captured: dict = {}
+
+    def _capture_enqueue(*_a, **kwargs):
+        captured.update(kwargs)
+        job = MagicMock()
+        job.id = uuid.uuid4()
+        return job
+
+    with (
+        patch("app.services.question_pool_jobs.count_assertions_on_page", return_value=1),
+        patch("app.services.question_pool_jobs._has_active_generate_job_for_page", return_value=False),
+        patch("app.services.question_pool_jobs._cancel_queued_generate_jobs_for_page"),
+        patch("app.services.question_pool_jobs.create_activity", return_value=uuid.uuid4()),
+        patch("app.services.question_pool_jobs.save_progress"),
+        patch("app.services.question_pool_jobs.enqueue_generate", side_effect=_capture_enqueue),
+    ):
+        enqueue_page_batch(db, doc, page=1, batch_size=421, start_sequence=1)
+
+    assert captured["options"]["batch_size"] == 5
 
 
 def test_record_answer_increments_counter() -> None:

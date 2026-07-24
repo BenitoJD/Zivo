@@ -16,21 +16,24 @@ from app.services.mcq_assertion_facets import page_assertion_ids_from_facets
 from app.repositories import workspace as workspace_repo
 
 INITIAL_BATCH_SIZE = 5
-# The first batch after triage fills the whole warm pool in one LLM call
-# (generate_quality_mcq_batch produces N MCQs per call), so a batch of 5 takes
-# ~the same wall-clock as a batch of 1 — generating just one question first and
-# the remaining four in a second job cycle only added a queue handoff + wait.
-FIRST_QUESTION_BATCH_SIZE = INITIAL_BATCH_SIZE
+# First job writes ONE question so the learner can start immediately. Critic +
+# verify run per draft after the shared draft call — a batch of 5 delays "go"
+# by four quality-gate round-trips. Warm pool fills right after via remainder /
+# refill jobs (capped at REFILL_BATCH_SIZE).
+FIRST_QUESTION_BATCH_SIZE = 1
 REFILL_BATCH_SIZE = 5
+# Hard ceiling on any single generate.questions job. Callers sometimes pass
+# `remaining` (= full page budget); without this a 400-idea plan becomes one
+# multi-hour job instead of small rolling batches.
+MAX_GENERATE_BATCH_SIZE = REFILL_BATCH_SIZE
 REFILL_AFTER_ANSWERED = 2
 # Proactive low-water mark: keep refilling so the ready buffer never silently
 # drains to empty before the next question is needed. The moment the count of
 # ready, unanswered questions dips below this, a refill batch is staged — instead
 # of only topping up every REFILL_AFTER_ANSWERED answers or once fully drained.
-# Jobs law: You move. Questions are already there. Always. Sized deep enough that
-# a fast solver cannot empty the pool during one in-flight batch (~5 questions,
-# tens of seconds) before on_batch_completed chains the next refill.
-READY_LOW_WATER = int(os.getenv("ZIVO_READY_LOW_WATER", "20"))
+# Jobs law: You move. Questions are already there. Always. Sized to cover one
+# in-flight refill (~5 questions) — not the whole page plan.
+READY_LOW_WATER = int(os.getenv("ZIVO_READY_LOW_WATER", "5"))
 # Start next-page triage/RAG/prep before the current page is nearly done so the
 # page turn never cold-starts. Was 0.70 — too late for fast learners.
 TRANSITION_PREFETCH_RATIO = float(os.getenv("ZIVO_TRANSITION_PREFETCH_RATIO", "0.45"))

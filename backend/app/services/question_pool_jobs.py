@@ -29,6 +29,7 @@ from app.services.question_pool import (
     GENERATE_JOB_STALE_SECONDS,
     INITIAL_BATCH_SIZE,
     MAX_ASPECT_ATTEMPTS,
+    MAX_GENERATE_BATCH_SIZE,
     READY_LOW_WATER,
     REFILL_AFTER_ANSWERED,
     REFILL_BATCH_SIZE,
@@ -101,7 +102,9 @@ def enqueue_page_batch(
             db.commit()
         return None
 
-    batch_size = min(batch_size, remaining)
+    # Never enqueue the whole remaining page plan in one job — small rolling
+    # batches so Q1 lands fast and the learner studies while the pool refills.
+    batch_size = min(batch_size, remaining, MAX_GENERATE_BATCH_SIZE)
     # Per-page guard: a different page (e.g. the next page's transition prefetch)
     # may be generating concurrently — only block on a job for THIS page.
     if _has_active_generate_job_for_page(db, doc.id, page):

@@ -278,6 +278,7 @@ def ingest_rag_window_job(payload: dict) -> dict:
 def transition_prep_job(payload: dict) -> dict:
     from app.services.question_pool import (
         FIRST_QUESTION_BATCH_SIZE,
+        REFILL_BATCH_SIZE,
         TRANSITION_GENERATION_RATIO,
         count_assertions_on_page,
         effective_question_budget,
@@ -302,11 +303,12 @@ def transition_prep_job(payload: dict) -> dict:
         generated = count_assertions_on_page(db, document_id, current_page)
         if generated < budget:
             remaining = budget - generated
+            # Rolling refill only — never one job for the entire remaining plan.
             enqueue_page_batch(
                 db,
                 doc,
                 page=current_page,
-                batch_size=remaining,
+                batch_size=min(REFILL_BATCH_SIZE, remaining),
                 start_sequence=generated,
             )
 

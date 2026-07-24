@@ -17,6 +17,7 @@ from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.api.access import require_document
 from app.services.guest_session import optional_guest_session
 from app.services.jobs import enqueue_rag_window
+from app.services.parse import refresh_document_page_count
 from app.services.question_pool import reset_for_new_page_range
 from app.services.storage import presigned_get_url
 
@@ -53,6 +54,10 @@ def get_artifact(
     guest_id: str | None = Depends(optional_guest_session),
 ) -> ArtifactOut:
     doc = require_document(db, artifact_id, user, guest_id)
+    # Heal stale page_count / bogus single-page selection before the FE decides
+    # whether to show the page picker.
+    refresh_document_page_count(db, doc)
+    db.refresh(doc)
     return ArtifactOut(
         id=doc.id,
         artifact_captured_at=doc.artifact_captured_at,
@@ -79,7 +84,8 @@ def get_pages(
         # Learners never get the newspaper PDF — admins may for ops.
         if user is None or not getattr(user, "is_admin", False):
             raise HTTPException(status_code=404, detail="Not found")
-    page_count = (doc.meta or {}).get("page_count") or 1
+    # Heal DOCX/paste that landed as page_count=1 before soft pagination.
+    page_count = refresh_document_page_count(db, doc)
     return {
         "artifact_id": str(doc.id),
         "page_count": page_count,
@@ -101,7 +107,8 @@ def confirm_page_range(
 
     if is_newspaper_document(doc) and (user is None or not getattr(user, "is_admin", False)):
         raise HTTPException(status_code=404, detail="Not found")
-    page_count = (doc.meta or {}).get("page_count") or body.to_page
+    # Re-count from bytes so a healed multi-page DOCX can accept a real range.
+    page_count = refresh_document_page_count(db, doc) or body.to_page
 
     if body.pages:
         study_pages = sorted({p for p in body.pages if p >= 1})

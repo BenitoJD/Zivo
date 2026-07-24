@@ -321,13 +321,26 @@ def _non_content_result(
 
 
 def _fallback_triage(page_text: str, page_number: int) -> dict[str, Any]:
-    # No floor and no artificial ceiling: count tracks how much testable content
-    # the page actually has — one aspect per paragraph, else ~one per 120 words.
+    # No floor. Idea count tracks substance (~one per 120 words), using
+    # substantial paragraphs as labels — never raw ``\\n\\n`` count. DOCX/PDF
+    # extracts often emit hundreds of tiny blocks; treating each as an idea
+    # planned 400+ MCQs for one page and blocked the learner.
+    _MIN_SUBSTANTIAL_WORDS = 12
     words = len(page_text.split()) if page_text else 0
     paragraphs = [p.strip() for p in page_text.split("\n\n") if p.strip()] if page_text else []
-    aspect_count = max(0, len(paragraphs), words // 120)
+    substantial = [p for p in paragraphs if len(p.split()) >= _MIN_SUBSTANTIAL_WORDS]
+    word_estimate = words // 120
+    if words > 0 and word_estimate == 0:
+        word_estimate = 1
+    if substantial:
+        aspect_count = min(len(substantial), word_estimate)
+    elif words > 0:
+        aspect_count = word_estimate
+    else:
+        aspect_count = 0
+    labels = substantial if substantial else paragraphs
     aspects = []
-    for i, para in enumerate(paragraphs[:aspect_count]):
+    for i, para in enumerate(labels[:aspect_count]):
         label = para[:120].replace("\n", " ")
         aspects.append(
             {
@@ -337,7 +350,7 @@ def _fallback_triage(page_text: str, page_number: int) -> dict[str, Any]:
                 "answered": False,
             }
         )
-    # Some text but no paragraph breaks — one consolidated aspect rather than zero.
+    # Some text but no usable labels — one consolidated aspect rather than zero.
     if not aspects and words > 0:
         aspects = [
             {
