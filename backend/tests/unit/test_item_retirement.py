@@ -28,7 +28,10 @@ def test_unseeded_vocab_is_a_safe_noop() -> None:
 
 def test_retires_flagged_items_and_commits() -> None:
     db = MagicMock()
-    db.execute.return_value.scalars.return_value.all.return_value = ["id-1", "id-2"]
+    db.execute.return_value.mappings.return_value.all.return_value = [
+        {"aid": "id-1", "n_exposure": 12, "p_correct": 0.05},
+        {"aid": "id-2", "n_exposure": 20, "p_correct": 0.0},
+    ]
     with (
         patch("app.services.item_retirement.get_settings") as gs,
         patch("app.services.item_retirement.concept_id", return_value="metric-id"),
@@ -43,7 +46,7 @@ def test_retires_flagged_items_and_commits() -> None:
 
 def test_no_candidates_does_not_update() -> None:
     db = MagicMock()
-    db.execute.return_value.scalars.return_value.all.return_value = []
+    db.execute.return_value.mappings.return_value.all.return_value = []
     with (
         patch("app.services.item_retirement.get_settings") as gs,
         patch("app.services.item_retirement.concept_id", return_value="metric-id"),
