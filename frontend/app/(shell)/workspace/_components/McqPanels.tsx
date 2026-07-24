@@ -30,7 +30,7 @@ import {
 import { GenerationStages } from "@/app/workspace/_components/GenerationStages";
 import { PetPlayground } from "@/app/_components/pets/PetPlayground";
 import { CAT_ENABLED_KEY } from "@/app/_components/pets/PetPlayground";
-import { mcqOptionChrome, McqFeedbackCard } from "@/app/_components/mcq/McqCard";
+import { MCQ_CONTENT_MAX, mcqOptionChrome, McqFeedbackCard } from "@/app/_components/mcq/McqCard";
 import { normalizeMcqOptions, type McqState } from "@/lib/types";
 import { learnWaitStatus } from "@/lib/learnStatus";
 import { type AnsweredCard } from "@/app/workspace/_components/studyLayout";
@@ -539,8 +539,10 @@ export function McqHeroPanel({
       <ScrollHintArea>
       {/* Top-anchored so the question is its own scrollable page. */}
       <Box
+        maw={MCQ_CONTENT_MAX}
+        w="100%"
+        mx="auto"
         style={{
-          width: "100%",
           display: "flex",
           flexDirection: "column",
           gap: compact ? 14 : 20,
@@ -598,7 +600,7 @@ export function McqHeroPanel({
           fontFamily: "var(--font-serif), Georgia, serif",
           fontSize: compact ? "clamp(1rem, 4.4vw, 1.3rem)" : "clamp(1.2rem, 2.2vw, 1.9rem)",
           letterSpacing: "-0.01em",
-          maxWidth: "min(640px, 100%)",
+          maxWidth: "100%",
           marginInline: "auto",
           overflowWrap: "anywhere",
           whiteSpace: "pre-line", // statement/matching/code stems arrive with \n line breaks
@@ -943,7 +945,12 @@ export function McqReviewView({
       </Group>
 
       <ScrollHintArea>
-        <Box style={{ width: "100%", display: "flex", flexDirection: "column", gap: compact ? 14 : 18 }}>
+        <Box
+          maw={MCQ_CONTENT_MAX}
+          w="100%"
+          mx="auto"
+          style={{ display: "flex", flexDirection: "column", gap: compact ? 14 : 18 }}
+        >
           <Title
             order={2}
             fw={500}
@@ -954,7 +961,7 @@ export function McqReviewView({
               fontFamily: "var(--font-serif), Georgia, serif",
               fontSize: compact ? "clamp(1rem, 4.4vw, 1.3rem)" : "clamp(1.2rem, 2.2vw, 1.9rem)",
               letterSpacing: "-0.01em",
-              maxWidth: "min(640px, 100%)",
+              maxWidth: "100%",
               marginInline: "auto",
               overflowWrap: "anywhere",
               whiteSpace: "pre-line", // statement/matching/code stems arrive with \n line breaks

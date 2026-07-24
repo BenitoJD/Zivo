@@ -53,6 +53,7 @@ import {
 import { useStudyNav } from "@/app/workspace/_components/studyNav";
 import { useTutorChat } from "@/app/workspace/_components/useTutorChat";
 import { McqHeroPanel, McqReviewView } from "@/app/workspace/_components/McqPanels";
+import { MCQ_CONTENT_MAX } from "@/app/_components/mcq/McqCard";
 import { StudySourcePanel } from "@/app/workspace/_components/StudySourcePanel";
 import { StudyEdgeTrigger } from "@/app/workspace/_components/StudyRails";
 import { FloatingPanel } from "@/app/workspace/_components/FloatingPanel";
@@ -1199,7 +1200,7 @@ export default function WorkspaceArtifactPage({
         }}
       >
         <Box
-          maw={760}
+          maw={MCQ_CONTENT_MAX}
           w="100%"
           mih={0}
           px={4}

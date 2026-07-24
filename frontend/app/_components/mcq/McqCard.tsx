@@ -11,6 +11,13 @@
 import { Box, Group, Text, ThemeIcon } from "@mantine/core";
 import { IconBulb, IconCheck } from "@tabler/icons-react";
 
+/**
+ * Shared reading measure for McqHeroPanel / McqReviewView / feedback.
+ * Wide enough for long newspaper stems + option cards; not full-bleed.
+ * Mobile stays fluid via `min(MCQ_CONTENT_MAX, 100%)`.
+ */
+export const MCQ_CONTENT_MAX = 800;
+
 export type GradeState = { correct: boolean; correctIndex: number; correctIndices?: number[] } | null;
 
 export type McqOptionVisualState = {
@@ -98,7 +105,7 @@ export function McqFeedbackCard({
       `}</style>
       <Box
         style={{
-          maxWidth: 640,
+          maxWidth: MCQ_CONTENT_MAX,
           marginInline: "auto",
           textAlign: "left",
           borderRadius: 18,

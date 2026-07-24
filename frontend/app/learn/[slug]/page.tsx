@@ -11,6 +11,7 @@ import { notFound } from "next/navigation";
 import { AssistantMarkdown } from "@/lib/chatMarkdown";
 import { LearnMcqSection } from "@/app/learn/_components/LearnMcqSection";
 import { LinkAnchor, LinkButton } from "@/app/learn/_components/AppLink";
+import { MCQ_CONTENT_MAX } from "@/app/_components/mcq/McqCard";
 
 type LearnPost = {
   slug: string;
@@ -124,7 +125,7 @@ export default async function LearnPostPage({
           dangerouslySetInnerHTML={{ __html: jsonLdScript(faqLd) }}
         />
       ) : null}
-      <Container size="sm" py="xl" px="md">
+      <Container size={MCQ_CONTENT_MAX} py="xl" px="md">
         <Stack gap="lg">
           <Stack gap="xs">
             <LinkAnchor href="/learn" c="lavender.7" size="sm" underline="never">
