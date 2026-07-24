@@ -1,18 +1,16 @@
 import {
-  Anchor,
   Box,
-  Button,
   Container,
   Group,
   Stack,
   Text,
   Title,
 } from "@mantine/core";
-import Link from "next/link";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { AssistantMarkdown } from "@/lib/chatMarkdown";
 import { LearnMcqSection } from "@/app/learn/_components/LearnMcqSection";
+import { LinkAnchor, LinkButton } from "@/app/learn/_components/AppLink";
 
 type LearnPost = {
   slug: string;
@@ -129,9 +127,9 @@ export default async function LearnPostPage({
       <Container size="sm" py="xl" px="md">
         <Stack gap="lg">
           <Stack gap="xs">
-            <Anchor component={Link} href="/learn" c="lavender.7" size="sm" underline="never">
+            <LinkAnchor href="/learn" c="lavender.7" size="sm" underline="never">
               ← Learn
-            </Anchor>
+            </LinkAnchor>
             <Text size="xs" c="dimmed" tt="uppercase">
               {post.stream === "system_design" ? "System design" : "General"}
               {post.published_at
@@ -189,17 +187,16 @@ export default async function LearnPostPage({
                 Practice from your own sources, or walk a System Design path with teach-gap lessons.
               </Text>
               <Group>
-                <Button
-                  component={Link}
+                <LinkButton
                   href={ctaHref(post.cta_kind, post.stream)}
                   radius="xl"
                   color="lavender"
                 >
                   {ctaLabel(post.cta_kind, post.stream)}
-                </Button>
-                <Button component={Link} href="/signup" radius="xl" variant="default">
+                </LinkButton>
+                <LinkButton href="/signup" radius="xl" variant="default">
                   Sign up free
-                </Button>
+                </LinkButton>
               </Group>
             </Stack>
           </Box>

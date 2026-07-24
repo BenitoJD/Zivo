@@ -1,5 +1,4 @@
 import {
-  Anchor,
   Box,
   Container,
   Group,
@@ -7,8 +6,8 @@ import {
   Text,
   Title,
 } from "@mantine/core";
-import Link from "next/link";
 import type { Metadata } from "next";
+import { LinkAnchor, LinkBox } from "@/app/learn/_components/AppLink";
 
 export const metadata: Metadata = {
   title: "Learn | Question Better.",
@@ -56,9 +55,9 @@ export default async function LearnIndexPage() {
       <Container size="md" py="xl" px="md">
         <Stack gap="xl">
           <Stack gap="xs">
-            <Anchor component={Link} href="/" c="lavender.7" size="sm" underline="never">
+            <LinkAnchor href="/" c="lavender.7" size="sm" underline="never">
               Question Better.
-            </Anchor>
+            </LinkAnchor>
             <Title
               order={1}
               ff="var(--font-serif)"
@@ -77,9 +76,8 @@ export default async function LearnIndexPage() {
           ) : (
             <Stack gap="md">
               {items.map((p) => (
-                <Box
+                <LinkBox
                   key={p.slug}
-                  component={Link}
                   href={`/learn/${p.slug}`}
                   style={{ textDecoration: "none", color: "inherit" }}
                 >
@@ -122,7 +120,7 @@ export default async function LearnIndexPage() {
                         : ""}
                     </Text>
                   </Stack>
-                </Box>
+                </LinkBox>
               ))}
             </Stack>
           )}
