@@ -173,12 +173,13 @@ Transitions use `cubic-bezier(0.32, 0.72, 0, 1)` over ~280ms; always respect `pr
 
 - `/` — public landing page (`app/page.tsx`)
 - `/login`, `/signup` — dedicated auth pages (`app/login/page.tsx`, `app/signup/page.tsx`); shared form in `app/_components/AuthForm.tsx`, logic in `lib/auth.ts`
-- `/workspace` — library / empty-state (`app/workspace/page.tsx`)
-- `/workspace/[artifactId]` — page selection → MCQ → source + tutor (`app/workspace/[artifactId]/page.tsx`)
-- `/workspace/models` — admin model management (`app/workspace/models/page.tsx`)
-- `/practice/system-design` — System Design mastery path + design loop (`app/practice/system-design/`)
-- Practice surfaces (Coding + System Design) share the mastery loop: path/case → attempt → teach-gap lesson → next at the weak edge. Learn MCQ teach-gap: TODO (same lesson shape when cheap).
-- Shared shell (sidebar, add-source modal, delete modal) — `app/workspace/layout.tsx` + `app/workspace/_components/` (`Sidebar`, `AddSourceModal`, `DeleteSourceModal`). Auth is handled by `/login`, not a modal.
+- `/learn` — public Learn posts (no learner sidebar)
+- `/workspace/**`, `/practice/**` — learner AppShell + Sidebar via route group `app/(shell)/layout.tsx` (URLs unchanged)
+- `/workspace` — library / empty-state (`app/(shell)/workspace/page.tsx`)
+- `/workspace/[artifactId]` — page selection → MCQ → source + tutor
+- `/workspace/models` — admin model management
+- `/practice` — practice hub; `/practice/coding`, `/practice/newspaper`, `/practice/system-design`, `/practice/c/[qid]`
+- Shared shell (sidebar, add-source modal, delete modal) — `app/(shell)/layout.tsx` wraps `/workspace/**` and `/practice/**` (`Sidebar`, `AddSourceModal`, `DeleteSourceModal` under `app/(shell)/workspace/_components/`). Auth is handled by `/login`, not a modal.
 
 ```bash
 cd frontend && npm run build && npm run lint

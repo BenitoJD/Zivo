@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Public coding problem solve page — full-viewport LeetCode-style IDE.
+ * Coding problem solve page — IDE inside the shared learner AppShell.
  */
 
 import { use, useEffect } from "react";
@@ -13,6 +13,21 @@ import { useCodingProblemQuery } from "@/lib/api/queries";
 import { CodeEditor } from "@/app/_components/coding/CodeEditor";
 import { useMediaQuery } from "@mantine/hooks";
 import { MOBILE_MAX_MQ } from "@/lib/responsive";
+
+function Fill({ children, p }: { children: React.ReactNode; p?: string }) {
+  return (
+    <Box
+      flex={1}
+      mih={0}
+      bg="var(--mantine-color-body)"
+      p={p}
+      display="flex"
+      style={{ flexDirection: "column", overflow: "hidden" }}
+    >
+      {children}
+    </Box>
+  );
+}
 
 export default function CodingSolvePage({ params }: { params: Promise<{ id: string }> }) {
   const router = useRouter();
@@ -26,49 +41,50 @@ export default function CodingSolvePage({ params }: { params: Promise<{ id: stri
 
   if (!id) {
     return (
-      <Box bg="var(--mantine-color-body)" h="100dvh" p="md">
+      <Fill p="md">
         <Text c="dimmed">No problem id.</Text>
-      </Box>
+      </Fill>
     );
   }
 
   if (isLoading) {
     return (
-      <Box bg="var(--mantine-color-body)" h="100dvh" p="md">
+      <Fill p="md">
         <Button
           variant="subtle"
           size="xs"
           leftSection={<IconArrowLeft size={14} />}
           onClick={() => router.push("/practice/coding")}
           mb="sm"
+          w="fit-content"
         >
           All problems
         </Button>
         <Text c="dimmed">Loading problem…</Text>
-      </Box>
+      </Fill>
     );
   }
 
   if (isError || !problem) {
     return (
-      <Box bg="var(--mantine-color-body)" h="100dvh" p="md">
+      <Fill p="md">
         <Stack gap="md">
           <Text c="terracotta.7">This problem couldn&rsquo;t be loaded.</Text>
-          <Button variant="light" leftSection={<IconArrowLeft size={16} />} onClick={() => router.push("/practice/coding")}>
+          <Button
+            variant="light"
+            leftSection={<IconArrowLeft size={16} />}
+            onClick={() => router.push("/practice/coding")}
+            w="fit-content"
+          >
             Back to coding practice
           </Button>
         </Stack>
-      </Box>
+      </Fill>
     );
   }
 
   return (
-    <Box
-      bg="var(--mantine-color-body)"
-      h="100dvh"
-      display="flex"
-      style={{ flexDirection: "column", overflow: "hidden" }}
-    >
+    <Fill>
       <Group
         px="sm"
         py={6}
@@ -90,6 +106,6 @@ export default function CodingSolvePage({ params }: { params: Promise<{ id: stri
       <Box flex={1} style={{ minHeight: 0 }}>
         <CodeEditor problem={problem} compact={Boolean(compact)} variant="ide" />
       </Box>
-    </Box>
+    </Fill>
   );
 }

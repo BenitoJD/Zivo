@@ -36,11 +36,12 @@ const WorkspaceShellContext = createContext<WorkspaceShellContextValue | null>(n
 
 export function useWorkspaceShell() {
   const ctx = useContext(WorkspaceShellContext);
-  if (!ctx) throw new Error("useWorkspaceShell must be used within WorkspaceLayout");
+  if (!ctx) throw new Error("useWorkspaceShell must be used within LearnerShellLayout");
   return ctx;
 }
 
-export default function WorkspaceLayout({ children }: { children: React.ReactNode }) {
+/** Shared AppShell + Sidebar for `/workspace/**` and `/practice/**`. */
+export default function LearnerShellLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const artifactId = pathname.startsWith("/workspace/") ? pathname.split("/")[2] : undefined;

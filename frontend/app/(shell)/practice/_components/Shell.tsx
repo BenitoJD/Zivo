@@ -4,15 +4,16 @@ import type { ReactNode } from "react";
 import { Box } from "@mantine/core";
 
 /**
- * Full-viewport scroll container used by every practice route.
- * Replaces the verbatim-identical local `Shell` previously defined per page.
+ * Scroll surface inside the shared learner AppShell.
+ * Fills AppShell.Main (flex column); do not use 100dvh — body is already locked.
  */
 export function Shell({ children }: { children: ReactNode }) {
   return (
     <Box
+      flex={1}
+      mih={0}
       bg="var(--mantine-color-body)"
       style={{
-        height: "100dvh",
         overflowY: "auto",
         overflowX: "hidden",
         WebkitOverflowScrolling: "touch",

@@ -33,6 +33,7 @@ import {
   type SdConceptState,
   type SdPathConcept,
 } from "@/lib/api/queries";
+import { Shell } from "@/app/practice/_components/Shell";
 
 function stateLabel(state: SdConceptState): string {
   if (state === "strong") return "strong";
@@ -75,7 +76,7 @@ export default function SystemDesignDoorPage() {
   };
 
   return (
-    <Box bg="var(--mantine-color-body)" style={{ minHeight: "100dvh" }}>
+    <Shell>
       <Container size="sm" py={{ base: 36, md: 64 }}>
         <Stack gap="xl">
           <Group gap="sm" align="center">
@@ -193,7 +194,7 @@ export default function SystemDesignDoorPage() {
           ) : null}
         </Stack>
       </Drawer>
-    </Box>
+    </Shell>
   );
 }
 

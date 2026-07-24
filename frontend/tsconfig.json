@@ -25,6 +25,15 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "@/app/workspace/*": [
+        "./app/(shell)/workspace/*"
+      ],
+      "@/app/practice/*": [
+        "./app/(shell)/practice/*"
+      ],
+      "@/app/workspace/layout": [
+        "./app/(shell)/layout"
       ]
     }
   },

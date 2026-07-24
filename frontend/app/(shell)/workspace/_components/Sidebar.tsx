@@ -738,7 +738,9 @@ export function Sidebar({
                 label="Coding bank"
                 description="Browse and practice problems"
                 leftSection={<IconCode size={18} stroke={1.5} />}
-                active={pathname.startsWith("/workspace/coding")}
+                active={
+                  pathname.startsWith("/workspace/coding") || pathname.startsWith("/practice/coding")
+                }
                 onClick={onOpenCodingBank}
                 mb="xs"
                 styles={{ root: { borderRadius: "var(--mantine-radius-md)" } }}

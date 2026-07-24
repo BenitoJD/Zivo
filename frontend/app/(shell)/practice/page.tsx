@@ -3,9 +3,8 @@
 /**
  * Practice library hub - search-first entry into the Wikidata concept graph.
  *
- * Public (no auth). A guest session is bootstrapped so on-demand generation and
- * answer recording work for anonymous visitors. Mirrors the landing-page pattern:
- * owns a 100dvh scroll container because <body> is locked by the workspace shell.
+ * Guest session bootstrapped for anonymous visitors. Lives under the shared
+ * learner AppShell (Sidebar) via `app/(shell)/layout.tsx`.
  */
 
 import { useEffect, useState } from "react";
@@ -24,6 +23,7 @@ import {
 } from "@mantine/core";
 import { IconArrowRight, IconSearch } from "@tabler/icons-react";
 import { apiGet, ensureGuestSession } from "@/lib/api/client";
+import { Shell } from "@/app/practice/_components/Shell";
 
 type ConceptSummary = { qid: string; label: string; description: string };
 type SearchResponse = { query: string; results: ConceptSummary[] };
@@ -66,10 +66,7 @@ export default function PracticeHubPage() {
   }
 
   return (
-    <Box
-      bg="var(--mantine-color-body)"
-      style={{ height: "100dvh", overflowY: "auto", overflowX: "hidden" }}
-    >
+    <Shell>
       <Container size="md" py={{ base: 48, md: 72 }} pb={{ base: 88, md: 72 }}>
         <Stack gap="xl">
           {/* Header */}
@@ -250,7 +247,7 @@ export default function PracticeHubPage() {
           )}
         </Stack>
       </Container>
-    </Box>
+    </Shell>
   );
 }
 

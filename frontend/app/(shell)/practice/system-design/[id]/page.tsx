@@ -30,6 +30,7 @@ import {
   type SdDimension,
   type SdSession,
 } from "@/lib/api/queries";
+import { Shell } from "@/app/practice/_components/Shell";
 
 const EMPTY_DESIGN: SdDesign = {
   requirements: "",
@@ -61,17 +62,6 @@ const SECTION_META: { key: keyof Omit<SdDesign, "blocks">; label: string; placeh
     placeholder: "Hot path, caching, queues, failure modes…",
   },
 ];
-
-function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <Box
-      bg="var(--mantine-color-body)"
-      style={{ height: "100dvh", overflowY: "auto", overflowX: "hidden" }}
-    >
-      {children}
-    </Box>
-  );
-}
 
 function useResolvedParam(params: Promise<{ id: string }>): string | null {
   const [id, setId] = useState<string | null>(null);

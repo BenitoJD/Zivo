@@ -32,6 +32,7 @@ import {
   type CodingProblemListItem,
   type CodingPublicFilters,
 } from "@/lib/api/queries";
+import { Shell } from "@/app/practice/_components/Shell";
 
 export default function CodingPracticePage() {
   const router = useRouter();
@@ -49,7 +50,7 @@ export default function CodingPracticePage() {
   const tags = data?.tags ?? [];
 
   return (
-    <Box bg="var(--mantine-color-body)" style={{ minHeight: "100dvh" }}>
+    <Shell>
       <Container size="md" py={{ base: 32, md: 56 }}>
         <Stack gap="lg">
           <Group justify="space-between" align="flex-start" wrap="wrap" gap="sm">
@@ -177,7 +178,7 @@ export default function CodingPracticePage() {
           )}
         </Stack>
       </Container>
-    </Box>
+    </Shell>
   );
 }
 
