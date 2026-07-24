@@ -152,6 +152,22 @@ function MermaidBlock({ chart }: { chart: string }) {
   );
 }
 
+function safeMarkdownHref(href: string | undefined): string | undefined {
+  if (!href) return undefined;
+  const trimmed = href.trim();
+  const lower = trimmed.toLowerCase();
+  // Block scriptable / data URL schemes; allow http(s), mailto, relative, hash.
+  if (
+    lower.startsWith("javascript:") ||
+    lower.startsWith("data:") ||
+    lower.startsWith("vbscript:") ||
+    lower.startsWith("blob:")
+  ) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 function markdownComponents(isDark: boolean): Components {
   return {
     p: ({ children }) => (
@@ -201,11 +217,22 @@ function markdownComponents(isDark: boolean): Components {
       </Blockquote>
     ),
     hr: () => <Divider my="sm" />,
-    a: ({ href, children }) => (
-      <Anchor href={href} target="_blank" rel="noopener noreferrer" size="sm">
-        {children}
-      </Anchor>
-    ),
+    a: ({ href, children }) => {
+      const safe = safeMarkdownHref(href);
+      if (!safe) {
+        return (
+          <Text span inherit>
+            {children}
+          </Text>
+        );
+      }
+      return (
+        <Anchor href={safe} target="_blank" rel="noopener noreferrer" size="sm">
+          {children}
+        </Anchor>
+      );
+    },
+    img: () => null,
     code: ({ className, children }) => {
       const text = String(children).replace(/\n$/, "");
       const lang = /language-(\w+)/.exec(className || "")?.[1]?.toLowerCase();

@@ -39,9 +39,16 @@ class TestSecretKeyValidation:
         assert s.secret_key == "real-prod-secret-32chars-or-more"
         assert s.csrf_secret == "real-prod-csrf-32chars-or-more"
 
-    def test_allows_dev_secrets_in_development(self) -> None:
-        s = _make_settings(environment="development")
-        assert s.secret_key == "dev-secret-change-me"
+    def test_rejects_csrf_disabled_in_production(self) -> None:
+        with pytest.raises(ValidationError) as exc:
+            _make_settings(
+                secret_key="real-prod-secret-32chars-or-more",
+                csrf_secret="real-prod-csrf-32chars-or-more",
+                minio_access_key="prod-access",
+                minio_secret_key="prod-secret-value",
+                csrf_disabled=True,
+            )
+        assert "CSRF_DISABLED" in str(exc.value)
 
 
 class TestSettingsAccessors:

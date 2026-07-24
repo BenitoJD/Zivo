@@ -715,7 +715,11 @@ async def chat_stream(
     )
 
 
-@router.post("/mcq/grade", response_model=McqGradeResponse, dependencies=[Depends(rate_limit_dependency)])
+@router.post(
+    "/mcq/grade",
+    response_model=McqGradeResponse,
+    dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)],
+)
 async def grade_mcq(
     body: McqGradeRequest,
     db: Session = Depends(get_db),

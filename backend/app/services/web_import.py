@@ -161,7 +161,21 @@ def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
 
 def _assert_public_host(hostname: str) -> None:
     host = hostname.lower().rstrip(".")
-    if host in {"localhost", "127.0.0.1", "::1", "169.254.169.254"} or host.endswith(".local"):
+    # Literal IPs (incl. weird decimal/hex forms once parsed) + DNS names.
+    if host in {
+        "localhost",
+        "metadata",
+        "metadata.google.internal",
+        "metadata.goog",
+        "kubernetes.default",
+        "kubernetes.default.svc",
+    } or host.endswith(".local") or host.endswith(".internal"):
+        raise WebImportError("That link points to a private address", code="blocked_url")
+    try:
+        as_ip = ipaddress.ip_address(host)
+    except ValueError:
+        as_ip = None
+    if as_ip is not None and _is_blocked_ip(as_ip):
         raise WebImportError("That link points to a private address", code="blocked_url")
     try:
         infos = socket.getaddrinfo(host, None)

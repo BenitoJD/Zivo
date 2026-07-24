@@ -78,6 +78,11 @@ function ctaLabel(kind: string | undefined, stream: string): string {
   return "Practice on Question Better";
 }
 
+function jsonLdScript(data: unknown): string {
+  // Prevent </script> breakout from admin/user strings inside JSON-LD.
+  return JSON.stringify(data).replace(/</g, "\\u003c");
+}
+
 export default async function LearnPostPage({
   params,
 }: {
@@ -113,12 +118,12 @@ export default async function LearnPostPage({
     <Box bg="var(--mantine-color-body)" mih="100dvh">
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(articleLd) }}
+        dangerouslySetInnerHTML={{ __html: jsonLdScript(articleLd) }}
       />
       {faqLd ? (
         <script
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(faqLd) }}
+          dangerouslySetInnerHTML={{ __html: jsonLdScript(faqLd) }}
         />
       ) : null}
       <Container size="sm" py="xl" px="md">

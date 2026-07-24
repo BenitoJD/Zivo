@@ -20,6 +20,24 @@ def test_normalize_public_url_blocks_localhost() -> None:
         normalize_public_url("http://localhost/secret")
 
 
+def test_normalize_public_url_blocks_decimal_loopback() -> None:
+    with pytest.raises(WebImportError) as exc:
+        normalize_public_url("http://2130706433/")
+    assert exc.value.code == "blocked_url"
+
+
+def test_normalize_public_url_blocks_metadata_hostname() -> None:
+    with pytest.raises(WebImportError) as exc:
+        normalize_public_url("http://metadata.google.internal/latest/")
+    assert exc.value.code == "blocked_url"
+
+
+def test_normalize_public_url_blocks_link_local_ip() -> None:
+    with pytest.raises(WebImportError) as exc:
+        normalize_public_url("http://169.254.169.254/latest/meta-data/")
+    assert exc.value.code == "blocked_url"
+
+
 def test_extract_article_from_simple_html() -> None:
     html = b"""
     <html>

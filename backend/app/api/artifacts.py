@@ -14,12 +14,13 @@ from app.db import get_db
 from app.models import Account
 from app.repositories import workspace as workspace_repo
 from app.services.auth import get_optional_user, require_csrf_or_guest
-from app.api.access import require_document
+from app.api.access import require_document, require_document_source
 from app.services.guest_session import optional_guest_session
 from app.services.jobs import enqueue_rag_window
 from app.services.parse import refresh_document_page_count
 from app.services.question_pool import reset_for_new_page_range
 from app.services.storage import presigned_get_url
+
 
 router = APIRouter()
 
@@ -77,13 +78,8 @@ def get_pages(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(optional_guest_session),
 ) -> dict:
-    doc = require_document(db, artifact_id, user, guest_id)
-    from app.services.newspaper import is_newspaper_document
-
-    if is_newspaper_document(doc):
-        # Learners never get the newspaper PDF — admins may for ops.
-        if user is None or not getattr(user, "is_admin", False):
-            raise HTTPException(status_code=404, detail="Not found")
+    # Learners never get the newspaper PDF — admins may for ops.
+    doc = require_document_source(db, artifact_id, user, guest_id)
     # Heal DOCX/paste that landed as page_count=1 before soft pagination.
     page_count = refresh_document_page_count(db, doc)
     return {
@@ -102,11 +98,7 @@ def confirm_page_range(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(optional_guest_session),
 ) -> dict:
-    doc = require_document(db, artifact_id, user, guest_id)
-    from app.services.newspaper import is_newspaper_document
-
-    if is_newspaper_document(doc) and (user is None or not getattr(user, "is_admin", False)):
-        raise HTTPException(status_code=404, detail="Not found")
+    doc = require_document_source(db, artifact_id, user, guest_id)
     # Re-count from bytes so a healed multi-page DOCX can accept a real range.
     page_count = refresh_document_page_count(db, doc) or body.to_page
 
@@ -164,7 +156,8 @@ def list_segments(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(optional_guest_session),
 ) -> list[dict]:
-    doc = require_document(db, artifact_id, user, guest_id)
+    # Full chunk text dump — same newspaper source gate as /pages and /file.
+    doc = require_document_source(db, artifact_id, user, guest_id)
     rows = db.execute(
         text(
             """

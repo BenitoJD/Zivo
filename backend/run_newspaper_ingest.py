@@ -23,6 +23,28 @@ def _env(name: str, default: str = "") -> str:
     return (os.environ.get(name) or default).strip()
 
 
+def resolve_telegram_session(session_raw: str):
+    """Return a Telethon session object or raise SystemExit on unsafe paths.
+
+    Prefer StringSession (len>80 or starts with ``1``). Otherwise only a simple
+    cwd session-file stem is allowed — no path separators / traversal.
+    """
+    from telethon.sessions import StringSession
+    import re
+
+    raw = (session_raw or "").strip()
+    if not raw:
+        raise SystemExit("TELEGRAM_SESSION required")
+    if len(raw) > 80 or raw.startswith("1"):
+        return StringSession(raw)
+    if re.fullmatch(r"[A-Za-z0-9._-]+", raw):
+        return raw
+    raise SystemExit(
+        "TELEGRAM_SESSION must be a Telethon StringSession or a simple session name "
+        "(letters/digits/._- only — no path separators)"
+    )
+
+
 def plan_gap_fill(
     seen: list[tuple[int, str, date]],
     existing: set[tuple[str, date]],
@@ -222,7 +244,6 @@ def _dialog_title_matches(dialog_name: str, *, label: str, ref: str) -> str | No
 async def run() -> None:
     try:
         from telethon import TelegramClient, events
-        from telethon.sessions import StringSession
         from telethon.tl.types import Channel, InputPeerChannel
         from telethon.utils import get_peer_id
     except ImportError as exc:
@@ -236,11 +257,7 @@ async def run() -> None:
     if not api_id or not api_hash or not session_raw:
         raise SystemExit("TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_SESSION required")
 
-    # Session string preferred; otherwise treat as session file path stem.
-    if len(session_raw) > 80 or session_raw.startswith("1"):
-        session = StringSession(session_raw)
-    else:
-        session = session_raw
+    session = resolve_telegram_session(session_raw)
 
     from app.db import SessionLocal
 

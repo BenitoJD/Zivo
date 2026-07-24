@@ -7,7 +7,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.api.access import require_document
+from app.api.access import require_document, require_document_source
 from app.db import get_db
 from app.models import Account, Document, DocumentChunk, User
 from app.services.auth import get_current_user, get_optional_user, require_csrf, require_csrf_or_guest
@@ -24,7 +24,9 @@ from app.services.web_import import (
     build_document_meta,
     encode_article_pages,
     fetch_and_extract,
+    normalize_public_url,
     paginate_reader_text,
+    source_domain,
 )
 from app.services.youtube import fetch_youtube_transcript, is_youtube_url
 
@@ -169,11 +171,7 @@ def get_document_file(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ):
-    doc = require_document(db, document_id, user, guest_id)
-    from app.services.newspaper import is_newspaper_document
-
-    if is_newspaper_document(doc) and (user is None or not getattr(user, "is_admin", False)):
-        raise HTTPException(status_code=404, detail="Not found")
+    doc = require_document_source(db, document_id, user, guest_id)
     if doc.meta and doc.meta.get("is_demo"):
         chunks = (
             db.query(DocumentChunk)
@@ -200,11 +198,7 @@ def get_document_pages(
     fall back to ``parse_document`` so DOCX/PPTX/text still get usable
     thumbnails — PDFs use client-side pdf.js instead.
     """
-    doc = require_document(db, document_id, user, guest_id)
-    from app.services.newspaper import is_newspaper_document
-
-    if is_newspaper_document(doc) and (user is None or not getattr(user, "is_admin", False)):
-        raise HTTPException(status_code=404, detail="Not found")
+    doc = require_document_source(db, document_id, user, guest_id)
     chunks = (
         db.query(DocumentChunk)
         .filter(DocumentChunk.document_id == document_id)
@@ -363,8 +357,18 @@ async def import_document_from_github(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(optional_guest_session),
 ) -> Document:
-    url = body.github_url.strip()
-    if "github.com" not in url:
+    try:
+        url = normalize_public_url(body.github_url.strip())
+    except WebImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    host = source_domain(url).lower()
+    # Host allowlist — substring "github.com" previously accepted evil.com/?q=github.com.
+    if not (
+        host == "github.com"
+        or host.endswith(".github.com")
+        or host == "githubusercontent.com"
+        or host.endswith(".githubusercontent.com")
+    ):
         raise HTTPException(status_code=422, detail="Not a GitHub URL")
     try:
         article = await fetch_and_extract(url)
