@@ -138,7 +138,11 @@ def _normalize_mcq_payload(data: dict[str, Any], target_aspect: dict[str, Any] |
     if not question or len(options) < 2:
         raise ValueError("invalid mcq")
     key = data.get("primary_concept_key") or (target_aspect or {}).get("key") or "page-concept"
-    label = data.get("primary_concept") or (target_aspect or {}).get("label") or "Page concept"
+    from app.services.mcq_dedup import short_concept_label
+
+    label = short_concept_label(
+        data.get("primary_concept") or (target_aspect or {}).get("label") or "Page concept"
+    )
     # Exam-style metadata rides along when the generator emits it (question_style /
     # difficulty / cognitive_level) — informative, never required.
     meta = {

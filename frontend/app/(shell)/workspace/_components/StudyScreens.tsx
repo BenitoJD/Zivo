@@ -25,6 +25,21 @@ import {
 import { type StudyReport } from "@/lib/api/queries";
 import { PageSelectionBody } from "@/app/workspace/_components/PageSelectionScreen";
 
+/** Clamp paragraph-length aspect labels so report chips stay readable. */
+function shortTopicName(raw: string, maxChars = 56): string {
+  let s = raw.replace(/\s+/g, " ").trim() || "General";
+  for (const sep of [". ", "? ", "! ", "; ", " — ", " – ", " - "]) {
+    if (s.includes(sep)) {
+      s = s.split(sep)[0]!.trim();
+      break;
+    }
+  }
+  const words = s.split(" ");
+  if (words.length > 8) s = words.slice(0, 8).join(" ");
+  if (s.length > maxChars) s = `${s.slice(0, Math.max(1, maxChars - 1)).replace(/[,;:\-\s]+$/u, "")}…`;
+  return s || "General";
+}
+
 /**
  * End-of-study report card: first-try correct vs. to-revisit, plus per-topic
  * strengths and the topics to focus on next. Driven entirely by the answered
@@ -47,11 +62,15 @@ export function StudyReportCard({
 
   let topics: { name: string; correct: number; total: number }[];
   if (useServer) {
-    topics = report.topics.map((t) => ({ name: t.concept, correct: t.correct, total: t.total }));
+    topics = report.topics.map((t) => ({
+      name: shortTopicName(t.concept),
+      correct: t.correct,
+      total: t.total,
+    }));
   } else {
     const byConcept = new Map<string, { name: string; correct: number; total: number }>();
     for (const a of answered) {
-      const name = (a.concept || "").trim() || "General";
+      const name = shortTopicName((a.concept || "").trim() || "General");
       const t = byConcept.get(name) ?? { name, correct: 0, total: 0 };
       t.total += 1;
       if (a.firstTryCorrect) t.correct += 1;

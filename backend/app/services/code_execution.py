@@ -59,11 +59,20 @@ _POLL_MAX = 30.0
 
 
 def _normalize(result: dict[str, Any]) -> dict[str, Any]:
-    """Flatten a Judge0 submission result into the shape the app uses."""
+    """Flatten a Judge0 submission result into the shape the app uses.
+
+    Free runs (no expected_output) never get Judge0 "Wrong Answer" — status 3
+    means the process finished cleanly. Surface that as "Ran" so the UI does not
+    imply the sample answer was correct (Submit owns pass/fail).
+    """
     status = (result.get("status") or {})
+    status_id = status.get("id")
+    description = status.get("description") or "Unknown"
+    if status_id == _ACCEPTED or str(description).strip().lower() == "accepted":
+        description = "Ran"
     return {
-        "status_id": status.get("id"),
-        "status": status.get("description") or "Unknown",
+        "status_id": status_id,
+        "status": description,
         "stdout": (result.get("stdout") or "").rstrip("\n"),
         "stderr": (result.get("stderr") or "").strip(),
         "compile_output": (result.get("compile_output") or "").strip(),

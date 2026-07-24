@@ -419,7 +419,9 @@ def _fallback_triage(page_text: str, page_number: int, *, mode: Mode = "learn") 
     labels = substantial if substantial else paragraphs
     aspects = []
     for i, para in enumerate(labels[:aspect_count]):
-        label = para[:120].replace("\n", " ")
+        from app.services.mcq_dedup import short_concept_label
+
+        label = short_concept_label(para.replace("\n", " "), max_chars=72)
         aspects.append(
             {
                 "key": f"page-{page_number}-p{i + 1}",

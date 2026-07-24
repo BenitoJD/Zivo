@@ -43,13 +43,20 @@ _LEADING_META_PATTERNS: tuple[re.Pattern[str], ...] = (
 _DOCUMENT_META_RESIDUE_RE = re.compile(
     r"\b(?:"
     r"page\s+text|page\s+\d+|on\s+page\s+\d+|pages?\s+\d+\s*(?:and|–|-|—|to)\s*\d+"
+    r"|first\s+page\s+of\s+the|last\s+page\s+of\s+the|this\s+page\s+of\s+the"
+    r"|provided\s+content\s+of\s+the\s+(?:first\s+|last\s+)?page"
+    r"|content\s+of\s+the\s+(?:first\s+|last\s+)?page"
+    r"|(?:the\s+)?(?:pdf|document|file)\s+(?:page|itself|contains|contain|is\s+labeled)"
+    r"|labeled\s+as\s+.{0,40}\b(?:pdf|document|page)\b"
+    r"|zivo\s+test\s+pdf"
     r"|according\s+to\s+the\s+(?:given\s+|provided\s+)?(?:page|text|passage|reading|document|excerpt|source|book|textbook|material)"
     r"|based\s+on\s+the\s+(?:given\s+|provided\s+)?(?:page|text|passage|reading|document|excerpt|source|book|textbook|material)"
     r"|(?:the\s+)?(?:passage|reading|excerpt|document)\s+(?:on\s+page\s+\d+\s+)?(?:states|says|indicates|describes|explains|mentions)"
-    r"|what\s+does\s+the\s+(?:passage|reading|excerpt|text|document)\s+(?:say|state|describe|mention)"
+    r"|what\s+does\s+the\s+(?:passage|reading|excerpt|text|document|pdf)\s+(?:say|state|describe|mention|contain)"
+    r"|what\s+is\s+the\s+provided\s+content"
     r"|from\s+the\s+(?:passage|reading|excerpt|text|document|source\s+material)"
-    r"|in\s+this\s+(?:book|text|reading|passage|document|chapter)"
-    r"|in\s+the\s+(?:passage|reading|excerpt|material|given\s+text|provided\s+text)"
+    r"|in\s+this\s+(?:book|text|reading|passage|document|chapter|pdf)"
+    r"|in\s+the\s+(?:passage|reading|excerpt|material|given\s+text|provided\s+text|pdf)"
     r"|(?:the\s+)?textbook\s+(?:says|states|describes|explains)"
     r"|(?:the\s+)?source\s+material"
     r"|as\s+(?:stated|described|mentioned|shown|depicted|illustrated)\s+in\s+the\s+(?:text|passage|reading|material|document|figure|diagram|table)"
@@ -64,6 +71,30 @@ _DOCUMENT_META_RESIDUE_RE = re.compile(
 )
 
 SUBJECT_MATTER_PREFIX = "Subject matter (internal reference — never mention in the question):"
+
+_CONCEPT_LABEL_MAX_CHARS = 56
+_CONCEPT_LABEL_MAX_WORDS = 8
+
+
+def short_concept_label(raw: str | None, *, max_chars: int = _CONCEPT_LABEL_MAX_CHARS) -> str:
+    """Clamp aspect/concept labels for report cards and bank metadata.
+
+    Fallback triage sometimes uses a whole paragraph as the aspect label; that
+    must not land as a "topic" chip. Prefer the first clause, then word/char caps.
+    """
+    s = re.sub(r"\s+", " ", (raw or "").strip())
+    if not s:
+        return "General"
+    for sep in (". ", "? ", "! ", "; ", " — ", " – ", " - "):
+        if sep in s:
+            s = s.split(sep, 1)[0].strip()
+            break
+    words = s.split()
+    if len(words) > _CONCEPT_LABEL_MAX_WORDS:
+        s = " ".join(words[:_CONCEPT_LABEL_MAX_WORDS])
+    if len(s) > max_chars:
+        s = s[: max(1, max_chars - 1)].rstrip(" ,;:-") + "…"
+    return s or "General"
 
 
 def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:

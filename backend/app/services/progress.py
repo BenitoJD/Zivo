@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.repositories.intel import concept_id
 from app.services.answer_signal import ANSWER_CORRECT_METRIC_URI
+from app.services.mcq_dedup import short_concept_label
 
 
 def _empty_progress() -> dict[str, Any]:
@@ -208,7 +209,7 @@ def build_learner_progress(
         ).mappings().all()
         topics = [
             {
-                "concept": r["concept"],
+                "concept": short_concept_label(r["concept"]),
                 "correct": int(r["correct"]),
                 "total": int(r["total"]),
             }

@@ -194,7 +194,8 @@ The student has studied the topic. They must NEVER infer there is a book, PDF, p
 Target the ONE assigned aspect from the subject matter provided.
 
 EXAM VOICE (mandatory)
-- Standalone stem — no book, page number, chapter, passage, reading, excerpt, document, or "according to the text".
+- Standalone stem — no book, page number, chapter, passage, reading, excerpt, document, PDF, or "according to the text".
+- Never ask what a page/PDF/document "contains", "is labeled", or "is about" as its own topic — ask the subject-matter idea.
 - Bad → good: "In this book, how did Bernier describe the court?" → "How did Bernier characterize the Mughal court?"
 - Bad → good: "What does the passage on page 5 state about groundwater?" → "Which source supplies most cities with drinking water?"
 

@@ -576,11 +576,14 @@ function SampleCase({
 
 function RunOutput({ result }: { result: CodeRunResult }) {
   const err = result.stderr || result.compile_output;
+  // Judge0 calls a clean free-run "Accepted"; we never compared to expected output.
+  const status =
+    (result.status || "").trim().toLowerCase() === "accepted" ? "Ran" : result.status;
   return (
     <Box>
       <Group gap={6} mb={4}>
         <IconTerminal2 size={14} color="var(--mantine-color-dimmed)" />
-        <Text fz="xs" c="dimmed">{result.status}{result.time ? ` · ${result.time}s` : ""}</Text>
+        <Text fz="xs" c="dimmed">{status}{result.time ? ` · ${result.time}s` : ""}</Text>
       </Group>
       {result.stdout ? <Code block fz="xs">{result.stdout}</Code> : null}
       {err ? <Code block fz="xs" color="terracotta">{err}</Code> : null}

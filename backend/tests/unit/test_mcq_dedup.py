@@ -98,7 +98,26 @@ def test_detects_exam_forbidden_mid_stem_refs() -> None:
     assert has_document_meta_reference("On page 12, what is photosynthesis?")
     assert has_document_meta_reference("In this book, how did Bernier describe the court?")
     assert has_document_meta_reference("What does the passage say about groundwater?")
+    assert has_document_meta_reference(
+        "What is the provided content of the first page of the ZIVO test PDF?"
+    )
+    assert has_document_meta_reference("It is labeled as ZIVO test PDF page one")
     assert not has_document_meta_reference("What is the primary function of chlorophyll?")
+
+
+def test_short_concept_label_clamps_paragraphs() -> None:
+    from app.services.mcq_dedup import short_concept_label
+
+    long = (
+        "Osmosis is the net movement of water molecules across a selectively "
+        "permeable membrane from a region of higher water potential to a region "
+        "of lower water potential."
+    )
+    out = short_concept_label(long)
+    assert out.startswith("Osmosis is the net movement")
+    assert len(out) <= 60
+    assert short_concept_label("") == "General"
+    assert short_concept_label("Chlorophyll") == "Chlorophyll"
 
 
 @pytest.mark.parametrize(

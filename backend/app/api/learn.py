@@ -21,6 +21,7 @@ from app.api.access import require_document
 from app.repositories.intel import concept_id
 from app.services.answer_signal import ANSWER_CORRECT_METRIC_URI, resolve_subject_entity
 from app.services.guest_session import guest_session_for_read
+from app.services.mcq_dedup import short_concept_label
 from app.services.question_pool import (
     advance_to_next_page,
     build_learn_queue_state,
@@ -275,7 +276,11 @@ def study_report(
         },
     ).mappings().all()
     topics = [
-        {"concept": r["concept"], "correct": int(r["correct"]), "total": int(r["total"])}
+        {
+            "concept": short_concept_label(r["concept"]),
+            "correct": int(r["correct"]),
+            "total": int(r["total"]),
+        }
         for r in rows
     ]
     total = sum(t["total"] for t in topics)
