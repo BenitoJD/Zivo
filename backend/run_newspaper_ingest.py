@@ -107,8 +107,9 @@ def _is_pdf_message(message) -> bool:  # noqa: ANN001
     return "pdf" in mime or (fname or "").lower().endswith(".pdf")
 
 
-async def _reconcile(client, entity, db, *, limit: int = 80) -> None:
+async def _reconcile(client, entity, db, *, limit: int = 250) -> None:
     """Catch-up: collect PDFs above cursor, process oldest→newest so first city wins."""
+    # 250: channel can drop 100+ PDFs/day; narrower window drops early editions after cursor advances.
     from app.repositories import newspaper as newspaper_repo
 
     settings = newspaper_repo.get_settings(db)
