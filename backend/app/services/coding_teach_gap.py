@@ -51,48 +51,19 @@ def heuristic_teach_gap(
     concept: str,
     first_fail: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Deterministic mentor + lesson when the model is unavailable."""
-    focus = _normalize_focus(tags, concept)
-    weak = focus[:2] or ["edge-cases"]
-    if all_passed:
-        return {
-            "mentor_summary": (
-                "Tests are green. The next edge is applying the same pattern under a twist — "
-                "constraints change, or the data structure choice gets costly."
-            ),
-            "weak_concepts": weak,
-            "lesson": {
-                "title": "Own the pattern, then stretch it",
-                "body": (
-                    "Passing tests means the happy path works. Solid mastery is recognizing when "
-                    "the same idea needs a different cut of the input or a tighter bound."
-                ),
-                "try_this": "On the next problem, name the pattern in one sentence before coding.",
-            },
-        }
-    fail_hint = ""
-    if first_fail:
-        stderr = str(first_fail.get("stderr") or "").strip()
-        if stderr:
-            fail_hint = " Runtime/compile noise showed up — fix that before chasing logic."
-        elif first_fail.get("expected") is not None:
-            fail_hint = " Your output diverged from the expected case — check boundaries and off-by-one."
-    ratio = f"{passed}/{total}" if total else "0/0"
-    return {
-        "mentor_summary": (
-            f"You cleared {ratio} hidden tests.{fail_hint} "
-            "The gap is usually one missed invariant, not more code."
-        ),
-        "weak_concepts": weak,
-        "lesson": {
-            "title": "Read the failing case as a clue",
-            "body": (
-                "A single failing input usually points at a boundary you skipped: empty, one element, "
-                "duplicates, or the last index. Restate the invariant the solution must keep, then fix that."
-            ),
-            "try_this": "Before re-submitting, write the invariant in one line above your loop.",
-        },
-    }
+    """Compat wrapper — canonical seam is Open Response ``heuristic_coding_teach_gap``."""
+    from app.services.open_response import heuristic_coding_teach_gap
+
+    return dict(
+        heuristic_coding_teach_gap(
+            all_passed=all_passed,
+            passed=passed,
+            total=total,
+            tags=tags,
+            concept=concept,
+            first_fail=first_fail,
+        ).result
+    )
 
 
 def pick_next_coding_id(

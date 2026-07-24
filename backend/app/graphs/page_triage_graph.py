@@ -15,8 +15,7 @@ from sqlalchemy.orm import Session
 from app.repositories.intel import update_activity
 from app.services.llm_router import acomplete_chat
 from app.services.llm_sync import run_coro_in_worker
-from app.services.aspect_discovery import parse_centrality, pick_for_plan
-from app.services.mcq_dedup import dedupe_aspects
+from app.services.aspect_discovery import dedupe_aspects, parse_centrality, pick_for_plan
 from app.services.prompts import get_prompt
 from app.services.question_budget import (
     Centrality,
@@ -112,30 +111,33 @@ def run_page_triage(
             }
 
         # Empty extractable text: one vision glance, then skip (cannot quiz without text).
-        # Vision changes the ask: blank → quiet skip; usable → stop and ask human;
-        # five blanks → stop and ask. After we asked, skip further vision calls.
+        # Vision plumbing returns usable; Content Worthiness owns the gate reason.
+        # blank → quiet skip; usable → stop and ask human; five blanks → stop and ask.
+        from app.services.content_worthiness import (
+            evaluate_vision_glance,
+            evaluate_worthiness,
+        )
+
         vision_usable = False
         rationale = "No extractable text on this page."
-        doc = db.get(Document, document_id)
-        if doc and should_skip_empty_page_vision(doc):
-            rationale = "Skipped vision — already asked learner to reselect pages."
-        else:
-            verdict = judge_page_has_content(db, document_id, page_number)
-            vision_usable = bool(verdict.get("usable"))
-            rationale = str(verdict.get("rationale") or "").strip() or (
-                "Page looks like it has content, but no extractable text."
-                if vision_usable
-                else "Vision glance: no useful study content."
-            )
-            note_empty_page_triage(db, document_id, vision_usable=vision_usable)
-
-        from app.services.content_worthiness import evaluate_worthiness
-
         worth = evaluate_worthiness(
             page_text=page_text or "",
             empty=True,
             min_chars=40,
         )
+        doc = db.get(Document, document_id)
+        if doc and should_skip_empty_page_vision(doc):
+            rationale = "Skipped vision — already asked learner to reselect pages."
+        else:
+            glance = judge_page_has_content(db, document_id, page_number)
+            vision_usable = bool(glance.get("usable"))
+            worth = evaluate_vision_glance(
+                usable=vision_usable,
+                rationale=str(glance.get("rationale") or ""),
+            )
+            rationale = worth.details or rationale
+            note_empty_page_triage(db, document_id, vision_usable=vision_usable)
+
         result = _non_content_result(
             rationale=f"{rationale} [worthiness:{worth.reason}]"
         )
@@ -473,12 +475,19 @@ def _finalize_triage(
     """Dedup aspects, normalize via KC engine, then let plan_page_budget own N."""
     from app.services.kc_coverage import normalize_aspects, normalize_key
 
-    deduped, meta = dedupe_aspects(aspects)
+    dedupe_verdict = dedupe_aspects(aspects)
+    deduped = list(dedupe_verdict.aspects)
+    meta = {
+        "raw_count": dedupe_verdict.raw_count,
+        "deduped_count": dedupe_verdict.deduped_count,
+        "merged_keys": list(dedupe_verdict.merged_keys),
+    }
     for aspect in deduped:
-        aspect.setdefault("centrality", "central")
-        cent = str(aspect.get("centrality") or "central").lower()
-        aspect["central"] = cent not in ("support", "peripheral")
-        if cent in ("support", "peripheral"):
+        # Aspect Discovery owns centrality tokens (incl. peripheral→support, skip≠central).
+        cent = parse_centrality(aspect.get("centrality"))
+        aspect["centrality"] = cent
+        aspect["central"] = cent == "central"
+        if cent == "support":
             aspect["peripheral"] = True
     plan_aspects = normalize_aspects(deduped)
     # Merge engine keys back onto triage aspect dicts (preserve angles, etc.).
@@ -494,8 +503,14 @@ def _finalize_triage(
         base = dict(unused.pop(matched_idx)) if matched_idx is not None else {}
         base["key"] = a.key
         base["label"] = a.label or base.get("label") or a.key
-        base["centrality"] = "central" if a.central else "support"
-        base["central"] = a.central
+        orig_cent = parse_centrality(base.get("centrality"))
+        if orig_cent == "skip":
+            # KC only has central bool; keep skip string for pick_for_plan / budget weights.
+            base["centrality"] = "skip"
+            base["central"] = False
+        else:
+            base["centrality"] = "central" if a.central else "support"
+            base["central"] = a.central
         normalized_dicts.append(base)
     deduped = normalized_dicts
     units = _units_from_aspects(deduped)

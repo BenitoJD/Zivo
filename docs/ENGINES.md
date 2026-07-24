@@ -48,3 +48,10 @@ Zero-wait refill (`REFILL_BATCH_SIZE`) stays outside Budget and Selection math.
 | `birth_prior_v1` | Calibration | `calibration_engine.birth_difficulty_prior` |
 | RAG window size / look-ahead | Tutor Retrieval | `tutor_retrieval.plan_rag_window` |
 | Cross-encoder rank vs truncate | Tutor Retrieval | `tutor_retrieval.finish_ranked_chunks` (calls `rerank` plumbing) |
+| Learn pin `current_page` before RAG window | Tutor Retrieval | `tutor_retrieval.decide_page_pin` |
+| Aspect cluster threshold / `dedupe_aspects` | Aspect Discovery | `aspect_discovery.dedupe_aspects` |
+| MCQ stem similarity threshold | Quality Evaluation | `quality_evaluation.judge_mcq_similarity` |
+| Vision empty-page glance → skip reason | Content Worthiness | `content_worthiness.evaluate_vision_glance` (vision LLM stays plumbing) |
+| Practice attempt bias (+unattempted / −done) | Practice Selection | `practice_selection.score_candidate` / `pick_next(attempted_ids=…)` |
+| Coding heuristic teach-gap lesson | Open Response | `open_response.heuristic_coding_teach_gap` |
+| Cross-doc MCQ reuse scope (`off`/`demo`/`all`) | Question Graph | `question_graph.plan_mcq_reuse` |

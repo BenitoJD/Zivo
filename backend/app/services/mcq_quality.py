@@ -18,7 +18,6 @@ from app.services.llm_sync import run_coro_in_worker
 from app.services.mcq_dedup import (
     embed_signature_cached,
     format_prior_mcqs_block,
-    is_mcq_too_similar,
     mcq_signature,
     prior_mcq_embeddings,
     SUBJECT_MATTER_PREFIX,
@@ -40,6 +39,7 @@ from app.services.quality_evaluation import (
     QualitySignals,
     critique_passes,
     decide_verdict,
+    judge_mcq_similarity,
     merge_critique_for_rewrite,
     should_run_critic,
 )
@@ -614,7 +614,8 @@ def generate_quality_mcq(
                 key_flaw = verify_answer_key(db, mcq=draft, page_text=page_text, model_id=model_id)
                 verify_ran = True
             if key_flaw is None:
-                too_similar, max_sim = is_mcq_too_similar(draft, prior_mcqs)
+                sim = judge_mcq_similarity(draft, prior_mcqs)
+                too_similar, max_sim = sim.too_similar, sim.max_similarity
 
         rewrite_left = max(0, max_attempts - attempt - 1)
         # Soft heuristic-only drafts still run critic below; hard fails skip LLM.
@@ -945,11 +946,12 @@ def _quality_gate_one(
     heuristic_flaws = _enrich_heuristics_with_engines(
         draft, heuristic_flaws, page_text=page_text
     )
-    too_similar, max_sim = is_mcq_too_similar(
+    sim = judge_mcq_similarity(
         draft,
         check_against,
         prior_embeddings=prior_embeddings,
     )
+    too_similar, max_sim = sim.too_similar, sim.max_similarity
     key_flaw: dict[str, str] | None = None
     verify_ran = False
     if verify_enabled and not has_fatal_heuristic_flaws(heuristic_flaws) and not too_similar:
@@ -1029,11 +1031,12 @@ def _quality_gate_one(
             heuristic_flaws = _enrich_heuristics_with_engines(
                 draft, heuristic_flaws, page_text=page_text
             )
-            too_similar, max_sim = is_mcq_too_similar(
+            sim = judge_mcq_similarity(
                 draft,
                 check_against,
                 prior_embeddings=prior_embeddings,
             )
+            too_similar, max_sim = sim.too_similar, sim.max_similarity
             key_flaw = None
             verify_ran = False
             if verify_enabled and not has_fatal_heuristic_flaws(heuristic_flaws) and not too_similar:
@@ -1317,9 +1320,9 @@ def generate_quality_mcq_batch(
                     f.get("code", "?") for f in h if f.get("code") in FATAL_FLAW_CODES
                 )
                 continue
-            too_sim, _ = is_mcq_too_similar(
+            too_sim = judge_mcq_similarity(
                 draft, prior_only, prior_embeddings=prior_only_embeddings
-            )
+            ).too_similar
             if too_sim:
                 rejected["too_similar_to_prior"] += 1
                 continue
@@ -1389,11 +1392,12 @@ def generate_quality_mcq_batch(
                 continue
             # Intra-batch dedup against already-accepted siblings (serial).
             check_against = list(prior_mcqs or []) + accepted_payloads
-            too_sim, max_sim2 = is_mcq_too_similar(
+            sim2 = judge_mcq_similarity(
                 gated,
                 check_against,
                 prior_embeddings=prior_embeddings,
             )
+            too_sim, max_sim2 = sim2.too_similar, sim2.max_similarity
             if too_sim:
                 rejected["too_similar_to_prior"] += 1
                 continue

@@ -3,7 +3,8 @@
 Design: docs/ADAPTIVE_SELECTION_ENGINE.md (practice sibling; same ADR 0004 seam)
 Version: qb.practice_sel.v1
 
-Owns overlap×difficulty ranking. Callers must not cram if-else score ladders.
+Owns overlap×difficulty ranking and attempt bias. Callers must not cram if-else
+score ladders.
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ PRACTICE_SEL_VERSION = "qb.practice_sel.v1"
 DEFAULT_POLICY = "overlap_v1"
 
 _DIFF_SCORE = {"easy": 1, "medium": 2, "hard": 3}
+ATTEMPT_BONUS = 5
+ATTEMPT_PENALTY = 3
 
 
 @dataclass(frozen=True)
@@ -35,12 +38,18 @@ class PracticePick:
 def score_candidate(
     candidate: PracticeCandidate,
     focus: Sequence[str],
+    *,
+    attempted: bool | None = None,
 ) -> int:
+    """Overlap×difficulty; optional attempt bias (+bonus unattempted / −penalty done)."""
     focus_set = {str(x).strip().lower() for x in focus if str(x).strip()}
     keys = {str(x).strip().lower() for x in candidate.concept_keys if str(x).strip()}
     overlap = len(focus_set & keys) if focus_set else 0
     diff = _DIFF_SCORE.get((candidate.difficulty or "").strip().lower(), 0)
-    return overlap * 10 + diff
+    base = overlap * 10 + diff
+    if attempted is None:
+        return base
+    return base + (ATTEMPT_BONUS if not attempted else -ATTEMPT_PENALTY)
 
 
 def pick_next(
@@ -48,16 +57,21 @@ def pick_next(
     focus: Sequence[str],
     *,
     exclude_id: str | None = None,
+    attempted_ids: Sequence[str] | None = None,
     policy: str | None = None,
 ) -> PracticePick:
-    """Pick highest overlap×difficulty; ties keep first-seen order. Empty → None."""
+    """Pick highest overlap×difficulty (+ attempt bias when attempted_ids given)."""
     pol = (policy or DEFAULT_POLICY).strip().lower() or DEFAULT_POLICY
+    attempted_set = (
+        {str(x) for x in attempted_ids} if attempted_ids is not None else None
+    )
     best_id: str | None = None
     best_score = -1
     for c in candidates:
         if exclude_id and str(c.id) == str(exclude_id):
             continue
-        s = score_candidate(c, focus)
+        attempted = None if attempted_set is None else str(c.id) in attempted_set
+        s = score_candidate(c, focus, attempted=attempted)
         if s > best_score:
             best_score = s
             best_id = c.id
@@ -76,6 +90,7 @@ def pick_from_rows(
     concepts_key: str = "concept_keys",
     difficulty_key: str = "difficulty",
     exclude_id: str | None = None,
+    attempted_ids: Sequence[str] | None = None,
 ) -> PracticePick:
     cands: list[PracticeCandidate] = []
     for r in rows:
@@ -91,4 +106,9 @@ def pick_from_rows(
                 difficulty=str(r.get(difficulty_key) or "") or None,
             )
         )
-    return pick_next(cands, focus, exclude_id=exclude_id)
+    return pick_next(
+        cands,
+        focus,
+        exclude_id=exclude_id,
+        attempted_ids=attempted_ids,
+    )

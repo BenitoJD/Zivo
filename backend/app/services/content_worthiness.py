@@ -3,8 +3,9 @@
 Design: docs/CONTENT_WORTHINESS_ENGINE.md
 Version: qb.worth.v1
 
-Callers depend on ``evaluate_worthiness`` only. Newspaper syllabus heuristics and
-junk-letter gates live behind this facade (ADR 0004 / holy grail).
+Callers depend on ``evaluate_worthiness`` (and ``evaluate_vision_glance`` for
+empty-page multimodal glances). Newspaper syllabus heuristics and junk-letter
+gates live behind this facade (ADR 0004 / holy grail).
 """
 
 from __future__ import annotations
@@ -20,6 +21,8 @@ WorthReason = Literal[
     "ok",
     "non_content",
     "empty",
+    "empty_vision_usable",
+    "empty_vision_blank",
     "ad_likely",
     "ad_copy",
     "too_short",
@@ -115,3 +118,32 @@ def evaluate_worthiness(
     if check_junk and looks_like_junk(text):
         return WorthinessVerdict(False, "junk_text", policy=pol)
     return WorthinessVerdict(True, "ok", policy=pol)
+
+
+def evaluate_vision_glance(
+    *,
+    usable: bool,
+    rationale: str = "",
+    policy: str | None = None,
+) -> WorthinessVerdict:
+    """Map multimodal empty-page glance into a worthiness verdict.
+
+    Vision LLM / cache / render stay in ``vision.judge_page_has_content``;
+    this seam owns whether usable vision content changes the empty-page reason.
+    Empty extractable text still cannot cook MCQs (worthy=False).
+    """
+    pol = normalize_policy(policy)
+    detail = (rationale or "").strip()
+    if usable:
+        return WorthinessVerdict(
+            False,
+            "empty_vision_usable",
+            policy=pol,
+            details=detail or "Page looks like it has content, but no extractable text.",
+        )
+    return WorthinessVerdict(
+        False,
+        "empty_vision_blank",
+        policy=pol,
+        details=detail or "Vision glance: no useful study content.",
+    )

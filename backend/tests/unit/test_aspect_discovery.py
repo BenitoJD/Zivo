@@ -5,9 +5,17 @@ from __future__ import annotations
 from app.services.aspect_discovery import (
     ASPECT_DISCOVERY_VERSION,
     next_unasked,
+    parse_centrality,
     pick_for_plan,
     speculative_targets,
 )
+
+
+def test_parse_centrality_peripheral_is_support() -> None:
+    assert parse_centrality("peripheral") == "support"
+    assert parse_centrality("secondary") == "support"
+    assert parse_centrality("skip") == "skip"
+    assert parse_centrality("central") == "central"
 
 
 def test_pick_prefers_central() -> None:
@@ -54,3 +62,33 @@ def test_speculative_from_paragraphs() -> None:
 def test_speculative_empty_page() -> None:
     v = speculative_targets("", 1, 2)
     assert v.n_kept == 0
+
+
+def test_dedupe_aspects_clusters_near_duplicates() -> None:
+    from unittest.mock import patch
+
+    from app.services.aspect_discovery import ASPECT_CLUSTER_THRESHOLD, dedupe_aspects
+
+    aspects = [
+        {"key": "a", "label": "Osmosis in plants"},
+        {"key": "b", "label": "Osmosis in plant cells"},
+        {"key": "c", "label": "Mitosis stages"},
+    ]
+
+    def fake_embed(texts: list[str]) -> list[list[float]]:
+        out: list[list[float]] = []
+        for t in texts:
+            if "mitosis" in t.lower():
+                out.append([0.0, 1.0])
+            else:
+                out.append([1.0, 0.0])
+        return out
+
+    with patch("app.services.mcq_dedup.embed_texts", side_effect=fake_embed):
+        v = dedupe_aspects(aspects, threshold=0.99)
+    assert v.deduped_count == 2
+    assert v.raw_count == 3
+    assert len(v.merged_keys) == 1
+    assert v.threshold == 0.99
+    assert ASPECT_CLUSTER_THRESHOLD == 0.88
+    assert v.policy_version == ASPECT_DISCOVERY_VERSION

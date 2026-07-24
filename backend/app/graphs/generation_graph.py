@@ -121,12 +121,13 @@ def _reusable_mcq_payloads(
 ) -> list[dict[str, Any]]:
     """Reuse MCQs from other documents with identical page text."""
     from app.config import get_settings
+    from app.services.question_graph import plan_mcq_reuse
 
-    scope = (get_settings().mcq_reuse_scope or "all").lower()
-    if scope == "off":
+    reuse = plan_mcq_reuse(get_settings().mcq_reuse_scope)
+    if not reuse.enabled:
         return []
 
-    demo_filter = "AND d.account_id IS NULL" if scope == "demo" else ""
+    demo_filter = "AND d.account_id IS NULL" if reuse.demo_only else ""
     rows = db.execute(
         text(
             f"""

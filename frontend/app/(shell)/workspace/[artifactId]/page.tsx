@@ -1,7 +1,7 @@
 "use client";
 
 import { use, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import {
   Alert,
   Box,
@@ -87,18 +87,21 @@ import {
   type PagesInfo,
 } from "@/lib/types";
 import { useIsDark } from "@/lib/useIsDark";
+import { useSearchParam } from "@/lib/useSearchParam";
 
 export default function WorkspaceArtifactPage({
   params,
 }: {
   params: Promise<{ artifactId: string }>;
 }) {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const queryClient = useQueryClient();
+  // `use(params)` first so a suspend does not leave later hooks half-mounted.
   const { artifactId } = use(params);
+  const router = useRouter();
+  const queryClient = useQueryClient();
   const invalidArtifactId = !isArtifactId(artifactId);
-  const urlMode = searchParams.get("mode");
+  // Avoid next/navigation useSearchParams: Next 16 DEV conditionally calls use()
+  // and trips Rules of Hooks in this page (useContext vs useState at position 5).
+  const urlMode = useSearchParam("mode");
   const isLg = useMediaQuery(STUDY_DESKTOP_BP, false, { getInitialValueInEffect: true });
   const isCompact = useMediaQuery(STUDY_COMPACT_BP, false, { getInitialValueInEffect: true });
   // Phone OR tablet study shell (<992): denser chrome. True phone (<768) also gets

@@ -6,11 +6,20 @@ import re
 from collections import OrderedDict
 from typing import Any
 
+from app.services.aspect_discovery import ASPECT_CLUSTER_THRESHOLD
 from app.services.embed import embed_texts
 
-ASPECT_CLUSTER_THRESHOLD = 0.88
-MCQ_SIMILARITY_THRESHOLD = 0.92
+# MCQ threshold lives on Quality Evaluation; resolved lazily to avoid
+# mcq_dedup → quality_evaluation → mcq_heuristics → mcq_dedup cycle.
 _SIGNATURE_EMBED_CACHE_MAX = 2_048
+
+
+def __getattr__(name: str) -> float:
+    if name == "MCQ_SIMILARITY_THRESHOLD":
+        from app.services.quality_evaluation import MCQ_SIMILARITY_THRESHOLD as value
+
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 _signature_embed_cache: OrderedDict[str, list[float]] = OrderedDict()
 
@@ -80,7 +89,8 @@ def short_concept_label(raw: str | None, *, max_chars: int = _CONCEPT_LABEL_MAX_
     """Clamp aspect/concept labels for report cards and bank metadata.
 
     Fallback triage sometimes uses a whole paragraph as the aspect label; that
-    must not land as a "topic" chip. Prefer the first clause, then word/char caps.
+    must not land as a "topic" chip. Prefer a noun-phrase subject before a
+    copula, else the first clause, then word/char caps.
     """
     s = re.sub(r"\s+", " ", (raw or "").strip())
     if not s:
@@ -98,6 +108,16 @@ def short_concept_label(raw: str | None, *, max_chars: int = _CONCEPT_LABEL_MAX_
                 break
         else:
             return "General"
+    # Sentence-as-aspect → keep the subject ("Osmosis is the net…" → "Osmosis").
+    copula = re.search(
+        r"\s+(?:is|are|was|were|means|refers|describes|involves)\s+",
+        s,
+        flags=re.IGNORECASE,
+    )
+    if copula and copula.start() > 0:
+        subject = s[: copula.start()].strip(" ,;:-")
+        if 1 <= len(subject.split()) <= _CONCEPT_LABEL_MAX_WORDS:
+            s = subject
     words = s.split()
     if len(words) > _CONCEPT_LABEL_MAX_WORDS:
         s = " ".join(words[:_CONCEPT_LABEL_MAX_WORDS])
@@ -305,36 +325,14 @@ def dedupe_aspects(
     *,
     threshold: float = ASPECT_CLUSTER_THRESHOLD,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    raw_count = len(aspects)
-    if raw_count <= 1:
-        return list(aspects), {
-            "raw_count": raw_count,
-            "deduped_count": raw_count,
-            "merged_keys": [],
-        }
+    """Compat wrapper — canonical seam is Aspect Discovery ``dedupe_aspects``."""
+    from app.services.aspect_discovery import dedupe_aspects as engine_dedupe
 
-    signatures = [aspect_signature(a) for a in aspects]
-    vectors = embed_texts(signatures)
-
-    kept: list[dict[str, Any]] = []
-    kept_vectors: list[list[float]] = []
-    merged_keys: list[str] = []
-
-    for aspect, vec in zip(aspects, vectors, strict=True):
-        duplicate = False
-        for kept_vec in kept_vectors:
-            if cosine_similarity(vec, kept_vec) >= threshold:
-                duplicate = True
-                merged_keys.append(str(aspect.get("key") or aspect.get("label") or ""))
-                break
-        if not duplicate:
-            kept.append(aspect)
-            kept_vectors.append(vec)
-
-    return kept, {
-        "raw_count": raw_count,
-        "deduped_count": len(kept),
-        "merged_keys": merged_keys,
+    verdict = engine_dedupe(aspects, threshold=threshold)
+    return list(verdict.aspects), {
+        "raw_count": verdict.raw_count,
+        "deduped_count": verdict.deduped_count,
+        "merged_keys": list(verdict.merged_keys),
     }
 
 
@@ -380,27 +378,22 @@ def is_mcq_too_similar(
     mcq: dict[str, Any],
     prior_mcqs: list[dict[str, Any]] | None,
     *,
-    threshold: float = MCQ_SIMILARITY_THRESHOLD,
+    threshold: float | None = None,
     prior_embeddings: list[list[float]] | None = None,
 ) -> tuple[bool, float]:
-    """Return (too_similar, max_cosine) vs prior MCQs on the same page."""
-    if not prior_mcqs and not prior_embeddings:
-        return False, 0.0
+    """Compat wrapper — canonical seam is Quality ``judge_mcq_similarity``."""
+    from app.services.quality_evaluation import (
+        MCQ_SIMILARITY_THRESHOLD,
+        judge_mcq_similarity,
+    )
 
-    candidate_sig = mcq_signature(mcq)
-    candidate_vec = embed_signature_cached(candidate_sig)
-    if prior_embeddings is not None:
-        prior_vecs = prior_embeddings
-    else:
-        prior_vecs = prior_mcq_embeddings(prior_mcqs or [])
-    if not prior_vecs:
-        return False, 0.0
-
-    max_sim = 0.0
-    for prior_vec in prior_vecs:
-        sim = cosine_similarity(candidate_vec, prior_vec)
-        max_sim = max(max_sim, sim)
-    return max_sim >= threshold, max_sim
+    verdict = judge_mcq_similarity(
+        mcq,
+        prior_mcqs,
+        threshold=MCQ_SIMILARITY_THRESHOLD if threshold is None else threshold,
+        prior_embeddings=prior_embeddings,
+    )
+    return verdict.too_similar, verdict.max_similarity
 
 
 def stems_match(a: str, b: str) -> bool:

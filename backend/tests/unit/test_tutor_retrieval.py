@@ -53,3 +53,27 @@ def test_finish_ranked_chunks_truncates_without_rerank() -> None:
     assert len(v.chunks) == 3
     assert v.used_rerank is False
     assert v.chunks[0]["text"] == "c0"
+
+
+def test_decide_page_pin_prefers_current() -> None:
+    from app.services.tutor_retrieval import decide_page_pin
+
+    v = decide_page_pin({"current_page": 4})
+    assert v.pin_current_first is True
+    assert v.page == 4
+    assert v.policy_version == TUTOR_RETRIEVAL_VERSION
+
+
+def test_decide_page_pin_skips_without_current() -> None:
+    from app.services.tutor_retrieval import decide_page_pin
+
+    v = decide_page_pin({"page_start": 1, "page_end": 6})
+    assert v.pin_current_first is False
+    assert v.page is None
+
+
+def test_decide_page_pin_rejects_invalid_page() -> None:
+    from app.services.tutor_retrieval import decide_page_pin
+
+    assert decide_page_pin({"current_page": 0}).pin_current_first is False
+    assert decide_page_pin({"current_page": "nope"}).page is None

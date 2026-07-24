@@ -44,7 +44,8 @@ Version field: `qb.worth.v1`.
 
 ## 3. Policy seam (ADR 0004)
 
-Callers depend on `app.services.content_worthiness.evaluate_worthiness` only.
+Callers depend on `app.services.content_worthiness.evaluate_worthiness` only
+(plus `evaluate_vision_glance` for empty-page multimodal glances).
 Do not call `newspaper_ad_filter` or invent junk if-ladders from triage/generation.
 Unknown policy degrades safely.
 
@@ -63,6 +64,7 @@ Unknown policy degrades safely.
 
 | Module | Role |
 |--------|------|
-| `content_worthiness.py` | `evaluate_worthiness`, `looks_like_junk` |
+| `content_worthiness.py` | `evaluate_worthiness`, `evaluate_vision_glance`, `looks_like_junk` |
 | `newspaper_ad_filter.py` | newspaper heuristics (called only from facade) |
+| `vision.py` | multimodal glance plumbing (`judge_page_has_content`) |
 | `page triage / generation / seo_cook` | skip generate when not worthy |

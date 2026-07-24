@@ -64,7 +64,7 @@ INTERVIEW_SCORE_MAX = 4
 class OpenResponseVerdict:
     """Typed measurement result with policy provenance."""
 
-    kind: Literal["mains", "interview_typed", "interview_report"]
+    kind: Literal["mains", "interview_typed", "interview_report", "coding_teach"]
     result: dict[str, Any]
     policy: str = DEFAULT_POLICY
     policy_version: str = OPEN_RESPONSE_VERSION
@@ -287,3 +287,80 @@ def build_interview_report(
         "focus_areas": focus,
     }
     return OpenResponseVerdict(kind="interview_report", result=result, policy=pol)
+
+
+# --- Coding teach-gap (heuristic mentor lesson) ------------------------------
+
+
+def _normalize_coding_focus(tags: list[str], concept: str) -> list[str]:
+    out: list[str] = []
+    for t in tags:
+        s = str(t).strip().lower()
+        if s and s not in out:
+            out.append(s)
+    c = str(concept or "").strip().lower()
+    if c and c not in out:
+        out.append(c)
+    return out[:6]
+
+
+def heuristic_coding_teach_gap(
+    *,
+    all_passed: bool,
+    passed: int,
+    total: int,
+    tags: list[str],
+    concept: str,
+    first_fail: dict[str, Any] | None,
+    policy: str | None = None,
+) -> OpenResponseVerdict:
+    """Deterministic mentor + lesson when the coding teach LLM is unavailable.
+
+    Owns lesson shape / weak-concept pick. LLM + cache stay in ``coding_teach_gap``.
+    """
+    pol = normalize_policy(policy)
+    focus = _normalize_coding_focus(tags, concept)
+    weak = focus[:2] or ["edge-cases"]
+    if all_passed:
+        result = {
+            "mentor_summary": (
+                "Tests are green. The next edge is applying the same pattern under a twist — "
+                "constraints change, or the data structure choice gets costly."
+            ),
+            "weak_concepts": weak,
+            "lesson": {
+                "title": "Own the pattern, then stretch it",
+                "body": (
+                    "Passing tests means the happy path works. Solid mastery is recognizing when "
+                    "the same idea needs a different cut of the input or a tighter bound."
+                ),
+                "try_this": "On the next problem, name the pattern in one sentence before coding.",
+            },
+        }
+        return OpenResponseVerdict(kind="coding_teach", result=result, policy=pol)
+
+    fail_hint = ""
+    if first_fail:
+        stderr = str(first_fail.get("stderr") or "").strip()
+        if stderr:
+            fail_hint = " Runtime/compile noise showed up — fix that before chasing logic."
+        elif first_fail.get("expected") is not None:
+            fail_hint = " Your output diverged from the expected case — check boundaries and off-by-one."
+    ratio = f"{passed}/{total}" if total else "0/0"
+    result = {
+        "mentor_summary": (
+            f"You cleared {ratio} hidden tests.{fail_hint} "
+            "The gap is usually one missed invariant, not more code."
+        ),
+        "weak_concepts": weak,
+        "lesson": {
+            "title": "Read the failing case as a clue",
+            "body": (
+                "A single failing input usually points at a boundary you skipped: empty, one element, "
+                "duplicates, or the last index. Restate the invariant the solution must keep, then fix that."
+            ),
+            "try_this": "Before re-submitting, write the invariant in one line above your loop.",
+        },
+    }
+    return OpenResponseVerdict(kind="coding_teach", result=result, policy=pol)
+

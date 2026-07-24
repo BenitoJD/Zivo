@@ -16,6 +16,9 @@ from typing import Any, Literal, Sequence
 ASPECT_DISCOVERY_VERSION = "qb.aspect_discovery.v1"
 DEFAULT_POLICY = "aspect_discovery_v1"
 
+# Near-duplicate aspect cluster cutoff (embedding cosine).
+ASPECT_CLUSTER_THRESHOLD = 0.88
+
 Centrality = Literal["central", "support", "skip"]
 
 
@@ -24,6 +27,17 @@ class AspectPickVerdict:
     aspects: tuple[dict[str, Any], ...]
     n_requested: int
     n_kept: int
+    policy: str = DEFAULT_POLICY
+    policy_version: str = ASPECT_DISCOVERY_VERSION
+
+
+@dataclass(frozen=True)
+class AspectDedupeVerdict:
+    aspects: tuple[dict[str, Any], ...]
+    raw_count: int
+    deduped_count: int
+    merged_keys: tuple[str, ...]
+    threshold: float = ASPECT_CLUSTER_THRESHOLD
     policy: str = DEFAULT_POLICY
     policy_version: str = ASPECT_DISCOVERY_VERSION
 
@@ -39,7 +53,63 @@ def parse_centrality(raw: Any) -> Centrality:
     value = str(raw or "central").strip().lower()
     if value in ("central", "support", "skip"):
         return value  # type: ignore[return-value]
+    # LLM / legacy aliases — peripheral is support, never promote to central.
+    if value in ("peripheral", "side", "minor", "secondary"):
+        return "support"
     return "central"
+
+
+def dedupe_aspects(
+    aspects: Sequence[dict[str, Any]],
+    *,
+    threshold: float = ASPECT_CLUSTER_THRESHOLD,
+    policy: str | None = None,
+) -> AspectDedupeVerdict:
+    """Cluster near-duplicate aspects by embedding cosine (owns threshold).
+
+    Embedding / signature plumbing stays in ``mcq_dedup``.
+    """
+    from app.services.mcq_dedup import aspect_signature, cosine_similarity, embed_texts
+
+    pol = normalize_policy(policy)
+    aspect_list = list(aspects)
+    raw_count = len(aspect_list)
+    if raw_count <= 1:
+        return AspectDedupeVerdict(
+            aspects=tuple(aspect_list),
+            raw_count=raw_count,
+            deduped_count=raw_count,
+            merged_keys=(),
+            threshold=threshold,
+            policy=pol,
+        )
+
+    signatures = [aspect_signature(a) for a in aspect_list]
+    vectors = embed_texts(signatures)
+
+    kept: list[dict[str, Any]] = []
+    kept_vectors: list[list[float]] = []
+    merged_keys: list[str] = []
+
+    for aspect, vec in zip(aspect_list, vectors, strict=True):
+        duplicate = False
+        for kept_vec in kept_vectors:
+            if cosine_similarity(vec, kept_vec) >= threshold:
+                duplicate = True
+                merged_keys.append(str(aspect.get("key") or aspect.get("label") or ""))
+                break
+        if not duplicate:
+            kept.append(aspect)
+            kept_vectors.append(vec)
+
+    return AspectDedupeVerdict(
+        aspects=tuple(kept),
+        raw_count=raw_count,
+        deduped_count=len(kept),
+        merged_keys=tuple(merged_keys),
+        threshold=threshold,
+        policy=pol,
+    )
 
 
 def pick_for_plan(

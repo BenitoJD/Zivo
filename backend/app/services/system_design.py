@@ -557,7 +557,7 @@ def list_problems(db: Session, *, difficulty: str | None = None) -> list[dict[st
 def recommend_problem(
     db: Session, account_id: uuid.UUID | None, guest_id: str | None
 ) -> dict[str, Any] | None:
-    from app.services.practice_selection import PracticeCandidate, score_candidate
+    from app.services.practice_selection import PracticeCandidate, pick_next
 
     path = build_path(db, account_id, guest_id)
     focus = path.get("focus_key")
@@ -575,26 +575,20 @@ def recommend_problem(
         ).mappings().all()
     }
     problems = list_problems(db)
-    # Prefer unattempted problems tagged with focus concept (Practice Selection score + attempt bias).
-    ranked: list[tuple[int, dict[str, Any]]] = []
     focus_list = [str(focus)] if focus else []
-    for p in problems:
-        base = score_candidate(
-            PracticeCandidate(
-                id=str(p["id"]),
-                concept_keys=tuple(p.get("concept_keys") or ()),
-                difficulty=p.get("difficulty"),
-            ),
-            focus_list,
+    cands = [
+        PracticeCandidate(
+            id=str(p["id"]),
+            concept_keys=tuple(p.get("concept_keys") or ()),
+            difficulty=p.get("difficulty"),
         )
-        # Attempt bias stays serve-path overlay (not a second ranker).
-        if str(p["id"]) not in attempted:
-            base += 5
-        else:
-            base -= 3
-        ranked.append((base, p))
-    ranked.sort(key=lambda x: (-x[0], x[1].get("sort_order") or 0))
-    return ranked[0][1] if ranked else None
+        for p in problems
+    ]
+    pick = pick_next(cands, focus_list, attempted_ids=list(attempted))
+    if not pick.id:
+        return None
+    by_id = {str(p["id"]): p for p in problems}
+    return by_id.get(pick.id)
 
 
 def active_session(

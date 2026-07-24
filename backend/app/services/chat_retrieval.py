@@ -13,6 +13,7 @@ from app.services.retrieval import fetch_chunks_for_page_range, merge_chunks, se
 from app.services.tutor_retrieval import (
     DEFAULT_FETCH_LIMIT,
     DEFAULT_TOP_N,
+    decide_page_pin,
     finish_ranked_chunks,
 )
 
@@ -67,14 +68,13 @@ def retrieve_document_chunks(
     scope: dict | None,
 ) -> list[dict]:
     scope = scope or {}
-    current_page = scope.get("current_page")
+    pin = decide_page_pin(scope)
 
     # Learn mode: normalize_chat_scope widens page_start/page_end to the RAG window
-    # (up to 6 pages). That disabled the old single-page fast path and forced every
-    # turn through embed + pgvector + cross-encoder rerank. Pin retrieval to the
-    # active page first; only fall back to the window when that page has no chunks.
-    if current_page is not None:
-        page = int(current_page)
+    # (up to 6 pages). Tutor Retrieval pin prefers the active page first; only fall
+    # back to the window when that page has no chunks.
+    if pin.pin_current_first and pin.page is not None:
+        page = pin.page
         primary_chunks = fetch_chunks_for_page_range(
             db,
             document_ids=document_ids,
@@ -83,6 +83,9 @@ def retrieve_document_chunks(
         )
         if primary_chunks:
             return _finish_chunks(query, primary_chunks)
+
+    # Only engine-validated page — never re-read raw scope after decide_page_pin rejects.
+    current_page = pin.page
 
     query_start, query_end = _extract_page_range(query)
     scope_start = scope.get("page_start")

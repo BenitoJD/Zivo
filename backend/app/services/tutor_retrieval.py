@@ -73,6 +73,16 @@ class ChunkRankVerdict:
     policy_version: str = TUTOR_RETRIEVAL_VERSION
 
 
+@dataclass(frozen=True)
+class PagePinVerdict:
+    """Learn-mode: prefer current_page chunks before widening to RAG window."""
+
+    pin_current_first: bool
+    page: int | None = None
+    policy: str = DEFAULT_POLICY
+    policy_version: str = TUTOR_RETRIEVAL_VERSION
+
+
 def normalize_policy(policy: str | None) -> str:
     p = (policy or DEFAULT_POLICY).strip().lower()
     if p in ("default", "tutor", "retrieval"):
@@ -109,6 +119,29 @@ def decide_retrieval(
     if is_conversational_followup(message):
         return RetrievalGateVerdict(False, "continuation", policy=pol)
     return RetrievalGateVerdict(True, "content_query", policy=pol)
+
+
+def decide_page_pin(
+    scope: dict | None,
+    *,
+    policy: str | None = None,
+) -> PagePinVerdict:
+    """Whether retrieval should try the active page before the RAG window.
+
+    Orchestration must not invent parallel current_page fast-path if-else.
+    """
+    pol = normalize_policy(policy)
+    scope = scope or {}
+    raw = scope.get("current_page")
+    if raw is None:
+        return PagePinVerdict(pin_current_first=False, page=None, policy=pol)
+    try:
+        page = int(raw)
+    except (TypeError, ValueError):
+        return PagePinVerdict(pin_current_first=False, page=None, policy=pol)
+    if page < 1:
+        return PagePinVerdict(pin_current_first=False, page=None, policy=pol)
+    return PagePinVerdict(pin_current_first=True, page=page, policy=pol)
 
 
 def needs_retrieval(

@@ -46,6 +46,19 @@ def test_question_graph_plans_follow_up_and_harder() -> None:
     assert "harder_than" in kinds
 
 
+def test_question_graph_mcq_reuse_scope() -> None:
+    from app.services.question_graph import GRAPH_VERSION, plan_mcq_reuse
+
+    off = plan_mcq_reuse("off")
+    assert off.enabled is False
+    assert off.scope == "off"
+    demo = plan_mcq_reuse("demo")
+    assert demo.enabled is True and demo.demo_only is True
+    all_scope = plan_mcq_reuse("all")
+    assert all_scope.enabled is True and all_scope.demo_only is False
+    assert all_scope.policy_version == GRAPH_VERSION
+
+
 def test_distractors_flag_longest_correct() -> None:
     v = evaluate_distractors(
         ["short", "also", "this is the conspicuously longest correct option text"],
@@ -60,6 +73,18 @@ def test_worthiness_rejects_ads_and_short() -> None:
     assert evaluate_worthiness(
         page_text="Photosynthesis converts light energy into chemical energy in chloroplasts."
     ).worthy is True
+
+
+def test_worthiness_vision_glance_maps_usable() -> None:
+    from app.services.content_worthiness import WORTH_VERSION, evaluate_vision_glance
+
+    usable = evaluate_vision_glance(usable=True, rationale="Diagram of cell cycle")
+    assert usable.worthy is False
+    assert usable.reason == "empty_vision_usable"
+    assert "Diagram" in usable.details
+    blank = evaluate_vision_glance(usable=False)
+    assert blank.reason == "empty_vision_blank"
+    assert blank.policy_version == WORTH_VERSION
 
 
 def test_worthiness_junk_and_newspaper_seam() -> None:

@@ -23,6 +23,9 @@ from app.services.mcq_heuristics import (
 QUALITY_VERSION = "qb.quality.v1"
 DEFAULT_QUALITY_POLICY = "code_driven_v1"
 
+# Stem/answer embedding cosine cutoff vs prior MCQs on the same page.
+MCQ_SIMILARITY_THRESHOLD = 0.92
+
 Decision = Literal["pass", "fail", "revise"]
 Stage = Literal["cook", "empirical"]
 
@@ -99,6 +102,67 @@ class QualitySignals:
     rewrite_budget_remaining: int = 0
     verify_ran: bool = False
     stage: Stage = "cook"
+
+
+@dataclass(frozen=True)
+class SimilarityVerdict:
+    """Near-dupe gate vs prior MCQs (owns ``MCQ_SIMILARITY_THRESHOLD``)."""
+
+    too_similar: bool
+    max_similarity: float
+    threshold: float = MCQ_SIMILARITY_THRESHOLD
+    policy: str = DEFAULT_QUALITY_POLICY
+    policy_version: str = QUALITY_VERSION
+
+
+def judge_mcq_similarity(
+    mcq: dict[str, Any],
+    prior_mcqs: list[dict[str, Any]] | None,
+    *,
+    threshold: float = MCQ_SIMILARITY_THRESHOLD,
+    prior_embeddings: list[list[float]] | None = None,
+    policy: str | None = None,
+) -> SimilarityVerdict:
+    """Sole MCQ near-dupe seam. Embed plumbing stays in ``mcq_dedup``."""
+    from app.services.mcq_dedup import (
+        cosine_similarity,
+        embed_signature_cached,
+        mcq_signature,
+        prior_mcq_embeddings,
+    )
+
+    pol = (policy or DEFAULT_QUALITY_POLICY).strip().lower() or DEFAULT_QUALITY_POLICY
+    if not prior_mcqs and not prior_embeddings:
+        return SimilarityVerdict(
+            too_similar=False,
+            max_similarity=0.0,
+            threshold=threshold,
+            policy=pol,
+        )
+
+    candidate_vec = embed_signature_cached(mcq_signature(mcq))
+    prior_vecs = (
+        prior_embeddings
+        if prior_embeddings is not None
+        else prior_mcq_embeddings(prior_mcqs or [])
+    )
+    if not prior_vecs:
+        return SimilarityVerdict(
+            too_similar=False,
+            max_similarity=0.0,
+            threshold=threshold,
+            policy=pol,
+        )
+
+    max_sim = 0.0
+    for prior_vec in prior_vecs:
+        max_sim = max(max_sim, cosine_similarity(candidate_vec, prior_vec))
+    return SimilarityVerdict(
+        too_similar=max_sim >= threshold,
+        max_similarity=max_sim,
+        threshold=threshold,
+        policy=pol,
+    )
 
 
 def _codes_from_flaws(flaws: Sequence[dict[str, str]] | None) -> list[str]:
@@ -394,6 +458,7 @@ def should_run_critic(
 __all__ = [
     "QUALITY_VERSION",
     "DEFAULT_QUALITY_POLICY",
+    "MCQ_SIMILARITY_THRESHOLD",
     "FATAL_FLAW_CODES",
     "NO_REWRITE_CODES",
     "EMPIRICAL_MIN_EXPOSURE",
@@ -401,11 +466,13 @@ __all__ = [
     "QualityScores",
     "QualityVerdict",
     "QualitySignals",
+    "SimilarityVerdict",
     "collect_flaw_codes",
     "critique_passes",
     "score_from_codes",
     "build_rewrite_brief",
     "merge_critique_for_rewrite",
+    "judge_mcq_similarity",
     "decide_verdict",
     "evaluate_empirical",
     "should_run_critic",

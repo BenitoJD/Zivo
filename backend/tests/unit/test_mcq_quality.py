@@ -14,6 +14,11 @@ from app.services.mcq_quality import (
     has_fatal_heuristic_flaws,
     run_heuristic_checks,
 )
+from app.services.quality_evaluation import SimilarityVerdict
+
+
+def _sim(too_similar: bool, max_similarity: float) -> SimilarityVerdict:
+    return SimilarityVerdict(too_similar=too_similar, max_similarity=max_similarity)
 
 def _good_mcq() -> dict:
     return {
@@ -374,7 +379,7 @@ def test_generate_quality_mcq_embedding_gate_retries() -> None:
     # critic ran on every draft (pre-deferred-critic behavior).
     with (
         patch("app.services.mcq_quality._complete_chat_sync", side_effect=[similar_block, distinct_block]),
-        patch("app.services.mcq_quality.is_mcq_too_similar", side_effect=[(True, 0.95), (False, 0.4)]),
+        patch("app.services.mcq_quality.judge_mcq_similarity", side_effect=[_sim(True, 0.95), _sim(False, 0.4)]),
         # This test exercises the embedding gate, not key verification.
         patch("app.services.mcq_quality.verify_answer_key", return_value=None),
     ):
@@ -500,7 +505,7 @@ def test_generate_quality_mcq_batch_gates_rest_in_parallel() -> None:
         patch.object(mq, "_quality_gate_one", side_effect=_fake_gate),
         patch.object(mq, "GENERATION_CONCURRENCY", 4),
         patch.object(mq, "PIPELINE_DRAFT_SPLIT", False),
-        patch.object(mq, "is_mcq_too_similar", return_value=(False, 0.0)),
+        patch.object(mq, "judge_mcq_similarity", return_value=_sim(False, 0.0)),
         patch.object(mq, "run_heuristic_checks", return_value=[]),
         patch.object(mq, "has_fatal_heuristic_flaws", return_value=False),
         patch.object(mq, "prior_mcq_embeddings", return_value=[]),
@@ -591,7 +596,7 @@ def test_pipeline_draft_split_overlaps_rest_draft_with_first_gate() -> None:
         patch.object(mq, "_quality_gate_one", side_effect=_fake_gate),
         patch.object(mq, "GENERATION_CONCURRENCY", 4),
         patch.object(mq, "PIPELINE_DRAFT_SPLIT", True),
-        patch.object(mq, "is_mcq_too_similar", return_value=(False, 0.0)),
+        patch.object(mq, "judge_mcq_similarity", return_value=_sim(False, 0.0)),
         patch.object(mq, "run_heuristic_checks", return_value=[]),
         patch.object(mq, "has_fatal_heuristic_flaws", return_value=False),
         patch.object(mq, "prior_mcq_embeddings", return_value=[]),

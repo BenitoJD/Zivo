@@ -114,14 +114,13 @@ def test_short_concept_label_clamps_paragraphs() -> None:
         "of lower water potential."
     )
     out = short_concept_label(long)
-    assert out.startswith("Osmosis is the net movement")
-    assert len(out) <= 60
+    assert out == "Osmosis"
     assert short_concept_label("") == "General"
     assert short_concept_label("Chlorophyll") == "Chlorophyll"
-    assert (
-        short_concept_label("Chlorophyll is the green pigment in plants that")
-        == "Chlorophyll is the green pigment in plants"
-    )
+    assert short_concept_label("Chlorophyll is the green pigment in plants that") == "Chlorophyll"
+    assert short_concept_label(
+        "Adenosine triphosphate (ATP) is the primary energy currency of living cells."
+    ) == "Adenosine triphosphate (ATP)"
     assert short_concept_label("ngress government in Karnataka should first set") == (
         "Karnataka should first set"
     )

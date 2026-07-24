@@ -38,6 +38,34 @@ def test_clean_signals_pass() -> None:
     assert v.fatal is False
     assert v.scores.structure == 1.0
     assert v.scores.key == 1.0
+
+
+def test_judge_mcq_similarity_uses_threshold() -> None:
+    from unittest.mock import patch
+
+    from app.services.quality_evaluation import (
+        MCQ_SIMILARITY_THRESHOLD,
+        judge_mcq_similarity,
+    )
+
+    mcq = {"question": "What is X?", "options": ["a", "b"], "correct_index": 0}
+    prior = [{"question": "What is X?", "correct_answer": "a"}]
+
+    with (
+        patch(
+            "app.services.mcq_dedup.embed_signature_cached",
+            return_value=[1.0, 0.0],
+        ),
+        patch(
+            "app.services.mcq_dedup.prior_mcq_embeddings",
+            return_value=[[1.0, 0.0]],
+        ),
+    ):
+        v = judge_mcq_similarity(mcq, prior, threshold=0.92)
+    assert v.too_similar is True
+    assert v.max_similarity >= 0.99
+    assert v.threshold == 0.92
+    assert MCQ_SIMILARITY_THRESHOLD == 0.92
     assert v.policy_version == QUALITY_VERSION
 
 

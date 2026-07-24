@@ -12,6 +12,16 @@ from app.graphs.page_triage_graph import (
     _normalize_aspect,
     _parse_triage_json,
 )
+from app.services.aspect_discovery import AspectDedupeVerdict
+
+
+def _identity_dedupe(aspects, **_kwargs) -> AspectDedupeVerdict:
+    return AspectDedupeVerdict(
+        aspects=tuple(aspects),
+        raw_count=len(aspects),
+        deduped_count=len(aspects),
+        merged_keys=(),
+    )
 
 
 def test_parse_triage_json_from_fence() -> None:
@@ -34,8 +44,8 @@ def test_fallback_triage_short_fragments_use_word_density() -> None:
     text = "\n\n".join(f"Short {i}." for i in range(200))
     words = len(text.split())
 
-    def identity_dedupe(aspects: list) -> tuple[list, dict]:
-        return aspects, {"raw_count": len(aspects), "deduped_count": len(aspects)}
+    def identity_dedupe(aspects, **_kwargs):
+        return _identity_dedupe(aspects)
 
     with patch("app.graphs.page_triage_graph.dedupe_aspects", side_effect=identity_dedupe):
         result = _fallback_triage(text, page_number=9)
@@ -55,8 +65,8 @@ def test_fallback_triage_substantial_paragraphs_capped_by_words() -> None:
     )
     words = len(text.split())
 
-    def identity_dedupe(aspects: list) -> tuple[list, dict]:
-        return aspects, {"raw_count": len(aspects), "deduped_count": len(aspects)}
+    def identity_dedupe(aspects: list) -> AspectDedupeVerdict:
+        return _identity_dedupe(aspects)
 
     with patch("app.graphs.page_triage_graph.dedupe_aspects", side_effect=identity_dedupe):
         result = _fallback_triage(text, page_number=9)
@@ -219,10 +229,7 @@ def test_finalize_triage_ignores_raw_budget_uses_weights() -> None:
         {"key": "c", "label": "C", "centrality": "skip", "asked": False, "answered": False},
     ]
 
-    def identity_dedupe(items: list) -> tuple[list, dict]:
-        return items, {"raw_count": len(items), "deduped_count": len(items)}
-
-    with patch("app.graphs.page_triage_graph.dedupe_aspects", side_effect=identity_dedupe):
+    with patch("app.graphs.page_triage_graph.dedupe_aspects", side_effect=_identity_dedupe):
         result = _finalize_triage(aspects=aspects, rationale="weighted")
 
     # 1 + 0.5 + 0 → 1.5 → 2; skip dropped from cook list
@@ -236,15 +243,27 @@ def test_finalize_triage_support_only_is_honest_zero() -> None:
         {"key": "a", "label": "Sidebar", "centrality": "support", "asked": False, "answered": False},
     ]
 
-    def identity_dedupe(items: list) -> tuple[list, dict]:
-        return items, {"raw_count": 1, "deduped_count": 1}
-
-    with patch("app.graphs.page_triage_graph.dedupe_aspects", side_effect=identity_dedupe):
+    with patch("app.graphs.page_triage_graph.dedupe_aspects", side_effect=_identity_dedupe):
         result = _finalize_triage(aspects=aspects, rationale="thin")
 
     # round(0.5)=0 → non_content, not filler
     assert result["question_budget"] == 0
     assert result["non_content"] is True
+
+
+def test_finalize_triage_peripheral_maps_to_support() -> None:
+    aspects = [
+        {"key": "a", "label": "Main", "centrality": "central", "asked": False, "answered": False},
+        {"key": "b", "label": "Aside", "centrality": "peripheral", "asked": False, "answered": False},
+    ]
+
+    with patch("app.graphs.page_triage_graph.dedupe_aspects", side_effect=_identity_dedupe):
+        result = _finalize_triage(aspects=aspects, rationale="peripheral")
+
+    by_key = {a["key"]: a for a in result["aspects"]}
+    assert by_key["b"]["centrality"] == "support"
+    assert by_key["b"]["central"] is False
+    assert by_key["a"]["centrality"] == "central"
 
 
 def test_triage_page_skips_llm_when_flag_off() -> None:

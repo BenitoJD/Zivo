@@ -7,12 +7,15 @@ Version: qb.graph.v1
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Literal, Sequence
 
 GRAPH_VERSION = "qb.graph.v1"
+DEFAULT_POLICY = "graph_v1"
 LINK_FOLLOW_UP_AFTER_MISS = "follow_up_after_miss"
 LINK_HARDER_THAN = "harder_than"
 LINK_SAME_CONCEPT = "same_concept"
+
+McqReuseScope = Literal["off", "demo", "all"]
 
 
 @dataclass(frozen=True)
@@ -25,7 +28,39 @@ class LineageEdge:
 @dataclass(frozen=True)
 class LineagePlan:
     edges: tuple[LineageEdge, ...]
+    policy: str = DEFAULT_POLICY
     policy_version: str = GRAPH_VERSION
+
+
+@dataclass(frozen=True)
+class McqReusePlan:
+    """Whether cook may clone MCQs from identical page-hash bank items."""
+
+    enabled: bool
+    scope: McqReuseScope
+    demo_only: bool
+    policy: str = DEFAULT_POLICY
+    policy_version: str = GRAPH_VERSION
+
+
+def normalize_reuse_scope(scope: str | None) -> McqReuseScope:
+    s = (scope or "all").strip().lower()
+    if s in ("off", "demo", "all"):
+        return s  # type: ignore[return-value]
+    return "all"
+
+
+def plan_mcq_reuse(scope: str | None = None) -> McqReusePlan:
+    """Sole MCQ cross-document reuse seam (settings.mcq_reuse_scope).
+
+    SQL fetch stays in generation_graph; this owns off / demo / all.
+    """
+    normalized = normalize_reuse_scope(scope)
+    if normalized == "off":
+        return McqReusePlan(enabled=False, scope="off", demo_only=False)
+    if normalized == "demo":
+        return McqReusePlan(enabled=True, scope="demo", demo_only=True)
+    return McqReusePlan(enabled=True, scope="all", demo_only=False)
 
 
 def plan_batch_lineage(finalized: Sequence[dict[str, Any]]) -> LineagePlan:

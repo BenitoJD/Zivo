@@ -58,5 +58,39 @@ def test_interview_report_typed_average() -> None:
 
 def test_shape_interview_scores() -> None:
     v = shape_interview_scores({"problem_framing": 3, "depth": 99})
+    assert v.result["scores"]["problem_framing"] == 3
     assert v.result["scores"]["depth"] == 4
     assert v.result["scores"]["tradeoffs"] == 2
+
+
+def test_heuristic_coding_teach_gap_fail_shape() -> None:
+    from app.services.open_response import heuristic_coding_teach_gap
+
+    v = heuristic_coding_teach_gap(
+        all_passed=False,
+        passed=1,
+        total=3,
+        tags=["arrays", "two-pointers"],
+        concept="Two sum",
+        first_fail={"stdin": "1\n", "expected": "2\n", "stdout": "0\n", "stderr": ""},
+    )
+    assert v.kind == "coding_teach"
+    assert v.policy_version == OPEN_RESPONSE_VERSION
+    assert v.result["mentor_summary"]
+    assert v.result["lesson"]["try_this"]
+    assert "arrays" in v.result["weak_concepts"] or "two-pointers" in v.result["weak_concepts"]
+
+
+def test_heuristic_coding_teach_gap_pass_still_teaches() -> None:
+    from app.services.open_response import heuristic_coding_teach_gap
+
+    v = heuristic_coding_teach_gap(
+        all_passed=True,
+        passed=3,
+        total=3,
+        tags=["dp"],
+        concept="Knapsack",
+        first_fail=None,
+    )
+    assert v.result["lesson"]["title"]
+    assert v.result["weak_concepts"]
