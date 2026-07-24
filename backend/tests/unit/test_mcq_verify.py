@@ -85,3 +85,21 @@ def test_verify_answer_key_on_by_default() -> None:
     from app.config import Settings
 
     assert Settings().verify_answer_key is True
+
+
+def test_multi_verify_cache_hit_skips_llm() -> None:
+    mcq = {
+        "question": "Select all that apply",
+        "options": ["A", "B", "C", "D"],
+        "correct_indices": [0, 2],
+    }
+    db = MagicMock()
+    with (
+        patch(
+            "app.services.generation_cache.get",
+            return_value={"ok": True},
+        ),
+        patch("app.services.mcq_quality._complete_chat_sync") as llm,
+    ):
+        assert verify_answer_key(db, mcq=mcq, page_text="src A and C", model_id=None) is None
+    llm.assert_not_called()

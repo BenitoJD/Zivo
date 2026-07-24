@@ -432,12 +432,54 @@ def _verify_answer_key_multi(
     Asks the solver which options the source supports (the full set), then compares
     to the marked set. Conservative: an unparseable/failed reply returns None.
     """
+    from app.services.chunk_map_cache import content_hash_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
+
     marked = sorted(
         {i for i in (mcq.get("correct_indices") or []) if isinstance(i, int) and 0 <= i < len(options)}
     )
     if len(options) < 2 or len(marked) < 2:
         return None
 
+    stem = str(mcq.get("question") or mcq.get("stem") or "")
+    cache_key = content_hash_key(
+        "verify_multi",
+        stem,
+        "|".join(options),
+        ",".join(str(i) for i in marked),
+        hashlib.sha256((page_text or "").encode("utf-8", "ignore")).hexdigest()[:32],
+        model_id,
+    )
+    hit = cache_get(db, kind="verify_verdict", cache_key=cache_key)
+    if isinstance(hit, dict):
+        if hit.get("ok") is True:
+            return None
+        flaw = hit.get("flaw")
+        return flaw if isinstance(flaw, dict) else None
+
+    result, decisive = _verify_answer_key_multi_uncached(
+        db, mcq=mcq, options=options, marked=marked, page_text=page_text, model_id=model_id
+    )
+    if decisive:
+        cache_put(
+            db,
+            kind="verify_verdict",
+            cache_key=cache_key,
+            value={"ok": True} if result is None else {"ok": False, "flaw": result},
+        )
+    return result
+
+
+def _verify_answer_key_multi_uncached(
+    db: Session,
+    *,
+    mcq: dict[str, Any],
+    options: list[str],
+    marked: list[int],
+    page_text: str,
+    model_id: uuid.UUID | None = None,
+) -> tuple[dict[str, str] | None, bool]:
+    """Return (flaw_or_None, decisive). decisive=False → do not cache (parse fail)."""
     excerpt = truncate_to_tokens(page_text, _PAGE_EXCERPT_MAX_TOKENS)
     options_block = "\n".join(f"{i}. {opt}" for i, opt in enumerate(options))
     system = get_prompt(db, "mcq_verify_multi_system")
@@ -459,26 +501,29 @@ def _verify_answer_key_multi(
     )
     parsed = _parse_critic_json(raw)
     if not parsed:
-        return None  # verifier failed — don't punish the item
+        return None, False  # verifier failed — don't punish / don't cache
 
     if parsed.get("none_defensible") is True:
-        return {"code": "not_grounded", "message": "Verifier: no option is supported by the source"}
+        return {
+            "code": "not_grounded",
+            "message": "Verifier: no option is supported by the source",
+        }, True
     raw_indices = parsed.get("answer_indices")
     if not isinstance(raw_indices, list):
-        return None
+        return None, False
     independent = sorted(
         {int(i) for i in raw_indices if isinstance(i, (int, float)) and 0 <= int(i) < len(options)}
     )
     if not independent:
-        return None  # malformed reply, not a real disagreement — stay conservative
+        return None, False  # malformed reply — stay conservative, don't cache
     if independent != marked:
         return {
             "code": "wrong_answer_key",
             "message": (
                 f"Verifier independently chose options {independent}, not the marked {marked}"
             ),
-        }
-    return None
+        }, True
+    return None, True
 
 
 def generate_quality_mcq(

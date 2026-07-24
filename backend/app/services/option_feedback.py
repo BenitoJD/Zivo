@@ -83,11 +83,27 @@ def generate_option_feedback(
     generation or grading path.
     """
     # Deferred import avoids a module-load cycle (mcq_quality → llm_router → ...).
+    from app.services.chunk_map_cache import content_hash_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
     from app.services.mcq_quality import _complete_chat_sync
 
     options = [str(o) for o in (options or [])]
     if len(options) < 2 or not (0 <= int(correct_index) < len(options)):
         return {}
+
+    coach_key = content_hash_key(
+        "coach_mcq",
+        question or "",
+        "|".join(options),
+        int(correct_index),
+        explanation or "",
+        concept or "",
+        model_id,
+    )
+    hit = cache_get(db, kind="coach_mcq", cache_key=coach_key)
+    if isinstance(hit, dict) and len(hit) == len(options):
+        if all(isinstance(hit.get(str(i)), str) and hit[str(i)].strip() for i in range(len(options))):
+            return {str(i): str(hit[str(i)]).strip() for i in range(len(options))}
 
     messages = [
         {"role": "system", "content": _COACH_SYSTEM},
@@ -119,7 +135,13 @@ def generate_option_feedback(
             out[str(i)] = val.strip()
     # Require full coverage — a partial map would silently leave some options on
     # the slow live path forever, which is worse than regenerating cleanly later.
-    return out if len(out) == len(options) else {}
+    if len(out) != len(options):
+        return {}
+    try:
+        cache_put(db, kind="coach_mcq", cache_key=coach_key, value=out)
+    except Exception:
+        logger.debug("option-feedback cache write failed", exc_info=True)
+    return out
 
 
 def _is_single_answer(payload: dict) -> bool:

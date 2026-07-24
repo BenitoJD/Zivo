@@ -182,10 +182,63 @@ def _norm_key(raw: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (raw or "").lower())
 
 
+def _brand_token_from_norm(norm: str) -> str | None:
+    """Map a normalized token (possibly glued city/date) onto a brand-family key."""
+    if not norm:
+        return None
+    if norm in _TOKEN_TO_BRAND:
+        return norm
+    loc_norms = {_norm_key(t) for t in _LOCATION_TOKENS}
+    # Longest brand token first so "thehindu" wins over "hindu".
+    for tok in sorted(_TOKEN_TO_BRAND, key=len, reverse=True):
+        if len(tok) < 2 or not norm.startswith(tok) or norm == tok:
+            continue
+        rest = norm[len(tok) :]
+        if rest.isdigit() or any(rest.startswith(loc) for loc in loc_norms):
+            return tok
+    return None
+
+
+def _extracted_brand_tokens(tokens: list[str]) -> list[str]:
+    """Brand-family keys present in filename tokens, including glued forms."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in tokens:
+        bt = _brand_token_from_norm(_norm_key(t))
+        if bt and bt not in seen:
+            seen.add(bt)
+            out.append(bt)
+    return out
+
+
+def _paper_id_fingerprint(*, filename: str, caption: str) -> str:
+    """City/date-stripped identity for paper-id LLM cache sharing across editions."""
+    blob = _normalize_blob(filename, caption)
+    tokens = [t for t in re.split(r"[_\-\s.]+", blob) if t]
+    parts: list[str] = []
+    for t in tokens:
+        low = t.lower()
+        if low in _LOCATION_TOKENS:
+            continue
+        if re.fullmatch(r"\d{1,8}", t) or re.fullmatch(r"20\d{2}", t):
+            continue
+        brand = _brand_token_from_norm(_norm_key(t))
+        parts.append(brand or _norm_key(t))
+    parts = [p for p in parts if p and not p.isdigit()]
+    if parts:
+        return "|".join(sorted(set(parts)))
+    return _norm_key(blob)[:64] or "unknown"
+
+
 def _alias_lookup_keys(*, guessed_title: str, blob: str, tokens: list[str]) -> list[str]:
     keys = [guessed_title, blob]
     if tokens:
         keys.append(tokens[0])
+    # Glued city PDFs (thdelhi24072026) must still hit a learned "th" alias.
+    keys.extend(_extracted_brand_tokens(tokens))
+    blob_brand = _brand_token_from_norm(_norm_key(blob))
+    if blob_brand:
+        keys.append(blob_brand)
     seen: set[str] = set()
     out: list[str] = []
     for k in keys:
@@ -277,7 +330,8 @@ def _learnable_alias_keys(
 
     candidates: list[str] = []
     seen: set[str] = set()
-    for raw in [guessed_title, *tokens]:
+    # Include glued-form brand keys (thdelhi… → th) so the next city PDF skips LLM.
+    for raw in [guessed_title, *tokens, *_extracted_brand_tokens(tokens)]:
         norm = _norm_key(raw)
         if not norm or norm in seen:
             continue
@@ -351,8 +405,30 @@ async def _llm_identify_paper_async(
 
     Returns (slug, title, confidence, exact_catalog_hit) or None.
     """
+    from app.services.chunk_map_cache import content_hash_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
     from app.services.llm_registry import default_chat_model_id
     from app.services.llm_router import acomplete_chat
+
+    tok_list = tokens if tokens is not None else [
+        t for t in re.split(r"[_\-\s.]+", _normalize_blob(filename, caption)) if t
+    ]
+    blob_s = blob or _normalize_blob(filename, caption)
+    fp = _paper_id_fingerprint(filename=filename, caption=caption)
+    cache_key = content_hash_key("newspaper_paper_id", fp)
+    hit = cache_get(db, kind="newspaper_paper_id", cache_key=cache_key)
+    if isinstance(hit, dict) and hit.get("slug") and hit.get("title"):
+        slug = str(hit["slug"])
+        canon = str(hit["title"])
+        try:
+            confidence = float(hit.get("confidence") if hit.get("confidence") is not None else 0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        exact_hit = bool(hit.get("exact_hit"))
+        if not _identity_conflicts_filename(
+            paper_slug=slug, tokens=tok_list, blob=blob_s
+        ):
+            return slug, canon, confidence, exact_hit
 
     system = (
         "You identify Indian / English newspaper brands from Telegram PDF filenames "
@@ -398,10 +474,6 @@ async def _llm_identify_paper_async(
         logger.info("newspaper paper-id empty title confidence=%s", confidence)
         return None
     slug, canon, exact_hit = _match_known_brand(db, title)
-    tok_list = tokens if tokens is not None else [
-        t for t in re.split(r"[_\-\s.]+", _normalize_blob(filename, caption)) if t
-    ]
-    blob_s = blob or _normalize_blob(filename, caption)
     conflict = _identity_conflicts_filename(
         paper_slug=slug, tokens=tok_list, blob=blob_s
     )
@@ -421,6 +493,20 @@ async def _llm_identify_paper_async(
             confidence,
         )
         return None
+    try:
+        cache_put(
+            db,
+            kind="newspaper_paper_id",
+            cache_key=cache_key,
+            value={
+                "slug": slug,
+                "title": canon,
+                "confidence": confidence,
+                "exact_hit": exact_hit,
+            },
+        )
+    except Exception:
+        logger.debug("newspaper paper-id cache write failed", exc_info=True)
     return slug, canon, confidence, exact_hit
 
 

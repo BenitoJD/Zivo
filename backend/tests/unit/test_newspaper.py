@@ -313,3 +313,63 @@ def test_soft_match_brand_rejected(monkeypatch) -> None:
     slug, title, exact = _match_known_brand(object(), "Hindu Daily")
     assert exact is False
     assert slug == "hindu-daily"
+
+
+def test_glued_city_pdf_hits_brand_alias(monkeypatch) -> None:
+    """thdelhi24072026 must resolve via learned 'th' alias — no LLM."""
+
+    def resolve(db, raw):
+        if _norm_key(raw) == "th":
+            return ("the-hindu", "The Hindu")
+        return None
+
+    monkeypatch.setattr(
+        "app.services.newspaper_naming.newspaper_repo.resolve_alias",
+        resolve,
+    )
+    parsed = parse_edition_meta(
+        object(),
+        filename="thdelhi24072026.pdf",
+        caption="",
+        message_date=datetime(2026, 7, 24, tzinfo=timezone.utc),
+        skip_llm=True,
+    )
+    assert parsed.paper_slug == "the-hindu"
+    assert parsed.source.startswith("alias+")
+
+
+def test_glued_form_learns_brand_alias_key(monkeypatch) -> None:
+    """After LLM IDs The Hindu from glued filename, learn 'th' for next city."""
+    learned: list[str] = []
+
+    monkeypatch.setattr(
+        "app.services.newspaper_naming.newspaper_repo.resolve_alias",
+        lambda db, raw: None,
+    )
+    monkeypatch.setattr(
+        "app.services.newspaper_naming.newspaper_repo.upsert_alias",
+        lambda db, *, alias_key, paper_slug, paper_title: learned.append(_norm_key(alias_key)),
+    )
+    monkeypatch.setattr(
+        "app.services.newspaper_naming.newspaper_repo.list_brands",
+        lambda db: [{"paper_slug": "the-hindu", "paper_title": "The Hindu", "enabled": True}],
+    )
+
+    parsed = parse_edition_meta(
+        object(),
+        filename="thmumbai24072026.pdf",
+        caption="",
+        message_date=datetime(2026, 7, 24, tzinfo=timezone.utc),
+        llm_identity=("the-hindu", "The Hindu", 0.9, True),  # type: ignore[arg-type]
+    )
+    assert parsed.paper_slug == "the-hindu"
+    assert "th" in learned
+
+
+def test_paper_id_fingerprint_shared_across_cities() -> None:
+    from app.services.newspaper_naming import _paper_id_fingerprint
+
+    a = _paper_id_fingerprint(filename="TH -Delhi -24-07-2026.pdf", caption="")
+    b = _paper_id_fingerprint(filename="TH -Bangalore -25-07-2026.pdf", caption="")
+    c = _paper_id_fingerprint(filename="thdelhi24072026.pdf", caption="")
+    assert a == b == c == "th"

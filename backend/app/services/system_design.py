@@ -789,55 +789,69 @@ async def submit_and_grade(
     concept_keys = list(problem.get("concept_keys") or [])
     design_clean = sess.get("design") or {}
 
-    user = (
-        f"Case: {problem.get('title')}\n"
-        f"Prompt: {problem.get('prompt')}\n"
-        f"Constraints: {problem.get('constraints')}\n"
-        f"Concept keys: {', '.join(concept_keys)}\n\n"
-        f"Learner's design JSON:\n{json.dumps(design_clean)}"
+    from app.services.chunk_map_cache import content_hash_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
+
+    design_json = json.dumps(design_clean, sort_keys=True, default=str)
+    grade_key = content_hash_key(
+        "sd_grade",
+        str(sess.get("problem_id") or ""),
+        design_json,
     )
+    cached = cache_get(db, kind="sd_grade", cache_key=grade_key)
     graded: dict[str, Any]
-    try:
-        raw = await complete_chat(
-            [
-                {"role": "system", "content": _GRADE_SYSTEM},
-                {"role": "user", "content": user},
-            ],
-            db,
-            log_tag="sd_grade",
+    if isinstance(cached, dict) and cached.get("mentor_summary") and cached.get("lesson"):
+        graded = cached
+    else:
+        user = (
+            f"Case: {problem.get('title')}\n"
+            f"Prompt: {problem.get('prompt')}\n"
+            f"Constraints: {problem.get('constraints')}\n"
+            f"Concept keys: {', '.join(concept_keys)}\n\n"
+            f"Learner's design JSON:\n{design_json}"
         )
-        data = extract_json_obj(raw) or {}
-        dims_in = data.get("dimensions") or []
-        dims = []
-        for key in ("framing", "api", "data", "scale", "tradeoffs", "communication"):
-            found = next((d for d in dims_in if isinstance(d, dict) and d.get("key") == key), None)
-            dims.append(
-                {
-                    "key": key,
-                    "score": _clamp_score((found or {}).get("score")),
-                    "note": str((found or {}).get("note") or "")[:280],
-                }
+        try:
+            raw = await complete_chat(
+                [
+                    {"role": "system", "content": _GRADE_SYSTEM},
+                    {"role": "user", "content": user},
+                ],
+                db,
+                log_tag="sd_grade",
             )
-        # Fill gaps from heuristic so lesson shape always matches coding teach-gap.
-        fallback = _heuristic_grade(design_clean, concept_keys)
-        weak = [str(w) for w in (data.get("weak_concepts") or []) if str(w)][:3]
-        if not weak:
-            weak = fallback["weak_concepts"]
-        lesson = data.get("lesson") if isinstance(data.get("lesson"), dict) else {}
-        graded = {
-            "mentor_summary": str(data.get("mentor_summary") or "").strip()
-            or fallback["mentor_summary"],
-            "dimensions": dims,
-            "weak_concepts": weak,
-            "lesson": {
-                "title": str(lesson.get("title") or fallback["lesson"]["title"])[:120],
-                "body": str(lesson.get("body") or fallback["lesson"]["body"])[:2000],
-                "try_this": str(lesson.get("try_this") or fallback["lesson"]["try_this"])[:400],
-            },
-        }
-    except Exception:
-        # Best-effort LLM grade — heuristic keeps the mastery loop alive.
-        graded = _heuristic_grade(design_clean, concept_keys)
+            data = extract_json_obj(raw) or {}
+            dims_in = data.get("dimensions") or []
+            dims = []
+            for key in ("framing", "api", "data", "scale", "tradeoffs", "communication"):
+                found = next((d for d in dims_in if isinstance(d, dict) and d.get("key") == key), None)
+                dims.append(
+                    {
+                        "key": key,
+                        "score": _clamp_score((found or {}).get("score")),
+                        "note": str((found or {}).get("note") or "")[:280],
+                    }
+                )
+            # Fill gaps from heuristic so lesson shape always matches coding teach-gap.
+            fallback = _heuristic_grade(design_clean, concept_keys)
+            weak = [str(w) for w in (data.get("weak_concepts") or []) if str(w)][:3]
+            if not weak:
+                weak = fallback["weak_concepts"]
+            lesson = data.get("lesson") if isinstance(data.get("lesson"), dict) else {}
+            graded = {
+                "mentor_summary": str(data.get("mentor_summary") or "").strip()
+                or fallback["mentor_summary"],
+                "dimensions": dims,
+                "weak_concepts": weak,
+                "lesson": {
+                    "title": str(lesson.get("title") or fallback["lesson"]["title"])[:120],
+                    "body": str(lesson.get("body") or fallback["lesson"]["body"])[:2000],
+                    "try_this": str(lesson.get("try_this") or fallback["lesson"]["try_this"])[:400],
+                },
+            }
+            cache_put(db, kind="sd_grade", cache_key=grade_key, value=graded)
+        except Exception:
+            # Best-effort LLM grade — heuristic keeps the mastery loop alive.
+            graded = _heuristic_grade(design_clean, concept_keys)
 
     next_id = _pick_next_problem_id(db, concept_keys=graded["weak_concepts"], exclude=uuid.UUID(sess["problem_id"]))
     db.execute(

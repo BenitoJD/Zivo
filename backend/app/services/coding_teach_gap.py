@@ -147,6 +147,11 @@ async def teach_after_submit(
     cases: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """LLM teach-gap with heuristic fallback. Same lesson shape as System Design."""
+    import hashlib
+
+    from app.services.chunk_map_cache import content_hash_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
+
     tags = list(payload.get("tags") or [])
     concept = str(payload.get("concept") or "")
     title = str(payload.get("title") or "Coding problem")
@@ -160,47 +165,77 @@ async def teach_after_submit(
         concept=concept,
         first_fail=first_fail if isinstance(first_fail, dict) else None,
     )
-    try:
-        fail_blob = ""
-        if first_fail and isinstance(first_fail, dict):
-            fail_blob = (
-                f"First fail stdin={first_fail.get('stdin')!r} "
-                f"expected={first_fail.get('expected')!r} "
-                f"stdout={first_fail.get('stdout')!r} stderr={first_fail.get('stderr')!r}"
-            )
-        user = (
-            f"Problem: {title}\n"
-            f"Concept: {concept}\nTags: {', '.join(tags)}\n"
-            f"Passed {passed}/{total} all_passed={all_passed}\n"
-            f"Statement (trim):\n{statement}\n\n"
-            f"Source (trim):\n{str(source)[:2500]}\n\n"
-            f"{fail_blob}"
+    fail_blob = ""
+    if first_fail and isinstance(first_fail, dict):
+        fail_blob = (
+            f"First fail stdin={first_fail.get('stdin')!r} "
+            f"expected={first_fail.get('expected')!r} "
+            f"stdout={first_fail.get('stdout')!r} stderr={first_fail.get('stderr')!r}"
         )
-        raw = await complete_chat(
-            [
-                {"role": "system", "content": _TEACH_SYSTEM},
-                {"role": "user", "content": user},
-            ],
-            db,
-            log_tag="coding_teach_gap",
-        )
-        data = extract_json_obj(raw) or {}
-        lesson_in = data.get("lesson") if isinstance(data.get("lesson"), dict) else {}
-        weak = [str(w).strip().lower() for w in (data.get("weak_concepts") or []) if str(w).strip()][:3]
-        if not weak:
-            weak = graded["weak_concepts"]
+    source_trim = str(source)[:2500]
+    teach_key = content_hash_key(
+        "coding_teach_gap",
+        str(assertion_id),
+        all_passed,
+        passed,
+        total,
+        hashlib.sha256(source_trim.encode("utf-8", "ignore")).hexdigest()[:32],
+        hashlib.sha256(fail_blob.encode("utf-8", "ignore")).hexdigest()[:16],
+    )
+    cached = cache_get(db, kind="coding_teach_gap", cache_key=teach_key)
+    if isinstance(cached, dict) and cached.get("mentor_summary") and cached.get("lesson"):
         graded = {
-            "mentor_summary": str(data.get("mentor_summary") or "").strip() or graded["mentor_summary"],
-            "weak_concepts": weak,
+            "mentor_summary": str(cached["mentor_summary"]),
+            "weak_concepts": list(cached.get("weak_concepts") or graded["weak_concepts"])[:3],
             "lesson": {
-                "title": str(lesson_in.get("title") or graded["lesson"]["title"])[:120],
-                "body": str(lesson_in.get("body") or graded["lesson"]["body"])[:2000],
-                "try_this": str(lesson_in.get("try_this") or graded["lesson"]["try_this"])[:400],
+                "title": str((cached.get("lesson") or {}).get("title") or graded["lesson"]["title"])[:120],
+                "body": str((cached.get("lesson") or {}).get("body") or graded["lesson"]["body"])[:2000],
+                "try_this": str(
+                    (cached.get("lesson") or {}).get("try_this") or graded["lesson"]["try_this"]
+                )[:400],
             },
         }
-    except Exception:
-        # Best-effort LLM teach — heuristic graded above stays the response.
-        pass
+    else:
+        try:
+            user = (
+                f"Problem: {title}\n"
+                f"Concept: {concept}\nTags: {', '.join(tags)}\n"
+                f"Passed {passed}/{total} all_passed={all_passed}\n"
+                f"Statement (trim):\n{statement}\n\n"
+                f"Source (trim):\n{source_trim}\n\n"
+                f"{fail_blob}"
+            )
+            raw = await complete_chat(
+                [
+                    {"role": "system", "content": _TEACH_SYSTEM},
+                    {"role": "user", "content": user},
+                ],
+                db,
+                log_tag="coding_teach_gap",
+            )
+            data = extract_json_obj(raw) or {}
+            lesson_in = data.get("lesson") if isinstance(data.get("lesson"), dict) else {}
+            weak = [
+                str(w).strip().lower()
+                for w in (data.get("weak_concepts") or [])
+                if str(w).strip()
+            ][:3]
+            if not weak:
+                weak = graded["weak_concepts"]
+            graded = {
+                "mentor_summary": str(data.get("mentor_summary") or "").strip()
+                or graded["mentor_summary"],
+                "weak_concepts": weak,
+                "lesson": {
+                    "title": str(lesson_in.get("title") or graded["lesson"]["title"])[:120],
+                    "body": str(lesson_in.get("body") or graded["lesson"]["body"])[:2000],
+                    "try_this": str(lesson_in.get("try_this") or graded["lesson"]["try_this"])[:400],
+                },
+            }
+            cache_put(db, kind="coding_teach_gap", cache_key=teach_key, value=graded)
+        except Exception:
+            # Best-effort LLM teach — heuristic graded above stays the response.
+            pass
 
     next_id = pick_next_coding_id(
         db,

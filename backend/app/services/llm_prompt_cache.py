@@ -15,7 +15,13 @@ from typing import Any
 from app.services.mcq_dedup import SUBJECT_MATTER_PREFIX
 
 # User messages whose leading prefix is stable across generate/critic/rewrite/triage.
-_STABLE_PREFIX_MARKERS = (SUBJECT_MATTER_PREFIX, "Document excerpts", "Section summaries:")
+_STABLE_PREFIX_MARKERS = (
+    SUBJECT_MATTER_PREFIX,
+    "Document excerpts",
+    "Section summaries:",
+    "Page text:",  # page_triage stable page prefix
+    "Grounding context",  # grade_mcq doc context
+)
 
 
 def _anthropic_cached_block(text: str) -> list[dict[str, Any]]:
