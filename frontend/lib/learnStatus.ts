@@ -53,6 +53,16 @@ export function learnWaitStatus(ctx: LearnWaitContext, tick: number): LearnWaitS
 
   if (ctx.generationPending) {
     const generated = ctx.questionsGenerated ?? 0;
+    const poolAvailable = ctx.poolAvailable ?? 0;
+    // Pool already has the next card — caller should not be in wait chrome.
+    // Keep copy focused on first-question / truly-empty cases only.
+    if (poolAvailable > 0 && generated > 0) {
+      return {
+        title: "Opening your question",
+        detail: "Almost there",
+        rotateKey: "open-ready",
+      };
+    }
     const line =
       GENERATING_LINES[((tick % GENERATING_LINES.length) + GENERATING_LINES.length) % GENERATING_LINES.length];
     if (generated === 0) {

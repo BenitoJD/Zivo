@@ -31,9 +31,10 @@ REFILL_AFTER_ANSWERED = 2
 # drains to empty before the next question is needed. The moment the count of
 # ready, unanswered questions dips below this, a refill batch is staged — instead
 # of only topping up every REFILL_AFTER_ANSWERED answers or once fully drained.
-# Jobs law: You move. Questions are already there. Always. Sized to cover one
-# in-flight refill (~5 questions) — not the whole page plan.
-READY_LOW_WATER = int(os.getenv("ZIVO_READY_LOW_WATER", "5"))
+# Jobs law: You move. Questions are already there. Always.
+# Sized ABOVE one in-flight refill (~5) so a fast learner cannot empty the pool
+# while the next batch's draft+gates are still cooking.
+READY_LOW_WATER = int(os.getenv("ZIVO_READY_LOW_WATER", "8"))
 # Start next-page triage/RAG/prep before the current page is nearly done so the
 # page turn never cold-starts. Was 0.70 — too late for fast learners.
 TRANSITION_PREFETCH_RATIO = float(os.getenv("ZIVO_TRANSITION_PREFETCH_RATIO", "0.45"))

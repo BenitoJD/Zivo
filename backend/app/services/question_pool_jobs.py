@@ -728,16 +728,23 @@ def kick_generation_sync(db: Session, document_id: uuid.UUID) -> None:
 
 
 def _enqueue_pool_work(db: Session, document_id: uuid.UUID, doc: Document) -> Job | None:
-    if _has_active_generate_job(db, document_id):
-        return None
     db.refresh(doc)
     meta = dict(doc.meta or {})
     progress = get_progress(doc)
     if not meta.get("question_pool_initialized"):
+        # Init may enqueue triage + first batch + eager lookahead; only block when
+        # *this* doc already has any generate work (avoid double-init races).
+        if _has_active_generate_job(db, document_id):
+            return None
         return enqueue_initial_pool(db, document_id)
 
     page = int(progress.get("current_page") or page_range_bounds(doc)[0])
+    # Page-scoped: next-page triage/prefetch must not block current-page start.
+    if _has_active_generate_job_for_page(db, document_id, page):
+        return None
     if not get_page_coverage(doc, page):
+        if _has_active_triage_job_for_page(db, document_id, page):
+            return None
         return enqueue_page_triage(db, doc, page=page)
 
     generated = count_assertions_on_page(db, document_id, page)
@@ -829,18 +836,22 @@ def ensure_question_pool(db: Session, document_id: uuid.UUID) -> Job | None:
         )
         db.commit()
 
+    # Always try to keep the warm buffer topped up — even when the learner already
+    # has a next card. Returning early here used to skip refill until the next
+    # answer, so a 1-deep pool drained to empty on Continue.
+    refill_job = maybe_refill_pool(db, document_id)
+
     if next_assertion_id(db, document_id, progress):
-        return rag_job
+        return refill_job or rag_job
 
     # Request path is read-only: only ENQUEUE background work, never generate
     # inline. Generation runs in the parallel CPU workers (and is pre-warmed by
     # eager precompute at index-ready), so the learn-queue request returns fast
     # and the client reads from a warm pool — the ≤5s seamless guarantee.
-    job: Job | None = rag_job
-    if not _has_active_generate_job(db, document_id):
-        pool_job = maybe_refill_pool(db, document_id)
-        if pool_job is None:
-            pool_job = _enqueue_pool_work(db, document_id, doc)
+    # Page-scoped: other pages' triage/prefetch must not block current-page cook.
+    job: Job | None = refill_job or rag_job
+    if refill_job is None:
+        pool_job = _enqueue_pool_work(db, document_id, doc)
         if pool_job is not None:
             job = pool_job
 

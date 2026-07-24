@@ -662,6 +662,10 @@ def generate_quality_mcq(
 # distractors). 5 is safely within the reliable range. For budgets > 5, call
 # this multiple times — prompt caching makes the repeat calls cheap.
 BATCH_MCQ_CAP = 5
+# Parallel LLM verify/critic slots within one batch after the first draft lands.
+# First draft always gates serially so Q1 hits the pool ASAP; remaining drafts
+# share this pool (capped further by process-wide LLM_MAX_CONCURRENT).
+GENERATION_CONCURRENCY = max(1, int(os.getenv("ZIVO_GENERATION_CONCURRENCY", "4")))
 # The critic is the cheapest, highest-leverage quality gate and prompt caching makes
 # the repeated page context nearly free — so critique EVERY item by default, not a
 # 25% sample. (Evaluation is the moat; don't skip it to save a few tokens.) Still an
@@ -799,6 +803,166 @@ def _generate_batch_drafts(
     return selected
 
 
+def _quality_gate_one(
+    db: Session,
+    *,
+    draft: dict[str, Any],
+    target: dict[str, Any] | None,
+    check_against: list[dict[str, Any]],
+    prior_embeddings: list[Any],
+    page_text: str,
+    page_number: int,
+    model_id: uuid.UUID | None,
+    verify_enabled: bool,
+    force_critic: bool,
+) -> tuple[str, dict[str, Any] | None, str | None, float, list[dict[str, Any]], dict[str, Any] | None, bool]:
+    """Run heuristic → embed → verify → critic(+rewrite) for one draft.
+
+    Returns ``(status, draft|None, reject_reason|None, max_sim, heuristic_flaws,
+    critic_meta|None, run_critic)``. status is ``accept`` or ``reject``.
+    """
+    heuristic_flaws = run_heuristic_checks(draft, prior_mcqs=check_against)
+    if has_fatal_heuristic_flaws(heuristic_flaws):
+        reason = next(
+            (str(f.get("code") or "?") for f in heuristic_flaws if f.get("code") in FATAL_FLAW_CODES),
+            "heuristic",
+        )
+        return ("reject", None, reason, 0.0, heuristic_flaws, None, False)
+
+    too_similar, max_sim = is_mcq_too_similar(
+        draft,
+        check_against,
+        prior_embeddings=prior_embeddings,
+    )
+    if too_similar:
+        return ("reject", None, "too_similar_to_prior", max_sim, heuristic_flaws, None, False)
+
+    if verify_enabled:
+        key_flaw = verify_answer_key(db, mcq=draft, page_text=page_text, model_id=model_id)
+        if key_flaw is not None:
+            return (
+                "reject",
+                None,
+                str(key_flaw.get("code") or "verify_failed"),
+                max_sim,
+                heuristic_flaws,
+                None,
+                False,
+            )
+
+    run_critic = force_critic or bool(heuristic_flaws) or random.random() < CRITIC_SAMPLE_RATE
+    critic_meta: dict[str, Any] | None = None
+    if run_critic:
+        critique = critique_mcq(
+            db,
+            mcq=draft,
+            page_text=page_text,
+            page_number=page_number,
+            target_aspect=target,
+            prior_mcqs=check_against,
+            model_id=model_id,
+        )
+        critic_meta = critique
+        if not _critique_passes(critique):
+            rewritten = _rewrite_mcq(
+                db,
+                draft=draft,
+                page_text=page_text,
+                page_number=page_number,
+                target_aspect=target,
+                critique_bundle=_merge_critique_for_rewrite(heuristic_flaws, critique),
+                prior_mcqs=check_against,
+                model_id=model_id,
+            )
+            if not rewritten:
+                return ("reject", None, "rewrite_failed", max_sim, heuristic_flaws, critic_meta, True)
+            draft = rewritten
+            heuristic_flaws = run_heuristic_checks(draft, prior_mcqs=check_against)
+            if has_fatal_heuristic_flaws(heuristic_flaws):
+                reason = next(
+                    (
+                        str(f.get("code") or "?")
+                        for f in heuristic_flaws
+                        if f.get("code") in FATAL_FLAW_CODES
+                    ),
+                    "heuristic",
+                )
+                return ("reject", None, reason, max_sim, heuristic_flaws, critic_meta, True)
+            too_similar, max_sim = is_mcq_too_similar(
+                draft,
+                check_against,
+                prior_embeddings=prior_embeddings,
+            )
+            if too_similar:
+                return (
+                    "reject",
+                    None,
+                    "too_similar_to_prior",
+                    max_sim,
+                    heuristic_flaws,
+                    critic_meta,
+                    True,
+                )
+            if verify_enabled:
+                key_flaw = verify_answer_key(db, mcq=draft, page_text=page_text, model_id=model_id)
+                if key_flaw is not None:
+                    return (
+                        "reject",
+                        None,
+                        str(key_flaw.get("code") or "verify_failed"),
+                        max_sim,
+                        heuristic_flaws,
+                        critic_meta,
+                        True,
+                    )
+            critique = critique_mcq(
+                db,
+                mcq=draft,
+                page_text=page_text,
+                page_number=page_number,
+                target_aspect=target,
+                prior_mcqs=check_against,
+                model_id=model_id,
+            )
+            critic_meta = critique
+            if not _critique_passes(critique):
+                return ("reject", None, "critic_rejected", max_sim, heuristic_flaws, critic_meta, True)
+
+    return ("accept", draft, None, max_sim, heuristic_flaws, critic_meta, run_critic)
+
+
+def _parallel_gate_draft(
+    *,
+    idx: int,
+    draft: dict[str, Any],
+    target: dict[str, Any] | None,
+    check_against: list[dict[str, Any]],
+    prior_embeddings: list[Any],
+    page_text: str,
+    page_number: int,
+    model_id: uuid.UUID | None,
+    verify_enabled: bool,
+    force_critic: bool,
+) -> tuple[int, tuple[str, dict[str, Any] | None, str | None, float, list[dict[str, Any]], dict[str, Any] | None, bool]]:
+    """Thread worker: own DB session so SQLAlchemy stays single-threaded per conn."""
+    from app.db import SessionLocal
+
+    with SessionLocal() as session:
+        result = _quality_gate_one(
+            session,
+            draft=draft,
+            target=target,
+            check_against=check_against,
+            prior_embeddings=prior_embeddings,
+            page_text=page_text,
+            page_number=page_number,
+            model_id=model_id,
+            verify_enabled=verify_enabled,
+            force_critic=force_critic,
+        )
+    return (idx, result)
+
+
 def generate_quality_mcq_batch(
     db: Session,
     *,
@@ -811,12 +975,14 @@ def generate_quality_mcq_batch(
     content_type: str | None = None,
     on_accept: Callable[[dict[str, Any], dict[str, Any]], bool] | None = None,
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    """Generate N MCQs in ONE LLM call, then run quality gates on each.
+    """Generate N MCQs in ONE LLM call, then quality-gate them.
 
-    ``on_accept(target, draft)`` (if given) is called the moment a draft passes the
-    gate — so the caller can persist it immediately and the learner sees the first
-    question while the rest are still being critiqued. Returning False stops the
-    loop early (e.g. the page budget is full). Dedup is unchanged (still sequential).
+    Pipeline for seamless Learn:
+      1. Shared draft call (cached).
+      2. Gate draft[0] serially → ``on_accept`` so Q1 lands ASAP.
+      3. Gate remaining drafts in parallel (``GENERATION_CONCURRENCY``, bounded
+         by process-wide ``LLM_MAX_CONCURRENT``) while the learner studies.
+      4. Finalize accepts in index order with intra-batch dedup.
 
     Returns (target_aspect, payload) pairs for MCQs that pass heuristics,
     embedding similarity, and sampled LLM critic checks.
@@ -870,104 +1036,22 @@ def generate_quality_mcq_batch(
     if not drafts:
         return []
 
-    # Run the fast-path quality gate per draft. Intra-batch near-dupes are
-    # caught by tracking accepted drafts as the "prior" for the next check.
     accepted: list[tuple[dict[str, Any], dict[str, Any]]] = []
     accepted_payloads: list[dict[str, Any]] = []
     prior_embeddings = prior_mcq_embeddings(list(prior_mcqs or []))
-    # Why drafts get discarded, so the gen→accept yield is measurable in prod
-    # (a high rejection rate is wasted generation time — the lever we tune).
     rejected: Counter[str] = Counter()
-    for idx, draft in enumerate(drafts):
-        target = targets[idx] if idx < len(targets) else None
-        check_against = list(prior_mcqs or []) + accepted_payloads
+    stop = False
 
-        heuristic_flaws = run_heuristic_checks(draft, prior_mcqs=check_against)
-        if has_fatal_heuristic_flaws(heuristic_flaws):
-            rejected.update(
-                f.get("code", "?") for f in heuristic_flaws if f.get("code") in FATAL_FLAW_CODES
-            )
-            continue
-
-        too_similar, max_sim = is_mcq_too_similar(
-            draft,
-            check_against,
-            prior_embeddings=prior_embeddings,
-        )
-        if too_similar:
-            rejected["too_similar_to_prior"] += 1
-            continue
-
-        # Correctness gate: independently re-solve and confirm the marked key.
-        # Always-on (cheap, short output) — the one check too important to sample.
-        if verify_enabled:
-            key_flaw = verify_answer_key(db, mcq=draft, page_text=page_text, model_id=model_id)
-            if key_flaw is not None:
-                rejected[key_flaw["code"]] += 1
-                continue
-
-        run_critic = bool(heuristic_flaws) or idx == 0 or random.random() < CRITIC_SAMPLE_RATE
-        critic_meta: dict[str, Any] | None = None
-        if run_critic:
-            critique = critique_mcq(
-                db,
-                mcq=draft,
-                page_text=page_text,
-                page_number=page_number,
-                target_aspect=target,
-                prior_mcqs=check_against,
-                model_id=model_id,
-            )
-            critic_meta = critique
-            if not _critique_passes(critique):
-                rewritten = _rewrite_mcq(
-                    db,
-                    draft=draft,
-                    page_text=page_text,
-                    page_number=page_number,
-                    target_aspect=target,
-                    critique_bundle=_merge_critique_for_rewrite(heuristic_flaws, critique),
-                    prior_mcqs=check_against,
-                    model_id=model_id,
-                )
-                if not rewritten:
-                    rejected["rewrite_failed"] += 1
-                    continue
-                draft = rewritten
-                heuristic_flaws = run_heuristic_checks(draft, prior_mcqs=check_against)
-                if has_fatal_heuristic_flaws(heuristic_flaws):
-                    rejected.update(
-                        f.get("code", "?") for f in heuristic_flaws if f.get("code") in FATAL_FLAW_CODES
-                    )
-                    continue
-                too_similar, max_sim = is_mcq_too_similar(
-                    draft,
-                    check_against,
-                    prior_embeddings=prior_embeddings,
-                )
-                if too_similar:
-                    rejected["too_similar_to_prior"] += 1
-                    continue
-                # The rewrite may have moved the answer — re-verify the key.
-                if verify_enabled:
-                    key_flaw = verify_answer_key(db, mcq=draft, page_text=page_text, model_id=model_id)
-                    if key_flaw is not None:
-                        rejected[key_flaw["code"]] += 1
-                        continue
-                critique = critique_mcq(
-                    db,
-                    mcq=draft,
-                    page_text=page_text,
-                    page_number=page_number,
-                    target_aspect=target,
-                    prior_mcqs=check_against,
-                    model_id=model_id,
-                )
-                critic_meta = critique
-                if not _critique_passes(critique):
-                    rejected["critic_rejected"] += 1
-                    continue
-
+    def _finalize_accept(
+        target: dict[str, Any] | None,
+        draft: dict[str, Any],
+        *,
+        max_sim: float,
+        heuristic_flaws: list[dict[str, Any]],
+        critic_meta: dict[str, Any] | None,
+        run_critic: bool,
+    ) -> bool:
+        """Apply quality metadata, append, and invoke on_accept. True = keep going."""
         draft["quality"] = {
             "pass": True,
             "flaw_count": len(heuristic_flaws),
@@ -986,14 +1070,152 @@ def generate_quality_mcq_batch(
         accepted_payloads.append(draft)
         prior_embeddings.append(embed_signature_cached(mcq_signature(draft)))
         if on_accept is not None and on_accept(target, draft) is False:
-            break
+            return False
+        return True
+
+    # --- Draft 0: serial gate so the first question hits the pool ASAP --------
+    first = drafts[0]
+    first_target = targets[0] if targets else None
+    status, gated, reason, max_sim, h_flaws, critic_meta, run_critic = _quality_gate_one(
+        db,
+        draft=first,
+        target=first_target,
+        check_against=list(prior_mcqs or []),
+        prior_embeddings=list(prior_embeddings),
+        page_text=page_text,
+        page_number=page_number,
+        model_id=model_id,
+        verify_enabled=verify_enabled,
+        force_critic=True,
+    )
+    if status == "accept" and gated is not None:
+        if not _finalize_accept(
+            first_target,
+            gated,
+            max_sim=max_sim,
+            heuristic_flaws=h_flaws,
+            critic_meta=critic_meta,
+            run_critic=run_critic,
+        ):
+            stop = True
+    elif reason:
+        rejected[reason] += 1
+
+    # --- Remaining drafts: parallel LLM gates, then ordered finalize ----------
+    rest = list(enumerate(drafts[1:], start=1))
+    if not stop and rest:
+        # Cheap pre-filter against page priors only (not yet-accepted siblings) so
+        # we don't spend LLM slots on obvious fatal/near-dupe drafts. Sibling
+        # dedup happens in the ordered finalize pass below.
+        prior_only = list(prior_mcqs or [])
+        prior_only_embeddings = prior_mcq_embeddings(prior_only)
+        work: list[tuple[int, dict[str, Any], dict[str, Any] | None]] = []
+        for idx, draft in rest:
+            target = targets[idx] if idx < len(targets) else None
+            h = run_heuristic_checks(draft, prior_mcqs=prior_only)
+            if has_fatal_heuristic_flaws(h):
+                rejected.update(
+                    f.get("code", "?") for f in h if f.get("code") in FATAL_FLAW_CODES
+                )
+                continue
+            too_sim, _ = is_mcq_too_similar(
+                draft, prior_only, prior_embeddings=prior_only_embeddings
+            )
+            if too_sim:
+                rejected["too_similar_to_prior"] += 1
+                continue
+            work.append((idx, draft, target))
+
+        gated_by_idx: dict[
+            int,
+            tuple[
+                str,
+                dict[str, Any] | None,
+                str | None,
+                float,
+                list[dict[str, Any]],
+                dict[str, Any] | None,
+                bool,
+            ],
+        ] = {}
+        if work:
+            workers = min(GENERATION_CONCURRENCY, len(work))
+            if workers <= 1:
+                for idx, draft, target in work:
+                    gated_by_idx[idx] = _quality_gate_one(
+                        db,
+                        draft=draft,
+                        target=target,
+                        check_against=prior_only,
+                        prior_embeddings=list(prior_only_embeddings),
+                        page_text=page_text,
+                        page_number=page_number,
+                        model_id=model_id,
+                        verify_enabled=verify_enabled,
+                        force_critic=False,
+                    )
+            else:
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+
+                with ThreadPoolExecutor(
+                    max_workers=workers, thread_name_prefix="mcq-gate"
+                ) as pool:
+                    futures = [
+                        pool.submit(
+                            _parallel_gate_draft,
+                            idx=idx,
+                            draft=draft,
+                            target=target,
+                            check_against=prior_only,
+                            prior_embeddings=list(prior_only_embeddings),
+                            page_text=page_text,
+                            page_number=page_number,
+                            model_id=model_id,
+                            verify_enabled=verify_enabled,
+                            force_critic=False,
+                        )
+                        for idx, draft, target in work
+                    ]
+                    for fut in as_completed(futures):
+                        idx, result = fut.result()
+                        gated_by_idx[idx] = result
+
+        for idx in sorted(gated_by_idx):
+            if stop:
+                break
+            status, gated, reason, max_sim, h_flaws, critic_meta, run_critic = gated_by_idx[idx]
+            if status != "accept" or gated is None:
+                if reason:
+                    rejected[reason] += 1
+                continue
+            # Intra-batch dedup against already-accepted siblings (serial).
+            check_against = list(prior_mcqs or []) + accepted_payloads
+            too_sim, max_sim2 = is_mcq_too_similar(
+                gated,
+                check_against,
+                prior_embeddings=prior_embeddings,
+            )
+            if too_sim:
+                rejected["too_similar_to_prior"] += 1
+                continue
+            target = targets[idx] if idx < len(targets) else None
+            if not _finalize_accept(
+                target,
+                gated,
+                max_sim=max_sim2,
+                heuristic_flaws=h_flaws,
+                critic_meta=critic_meta,
+                run_critic=run_critic,
+            ):
+                stop = True
 
     logger.info(
-        "mcq batch gate: page=%s drafts=%d accepted=%d rejected=%d reasons=%s",
+        "mcq batch gate: page=%s drafts=%d accepted=%d rejected=%d reasons=%s concurrency=%s",
         page_number,
         len(drafts),
         len(accepted),
         sum(rejected.values()),
         dict(rejected),
+        GENERATION_CONCURRENCY,
     )
     return accepted

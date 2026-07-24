@@ -126,7 +126,9 @@ def test_pool_ahead_defaults_are_deep_enough_for_seamless() -> None:
 
     assert FIRST_QUESTION_BATCH_SIZE == 1
     assert MAX_GENERATE_BATCH_SIZE == REFILL_BATCH_SIZE == 5
-    assert READY_LOW_WATER >= REFILL_BATCH_SIZE
+    # Low-water must sit ABOVE one refill batch so a fast learner cannot empty
+    # the pool while the next draft+gates are still in flight.
+    assert READY_LOW_WATER > REFILL_BATCH_SIZE
     assert TRANSITION_PREFETCH_RATIO <= 0.45
     assert TRANSITION_GENERATION_RATIO <= 0.15
     assert EAGER_TRIAGE_LOOKAHEAD >= 5
@@ -291,7 +293,8 @@ def test_ensure_question_pool_requeues_triage_when_no_coverage() -> None:
         patch("app.services.question_pool_jobs.release_stuck_generation"),
         patch("app.services.question_pool_jobs.kick_generation_sync"),
         patch("app.services.question_pool_jobs.next_assertion_id", return_value=None),
-        patch("app.services.question_pool_jobs._has_active_generate_job", return_value=False),
+        patch("app.services.question_pool_jobs._has_active_generate_job_for_page", return_value=False),
+        patch("app.services.question_pool_jobs._has_active_triage_job_for_page", return_value=False),
         patch("app.services.question_pool_jobs.maybe_refill_pool", return_value=None),
         patch("app.services.question_pool_jobs.enqueue_page_triage") as triage,
     ):
@@ -373,6 +376,51 @@ def test_reset_for_new_page_range_clears_pool_state() -> None:
     assert kwargs["page"] == 10
     assert kwargs["batch_size"] == 5
     assert kwargs["start_sequence"] == 5
+
+
+def test_maybe_refill_pool_fires_when_available_below_raised_low_water() -> None:
+    """READY_LOW_WATER > REFILL_BATCH_SIZE: a half-full warm pool still refills."""
+    from app.services.question_pool import READY_LOW_WATER, REFILL_BATCH_SIZE
+
+    assert READY_LOW_WATER > REFILL_BATCH_SIZE
+    # Simulate available just under the low-water mark (still > 0).
+    available = READY_LOW_WATER - 1
+    assert available > 0
+
+    doc_id = uuid.uuid4()
+    doc = MagicMock()
+    doc.id = doc_id
+    doc.status = "ready"
+    doc.account_id = None
+    doc.meta = {
+        "selected_range": {"from": 10, "to": 12},
+        "question_progress": {
+            "current_page": 10,
+            "answered_ids": [],
+            "generation_pending": False,
+            "page_coverage": {
+                "10": {
+                    "question_budget": 47,
+                    "aspects": [{"key": "x", "label": "X", "asked": False}],
+                    "coverage_complete": False,
+                }
+            },
+        },
+    }
+    db = MagicMock()
+    db.get.return_value = doc
+
+    with (
+        patch("app.services.question_pool_jobs.count_assertions_on_page", return_value=available),
+        patch("app.services.question_pool_jobs.count_answered_on_page", return_value=0),
+        patch("app.services.question_pool_jobs._count_available", return_value=available),
+        patch("app.services.question_pool_jobs._has_active_generate_job_for_page", return_value=False),
+        patch("app.services.question_pool_jobs.enqueue_page_batch") as enqueue,
+    ):
+        enqueue.return_value = MagicMock()
+        maybe_refill_pool(db, doc_id)
+
+    enqueue.assert_called_once()
 
 
 def test_maybe_refill_pool_while_generation_pending_if_no_page_job() -> None:
@@ -573,6 +621,7 @@ def test_release_stuck_generation_keeps_pending_when_job_queued() -> None:
 
 
 def test_ensure_question_pool_skips_enqueue_when_job_active() -> None:
+    """Page-scoped lock: refill is attempted, but no duplicate current-page work."""
     doc_id = uuid.uuid4()
     doc = MagicMock()
     doc.id = doc_id
@@ -594,14 +643,49 @@ def test_ensure_question_pool_skips_enqueue_when_job_active() -> None:
         patch("app.services.question_pool_jobs.release_stuck_generation"),
         patch("app.services.question_pool_jobs.kick_generation_sync"),
         patch("app.services.question_pool_jobs.next_assertion_id", return_value=None),
-        patch("app.services.question_pool_jobs._has_active_generate_job", return_value=True),
-        patch("app.services.question_pool_jobs.maybe_refill_pool") as refill,
+        patch("app.services.question_pool_jobs.maybe_refill_pool", return_value=None) as refill,
+        patch("app.services.question_pool_jobs._enqueue_pool_work", return_value=None) as enqueue_work,
         patch("app.services.question_pool_jobs.enqueue_page_triage") as triage,
     ):
         ensure_question_pool(db, doc_id)
 
-    refill.assert_not_called()
+    refill.assert_called_once_with(db, doc_id)
+    enqueue_work.assert_called_once()
     triage.assert_not_called()
+
+
+def test_ensure_question_pool_refills_while_learner_has_next() -> None:
+    """Warm buffer tops up even when current_assertion_id is already set."""
+    doc_id = uuid.uuid4()
+    doc = MagicMock()
+    doc.id = doc_id
+    doc.status = "ready"
+    doc.account_id = None
+    doc.meta = {
+        "selected_range": {"from": 25, "to": 33},
+        "question_pool_initialized": True,
+        "question_progress": {"current_page": 25, "page_coverage": {"25": {"question_budget": 15}}},
+    }
+    db = MagicMock()
+    db.get.return_value = doc
+    refill_job = MagicMock()
+
+    with (
+        patch("app.services.question_pool_jobs.release_stuck_generation"),
+        patch("app.services.question_pool_jobs.clear_stale_coverage_complete", return_value=False),
+        patch(
+            "app.services.rag_window.is_rag_window_ready",
+            return_value=True,
+        ),
+        patch("app.services.question_pool_jobs.next_assertion_id", return_value=str(uuid.uuid4())),
+        patch("app.services.question_pool_jobs.maybe_refill_pool", return_value=refill_job) as refill,
+        patch("app.services.question_pool_jobs._enqueue_pool_work") as enqueue_work,
+    ):
+        job = ensure_question_pool(db, doc_id)
+
+    assert job is refill_job
+    refill.assert_called_once_with(db, doc_id)
+    enqueue_work.assert_not_called()
 
 
 def test_ensure_question_pool_refills_when_pool_exhausted() -> None:
@@ -623,7 +707,6 @@ def test_ensure_question_pool_refills_when_pool_exhausted() -> None:
         patch("app.services.question_pool_jobs.release_stuck_generation"),
         patch("app.services.question_pool_jobs.kick_generation_sync") as kick,
         patch("app.services.question_pool_jobs.next_assertion_id", return_value=None),
-        patch("app.services.question_pool_jobs._has_active_generate_job", return_value=False),
         patch("app.services.question_pool_jobs.maybe_refill_pool", return_value=refill_job) as refill,
         patch("app.services.question_pool_jobs._enqueue_pool_work") as enqueue_work,
     ):
