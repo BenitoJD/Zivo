@@ -36,10 +36,18 @@ def _save_newspaper_pdf(filename: str, data: bytes) -> str:
 
 
 def window_start(today: date | None = None) -> date:
+    """Earliest edition_date learners may see (UTC date, last RETENTION_DAYS)."""
     today = today or datetime.now(timezone.utc).date()
     return newspaper_repo.retention_cutoff(
         datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
     )
+
+
+def edition_in_practice_window(
+    edition_date: date, *, today: date | None = None
+) -> bool:
+    """True when edition_date is within the practice retention window."""
+    return edition_date >= window_start(today)
 
 
 def list_catalog(db: Session) -> dict[str, Any]:
@@ -288,6 +296,8 @@ def purge_expired_editions(db: Session) -> int:
 def list_edition_questions(db: Session, edition_id: uuid.UUID, *, limit: int = 40) -> dict[str, Any]:
     ed = newspaper_repo.get_edition(db, edition_id)
     if not ed:
+        return {"edition": None, "items": []}
+    if not edition_in_practice_window(ed["edition_date"]):
         return {"edition": None, "items": []}
     doc_id = ed.get("document_id")
     if not doc_id or ed.get("status") != "ready":

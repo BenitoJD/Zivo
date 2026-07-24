@@ -47,6 +47,9 @@ def get_edition(edition_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
         raise HTTPException(status_code=404, detail="Edition not found")
     if not newspaper_repo.is_brand_allowed(db, ed["paper_slug"]):
         raise HTTPException(status_code=404, detail="Edition not found")
+    # Practice catalog is last RETENTION_DAYS only — stale editions stay out.
+    if not newspaper_svc.edition_in_practice_window(ed["edition_date"]):
+        raise HTTPException(status_code=404, detail="Edition not found")
     return {
         "id": str(ed["id"]),
         "paper_slug": ed["paper_slug"],

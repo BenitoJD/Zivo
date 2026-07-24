@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * Newspaper door — pick a paper from the last month.
+ * Newspaper door — pick a paper from the last 30 days.
  * Practice hands off to Learn/Test at /workspace/[documentId].
+ * Layout matches coding / system-design practice siblings (left header, dense cards).
  */
 
 import { useEffect } from "react";
@@ -15,12 +16,12 @@ import {
   Stack,
   Text,
 } from "@mantine/core";
-import { IconArrowLeft, IconArrowRight } from "@tabler/icons-react";
+import { IconArrowRight } from "@tabler/icons-react";
 import { useRouter } from "next/navigation";
 import { ensureGuestSession } from "@/lib/api/client";
 import { useNewspaperCatalogQuery } from "@/lib/api/queries";
 import { Shell } from "@/app/practice/_components/Shell";
-import { PaperMasthead } from "@/app/practice/newspaper/_components/PaperMasthead";
+import { LearnerPageHeader } from "@/app/_components/study/LearnerPageHeader";
 
 export default function NewspaperDoorPage() {
   const router = useRouter();
@@ -30,37 +31,27 @@ export default function NewspaperDoorPage() {
     void ensureGuestSession();
   }, []);
 
+  const retention = catalog.data?.retention_days ?? 30;
+
   return (
     <Shell>
-      <Container size="sm" py={{ base: 28, md: 56 }}>
-        <Stack gap="xl">
-          <Button
-            variant="subtle"
-            color="gray"
-            size="compact-sm"
-            w="fit-content"
-            leftSection={<IconArrowLeft size={14} />}
-            onClick={() => router.push("/practice")}
-          >
-            Practice
-          </Button>
-
-          <PaperMasthead
-            title="Today’s papers"
-            subtitle="Pick a paper. Pick a day. Same Learn flow — questions only."
+      <Container size="md" py={{ base: 32, md: 56 }}>
+        <Stack gap="lg">
+          <LearnerPageHeader
+            align="left"
+            compact
+            eyebrow="Newspaper"
+            title="Today's papers"
+            subtitle={`Pick a paper, pick a day (last ${retention} days). Same Learn flow, questions only.`}
           />
 
           {catalog.isLoading ? (
-            <Text c="dimmed" ta="center">
-              Loading papers…
-            </Text>
+            <Text c="dimmed">Loading papers…</Text>
           ) : catalog.isError ? (
-            <Text c="terracotta" ta="center">
-              Couldn&rsquo;t load newspapers right now.
-            </Text>
+            <Text c="terracotta">Couldn&rsquo;t load newspapers right now.</Text>
           ) : (catalog.data?.papers.length ?? 0) === 0 ? (
             <Paper radius="xl" p="xl" withBorder bg="gray.0" shadow="paper">
-              <Stack gap="xs" ta="center">
+              <Stack gap="xs">
                 <Text ff="var(--font-serif)" fw={500} fz="lg">
                   Nothing ready yet
                 </Text>
@@ -70,7 +61,7 @@ export default function NewspaperDoorPage() {
               </Stack>
             </Paper>
           ) : (
-            <Stack gap="sm">
+            <Stack gap="xs">
               {catalog.data!.papers.map((p) => (
                 <Paper
                   key={p.slug}
@@ -82,10 +73,10 @@ export default function NewspaperDoorPage() {
                 >
                   <Group justify="space-between" align="center" wrap="wrap" gap="sm">
                     <Box style={{ minWidth: 0, flex: "1 1 180px" }}>
-                      <Text fw={600} ff="var(--font-serif)" fz="lg" style={{ letterSpacing: "-0.01em" }}>
+                      <Text fw={600} ff="var(--font-serif)">
                         {p.title}
                       </Text>
-                      <Text size="sm" c="dimmed">
+                      <Text size="sm" c="dimmed" style={{ overflowWrap: "anywhere" }}>
                         {p.ready_days} day{p.ready_days === 1 ? "" : "s"} ready
                         {p.latest_date ? ` · latest ${p.latest_date}` : ""}
                       </Text>
@@ -94,6 +85,8 @@ export default function NewspaperDoorPage() {
                       radius="xl"
                       variant="light"
                       color="lavender"
+                      fullWidth
+                      maw={{ base: "100%", xs: 180 }}
                       rightSection={<IconArrowRight size={16} />}
                       onClick={() => router.push(`/practice/newspaper/${p.slug}`)}
                     >

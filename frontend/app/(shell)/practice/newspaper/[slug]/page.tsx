@@ -1,13 +1,13 @@
 "use client";
 
 /**
- * Newspaper paper — pick a day, then hand off to Learn/Test workspace.
+ * Newspaper paper — pick a day (last 30 days), then hand off to Learn/Test workspace.
+ * Same left-header / dense-card chrome as coding + system-design practice.
  */
 
 import { useEffect, use } from "react";
 import {
   Badge,
-  Box,
   Button,
   Container,
   Group,
@@ -15,12 +15,12 @@ import {
   Stack,
   Text,
 } from "@mantine/core";
-import { IconArrowLeft, IconArrowRight } from "@tabler/icons-react";
+import { IconArrowRight } from "@tabler/icons-react";
 import { useRouter } from "next/navigation";
 import { ensureGuestSession } from "@/lib/api/client";
 import { useNewspaperDaysQuery } from "@/lib/api/queries";
 import { Shell } from "@/app/practice/_components/Shell";
-import { PaperMasthead } from "@/app/practice/newspaper/_components/PaperMasthead";
+import { LearnerPageHeader } from "@/app/_components/study/LearnerPageHeader";
 
 export default function NewspaperPaperPage({
   params,
@@ -39,38 +39,24 @@ export default function NewspaperPaperPage({
 
   return (
     <Shell>
-      <Container size="sm" py={{ base: 28, md: 56 }}>
-        <Stack gap="xl">
-          <Button
-            variant="subtle"
-            color="gray"
-            size="compact-sm"
-            w="fit-content"
-            leftSection={<IconArrowLeft size={14} />}
-            onClick={() => router.push("/practice/newspaper")}
-          >
-            All papers
-          </Button>
-
-          <PaperMasthead
+      <Container size="md" py={{ base: 32, md: 56 }}>
+        <Stack gap="lg">
+          <LearnerPageHeader
+            align="left"
+            compact
+            eyebrow="Newspaper"
             title={title}
-            subtitle="Last month of practice days. Open a day to study in Learn."
+            subtitle="Last 30 days of practice days. Open a day to study in Learn."
           />
 
           {daysQ.isLoading ? (
-            <Text c="dimmed" ta="center">
-              Loading days…
-            </Text>
+            <Text c="dimmed">Loading days…</Text>
           ) : daysQ.isError ? (
-            <Text c="terracotta" ta="center">
-              Couldn&rsquo;t load days.
-            </Text>
+            <Text c="terracotta">Couldn&rsquo;t load days.</Text>
           ) : (daysQ.data?.days.length ?? 0) === 0 ? (
-            <Text c="dimmed" ta="center">
-              No editions in the window yet.
-            </Text>
+            <Text c="dimmed">No editions in the last 30 days yet.</Text>
           ) : (
-            <Stack gap="sm">
+            <Stack gap="xs">
               {daysQ.data!.days.map((d) => {
                 const ready = d.status === "ready";
                 const canOpen = Boolean(d.document_id) && (ready || d.status === "indexing");
@@ -78,7 +64,7 @@ export default function NewspaperPaperPage({
                   <Paper key={d.id} radius="xl" p="lg" withBorder bg="gray.0" shadow="paper">
                     <Group justify="space-between" align="center" wrap="wrap" gap="sm">
                       <Group gap="sm">
-                        <Text fw={600} ff="var(--font-serif)" fz="lg" style={{ letterSpacing: "-0.01em" }}>
+                        <Text fw={600} ff="var(--font-serif)">
                           {d.edition_date}
                         </Text>
                         <Badge
@@ -98,6 +84,8 @@ export default function NewspaperPaperPage({
                         variant="light"
                         color="lavender"
                         disabled={!canOpen}
+                        fullWidth
+                        maw={{ base: "100%", xs: 180 }}
                         rightSection={<IconArrowRight size={16} />}
                         onClick={() => {
                           if (!d.document_id) return;

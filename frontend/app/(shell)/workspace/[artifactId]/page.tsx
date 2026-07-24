@@ -1161,45 +1161,12 @@ export default function WorkspaceArtifactPage({
       : studyAlign === "right"
         ? "right"
         : null;
+  const newspaperContextLabel = isNewspaper
+    ? [paperTitle || shortFilename, editionDate].filter(Boolean).join(" · ")
+    : null;
+
   const questionColumn = (
     <Box flex={1} mih={0} h="100%" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      {isNewspaper ? (
-        <Group
-          gap="sm"
-          wrap="nowrap"
-          px={{ base: "sm", sm: "md", lg: "lg" }}
-          pt="xs"
-          pb={4}
-          style={{ flexShrink: 0 }}
-        >
-          <Button
-            variant="subtle"
-            color="gray"
-            size="compact-sm"
-            leftSection={<IconArrowLeft size={14} />}
-            onClick={() => router.push(newspaperBackHref)}
-          >
-            {paperTitle || "Paper"}
-          </Button>
-          <Box style={{ minWidth: 0, flex: 1 }}>
-            <Text
-              ff="var(--font-serif)"
-              fw={500}
-              fz="sm"
-              truncate
-              style={{ letterSpacing: "-0.01em" }}
-            >
-              {paperTitle || shortFilename}
-              {editionDate ? (
-                <Text span c="dimmed" fw={400} ff="var(--font-sans)" fz="xs">
-                  {" · "}
-                  {editionDate}
-                </Text>
-              ) : null}
-            </Text>
-          </Box>
-        </Group>
-      ) : null}
       <StudyMetaBar
         questionIndex={questionIndex}
         questionTotal={questionTotal}
@@ -1213,6 +1180,7 @@ export default function WorkspaceArtifactPage({
         onStudyModeChange={(m) => void setStudyMode(m)}
         align={studyAlign}
         onAlignChange={setStudyAlign}
+        contextLabel={newspaperContextLabel}
       />
       <Box
         flex={1}
@@ -1433,7 +1401,7 @@ export default function WorkspaceArtifactPage({
               Questions only
             </Text>
             <Text c="dimmed" size="sm">
-              Newspaper editions hide the PDF. Use Learn or Test — same MCQ surface as your other sources.
+              Newspaper editions hide the PDF. Use Learn or Test: same MCQ surface as your other sources.
             </Text>
             <Group>
               <Button

@@ -90,6 +90,8 @@ export function StudyMetaBar({
   onStudyModeChange,
   align = "center",
   onAlignChange,
+  /** Optional identity next to Learn/Test (e.g. newspaper "The Hindu · 2026-07-24"). */
+  contextLabel,
 }: {
   questionIndex: number;
   questionTotal: number;
@@ -106,6 +108,7 @@ export function StudyMetaBar({
   align?: StudyAlign;
   /** Omit to hide the alignment toggle entirely (e.g. Read, which owns its layout). */
   onAlignChange?: (align: StudyAlign) => void;
+  contextLabel?: string | null;
 }) {
   const modeSelect = showModeSelect ?? compact;
   const showBar = showProgress && questionTotal > 0;
@@ -115,34 +118,50 @@ export function StudyMetaBar({
   // Test wears the brand's deep green; Learn keeps lavender - a constant, glanceable
   // signal that the two are different study contexts.
   const barAccent = isTestMode ? "forest" : "lavender";
+  const contextChip =
+    contextLabel && contextLabel.trim() ? (
+      <Text
+        fz="xs"
+        c="dimmed"
+        fw={500}
+        truncate
+        style={{ minWidth: 0, maxWidth: compact ? 160 : 280, letterSpacing: "-0.01em" }}
+      >
+        {contextLabel.trim()}
+      </Text>
+    ) : null;
+
   const modeBadge =
     mode === "learn" || mode === "test" ? (
-      <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
-        <ThemeIcon
-          size={20}
-          radius="xl"
-          variant="light"
-          color={barAccent}
-          // Dark-mode accent shades are INVERTED here: low shades (-3) are deep
-          // surfaces, high shades (-7) are the bright "text/icon on ink" tone.
-          // -7 reads on both schemes (was light-dark(-7, -3) → dark glyph near-invisible).
-          style={{ color: `var(--mantine-color-${barAccent}-7)` }}
-        >
-          {isTestMode ? <IconClipboardList size={12} stroke={2} /> : <IconBulb size={12} stroke={2} />}
-        </ThemeIcon>
-        <Text
-          fz="xs"
-          fw={700}
-          tt="uppercase"
-          style={{
-            letterSpacing: "0.04em",
-            // Dark branch was -3 (a deep surface shade) → invisible on ink; the
-            // bright text-on-ink shade in this inverted scale is -7.
-            color: `light-dark(var(--mantine-color-${barAccent}-${isTestMode ? 8 : 7}), var(--mantine-color-${barAccent}-7))`,
-          }}
-        >
-          {isTestMode ? "Test" : "Learn"}
-        </Text>
+      <Group gap={8} wrap="nowrap" style={{ flexShrink: 0, minWidth: 0 }}>
+        <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
+          <ThemeIcon
+            size={20}
+            radius="xl"
+            variant="light"
+            color={barAccent}
+            // Dark-mode accent shades are INVERTED here: low shades (-3) are deep
+            // surfaces, high shades (-7) are the bright "text/icon on ink" tone.
+            // -7 reads on both schemes (was light-dark(-7, -3) → dark glyph near-invisible).
+            style={{ color: `var(--mantine-color-${barAccent}-7)` }}
+          >
+            {isTestMode ? <IconClipboardList size={12} stroke={2} /> : <IconBulb size={12} stroke={2} />}
+          </ThemeIcon>
+          <Text
+            fz="xs"
+            fw={700}
+            tt="uppercase"
+            style={{
+              letterSpacing: "0.04em",
+              // Dark branch was -3 (a deep surface shade) → invisible on ink; the
+              // bright text-on-ink shade in this inverted scale is -7.
+              color: `light-dark(var(--mantine-color-${barAccent}-${isTestMode ? 8 : 7}), var(--mantine-color-${barAccent}-7))`,
+            }}
+          >
+            {isTestMode ? "Test" : "Learn"}
+          </Text>
+        </Group>
+        {contextChip}
       </Group>
     ) : null;
 
@@ -295,7 +314,18 @@ export function StudyMetaBar({
     // (tablets keep the desktop sidebar mode list).
     return (
       <Stack px="sm" py={6} gap={6} style={{ flexShrink: 0 }}>
-        {modeSelect ? <CompactModeSelect mode={mode} onChange={onModeChange} /> : null}
+        {modeSelect ? (
+          <Group gap="sm" wrap="nowrap" align="center">
+            <Box style={{ flex: 1, minWidth: 0 }}>
+              <CompactModeSelect mode={mode} onChange={onModeChange} />
+            </Box>
+            {contextChip}
+          </Group>
+        ) : contextChip ? (
+          <Group gap={8} wrap="nowrap">
+            {modeBadge}
+          </Group>
+        ) : null}
         {progress || studyModeControl ? (
           <Group justify="space-between" wrap="wrap" align="center" gap="sm">
             <Box style={{ flex: 1, minWidth: 0 }}>{progress}</Box>

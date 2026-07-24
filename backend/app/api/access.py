@@ -26,7 +26,39 @@ def require_document(
     doc = db.get(Document, artifact_id)
     if not doc or not can_access_document(doc, user, guest_id):
         raise HTTPException(status_code=404, detail="Not found")
+    forbid_stale_newspaper_practice(doc, user)
     return doc
+
+
+def forbid_stale_newspaper_practice(doc: Document, user: Account | None) -> None:
+    """Learners may only open newspaper editions inside the practice window.
+
+    Admin ops keep full history until purge. Catalog/days already filter by
+    ``window_start``; this blocks deep links to expired document ids.
+    """
+    from datetime import date
+
+    from app.services.newspaper import (
+        edition_in_practice_window,
+        is_newspaper_document,
+    )
+
+    if user is not None and getattr(user, "is_admin", False):
+        return
+    if not is_newspaper_document(doc):
+        return
+    raw = (doc.meta or {}).get("edition_date")
+    if raw is None:
+        return
+    if isinstance(raw, date):
+        edition_date = raw
+    else:
+        try:
+            edition_date = date.fromisoformat(str(raw)[:10])
+        except ValueError:
+            return
+    if not edition_in_practice_window(edition_date):
+        raise HTTPException(status_code=404, detail="Not found")
 
 
 def require_ready_document(

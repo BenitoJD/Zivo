@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Light paper identity for the newspaper catalog (pick paper / pick day).
- * Same Study-Deck header chrome as other learner hubs — practice itself lives in Learn/Test.
+ * Thin wrapper kept for any leftover imports — prefer LearnerPageHeader
+ * with align="left" compact on practice newspaper pages (matches coding / SD).
  */
 
 import { LearnerPageHeader } from "@/app/_components/study/LearnerPageHeader";
@@ -10,7 +10,7 @@ import { LearnerPageHeader } from "@/app/_components/study/LearnerPageHeader";
 export function PaperMasthead({
   title,
   subtitle,
-  compact = false,
+  compact = true,
 }: {
   title: string;
   subtitle?: string;
@@ -18,6 +18,7 @@ export function PaperMasthead({
 }) {
   return (
     <LearnerPageHeader
+      align="left"
       eyebrow="Newspaper"
       title={title}
       subtitle={subtitle}
