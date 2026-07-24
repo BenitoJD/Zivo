@@ -16,12 +16,17 @@ from sse_starlette.sse import EventSourceResponse
 from app.config import get_settings
 from app.db import SessionLocal, get_db
 from app.graphs.mcq_graph import grade_feedback, grade_mcq, grade_verdict, load_grade_payload
-from app.models import Account
+from app.models import Account, Document
 from app.services.answer_signal import record_answer_signal, resolve_subject_entity
 from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.api.access import require_document
 from app.services.guest_session import guest_session_for_read
-from app.services.question_pool import record_answer, save_confirmed_answer
+from app.services.question_pool import (
+    get_progress,
+    next_assertion_id,
+    record_answer,
+    save_confirmed_answer,
+)
 from app.services.rate_limit import rate_limit_dependency
 
 logger = logging.getLogger(__name__)
@@ -177,8 +182,12 @@ async def grade_stream(
                 return
 
             verdict = grade_verdict(payload, body.choice_index, body.choice_indices)
-            # Record the answer + emit the verdict BEFORE any LLM work, so the outcome
-            # is committed and revealed even if the learner leaves mid-coaching.
+            # Yield verdict FIRST — before calibration / progress writes — so the
+            # learner sees the outcome immediately. Bookkeeping is idempotent and
+            # runs after yield; a disconnect mid-stream still records on retry.
+            yield _sse("verdict", verdict)
+
+            next_id: str | None = None
             try:
                 _record_graded_answer(
                     stream_db,
@@ -188,9 +197,15 @@ async def grade_stream(
                     user=user,
                     guest_id=guest_id,
                 )
+                doc = stream_db.get(Document, artifact_id)
+                if doc is not None:
+                    stream_db.refresh(doc)
+                    progress = get_progress(doc)
+                    next_id = next_assertion_id(stream_db, artifact_id, progress)
             except Exception:
                 logger.exception("grade answer-record failed")
-            yield _sse("verdict", verdict)
+            if next_id:
+                yield _sse("next", {"next_assertion_id": next_id})
 
             try:
                 feedback = await grade_feedback(

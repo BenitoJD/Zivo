@@ -93,21 +93,28 @@ def enqueue_page_batch(
     progress = get_progress(doc)
     budget = effective_question_budget(doc, page, progress)
     remaining = budget - generated
+    current_page = int(progress.get("current_page") or page_range_bounds(doc)[0])
+    is_current_page = page == current_page
     if remaining <= 0:
-        save_progress(db, doc, {"generation_pending": False})
-        db.commit()
+        if is_current_page:
+            save_progress(db, doc, {"generation_pending": False})
+            db.commit()
         return None
 
     batch_size = min(batch_size, remaining)
     # Per-page guard: a different page (e.g. the next page's transition prefetch)
     # may be generating concurrently — only block on a job for THIS page.
     if _has_active_generate_job_for_page(db, doc.id, page):
-        save_progress(db, doc, {"generation_pending": True})
-        db.commit()
+        # Only the current page's in-flight batch owns generation_pending. A
+        # next-page prefetch must not freeze current-page refill / page-complete.
+        if is_current_page:
+            save_progress(db, doc, {"generation_pending": True})
+            db.commit()
         return None
 
     _cancel_queued_generate_jobs_for_page(db, doc.id, page)
-    save_progress(db, doc, {"generation_pending": True})
+    if is_current_page:
+        save_progress(db, doc, {"generation_pending": True})
 
     activity_id = create_activity(
         db,
@@ -393,6 +400,10 @@ def on_batch_completed(db: Session, document_id: uuid.UUID, *, page: int, saved:
             logger.warning("coach enqueue failed for doc=%s page=%s", document_id, page, exc_info=True)
     if current_page == page:
         _maybe_enqueue_initial_pool_remainder(db, doc, page=page)
+        # Chain the next refill immediately when still below low-water. Waiting
+        # for the next answer used to leave a drained pool with no job queued
+        # after a batch finished — the classic empty-spinner cliff.
+        maybe_refill_pool(db, document_id)
 
 
 def on_batch_failed(db: Session, document_id: uuid.UUID, *, page: int) -> None:
@@ -603,8 +614,9 @@ def _enqueue_eager_triage_lookahead(db: Session, doc: Document, *, from_page: in
     """Keep page triage rolling EAGER_TRIAGE_LOOKAHEAD pages ahead of the reader.
 
     Triage is cheap (~1 LLM call/page) but must land BEFORE the transition
-    prefetch (which fires at 70% of a page) can generate the next page's pool —
-    transition_prep only generates a next page whose coverage already exists.
+    prefetch (which fires around TRANSITION_PREFETCH_RATIO of a page) can
+    generate the next page's pool — transition_prep only generates a next page
+    whose coverage already exists.
     Seeding once at init left the window static: on documents longer than the
     lookahead, every transition past the seeded window hit a cold triage→generate
     when the reader arrived (~30s wait). Re-seeding on each advance keeps the
@@ -966,10 +978,14 @@ def maybe_refill_pool(db: Session, document_id: uuid.UUID) -> Job | None:
         return None
 
     progress = get_progress(doc)
-    if progress.get("generation_pending"):
-        return None
-
     page = int(progress.get("current_page") or 1)
+    # Never bail solely on doc-level generation_pending — that flag is also set by
+    # current-page work and used to freeze refill while a batch ran, so a fast
+    # learner drained the pool with no follow-up job queued. Per-page active-job
+    # check respects the same-page lock (no duplicate concurrent batches) while
+    # still allowing refill when only another page's prefetch set the flag.
+    if _has_active_generate_job_for_page(db, document_id, page):
+        return None
     # Triage must populate page_coverage before batch generation can run.
     if not get_page_coverage(doc, page):
         return None

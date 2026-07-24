@@ -103,14 +103,40 @@ def test_get_question_budget_ignores_legacy_preferred_meta() -> None:
 
 
 def test_effective_budget_modest_before_engagement_then_deep() -> None:
+    from app.services.question_pool import (
+        GENERATION_AHEAD_BUFFER,
+        INITIAL_GENERATION_AHEAD,
+    )
+
     doc = MagicMock()
     doc.meta = {"question_progress": {"page_coverage": {"3": {"question_budget": 150, "aspects": []}}}}
-    # Before the first answer: only a modest pre-build (don't over-invest on a bounce).
-    assert effective_question_budget(doc, 3, {"answered_on_page": 0}) == 10
+    # Before the first answer: warm opening pool (Jobs: open stretch never cliffs).
+    assert effective_question_budget(doc, 3, {"answered_on_page": 0}) == INITIAL_GENERATION_AHEAD
     # Once engaged: a deep buffer stays well ahead of consumption...
-    assert effective_question_budget(doc, 3, {"answered_on_page": 20}) == 50
+    assert effective_question_budget(doc, 3, {"answered_on_page": 20}) == min(
+        150, 20 + GENERATION_AHEAD_BUFFER
+    )
     # ...still capped at the page budget near the end.
     assert effective_question_budget(doc, 3, {"answered_on_page": 130}) == 150
+
+
+def test_pool_ahead_defaults_are_deep_enough_for_seamless() -> None:
+    """Jobs law knobs: deep low-water + early transition + warm open."""
+    from app.services.question_pool import (
+        EAGER_TRIAGE_LOOKAHEAD,
+        GENERATION_AHEAD_BUFFER,
+        INITIAL_GENERATION_AHEAD,
+        READY_LOW_WATER,
+        TRANSITION_GENERATION_RATIO,
+        TRANSITION_PREFETCH_RATIO,
+    )
+
+    assert READY_LOW_WATER >= 20
+    assert INITIAL_GENERATION_AHEAD >= 15
+    assert GENERATION_AHEAD_BUFFER >= 40
+    assert TRANSITION_PREFETCH_RATIO <= 0.45
+    assert TRANSITION_GENERATION_RATIO <= 0.15
+    assert EAGER_TRIAGE_LOOKAHEAD >= 5
 
 
 def test_record_answer_increments_counter() -> None:
@@ -299,6 +325,7 @@ def test_reset_for_new_page_range_clears_pool_state() -> None:
         patch("app.services.question_pool_jobs.count_assertions_on_page", return_value=5),
         patch("app.services.question_pool_jobs.count_answered_on_page", return_value=REFILL_AFTER_ANSWERED),
         patch("app.services.question_pool_jobs._count_available", return_value=2),
+        patch("app.services.question_pool_jobs._has_active_generate_job_for_page", return_value=False),
         patch("app.services.question_pool_jobs.enqueue_page_batch") as enqueue,
     ):
         enqueue.return_value = MagicMock()
@@ -309,6 +336,109 @@ def test_reset_for_new_page_range_clears_pool_state() -> None:
     assert kwargs["page"] == 10
     assert kwargs["batch_size"] == 5
     assert kwargs["start_sequence"] == 5
+
+
+def test_maybe_refill_pool_while_generation_pending_if_no_page_job() -> None:
+    """Doc-level generation_pending must NOT freeze refill when this page has no active batch.
+
+    Classic freeze: next-page prefetch sets generation_pending, current page drains,
+    maybe_refill bailed on the flag → empty spinner. Page-scoped job check fixes it.
+    """
+    doc_id = uuid.uuid4()
+    doc = MagicMock()
+    doc.id = doc_id
+    doc.status = "ready"
+    doc.account_id = None
+    doc.meta = {
+        "selected_range": {"from": 10, "to": 12},
+        "question_progress": {
+            "current_page": 10,
+            "answered_ids": ["a", "b", "c"],
+            "generation_pending": True,
+            "page_coverage": {
+                "10": {
+                    "question_budget": 47,
+                    "aspects": [{"key": "x", "label": "X", "asked": False}],
+                    "coverage_complete": False,
+                }
+            },
+        },
+    }
+    db = MagicMock()
+    db.get.return_value = doc
+
+    with (
+        patch("app.services.question_pool_jobs.count_assertions_on_page", return_value=5),
+        patch("app.services.question_pool_jobs.count_answered_on_page", return_value=3),
+        patch("app.services.question_pool_jobs._count_available", return_value=2),
+        patch("app.services.question_pool_jobs._has_active_generate_job_for_page", return_value=False),
+        patch("app.services.question_pool_jobs.enqueue_page_batch") as enqueue,
+    ):
+        enqueue.return_value = MagicMock()
+        maybe_refill_pool(db, doc_id)
+
+    enqueue.assert_called_once()
+
+
+def test_maybe_refill_pool_skips_when_page_batch_active() -> None:
+    doc_id = uuid.uuid4()
+    doc = MagicMock()
+    doc.id = doc_id
+    doc.status = "ready"
+    doc.account_id = None
+    doc.meta = {
+        "selected_range": {"from": 10, "to": 12},
+        "question_progress": {
+            "current_page": 10,
+            "answered_ids": [],
+            "generation_pending": True,
+            "page_coverage": {
+                "10": {
+                    "question_budget": 47,
+                    "aspects": [{"key": "x", "asked": False}],
+                    "coverage_complete": False,
+                }
+            },
+        },
+    }
+    db = MagicMock()
+    db.get.return_value = doc
+
+    with (
+        patch("app.services.question_pool_jobs._has_active_generate_job_for_page", return_value=True),
+        patch("app.services.question_pool_jobs.enqueue_page_batch") as enqueue,
+    ):
+        maybe_refill_pool(db, doc_id)
+
+    enqueue.assert_not_called()
+
+
+def test_on_batch_completed_chains_refill() -> None:
+    from app.services.question_pool_jobs import on_batch_completed
+
+    doc_id = uuid.uuid4()
+    doc = MagicMock()
+    doc.id = doc_id
+    doc.account_id = None
+    doc.meta = {
+        "question_progress": {
+            "current_page": 3,
+            "generation_pending": True,
+            "page_coverage": {"3": {"question_budget": 40, "aspects": [{"key": "a"}]}},
+        }
+    }
+    db = MagicMock()
+    db.get.return_value = doc
+
+    with (
+        patch("app.services.question_pool_jobs.count_assertions_on_page", return_value=5),
+        patch("app.services.question_pool_jobs.save_progress"),
+        patch("app.services.question_pool_jobs._maybe_enqueue_initial_pool_remainder", return_value=None),
+        patch("app.services.question_pool_jobs.maybe_refill_pool") as refill,
+    ):
+        on_batch_completed(db, doc_id, page=3, saved=2)
+
+    refill.assert_called_once_with(db, doc_id)
 
 
 def test_merge_progress_does_not_wipe_page_coverage() -> None:
@@ -470,9 +600,10 @@ def test_ensure_question_pool_refills_when_pool_exhausted() -> None:
     kick.assert_not_called()
 
 
-def test_should_transition_prefetch_after_seventy_percent() -> None:
-    assert should_transition_prefetch(10, 15) is False
-    assert should_transition_prefetch(11, 15) is True
+def test_should_transition_prefetch_after_ratio() -> None:
+    # Default TRANSITION_PREFETCH_RATIO is 0.45 — fire well before page end.
+    assert should_transition_prefetch(6, 15) is False  # 0.40
+    assert should_transition_prefetch(7, 15) is True  # ~0.47
 
 
 def test_maybe_transition_prefetch_enqueues_once() -> None:
@@ -484,7 +615,7 @@ def test_maybe_transition_prefetch_enqueues_once() -> None:
     doc.meta = {
         "question_progress": {
             "current_page": 1,
-            "answered_on_page": 11,
+            "answered_on_page": 7,
             "transition_prep_done": {},
             "page_coverage": {"1": {"question_budget": 15, "aspects": []}},
         }

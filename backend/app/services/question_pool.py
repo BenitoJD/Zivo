@@ -27,26 +27,29 @@ REFILL_AFTER_ANSWERED = 2
 # drains to empty before the next question is needed. The moment the count of
 # ready, unanswered questions dips below this, a refill batch is staged — instead
 # of only topping up every REFILL_AFTER_ANSWERED answers or once fully drained.
-# This is what keeps a fast solver from ever catching up to an empty pool. Sized
-# to keep a deep buffer even on a 150-question page (refills well before it drains).
-READY_LOW_WATER = int(os.getenv("ZIVO_READY_LOW_WATER", "15"))
-TRANSITION_PREFETCH_RATIO = float(os.getenv("ZIVO_TRANSITION_PREFETCH_RATIO", "0.70"))
-TRANSITION_GENERATION_RATIO = float(os.getenv("ZIVO_TRANSITION_GENERATION_RATIO", "0.30"))
+# Jobs law: You move. Questions are already there. Always. Sized deep enough that
+# a fast solver cannot empty the pool during one in-flight batch (~5 questions,
+# tens of seconds) before on_batch_completed chains the next refill.
+READY_LOW_WATER = int(os.getenv("ZIVO_READY_LOW_WATER", "20"))
+# Start next-page triage/RAG/prep before the current page is nearly done so the
+# page turn never cold-starts. Was 0.70 — too late for fast learners.
+TRANSITION_PREFETCH_RATIO = float(os.getenv("ZIVO_TRANSITION_PREFETCH_RATIO", "0.45"))
+# Begin generating the next page's first batch even earlier than full transition
+# prep, once the learner has shown real engagement on the current page.
+TRANSITION_GENERATION_RATIO = float(os.getenv("ZIVO_TRANSITION_GENERATION_RATIO", "0.15"))
 # How far ahead of what's been ANSWERED we keep generating, once the learner is
 # engaged. Deep enough that a fast reader never catches up on a long page, while
 # staying demand-driven (we never pre-build the whole 150 up front).
-GENERATION_AHEAD_BUFFER = int(os.getenv("ZIVO_GENERATION_AHEAD_BUFFER", "30"))
-# Before the FIRST answer, pre-build only a modest batch — don't invest 30
-# questions into a page the learner might bounce off. The first answer (real
-# engagement) unlocks the deep buffer above.
-INITIAL_GENERATION_AHEAD = int(os.getenv("ZIVO_INITIAL_GENERATION_AHEAD", str(INITIAL_BATCH_SIZE * 2)))
+GENERATION_AHEAD_BUFFER = int(os.getenv("ZIVO_GENERATION_AHEAD_BUFFER", "40"))
+# Before the FIRST answer, warm a deeper opening pool than a single batch — the
+# open stretch is where empty-pool spinners hurt most. Still far below full-page
+# spend so a bounce does not burn a full triage budget.
+INITIAL_GENERATION_AHEAD = int(os.getenv("ZIVO_INITIAL_GENERATION_AHEAD", "15"))
 # Eagerly triage the current page + this many pages ahead at init, so the document
 # is understood before the reader arrives. Triage only (cheap, ~1 call/page);
-# batches stay on-demand + next-page prefetch, so we don't burn tokens generating
-# pages the reader never reaches. 3 is enough to stay ahead of the transition
-# prefetch (which fires at 40% page progress) without triaging pages that are
-# never opened — 10 was pure waste (~7 unused triage calls/doc).
-EAGER_TRIAGE_LOOKAHEAD = int(os.getenv("ZIVO_EAGER_TRIAGE_LOOKAHEAD", "3"))
+# batches stay on-demand + next-page prefetch. Wider than 3 so long docs stay
+# ahead of the earlier transition window without speculative MCQ generation.
+EAGER_TRIAGE_LOOKAHEAD = int(os.getenv("ZIVO_EAGER_TRIAGE_LOOKAHEAD", "5"))
 ABSOLUTE_MAX_QUESTIONS_PER_PAGE = int(os.getenv("ZIVO_MAX_QUESTIONS_PER_PAGE", "150"))
 # After this many failed generation attempts, an aspect is abandoned (marked asked)
 # so a permanently un-generatable aspect — every draft rejected by the verifier,
@@ -525,18 +528,28 @@ def is_page_complete(
 ) -> bool:
     # Non-content pages are complete by definition — never block advancement on
     # a cover page just because it produced zero questions.
-    if is_non_content_page(doc, int(progress.get("current_page") or 1)):
+    page = int(progress.get("current_page") or 1)
+    if is_non_content_page(doc, page):
         return True
-    if progress.get("generation_pending"):
-        return False
+    # Unanswered questions on this page → not complete. Never let a pending flag
+    # strand the learner when the pool still has cards to show.
     if next_assertion_id(db, doc.id, progress, page_ids=page_ids):
         return False
-    page = int(progress.get("current_page") or 1)
     budget = effective_question_budget(doc, page, progress)
     generated = len(page_ids) if page_ids is not None else count_assertions_on_page(db, doc.id, page)
     if generated == 0:
         return False
-    if is_coverage_complete(doc, page):
+    coverage_done = is_coverage_complete(doc, page)
+    # generation_pending is doc-level and can be set by next-page prefetch. Only
+    # treat it as "still cooking THIS page" when we still have room under the
+    # demand-driven cap and coverage is not done — otherwise advance.
+    if (
+        progress.get("generation_pending")
+        and not coverage_done
+        and generated < budget
+    ):
+        return False
+    if coverage_done:
         return True
     return generated >= budget
 

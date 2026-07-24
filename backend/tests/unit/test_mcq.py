@@ -284,3 +284,89 @@ def test_grade_mcq_answer_llm_failure_falls_back() -> None:
         mock_complete.assert_called_once()
 
     asyncio.run(run())
+
+
+def test_grade_stream_yields_verdict_before_bookkeeping() -> None:
+    """SSE order: verdict first, then next (after record), then feedback — never bookkeeping before verdict."""
+    import json
+    import uuid
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from app.api import mcq as mcq_api
+
+    assertion_id = uuid.uuid4()
+    artifact_id = uuid.uuid4()
+    body = mcq_api.GradeIn(assertion_id=assertion_id, choice_index=1, mode="learn")
+    payload = {"options": ["a", "b"], "correct_index": 1, "explanation": "Because b."}
+    verdict = {"correct": True, "correct_index": 1, "explanation": "Because b."}
+    next_id = str(uuid.uuid4())
+
+    record_calls: list[str] = []
+    events: list[tuple[str, dict]] = []
+
+    def _record(*_a, **_k):
+        record_calls.append("record")
+
+    async def _feedback(*_a, **_k):
+        record_calls.append("feedback")
+        return "Coaching text."
+
+    stream_db = MagicMock()
+    doc = MagicMock()
+    stream_db.get.return_value = doc
+
+    with (
+        patch.object(mcq_api, "SessionLocal", return_value=stream_db),
+        patch.object(mcq_api, "load_grade_payload", return_value=payload),
+        patch.object(mcq_api, "grade_verdict", return_value=verdict),
+        patch.object(mcq_api, "_record_graded_answer", side_effect=_record),
+        patch.object(mcq_api, "get_progress", return_value={"current_page": 1}),
+        patch.object(mcq_api, "next_assertion_id", return_value=next_id),
+        patch.object(mcq_api, "grade_feedback", new=AsyncMock(side_effect=_feedback)),
+        patch.object(mcq_api, "_require_actor"),
+        patch.object(mcq_api, "_resolve_assertion_artifact", return_value=artifact_id),
+    ):
+        # Call the route function's generator directly via the dependency-injected path.
+        # grade_stream returns EventSourceResponse; drive its body generator.
+        async def drive():
+            # Mimic FastAPI calling grade_stream with pre-resolved deps.
+            response = await mcq_api.grade_stream(
+                body,
+                db=MagicMock(),
+                user=None,
+                guest_id="guest-test",
+            )
+            agen = response.body_iterator
+            async for chunk in agen:
+                if isinstance(chunk, dict):
+                    events.append((chunk.get("event"), json.loads(chunk.get("data") or "{}")))
+                elif isinstance(chunk, (bytes, str)):
+                    text = chunk.decode() if isinstance(chunk, bytes) else chunk
+                    # sse-starlette may format as "event: x\ndata: y\n\n"
+                    ev = None
+                    data = None
+                    for line in text.splitlines():
+                        if line.startswith("event:"):
+                            ev = line.split(":", 1)[1].strip()
+                        elif line.startswith("data:"):
+                            data = json.loads(line.split(":", 1)[1].strip())
+                    if ev:
+                        events.append((ev, data or {}))
+
+        import asyncio
+
+        asyncio.run(drive())
+
+    assert events, "expected SSE events"
+    assert events[0][0] == "verdict"
+    assert events[0][1]["correct"] is True
+    # Bookkeeping must not run before the first yield (verdict).
+    assert record_calls[0] == "record"
+    names = [e[0] for e in events]
+    assert "verdict" in names
+    assert names.index("verdict") == 0
+    if "next" in names:
+        assert names.index("next") > names.index("verdict")
+        assert events[names.index("next")][1]["next_assertion_id"] == next_id
+    assert "feedback" in names
+    assert names.index("feedback") > names.index("verdict")

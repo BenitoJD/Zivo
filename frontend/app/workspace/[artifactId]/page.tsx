@@ -133,6 +133,13 @@ export default function WorkspaceArtifactPage({
   const [currentConcept, setCurrentConcept] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [gradeState, setGradeState] = useState<{ correct: boolean; correctIndex: number; correctIndices?: number[] } | null>(null);
+  // Pin the graded card until Continue — SSE learn-queue advances current_assertion_id
+  // as soon as the answer is recorded, which would otherwise wipe feedback mid-coach.
+  const [pinnedAssertionId, setPinnedAssertionId] = useState<string | null>(null);
+  const pinnedAssertionIdRef = useRef<string | null>(null);
+  // Prefetched next id from grade/stream "next" event — Continue swaps without a full queue RT.
+  const [pendingNextAssertionId, setPendingNextAssertionId] = useState<string | null>(null);
+  const pendingNextAssertionIdRef = useRef<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [mcqLoading, setMcqLoading] = useState(true);
   // Answered-question history + a "review" cursor (null = on the live question).
@@ -218,6 +225,10 @@ export default function WorkspaceArtifactPage({
     setCurrentConcept(null);
     setFeedback(null);
     setGradeState(null);
+    pinnedAssertionIdRef.current = null;
+    setPinnedAssertionId(null);
+    pendingNextAssertionIdRef.current = null;
+    setPendingNextAssertionId(null);
     setSubmitting(false);
     setMcqLoading(true);
     setAnsweredHistory([]);
@@ -255,10 +266,11 @@ export default function WorkspaceArtifactPage({
     sortedSelection.length > 0 ? sortedSelection[sortedSelection.length - 1] : 1;
   const sliderMarks = useMemo(() => buildPageSliderMarks(pageCount), [pageCount]);
 
+  const displayAssertionId = pinnedAssertionId ?? queue?.current_assertion_id ?? null;
   const stem =
     mcqLoading
       ? "Loading questions…"
-      : queue && !queue.current_assertion_id
+      : queue && !displayAssertionId
         ? "Questions will appear once indexing finishes."
         : question;
 
@@ -270,7 +282,7 @@ export default function WorkspaceArtifactPage({
 
   const artifactQuery = useArtifactQuery(artifactId, !invalidArtifactId);
   const pagesQuery = useArtifactPagesQuery(artifactId, !invalidArtifactId);
-  const assertionQuery = useAssertionQuery(queue?.current_assertion_id);
+  const assertionQuery = useAssertionQuery(displayAssertionId);
   // Persistent report card - only fetched once a range is complete.
   const studyReportQuery = useStudyReportQuery(
     artifactId,
@@ -426,7 +438,18 @@ export default function WorkspaceArtifactPage({
         if (cancelled) return;
         try {
           const data = JSON.parse((ev as MessageEvent).data) as McqState;
-          setQueue(data);
+          setQueue((prev) => {
+            // While graded feedback is pinned, keep showing the answered card —
+            // still absorb pool/progress fields so Continue stays warm.
+            const pinned = pinnedAssertionIdRef.current;
+            if (pinned && prev) {
+              return {
+                ...data,
+                current_assertion_id: pinned,
+              };
+            }
+            return data;
+          });
           setMcqLoading(false);
         } catch {
           /* ignore malformed */
@@ -513,16 +536,19 @@ export default function WorkspaceArtifactPage({
   useEffect(() => {
     if (invalidArtifactId) return;
     if (queue?.current_assertion_id) {
+      // While pinned on a graded card, ignore SSE advances that would clear
+      // feedback before the learner hits Continue.
+      if (pinnedAssertionIdRef.current) return;
       // Assertion advanced: reset answer chrome only. Keep stem/options on screen
       // until the next fetch lands — clearing them made hasQuestion false and
       // McqHeroPanel flashed the full loading ring for ~200–500ms.
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset answer UI on assertion change
       setSelected(null);
       setMultiSelected([]);
       setGradeState(null);
       setFeedback(null);
       return;
     }
+    if (pinnedAssertionIdRef.current) return;
     setOptions([]);
     setSelected(null);
     setGradeState(null);
@@ -530,7 +556,7 @@ export default function WorkspaceArtifactPage({
   }, [invalidArtifactId, queue?.current_assertion_id]);
 
   useEffect(() => {
-    if (invalidArtifactId || !queue?.current_assertion_id) return;
+    if (invalidArtifactId || !displayAssertionId) return;
     if (assertionQuery.isError) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- intentionally reset grade/feedback when the study mode changes
       setQuestion("Could not load question.");
@@ -538,6 +564,10 @@ export default function WorkspaceArtifactPage({
       return;
     }
     if (!assertionQuery.data || assertionQuery.isPlaceholderData) return;
+    // Don't clobber the graded card while pinned — assertion payload is already on screen.
+    if (pinnedAssertionIdRef.current && pinnedAssertionIdRef.current === displayAssertionId) {
+      return;
+    }
     const row = assertionQuery.data;
     const p = (row.payload ?? {}) as AssertionPayload;
     setQuestion(sanitizeMcqStem(p.question ?? p.stem ?? row.title ?? "Question"));
@@ -548,7 +578,7 @@ export default function WorkspaceArtifactPage({
     setSelected(null);
     setFeedback(null);
     setGradeState(null);
-  }, [assertionQuery.data, assertionQuery.isError, assertionQuery.isPlaceholderData, queue?.current_assertion_id, invalidArtifactId]);
+  }, [assertionQuery.data, assertionQuery.isError, assertionQuery.isPlaceholderData, displayAssertionId, invalidArtifactId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentionally reset grade/feedback on the active question change
@@ -558,16 +588,21 @@ export default function WorkspaceArtifactPage({
 
   useEffect(() => {
     if (!queue?.page_complete || queue.current_assertion_id || queue.document_complete) return;
+    // Short debounce only — was 1.5s of dead air after the last question on a page.
     const id = window.setTimeout(() => {
       void refreshQueue();
-    }, 1500);
+    }, 200);
     return () => window.clearTimeout(id);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshQueue is recreated each render; listing it would reset this debounce timer every render
   }, [queue?.page_complete, queue?.current_assertion_id, queue?.document_complete]);
 
   async function refreshQueue() {
     const data = await apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`);
-    setQueue(data);
+    if (pinnedAssertionIdRef.current) {
+      setQueue({ ...data, current_assertion_id: pinnedAssertionIdRef.current });
+    } else {
+      setQueue(data);
+    }
   }
 
   async function setStudyMode(nextMode: "adaptive" | "classic") {
@@ -619,11 +654,27 @@ export default function WorkspaceArtifactPage({
   async function advanceMcq() {
     setSubmitting(true);
     try {
-      await refreshQueue();
+      const nextId = pendingNextAssertionIdRef.current;
+      pinnedAssertionIdRef.current = null;
+      setPinnedAssertionId(null);
+      pendingNextAssertionIdRef.current = null;
+      setPendingNextAssertionId(null);
       setGradeState(null);
       setFeedback(null);
       setSelected(null);
       setMultiSelected([]);
+      if (nextId) {
+        // Instant Next: swap to the prefetched card; background-refresh pool metadata.
+        setQueue((q) => (q ? { ...q, current_assertion_id: nextId } : q));
+        void apiGet<McqState>(`/api/artifacts/${artifactId}/learn-queue`)
+          .then((data) => {
+            if (pinnedAssertionIdRef.current) return;
+            setQueue(data);
+          })
+          .catch(() => {});
+      } else {
+        await refreshQueue();
+      }
     } catch {
       setFeedback("Could not load next question.");
     } finally {
@@ -633,10 +684,10 @@ export default function WorkspaceArtifactPage({
 
   async function submitMcq() {
     const hasSelection = isMulti ? multiSelected.length > 0 : selected !== null;
-    if (!queue?.current_assertion_id || !hasSelection || submitting) return;
+    if (!displayAssertionId || !hasSelection || submitting) return;
     setSubmitting(true);
     setFeedback(null);
-    const answeredId = queue.current_assertion_id;
+    const answeredId = displayAssertionId;
     const answeredSelection = isMulti ? (multiSelected[0] ?? -1) : Number(selected);
     // Snapshot stem/options/selection at submit time — queue can advance before SSE
     // finishes, and a stale render closure would pair the wrong text with answeredId.
@@ -644,6 +695,9 @@ export default function WorkspaceArtifactPage({
     const optionsSnapshot = [...options];
     const conceptSnapshot = currentConcept;
     const multiSnapshot = isMulti ? [...multiSelected] : undefined;
+    // Pin immediately so learn-queue SSE cannot wipe the card mid-grade.
+    pinnedAssertionIdRef.current = answeredId;
+    setPinnedAssertionId(answeredId);
     // Verdict-first stream: the outcome (index compare + stored explanation) lands
     // in ~200ms and reveals immediately; the LLM coaching follows as a second event.
     let gotVerdict = false;
@@ -696,6 +750,26 @@ export default function WorkspaceArtifactPage({
                   },
                 ];
               });
+            } else if (event === "next") {
+              let n: { next_assertion_id?: string };
+              try {
+                n = JSON.parse(data);
+              } catch {
+                return;
+              }
+              const nextId = n.next_assertion_id;
+              if (!nextId) return;
+              pendingNextAssertionIdRef.current = nextId;
+              setPendingNextAssertionId(nextId);
+              // Prefetch stem+options so Continue is one-frame instant.
+              void queryClient.prefetchQuery({
+                queryKey: queryKeys.assertion(nextId),
+                queryFn: () =>
+                  apiGet<{ payload: Record<string, unknown>; title?: string }>(
+                    `/api/assertions/${nextId}`,
+                  ),
+                staleTime: 60_000,
+              });
             } else if (event === "feedback") {
               let f: { feedback?: string };
               try {
@@ -717,8 +791,11 @@ export default function WorkspaceArtifactPage({
       // affordance resolves instead of hanging.
       setFeedback((prev) => prev ?? (verdictExplanation || "Answer recorded."));
     } catch {
-      if (!gotVerdict) setFeedback("Could not grade answer - try again.");
-      else setFeedback((prev) => prev ?? (verdictExplanation || "Answer recorded."));
+      if (!gotVerdict) {
+        pinnedAssertionIdRef.current = null;
+        setPinnedAssertionId(null);
+        setFeedback("Could not grade answer - try again.");
+      } else setFeedback((prev) => prev ?? (verdictExplanation || "Answer recorded."));
     } finally {
       setSubmitting(false);
     }
@@ -954,7 +1031,7 @@ export default function WorkspaceArtifactPage({
         page={queue?.current_page}
         mode={mode}
         onModeChange={setMode}
-        showProgress={(mode === "learn" || mode === "test") && !mcqLoading && Boolean(queue?.current_assertion_id) && !showPageComplete && !showDocumentComplete}
+        showProgress={(mode === "learn" || mode === "test") && !mcqLoading && Boolean(displayAssertionId) && !showPageComplete && !showDocumentComplete}
         compact={isNarrow}
         showModeSelect={isCompact}
         studyMode={queue?.study_mode}
@@ -1100,7 +1177,7 @@ export default function WorkspaceArtifactPage({
           <SelectionQuote
             onAsk={quoteSelectionToChat}
             onExplain={explainSelectionInChat}
-            disabled={mcqLoading || !queue?.current_assertion_id}
+            disabled={mcqLoading || !displayAssertionId}
           >
           <McqHeroPanel
             stem={stem}
@@ -1114,7 +1191,7 @@ export default function WorkspaceArtifactPage({
             mcqLoading={mcqLoading}
             artifactStatus={artifact.status}
             indexProgress={artifact.index_progress}
-            hasQuestion={Boolean(queue?.current_assertion_id) && options.length > 0}
+            hasQuestion={Boolean(displayAssertionId) && options.length > 0}
             queue={queue}
             mode={mode as "learn" | "test"}
             gradeState={gradeState}
@@ -1127,12 +1204,12 @@ export default function WorkspaceArtifactPage({
             onSubmit={() => void submitMcq()}
             onContinue={() => void advanceMcq()}
             onRetry={() => void refreshQueue()}
-            flagged={Boolean(queue?.current_assertion_id && flaggedIds[queue.current_assertion_id])}
+            flagged={Boolean(displayAssertionId && flaggedIds[displayAssertionId])}
             flagBusy={flagBusy}
             onFlagQuestion={
-              queue?.current_assertion_id
+              displayAssertionId
                 ? (reason) => {
-                    const aid = queue.current_assertion_id!;
+                    const aid = displayAssertionId;
                     setFlagBusy(true);
                     void apiPost(`/api/assertions/${aid}/flag`, { reason })
                       .then(() => setFlaggedIds((m) => ({ ...m, [aid]: true })))

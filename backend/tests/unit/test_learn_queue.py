@@ -56,7 +56,9 @@ def test_build_learn_queue_state_resume_at_question_three() -> None:
     # Learner-facing Y is the triage/heuristic plan, not the generate-ahead cap.
     assert state["question_budget"] == 47
     assert state["plan_budget"] == 47
-    assert state["generation_cap"] == 10
+    from app.services.question_pool import INITIAL_GENERATION_AHEAD
+
+    assert state["generation_cap"] == INITIAL_GENERATION_AHEAD
     assert state["current_assertion_id"] == "id-3"
     assert state["page_complete"] is False
     assert state["page_triage_complete"] is True
@@ -74,6 +76,35 @@ def test_is_page_complete_when_budget_reached_and_pool_empty() -> None:
         patch("app.services.question_pool.is_coverage_complete", return_value=False),
     ):
         assert is_page_complete(db, doc, progress) is True
+
+
+def test_is_page_complete_ignores_stale_pending_when_budget_met() -> None:
+    """Next-page prefetch can leave generation_pending True — must not strand page turn."""
+    doc = _doc_with_coverage(budget=10)
+    progress = doc.meta["question_progress"]
+    progress["generation_pending"] = True
+    db = MagicMock()
+
+    with (
+        patch("app.services.question_pool.next_assertion_id", return_value=None),
+        patch("app.services.question_pool.count_assertions_on_page", return_value=10),
+        patch("app.services.question_pool.is_coverage_complete", return_value=False),
+    ):
+        assert is_page_complete(db, doc, progress) is True
+
+
+def test_is_page_complete_false_while_pending_and_room_left() -> None:
+    doc = _doc_with_coverage(budget=47)
+    progress = doc.meta["question_progress"]
+    progress["generation_pending"] = True
+    db = MagicMock()
+
+    with (
+        patch("app.services.question_pool.next_assertion_id", return_value=None),
+        patch("app.services.question_pool.count_assertions_on_page", return_value=5),
+        patch("app.services.question_pool.is_coverage_complete", return_value=False),
+    ):
+        assert is_page_complete(db, doc, progress) is False
 
 
 def test_advance_to_next_page_enqueues_triage_for_new_page() -> None:
