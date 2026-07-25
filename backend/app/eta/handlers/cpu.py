@@ -279,7 +279,6 @@ def transition_prep_job(payload: dict) -> dict:
     from app.services.question_pool import (
         FIRST_QUESTION_BATCH_SIZE,
         REFILL_BATCH_SIZE,
-        TRANSITION_GENERATION_RATIO,
         count_assertions_on_page,
         effective_question_budget,
         enqueue_page_batch,
@@ -290,6 +289,7 @@ def transition_prep_job(payload: dict) -> dict:
         mark_transition_prep_done,
         selected_page_list,
     )
+    from app.services.session_design import evaluate_serve_schedule
 
     document_id = UUID(payload["document_id"])
     current_page = int(payload["current_page"])
@@ -321,9 +321,10 @@ def transition_prep_job(payload: dict) -> dict:
 
         answered_on_page = int(progress.get("answered_on_page") or 0)
         triage_budget = get_question_budget(doc, current_page)
-        allow_next_page_generation = (
-            triage_budget > 0 and answered_on_page / triage_budget >= TRANSITION_GENERATION_RATIO
-        )
+        allow_next_page_generation = evaluate_serve_schedule(
+            answered_on_page=answered_on_page,
+            page_budget=triage_budget,
+        ).generate_next_page if triage_budget > 0 else False
 
         if next_page is not None:
             if not get_page_coverage(doc, next_page):

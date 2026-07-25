@@ -144,3 +144,50 @@ def test_cold_bank_degrades() -> None:
     )
     assert v.assertion_id == "a"
     assert "cold_bank" in v.rationale
+
+
+def test_narrow_serve_pool_focus_and_mastery_and_spaced() -> None:
+    from app.services.adaptive_selection import CandidateSignals, LearnerState, narrow_serve_pool
+
+    rows = [
+        CandidateSignals("a", concept_key="x", concept_label="Osmosis"),
+        CandidateSignals("b", concept_key="y", concept_label="Photosynthesis light"),
+        CandidateSignals("c", concept_key="z", concept_label="Mitosis"),
+    ]
+    focused = narrow_serve_pool(
+        rows, LearnerState(focus_concept="Photosynthesis")
+    )
+    assert [c.assertion_id for c in focused] == ["b"]
+
+    diversified = narrow_serve_pool(
+        rows,
+        LearnerState(
+            mastery_stop=True,
+            last_concept_key="x",
+        ),
+    )
+    assert "a" not in [c.assertion_id for c in diversified]
+
+    due = narrow_serve_pool(
+        rows,
+        LearnerState(concept_revisit_hours={"mitosis": 1.0, "other": 99.0}),
+    )
+    assert [c.assertion_id for c in due] == ["c"]
+
+
+def test_difficulty_edge_cold_lineage_flips_to_reinforce() -> None:
+    state = LearnerState(
+        ability=0.0,
+        last_correct=False,
+        last_concept_key="weak",
+    )
+    v = select_next(
+        ["a", "b"],
+        state,
+        policy="difficulty_edge",
+        difficulty_by_id={},
+        concept_by_id={"a": "weak", "b": "other"},
+        lineage_by_id={},
+    )
+    assert v.policy == "concept_reinforce"
+    assert v.assertion_id == "a"

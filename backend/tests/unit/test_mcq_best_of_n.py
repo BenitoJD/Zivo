@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 from app.config import Settings
 from app.services.llm_registry import draft_chat_model_id
-from app.services.mcq_quality import _draft_score, _select_best_draft
+from app.services.quality_evaluation import draft_structural_score, pick_best_draft
 
 
 def _clean() -> dict:
@@ -32,16 +32,16 @@ def _flawed() -> dict:
 
 
 def test_clean_draft_scores_better_than_flawed() -> None:
-    assert _draft_score(_clean()) < _draft_score(_flawed())
+    assert draft_structural_score(_clean()) < draft_structural_score(_flawed())
 
 
 def test_select_best_picks_the_clean_candidate() -> None:
-    best = _select_best_draft([_flawed(), _clean()])
+    best = pick_best_draft([_flawed(), _clean()])
     assert best is not None and best["question"].startswith("Why does a catalyst")
 
 
 def test_select_best_of_empty_is_none() -> None:
-    assert _select_best_draft([]) is None
+    assert pick_best_draft([]) is None
 
 
 def test_draft_model_falls_back_when_unset() -> None:

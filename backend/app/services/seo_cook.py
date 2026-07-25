@@ -18,7 +18,11 @@ from app.services.seo_dedupe import (
     topic_fingerprint,
     unique_slug,
 )
-from app.services.seo_gate import evaluate_dedupe, evaluate_usefulness
+from app.services.seo_gate import (
+    evaluate_dedupe,
+    evaluate_publish_cap,
+    evaluate_usefulness,
+)
 from app.services.seo_mcq import attach_or_generate_mcqs
 from app.services.seo_pii import scrub_pii
 from app.services.seo_writer import write_article
@@ -158,8 +162,11 @@ def cook_one(db: Session, cand: Candidate) -> dict[str, Any]:
         return {"skipped": True, "reason": "cook_disabled"}
 
     today = _today_ist()
-    soft_max = int(settings.get("soft_max_per_day") or 20)
-    if seo_repo.count_published_on_day(db, today) >= soft_max:
+    cap = evaluate_publish_cap(
+        published_today=seo_repo.count_published_on_day(db, today),
+        soft_max_per_day=settings.get("soft_max_per_day"),
+    )
+    if not cap.allow:
         return {"skipped": True, "reason": "soft_max"}
 
     if seo_repo.attempt_exists(db, cand.source_kind, cand.source_key):
@@ -263,15 +270,21 @@ def cook_batch(db: Session, *, limit: int = 3) -> dict[str, Any]:
         return {"ok": True, "skipped": "cook_disabled", "results": []}
 
     today = _today_ist()
-    soft_max = int(settings.get("soft_max_per_day") or 20)
-    remaining = soft_max - seo_repo.count_published_on_day(db, today)
-    if remaining <= 0:
+    cap = evaluate_publish_cap(
+        published_today=seo_repo.count_published_on_day(db, today),
+        soft_max_per_day=settings.get("soft_max_per_day"),
+    )
+    if not cap.allow:
         return {"ok": True, "skipped": "soft_max", "results": []}
 
-    n = min(limit, remaining, 5)
+    n = min(limit, cap.remaining, 5)
     results = []
     for cand in collect_candidates(db, batch_size=n):
-        if seo_repo.count_published_on_day(db, today) >= soft_max:
+        again = evaluate_publish_cap(
+            published_today=seo_repo.count_published_on_day(db, today),
+            soft_max_per_day=settings.get("soft_max_per_day"),
+        )
+        if not again.allow:
             break
         results.append(cook_one(db, cand))
     return {"ok": True, "results": results}
@@ -287,8 +300,11 @@ def ensure_sd_daily(db: Session) -> dict[str, Any]:
     if seo_repo.count_sd_published_on_day(db, today) >= 1:
         return {"ok": True, "skipped": "already_have_sd"}
 
-    soft_max = int(settings.get("soft_max_per_day") or 20)
-    if seo_repo.count_published_on_day(db, today) >= soft_max:
+    cap = evaluate_publish_cap(
+        published_today=seo_repo.count_published_on_day(db, today),
+        soft_max_per_day=settings.get("soft_max_per_day"),
+    )
+    if not cap.allow:
         return {"ok": True, "skipped": "soft_max"}
 
     row = seo_repo.pick_unused_sd_problem(db)

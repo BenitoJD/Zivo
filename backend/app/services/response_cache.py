@@ -22,13 +22,15 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.services.chunks import pgvector_literal
+from app.services.tutor_retrieval import (
+    RESPONSE_CACHE_SIMILARITY,
+    decide_cache_reuse,
+)
 
 logger = logging.getLogger(__name__)
 
-# Cosine similarity threshold above which a cached answer is reused. 0.92 is
-# conservative — near-paraphrase. Lower to 0.88 for more hits at the cost of
-# occasional off-target answers.
-SIMILARITY_THRESHOLD = 0.92
+# Re-export engine threshold for callers / tests.
+SIMILARITY_THRESHOLD = RESPONSE_CACHE_SIMILARITY
 
 
 def _scope_hash(artifact_id: uuid.UUID, scope: dict) -> str:
@@ -87,7 +89,7 @@ def get_cached_response(
     if not row:
         return None
     similarity = float(row["similarity"])
-    if similarity < threshold:
+    if not decide_cache_reuse(similarity, threshold=threshold).reuse:
         return None
     return {
         "response_text": row["response_text"],

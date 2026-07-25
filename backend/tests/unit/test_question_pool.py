@@ -763,21 +763,25 @@ def test_select_next_assertion_prefers_focus_concept() -> None:
         "selection_policy": "sequence",
     }
     candidates = [str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())]
-    preferred = [candidates[1]]
+    preferred = candidates[1]
+    keys = {c: None for c in candidates}
+    labels = {
+        candidates[0]: "Respiration",
+        candidates[1]: "Photosynthesis light reaction",
+        candidates[2]: "Mitosis",
+    }
     db = MagicMock()
 
     with (
         patch("app.services.question_pool.page_assertion_ids", return_value=candidates),
         patch(
-            "app.services.question_pool._candidates_matching_concept_label",
-            return_value=preferred,
-        ) as match,
+            "app.services.question_pool._concept_signals_for_ids",
+            return_value=(keys, labels),
+        ),
     ):
         chosen = select_next_assertion(db, doc_id, doc, progress)
 
-    assert chosen == preferred[0]
-    match.assert_called_once()
-    assert match.call_args[0][2] == "Photosynthesis"
+    assert chosen == preferred
 
 
 def test_select_next_assertion_miss_without_lineage_falls_back_to_reinforce() -> None:
@@ -805,8 +809,11 @@ def test_select_next_assertion_miss_without_lineage_falls_back_to_reinforce() ->
         patch("app.services.question_pool.page_assertion_ids", return_value=candidates),
         patch("app.services.question_pool._difficulty_for_ids", return_value={}),
         patch(
-            "app.services.question_pool._concept_keys_for_ids",
-            return_value={c: "cell-membrane" for c in candidates},
+            "app.services.question_pool._concept_signals_for_ids",
+            return_value=(
+                {c: "cell-membrane" for c in candidates},
+                {c: "Cell membrane" for c in candidates},
+            ),
         ),
         patch("app.services.question_pool._lineage_successors", return_value={}),
         patch(
@@ -823,12 +830,15 @@ def test_select_next_assertion_miss_without_lineage_falls_back_to_reinforce() ->
             last_assertion_id=last_id,
             last_correct=False,
             last_concept_key="cell-membrane",
+            focus_concept=None,
+            mastery_stop=False,
+            concept_revisit_hours=None,
         )
         chosen = select_next_assertion(db, doc_id, doc, progress)
 
     assert chosen == candidates[0]
-    # Cold lineage on miss → concept_reinforce policy handed to engine.
-    assert choose.call_args.kwargs["policy"] == "concept_reinforce"
+    # Pool passes difficulty_edge; engine owns cold-lineage → concept_reinforce flip.
+    assert choose.call_args.kwargs["policy"] == "difficulty_edge"
 
 def test_write_batch_lineage_links_same_concept_and_sequence() -> None:
     from app.graphs.generation_graph import _write_batch_lineage

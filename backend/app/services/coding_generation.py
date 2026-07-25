@@ -284,18 +284,20 @@ def _persist(
 
     Returns the *public* payload (sample tests only, no reference/hidden) for logging.
     """
+    from app.services.open_response import evaluate_coding_bank_item
+
+    bank = evaluate_coding_bank_item(problem)
+    if not bank.ok:
+        return None
+
     sample_tests, hidden_tests = _split_tests(problem.get("tests") or [])
     if not hidden_tests:
-        # Need at least one hidden test to actually grade against.
         return None
 
     assertion_id = uuid.uuid4()
     title = str(problem.get("title") or "").strip()
     if len(title) < 3:
         title = str(problem.get("concept") or "").strip()
-    if len(title) < 3:
-        # Reject single-letter / empty LLM titles rather than pollute the bank.
-        return None
     title = title[:200]
     difficulty = (str(problem.get("difficulty") or "medium").strip().lower() or "medium")
     language_id = int(problem.get("language_id") or DEFAULT_LANGUAGE_ID)

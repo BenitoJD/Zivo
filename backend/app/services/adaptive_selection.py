@@ -52,13 +52,20 @@ _POLICY_ALIASES = {
 
 @dataclass(frozen=True)
 class LearnerState:
-    """What the loop listens to: last answer + calibrated ability (global + concept)."""
+    """What the loop listens to: last answer + calibrated ability + serve hygiene.
+
+    Orchestration loads these from progress; ``select_next`` owns focus / mastery
+    diversify / spaced prefer (holy grail — not pre-filtered in question_pool).
+    """
 
     last_concept_key: str | None = None
     last_correct: bool | None = None
     last_assertion_id: str | None = None
     ability: float | None = None
     concept_ability: dict[str, float] | None = None
+    focus_concept: str | None = None
+    mastery_stop: bool = False
+    concept_revisit_hours: Mapping[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +75,7 @@ class CandidateSignals:
     assertion_id: str
     difficulty: float | None = None
     concept_key: str | None = None
+    concept_label: str | None = None
     lineage_kind: str | None = None
     exposure: int = 0
 
@@ -104,6 +112,15 @@ def build_learner_state(progress: Mapping[str, Any]) -> LearnerState:
     correct = last.get("correct")
     ability = progress.get("learner_ability")
     concept_ability = progress.get("concept_ability")
+    focus = str(progress.get("focus_concept") or "").strip() or None
+    due_raw = progress.get("concept_revisit_hours") or {}
+    due_map: dict[str, float] | None = None
+    if isinstance(due_raw, dict) and due_raw:
+        due_map = {
+            str(k): float(v)
+            for k, v in due_raw.items()
+            if k is not None and str(k).strip()
+        }
     return LearnerState(
         last_concept_key=(last.get("concept_key") or None),
         last_correct=bool(correct) if correct is not None else None,
@@ -114,7 +131,66 @@ def build_learner_state(progress: Mapping[str, Any]) -> LearnerState:
             if isinstance(concept_ability, dict) and concept_ability
             else None
         ),
+        focus_concept=focus,
+        mastery_stop=bool(progress.get("mastery_stop")),
+        concept_revisit_hours=due_map,
     )
+
+
+def concept_text_matches(needle: str, *, key: str | None, label: str | None) -> bool:
+    """Focus / due-map match: substring on label or key (case-insensitive)."""
+    n = (needle or "").strip().lower()
+    if not n:
+        return False
+    lab = (label or "").strip().lower()
+    k = (key or "").strip().lower()
+    return n in lab or n in k or lab == n
+
+
+def _matching_ids(
+    rows: Sequence[CandidateSignals], needle: str
+) -> list[CandidateSignals]:
+    return [
+        c
+        for c in rows
+        if concept_text_matches(needle, key=c.concept_key, label=c.concept_label)
+    ]
+
+
+def narrow_serve_pool(
+    candidates: Sequence[CandidateSignals],
+    state: LearnerState,
+) -> list[CandidateSignals]:
+    """Apply focus → mastery diversify → spaced due prefer. Soft: never empty the bank."""
+    pool = list(candidates)
+    if not pool:
+        return pool
+
+    focus = (state.focus_concept or "").strip()
+    if focus:
+        preferred = _matching_ids(pool, focus)
+        if preferred:
+            return preferred
+
+    if state.mastery_stop:
+        stop_concept = (state.last_concept_key or "").strip()
+        if stop_concept:
+            diversified = [
+                c
+                for c in pool
+                if (c.concept_key or "").strip() != stop_concept
+            ]
+            if diversified:
+                pool = diversified
+
+    due_map = state.concept_revisit_hours
+    if due_map and not focus:
+        due_sorted = sorted(due_map.items(), key=lambda kv: kv[1])
+        for due_key, _hours in due_sorted[:3]:
+            preferred = _matching_ids(pool, due_key)
+            if preferred:
+                return preferred
+    return pool
 
 
 def target_difficulty(ability: float, target_success: float = TARGET_SUCCESS) -> float:
@@ -156,8 +232,10 @@ def _candidates_from_maps(
     difficulty_by_id: Mapping[str, float] | None,
     lineage_by_id: Mapping[str, str] | None,
     exposure_by_id: Mapping[str, int] | None,
+    concept_label_by_id: Mapping[str, str | None] | None = None,
 ) -> list[CandidateSignals]:
     concepts = concept_by_id or {}
+    labels = concept_label_by_id or {}
     diffs = difficulty_by_id or {}
     lineage = lineage_by_id or {}
     exposure = exposure_by_id or {}
@@ -168,6 +246,7 @@ def _candidates_from_maps(
                 assertion_id=cid,
                 difficulty=diffs.get(cid),
                 concept_key=concepts.get(cid),
+                concept_label=labels.get(cid),
                 lineage_kind=lineage.get(cid),
                 exposure=int(exposure.get(cid, 0) or 0),
             )
@@ -355,6 +434,7 @@ def select_next(
     mode: ServeMode = "learn",
     target_success: float = TARGET_SUCCESS,
     concept_by_id: Mapping[str, str | None] | None = None,
+    concept_label_by_id: Mapping[str, str | None] | None = None,
     difficulty_by_id: Mapping[str, float] | None = None,
     lineage_by_id: Mapping[str, str] | None = None,
     exposure_by_id: Mapping[str, int] | None = None,
@@ -363,6 +443,7 @@ def select_next(
 
     ``candidates`` may be ``CandidateSignals`` rows or bare id strings (then maps
     supply signals). Every policy degrades safely toward sequence order.
+    Owns focus / mastery diversify / spaced prefer and difficulty_edge→reinforce.
     """
     pol = normalize_policy(policy)
     if not candidates:
@@ -375,8 +456,26 @@ def select_next(
     else:
         ids = [str(x) for x in candidates]  # type: ignore[arg-type]
         rows = _candidates_from_maps(
-            ids, concept_by_id, difficulty_by_id, lineage_by_id, exposure_by_id
+            ids,
+            concept_by_id,
+            difficulty_by_id,
+            lineage_by_id,
+            exposure_by_id,
+            concept_label_by_id,
         )
+
+    rows = narrow_serve_pool(rows, state)
+    if not rows:
+        return SelectionVerdict(assertion_id=None, rationale="empty", policy=pol)
+
+    # Cold lineage on legacy band policy: miss → reinforce same concept.
+    if (
+        pol == "difficulty_edge"
+        and state.last_correct is False
+        and state.last_concept_key
+        and not any(c.lineage_kind for c in rows)
+    ):
+        pol = "concept_reinforce"
 
     if len(rows) == 1 or pol == "sequence":
         return SelectionVerdict(

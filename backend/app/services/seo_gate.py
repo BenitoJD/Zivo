@@ -19,6 +19,10 @@ from sqlalchemy.orm import Session
 SEO_GATE_VERSION = "qb.seo_gate.v1"
 DEFAULT_POLICY = "seo_gate_v1"
 
+# Anti-repeat embedding cosine (owned here; seo_dedupe is plumbing).
+NEAR_DUPE_COSINE = 0.85
+DEFAULT_SOFT_MAX_PER_DAY = 20
+
 UsefulnessReason = Literal[
     "ok",
     "too_short",
@@ -137,3 +141,45 @@ def evaluate_dedupe(
 
     ok, reason = check_dedupe(db, fingerprint=fingerprint, title=title, lede=lede)
     return SeoDedupeVerdict(ok=ok, reason=reason, policy=pol)
+
+
+@dataclass(frozen=True)
+class SeoPublishCapVerdict:
+    allow: bool
+    remaining: int
+    soft_max: int
+    published_today: int
+    reason: str
+    policy: str = DEFAULT_POLICY
+    policy_version: str = SEO_GATE_VERSION
+
+
+def evaluate_publish_cap(
+    *,
+    published_today: int,
+    soft_max_per_day: int | None = None,
+    policy: str | None = None,
+) -> SeoPublishCapVerdict:
+    """Daily soft publish ceiling before SEO cook spends LLM."""
+    pol = normalize_policy(policy)
+    soft = int(soft_max_per_day) if soft_max_per_day is not None else DEFAULT_SOFT_MAX_PER_DAY
+    soft = max(1, soft)
+    published = max(0, int(published_today))
+    remaining = max(0, soft - published)
+    if remaining <= 0:
+        return SeoPublishCapVerdict(
+            allow=False,
+            remaining=0,
+            soft_max=soft,
+            published_today=published,
+            reason="soft_max",
+            policy=pol,
+        )
+    return SeoPublishCapVerdict(
+        allow=True,
+        remaining=remaining,
+        soft_max=soft,
+        published_today=published,
+        reason="ok",
+        policy=pol,
+    )

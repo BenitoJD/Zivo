@@ -28,12 +28,9 @@ from app.services.question_pool import (
     FIRST_QUESTION_BATCH_SIZE,
     GENERATE_JOB_STALE_SECONDS,
     INITIAL_BATCH_SIZE,
-    MAX_ASPECT_ATTEMPTS,
     MAX_GENERATE_BATCH_SIZE,
-    READY_LOW_WATER,
     REFILL_AFTER_ANSWERED,
     REFILL_BATCH_SIZE,
-    TRANSITION_PREFETCH_RATIO,
     _count_available,
     _page_key,
     count_answered_on_page,
@@ -456,6 +453,8 @@ def bump_aspect_attempts(
     the verifier/critic/dedup) stays unasked forever, so coverage never completes
     and the learner is stranded once every producible question is answered.
     """
+    from app.services.aspect_discovery import should_abandon_aspect
+
     wanted = set(aspect_keys)
     if not wanted:
         return
@@ -469,7 +468,7 @@ def bump_aspect_attempts(
         if aspect.get("key") in wanted and not aspect.get("asked"):
             attempts = int(aspect.get("gen_attempts") or 0) + 1
             aspect["gen_attempts"] = attempts
-            if attempts >= MAX_ASPECT_ATTEMPTS:
+            if should_abandon_aspect(attempts).abandon:
                 aspect["asked"] = True
                 aspect["abandoned"] = True
             changed = True
@@ -871,9 +870,14 @@ def mark_transition_prep_done(db: Session, doc: Document, page: int) -> None:
 
 
 def should_transition_prefetch(answered_on_page: int, budget: int) -> bool:
+    from app.services.session_design import evaluate_serve_schedule
+
     if budget <= 0:
         return False
-    return answered_on_page / budget > TRANSITION_PREFETCH_RATIO
+    return evaluate_serve_schedule(
+        answered_on_page=answered_on_page,
+        page_budget=budget,
+    ).prefetch_transition
 
 
 def maybe_transition_prefetch(db: Session, document_id: uuid.UUID) -> Job | None:
@@ -1054,7 +1058,9 @@ def maybe_refill_pool(db: Session, document_id: uuid.UUID) -> Job | None:
     # Stage another batch whenever the ready buffer is running low, on the periodic
     # answered cadence, or if the pool has fully drained — so there is always a deep
     # backlog of questions ready and the reader never waits on generation.
-    low_water = available < READY_LOW_WATER
+    from app.services.session_design import evaluate_serve_schedule
+
+    low_water = evaluate_serve_schedule(ready_count=available).refill_now
     periodic = answered_on_page > 0 and answered_on_page % REFILL_AFTER_ANSWERED == 0
     drained = available == 0
     if low_water or periodic or drained:

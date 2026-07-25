@@ -24,9 +24,13 @@ stem, correct option text(s), page_text, optional verify_flaw.
 
 ### Output
 ```
-GroundingVerdict { grounded: bool, score: float, flaw_codes, policy_version }
+GroundingVerdict { grounded: bool, score: float, flaw_codes, fatal: bool, details, policy_version }
 ```
 
+Cook path: `evaluate_grounding_for_cook` owns `COOK_MIN_SCORE` (0.02) and
+`COOK_MIN_PAGE_WORDS` (20). Thin pages stay advisory (`fatal=False`); dense pages
+with low overlap get fatal `not_grounded`. Callers must not re-threshold in
+`mcq_quality`.
 
 Version field: `qb.ground.v1`.
 

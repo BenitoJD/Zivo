@@ -18,6 +18,13 @@ DEFAULT_POLICY = "aspect_discovery_v1"
 
 # Near-duplicate aspect cluster cutoff (embedding cosine).
 ASPECT_CLUSTER_THRESHOLD = 0.88
+# Failed cook attempts before marking an aspect asked/abandoned.
+import os as _os
+
+MAX_ASPECT_ATTEMPTS = int(_os.getenv("ZIVO_MAX_ASPECT_ATTEMPTS", "3"))
+# Heuristic triage: ~one idea per N words; paragraphs shorter than this are noise.
+FALLBACK_WORDS_PER_ASPECT = 120
+FALLBACK_MIN_SUBSTANTIAL_WORDS = 12
 
 Centrality = Literal["central", "support", "skip"]
 
@@ -42,12 +49,97 @@ class AspectDedupeVerdict:
     policy_version: str = ASPECT_DISCOVERY_VERSION
 
 
+@dataclass(frozen=True)
+class AspectAbandonVerdict:
+    abandon: bool
+    attempts: int
+    max_attempts: int = MAX_ASPECT_ATTEMPTS
+    policy: str = DEFAULT_POLICY
+    policy_version: str = ASPECT_DISCOVERY_VERSION
+
+
 def normalize_policy(policy: str | None) -> str:
     p = (policy or DEFAULT_POLICY).strip().lower()
     if p in ("default", "aspect", "discovery", "triage"):
         return DEFAULT_POLICY
     return p or DEFAULT_POLICY
 
+
+def should_abandon_aspect(
+    attempts: int,
+    *,
+    max_attempts: int = MAX_ASPECT_ATTEMPTS,
+    policy: str | None = None,
+) -> AspectAbandonVerdict:
+    """After failed cooks, abandon (mark asked) so coverage can complete."""
+    pol = normalize_policy(policy)
+    n = max(0, int(attempts))
+    cap = max(1, int(max_attempts))
+    return AspectAbandonVerdict(
+        abandon=n >= cap,
+        attempts=n,
+        max_attempts=cap,
+        policy=pol,
+    )
+
+
+def heuristic_fallback_aspects(
+    page_text: str,
+    page_number: int,
+    *,
+    words_per_aspect: int = FALLBACK_WORDS_PER_ASPECT,
+    min_substantial_words: int = FALLBACK_MIN_SUBSTANTIAL_WORDS,
+    policy: str | None = None,
+) -> AspectPickVerdict:
+    """Density prior when LLM triage is off or returns empty aspects.
+
+    ~one idea / ``words_per_aspect`` words; substantial paragraphs as labels.
+    Budget still owns N via ``plan_page_budget`` after units are built.
+    """
+    pol = normalize_policy(policy)
+    words = len(page_text.split()) if page_text else 0
+    paragraphs = [p.strip() for p in page_text.split("\n\n") if p.strip()] if page_text else []
+    substantial = [p for p in paragraphs if len(p.split()) >= min_substantial_words]
+    word_estimate = words // max(1, words_per_aspect)
+    if words > 0 and word_estimate == 0:
+        word_estimate = 1
+    if substantial:
+        aspect_count = min(len(substantial), word_estimate)
+    elif words > 0:
+        aspect_count = word_estimate
+    else:
+        aspect_count = 0
+    labels = substantial if substantial else paragraphs
+    aspects: list[dict[str, Any]] = []
+    for i, para in enumerate(labels[:aspect_count]):
+        from app.services.mcq_dedup import short_concept_label
+
+        label = short_concept_label(para.replace("\n", " "), max_chars=72)
+        aspects.append(
+            {
+                "key": f"page-{page_number}-p{i + 1}",
+                "label": label,
+                "centrality": "central",
+                "asked": False,
+                "answered": False,
+            }
+        )
+    if not aspects and words > 0:
+        aspects = [
+            {
+                "key": f"page-{page_number}-main",
+                "label": "Main ideas on this page",
+                "centrality": "central",
+                "asked": False,
+                "answered": False,
+            }
+        ]
+    return AspectPickVerdict(
+        aspects=tuple(aspects),
+        n_requested=aspect_count,
+        n_kept=len(aspects),
+        policy=pol,
+    )
 
 def parse_centrality(raw: Any) -> Centrality:
     value = str(raw or "central").strip().lower()

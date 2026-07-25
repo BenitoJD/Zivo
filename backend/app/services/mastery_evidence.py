@@ -18,7 +18,12 @@ MASTERY_MIN_N = 3
 SE_TARGET = 0.40
 SE_MIN_N = 5
 
+# Practice-hub path labeling (system-design concept map).
+PATH_STRONG = 0.72
+PATH_IN_PROGRESS = 0.35
+
 StopReason = Literal["mastery", "se_precision", "min_items", "continue"]
+PathState = Literal["not_started", "needs_work", "in_progress", "strong"]
 
 
 @dataclass(frozen=True)
@@ -30,6 +35,32 @@ class StopVerdict:
     n: int
     policy_version: str = MASTERY_VERSION
 
+
+@dataclass(frozen=True)
+class PathLabelVerdict:
+    state: PathState
+    mastery: float | None
+    policy_version: str = MASTERY_VERSION
+
+
+def label_path_mastery(
+    samples: list[float] | None,
+    *,
+    strong_at: float = PATH_STRONG,
+    in_progress_at: float = PATH_IN_PROGRESS,
+) -> PathLabelVerdict:
+    """Map recent practice scores into UI path state for hubs."""
+    hist = list(samples or [])
+    if not hist:
+        return PathLabelVerdict("not_started", None)
+    mastery = round(sum(hist[:5]) / min(5, len(hist)), 2)
+    if mastery >= strong_at:
+        state: PathState = "strong"
+    elif mastery >= in_progress_at:
+        state = "in_progress"
+    else:
+        state = "needs_work"
+    return PathLabelVerdict(state, mastery)
 
 def p_mastery_from_ability(ability: float, *, threshold_difficulty: float = 0.0) -> float:
     """Logistic P(correct) vs a reference difficulty as a cheap mastery proxy."""

@@ -138,6 +138,62 @@ def test_grounding_overlap() -> None:
     assert bad.grounded is False
 
 
+def test_grounding_cook_fatality_owns_page_density() -> None:
+    from app.services.grounding_answerability import evaluate_grounding_for_cook
+
+    thin = evaluate_grounding_for_cook(
+        stem="Who invented the telephone?",
+        correct_texts=["Alexander Graham Bell"],
+        page_text="short page",
+    )
+    assert thin.fatal is False
+    fat = evaluate_grounding_for_cook(
+        stem="Who invented the telephone?",
+        correct_texts=["Alexander Graham Bell"],
+        page_text=("Chloroplasts perform photosynthesis using chlorophyll. " * 8),
+    )
+    assert fat.fatal is True
+    assert "not_grounded" in fat.flaw_codes
+
+
+def test_aspect_abandon_and_fallback() -> None:
+    from app.services.aspect_discovery import (
+        heuristic_fallback_aspects,
+        should_abandon_aspect,
+    )
+
+    assert should_abandon_aspect(2).abandon is False
+    assert should_abandon_aspect(3).abandon is True
+    text = ("Idea one about cells.\n\n" * 20) + ("Another paragraph with enough words here.\n\n" * 5)
+    pick = heuristic_fallback_aspects(text, page_number=2)
+    assert pick.n_kept >= 1
+
+
+def test_empty_page_reselect_and_serve_schedule() -> None:
+    from app.services.content_worthiness import plan_empty_page_reselect
+    from app.services.session_design import evaluate_serve_schedule
+    from app.services.mastery_evidence import label_path_mastery
+
+    blank = plan_empty_page_reselect(prior_streak=4, vision_usable=False)
+    assert blank.prompt_reselect is True
+    vision = plan_empty_page_reselect(prior_streak=0, vision_usable=True)
+    assert vision.reason == "unreadable_content"
+    sched = evaluate_serve_schedule(ready_count=2, answered_on_page=5, page_budget=10)
+    assert sched.refill_now is True
+    assert sched.prefetch_transition is True
+    assert label_path_mastery([0.9, 0.8]).state == "strong"
+    assert label_path_mastery([]).state == "not_started"
+
+
+def test_tutor_cache_and_brainstorm_gate() -> None:
+    from app.services.tutor_retrieval import decide_cache_reuse, decide_retrieval
+
+    assert decide_cache_reuse(0.95).reuse is True
+    assert decide_cache_reuse(0.5).reuse is False
+    brainstorm = decide_retrieval("hello", scope={"mode": "brainstorm"}, has_history=True)
+    assert brainstorm.retrieve is False and brainstorm.reason == "brainstorm"
+
+
 def test_spaced_revisit_expands_on_success() -> None:
     hit = plan_revisit(last_correct=True, repetitions=2, prior_interval_hours=72, ease=2.5)
     miss = plan_revisit(last_correct=False, repetitions=2, prior_interval_hours=72, ease=2.5)

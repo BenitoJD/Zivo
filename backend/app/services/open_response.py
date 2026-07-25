@@ -64,7 +64,7 @@ INTERVIEW_SCORE_MAX = 4
 class OpenResponseVerdict:
     """Typed measurement result with policy provenance."""
 
-    kind: Literal["mains", "interview_typed", "interview_report", "coding_teach"]
+    kind: Literal["mains", "interview_typed", "interview_report", "coding_teach", "system_design"]
     result: dict[str, Any]
     policy: str = DEFAULT_POLICY
     policy_version: str = OPEN_RESPONSE_VERSION
@@ -363,4 +363,104 @@ def heuristic_coding_teach_gap(
         },
     }
     return OpenResponseVerdict(kind="coding_teach", result=result, policy=pol)
+
+
+# --- System design heuristic grade -------------------------------------------
+
+SD_DIMENSIONS = ("framing", "api", "data", "scale", "tradeoffs", "communication")
+
+
+def heuristic_system_design_grade(
+    design: dict[str, Any],
+    concept_keys: list[str],
+    *,
+    policy: str | None = None,
+) -> OpenResponseVerdict:
+    """Deterministic SD mentor when the grade LLM is unavailable."""
+    import re
+
+    pol = normalize_policy(policy)
+    text_blob = " ".join(
+        str(design.get(k) or "") for k in ("requirements", "apis", "data", "scale")
+    )
+    words = len(re.findall(r"\w+", text_blob))
+    blocks = design.get("blocks") or []
+    base = 2
+    if words > 80:
+        base = 3
+    if words < 25:
+        base = 1
+    dims = []
+    low = text_blob.lower()
+    for key in SD_DIMENSIONS:
+        score = base
+        if key == "api" and ("api" in low or "endpoint" in low):
+            score = min(4, score + 1)
+        if key == "data" and any(w in low for w in ("db", "database", "sql", "store")):
+            score = min(4, score + 1)
+        if key == "scale" and any(w in low for w in ("cache", "shard", "qps", "cdn", "queue")):
+            score = min(4, score + 1)
+        if key == "framing" and words > 40:
+            score = min(4, max(score, 2))
+        if blocks and key == "communication":
+            score = min(4, score + 1)
+        dims.append({"key": key, "score": score, "note": "Heuristic score - model unavailable."})
+    weak = list(concept_keys[:1]) or ["requirements"]
+    result = {
+        "mentor_summary": (
+            "You sketched a direction, but the interesting constraints are still thin. "
+            "Name the hot path, the data ownership, and one failure mode before drawing more boxes."
+        ),
+        "dimensions": dims,
+        "weak_concepts": weak,
+        "lesson": {
+            "title": "Start from the hot path",
+            "body": (
+                "Great designs begin with the request that happens most often and the data it "
+                "must touch. Write that path end-to-end before optimizing side features."
+            ),
+            "try_this": "On the next case, write the single most common request as a numbered sequence of hops.",
+        },
+    }
+    return OpenResponseVerdict(kind="system_design", result=result, policy=pol)
+
+
+# --- Coding bank structural gate ---------------------------------------------
+
+
+@dataclass(frozen=True)
+class CodingBankVerdict:
+    ok: bool
+    reason: str
+    policy: str = DEFAULT_POLICY
+    policy_version: str = OPEN_RESPONSE_VERSION
+
+
+def evaluate_coding_bank_item(
+    problem: dict[str, Any],
+    *,
+    min_title_len: int = 3,
+    require_hidden_tests: bool = True,
+    policy: str | None = None,
+) -> CodingBankVerdict:
+    """Whether a generated coding problem is bank-grade enough to persist.
+
+    Judge0 verify / LLM stay in coding_generation; this owns structural thresholds.
+    """
+    pol = normalize_policy(policy)
+    required = ("statement", "starter_code", "reference_solution", "tests")
+    if not all(problem.get(k) for k in required):
+        return CodingBankVerdict(False, "missing_required_fields", policy=pol)
+    tests = problem.get("tests")
+    if not isinstance(tests, list) or not tests:
+        return CodingBankVerdict(False, "no_tests", policy=pol)
+    clean = [t for t in tests if isinstance(t, dict)]
+    if require_hidden_tests and len(clean) <= 2:
+        return CodingBankVerdict(False, "no_hidden_tests", policy=pol)
+    title = str(problem.get("title") or "").strip()
+    if len(title) < min_title_len:
+        title = str(problem.get("concept") or "").strip()
+    if len(title) < min_title_len:
+        return CodingBankVerdict(False, "title_too_short", policy=pol)
+    return CodingBankVerdict(True, "ok", policy=pol)
 
