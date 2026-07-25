@@ -7,6 +7,7 @@ Version: qb.session.v1
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from app.services.question_budget import SESSION_SOFT
 
@@ -21,6 +22,193 @@ READY_LOW_WATER = int(_os.getenv("ZIVO_READY_LOW_WATER", "8"))
 TRANSITION_PREFETCH_RATIO = float(_os.getenv("ZIVO_TRANSITION_PREFETCH_RATIO", "0.45"))
 TRANSITION_GENERATION_RATIO = float(_os.getenv("ZIVO_TRANSITION_GENERATION_RATIO", "0.15"))
 EAGER_TRIAGE_LOOKAHEAD = int(_os.getenv("ZIVO_EAGER_TRIAGE_LOOKAHEAD", "5"))
+REFILL_AFTER_ANSWERED = int(_os.getenv("ZIVO_REFILL_AFTER_ANSWERED", "2"))
+
+# Interview Mode round plans — session schedule for mock interviews.
+# Each round: name, kind ("mcq" | "typed" | "coding"), focus, questions (count).
+InterviewRound = dict[str, Any]
+
+INTERVIEW_ROUND_PLANS: dict[str, list[InterviewRound]] = {
+    "service": [
+        {
+            "name": "Aptitude & Coding",
+            "kind": "mcq",
+            "questions": 3,
+            "focus": (
+                "quantitative aptitude, logical reasoning, and basic coding / "
+                "output-prediction MCQs"
+            ),
+        },
+        {
+            "name": "Technical",
+            "kind": "typed",
+            "questions": 2,
+            "focus": (
+                "core CS fundamentals and project / tech-stack questions from the "
+                "resume (OOP, DBMS, SQL, the candidate's listed technologies)"
+            ),
+        },
+        {
+            "name": "HR & Behavioural",
+            "kind": "typed",
+            "questions": 2,
+            "focus": (
+                "behavioural / HR questions (strengths, weaknesses, motivation, "
+                "teamwork) — expect STAR-style answers"
+            ),
+        },
+    ],
+    "product": [
+        {
+            "name": "DSA / Coding",
+            "kind": "coding",
+            "questions": 1,
+            "focus": (
+                "a self-contained data-structures & algorithms problem solved by "
+                "reading stdin and printing to stdout (LeetCode-easy/medium)"
+            ),
+        },
+        {
+            "name": "Technical Fundamentals",
+            "kind": "typed",
+            "questions": 2,
+            "focus": (
+                "deep CS fundamentals relevant to the resume (operating systems, "
+                "networks, databases, language internals)"
+            ),
+        },
+        {
+            "name": "System Design (HLD)",
+            "kind": "typed",
+            "questions": 1,
+            "focus": (
+                "high-level system design: functional & non-functional requirements, "
+                "capacity estimation, architecture, scaling, and trade-offs "
+                "(CAP, consistency, caching)"
+            ),
+        },
+        {
+            "name": "Low-Level Design (LLD)",
+            "kind": "typed",
+            "questions": 1,
+            "focus": (
+                "object-oriented / low-level design: class modelling, SOLID, "
+                "design patterns, concurrency, and schema"
+            ),
+        },
+        {
+            "name": "Behavioural",
+            "kind": "typed",
+            "questions": 2,
+            "focus": (
+                "behavioural / culture-fit questions grounded in the candidate's "
+                "projects and experience — STAR answers"
+            ),
+        },
+    ],
+    "bank": [
+        {
+            "name": "Aptitude",
+            "kind": "mcq",
+            "questions": 3,
+            "focus": "quantitative aptitude, logical reasoning, and basic technical MCQs",
+        },
+        {
+            "name": "Technical",
+            "kind": "typed",
+            "questions": 2,
+            "focus": (
+                "core CS fundamentals and the candidate's tech stack "
+                "(OOP, DBMS, SQL, data structures)"
+            ),
+        },
+        {
+            "name": "Domain & Systems",
+            "kind": "typed",
+            "questions": 2,
+            "focus": (
+                "banking / fintech domain awareness, secure & reliable system design, "
+                "transactions and consistency"
+            ),
+        },
+        {
+            "name": "HR",
+            "kind": "typed",
+            "questions": 2,
+            "focus": (
+                "behavioural / HR questions — stability, integrity, teamwork, "
+                "communication"
+            ),
+        },
+    ],
+    "startup": [
+        {
+            "name": "Coding",
+            "kind": "coding",
+            "questions": 1,
+            "focus": (
+                "a practical, self-contained coding problem solved by reading stdin "
+                "and printing to stdout"
+            ),
+        },
+        {
+            "name": "Machine Coding / Practical",
+            "kind": "typed",
+            "questions": 2,
+            "focus": (
+                "building a small feature end-to-end: API/component design, edge "
+                "cases, and pragmatic trade-offs under time pressure"
+            ),
+        },
+        {
+            "name": "System Design",
+            "kind": "typed",
+            "questions": 1,
+            "focus": (
+                "designing a small product system: requirements, architecture, "
+                "data model, and scaling the pragmatic way"
+            ),
+        },
+        {
+            "name": "Culture Fit",
+            "kind": "typed",
+            "questions": 2,
+            "focus": (
+                "ownership, ambiguity, bias-to-action, and impact — grounded in "
+                "the candidate's projects"
+            ),
+        },
+    ],
+    "other": [
+        {
+            "name": "Aptitude & Coding",
+            "kind": "mcq",
+            "questions": 3,
+            "focus": "aptitude, reasoning, and coding / output-prediction MCQs",
+        },
+        {
+            "name": "Technical",
+            "kind": "typed",
+            "questions": 2,
+            "focus": "core CS fundamentals and the candidate's tech stack from the resume",
+        },
+        {
+            "name": "System Design",
+            "kind": "typed",
+            "questions": 1,
+            "focus": (
+                "high-level system design: requirements, architecture, scaling, "
+                "and trade-offs"
+            ),
+        },
+        {
+            "name": "Behavioural",
+            "kind": "typed",
+            "questions": 2,
+            "focus": "behavioural questions grounded in the candidate's projects — STAR answers",
+        },
+    ],
+}
 
 
 @dataclass(frozen=True)
@@ -35,6 +223,14 @@ class ServeScheduleVerdict:
     refill_now: bool
     prefetch_transition: bool
     generate_next_page: bool
+    periodic_refill: bool = False
+    policy_version: str = SESSION_VERSION
+
+
+@dataclass(frozen=True)
+class InterviewRoundsPlan:
+    category: str
+    rounds: tuple[InterviewRound, ...]
     policy_version: str = SESSION_VERSION
 
 
@@ -60,6 +256,7 @@ def evaluate_serve_schedule(
     low_water: int = READY_LOW_WATER,
     prefetch_ratio: float = TRANSITION_PREFETCH_RATIO,
     generation_ratio: float = TRANSITION_GENERATION_RATIO,
+    refill_after_answered: int = REFILL_AFTER_ANSWERED,
 ) -> ServeScheduleVerdict:
     """When to refill the ready pool / prefetch next page / kick early generation."""
     refill = False
@@ -75,8 +272,23 @@ def evaluate_serve_schedule(
         ratio = int(answered_on_page) / int(page_budget)
         prefetch = ratio > float(prefetch_ratio)
         generate = ratio >= float(generation_ratio)
+    periodic = False
+    cadence = int(refill_after_answered)
+    if answered_on_page is not None and cadence > 0:
+        answered = int(answered_on_page)
+        periodic = answered > 0 and answered % cadence == 0
     return ServeScheduleVerdict(
         refill_now=refill,
         prefetch_transition=prefetch,
         generate_next_page=generate,
+        periodic_refill=periodic,
     )
+
+
+def plan_interview_rounds(category: str | None) -> InterviewRoundsPlan:
+    """Resolve mock-interview round schedule for a company category."""
+    cat = (category or "").strip().lower()
+    if cat not in INTERVIEW_ROUND_PLANS:
+        cat = "other"
+    rounds = tuple(dict(r) for r in INTERVIEW_ROUND_PLANS[cat])
+    return InterviewRoundsPlan(category=cat, rounds=rounds)

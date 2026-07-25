@@ -29,7 +29,6 @@ from app.services.question_pool import (
     GENERATE_JOB_STALE_SECONDS,
     INITIAL_BATCH_SIZE,
     MAX_GENERATE_BATCH_SIZE,
-    REFILL_AFTER_ANSWERED,
     REFILL_BATCH_SIZE,
     _count_available,
     _page_key,
@@ -1060,10 +1059,11 @@ def maybe_refill_pool(db: Session, document_id: uuid.UUID) -> Job | None:
     # backlog of questions ready and the reader never waits on generation.
     from app.services.session_design import evaluate_serve_schedule
 
-    low_water = evaluate_serve_schedule(ready_count=available).refill_now
-    periodic = answered_on_page > 0 and answered_on_page % REFILL_AFTER_ANSWERED == 0
-    drained = available == 0
-    if low_water or periodic or drained:
+    sched = evaluate_serve_schedule(
+        ready_count=available,
+        answered_on_page=answered_on_page,
+    )
+    if sched.refill_now or sched.periodic_refill:
         remaining = budget - generated_on_page
         batch = min(REFILL_BATCH_SIZE, remaining)
         if batch > 0:

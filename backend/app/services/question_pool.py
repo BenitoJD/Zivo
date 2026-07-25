@@ -16,9 +16,11 @@ from app.services.mcq_assertion_facets import page_assertion_ids_from_facets
 from app.repositories import workspace as workspace_repo
 from app.services.question_budget import (
     Mode,
+    SPECULATIVE_PAGE_N,
     parse_budget_mode,
     plan_document_budget,
     plan_page_budget,
+    speculative_page_budget,
     units_from_aspect_dicts,
 )
 from app.services import aspect_discovery as _aspect_discovery
@@ -32,8 +34,10 @@ EAGER_TRIAGE_LOOKAHEAD = _session_design.EAGER_TRIAGE_LOOKAHEAD
 READY_LOW_WATER = _session_design.READY_LOW_WATER
 TRANSITION_GENERATION_RATIO = _session_design.TRANSITION_GENERATION_RATIO
 TRANSITION_PREFETCH_RATIO = _session_design.TRANSITION_PREFETCH_RATIO
+REFILL_AFTER_ANSWERED = _session_design.REFILL_AFTER_ANSWERED
 
-INITIAL_BATCH_SIZE = 5
+# Warm-pool fill target matches Budget speculative seed (pipe only, not N_page).
+INITIAL_BATCH_SIZE = SPECULATIVE_PAGE_N
 # First job writes ONE question so the learner can start immediately. Critic +
 # verify run per draft after the shared draft call — a batch of 5 delays "go"
 # by four quality-gate round-trips. Warm pool fills right after via remainder /
@@ -47,9 +51,6 @@ REFILL_BATCH_SIZE = 5
 # `remaining` (= full page budget); without this a large N_page becomes one
 # multi-hour job instead of small rolling batches.
 MAX_GENERATE_BATCH_SIZE = REFILL_BATCH_SIZE
-REFILL_AFTER_ANSWERED = 2
-# Schedule / abandon / reselect thresholds: re-exported from engines (session_design,
-# aspect_discovery, content_worthiness). Keep names for ETA / jobs imports.
 # A generate job left in 'running' after a worker crash blocks recovery until reclaimed.
 # Must sit well above p99 generation wall-clock — reclaiming a live job duplicates LLM
 # work and races assertion writes. Workers do not heartbeat locked_at during the handler.
@@ -279,10 +280,12 @@ def get_question_budget(doc: Document, page: int, *, mode: Mode | None = None) -
         plan = plan_page_budget(units, mode=serve_mode, confidence=conf)
         return plan.n_page
     # Page cook target N_page from plan_page_budget (persisted at triage). A
-    # missing budget means triage hasn't landed yet — seed a small speculative
-    # batch (confidence=low) so generation can start; a triaged 0 is honoured.
+    # missing budget means triage hasn't landed yet — seed speculative N_page
+    # (confidence=low) so generation can start; a triaged 0 is honoured.
     raw = cov.get("question_budget")
-    budget = int(raw) if raw is not None else INITIAL_BATCH_SIZE
+    if raw is None:
+        return speculative_page_budget(mode=serve_mode).n_page
+    budget = int(raw)
     return max(0, budget)
 
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal, Sequence
 
 TUTOR_RETRIEVAL_VERSION = "qb.tutor_retrieval.v1"
 DEFAULT_POLICY = "tutor_retrieval_v1"
@@ -25,6 +25,12 @@ DEFAULT_FETCH_LIMIT = 20
 GRADE_CONTEXT_TOP_N = 4
 # Semantic response-cache reuse (GPTCache-style). Conservative near-paraphrase.
 RESPONSE_CACHE_SIMILARITY = 0.92
+# Brainstorm: evenly spaced whole-source sample (breadth, not top-k depth).
+BRAINSTORM_CHUNK_SAMPLE = 24
+# Chat history: compress older turns once the thread exceeds this length.
+CHAT_HISTORY_COMPRESS_ABOVE = 4
+CHAT_HISTORY_KEEP_TAIL = 2
+CHAT_HISTORY_SNIPPET_CHARS = 180
 
 GateReason = Literal[
     "empty",
@@ -159,6 +165,74 @@ def decide_cache_reuse(
 def grade_context_top_n(*, top_n: int = GRADE_CONTEXT_TOP_N) -> int:
     """How many ranked chunks to paste into MCQ grade-tutor prompts."""
     return max(1, int(top_n))
+
+
+@dataclass(frozen=True)
+class BrainstormSampleVerdict:
+    texts: tuple[str, ...]
+    sample_n: int
+    policy: str = DEFAULT_POLICY
+    policy_version: str = TUTOR_RETRIEVAL_VERSION
+
+
+def plan_brainstorm_sample(
+    chunks: Sequence[str],
+    *,
+    sample_n: int = BRAINSTORM_CHUNK_SAMPLE,
+    policy: str | None = None,
+) -> BrainstormSampleVerdict:
+    """Evenly spaced whole-source sample for brainstorm (not vector top-k)."""
+    pol = normalize_policy(policy)
+    n = max(1, int(sample_n))
+    if not chunks:
+        return BrainstormSampleVerdict(texts=(), sample_n=n, policy=pol)
+    step = max(1, len(chunks) // n)
+    sample = tuple(str(c) for c in chunks[::step][:n])
+    return BrainstormSampleVerdict(texts=sample, sample_n=n, policy=pol)
+
+
+@dataclass(frozen=True)
+class ChatHistoryVerdict:
+    messages: tuple[dict[str, Any], ...]
+    compressed: bool
+    policy: str = DEFAULT_POLICY
+    policy_version: str = TUTOR_RETRIEVAL_VERSION
+
+
+def compress_chat_history(
+    prior: Sequence[dict[str, Any]],
+    *,
+    compress_above: int = CHAT_HISTORY_COMPRESS_ABOVE,
+    keep_tail: int = CHAT_HISTORY_KEEP_TAIL,
+    snippet_chars: int = CHAT_HISTORY_SNIPPET_CHARS,
+    policy: str | None = None,
+) -> ChatHistoryVerdict:
+    """Keep last N messages + one compressed earlier block (cuts input tokens)."""
+    pol = normalize_policy(policy)
+    msgs = list(prior or [])
+    above = max(0, int(compress_above))
+    tail_n = max(1, int(keep_tail))
+    snip = max(40, int(snippet_chars))
+    if len(msgs) <= above:
+        return ChatHistoryVerdict(messages=tuple(msgs), compressed=False, policy=pol)
+    tail = msgs[-tail_n:]
+    bits: list[str] = []
+    for m in msgs[:-tail_n]:
+        content = (m.get("content") or "").strip().replace("\n", " ")
+        if not content:
+            continue
+        role = m.get("role") or "?"
+        bits.append(f"{role}: {content[:snip]}")
+    if not bits:
+        return ChatHistoryVerdict(messages=tuple(tail), compressed=True, policy=pol)
+    compressed = [
+        {
+            "role": "user",
+            "content": "Earlier in this thread (compressed):\n" + "\n".join(bits),
+        },
+        *tail,
+    ]
+    return ChatHistoryVerdict(messages=tuple(compressed), compressed=True, policy=pol)
 
 
 def decide_page_pin(

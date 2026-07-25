@@ -55,6 +55,27 @@ def test_finish_ranked_chunks_truncates_without_rerank() -> None:
     assert v.chunks[0]["text"] == "c0"
 
 
+def test_plan_brainstorm_sample_spans_document() -> None:
+    from app.services.tutor_retrieval import plan_brainstorm_sample
+
+    texts = [f"chunk-{i}" for i in range(48)]
+    v = plan_brainstorm_sample(texts, sample_n=24)
+    assert len(v.texts) == 24
+    assert v.texts[0] == "chunk-0"
+    assert v.texts[-1] == "chunk-46"
+
+
+def test_compress_chat_history_keeps_tail() -> None:
+    from app.services.tutor_retrieval import compress_chat_history
+
+    prior = [{"role": "user", "content": f"msg-{i}"} for i in range(6)]
+    v = compress_chat_history(prior)
+    assert v.compressed is True
+    assert len(v.messages) == 3
+    assert "compressed" in v.messages[0]["content"]
+    assert v.messages[-1]["content"] == "msg-5"
+
+
 def test_decide_page_pin_prefers_current() -> None:
     from app.services.tutor_retrieval import decide_page_pin
 

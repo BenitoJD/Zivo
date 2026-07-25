@@ -30,6 +30,7 @@ from app.api.access import require_document
 from app.services.guest_session import guest_session_for_read, optional_guest_session
 from app.services.response_cache import get_cached_response, store_response
 from app.services.rate_limit import rate_limit_dependency
+from app.services.tutor_retrieval import compress_chat_history
 from app.services.usage import reserve_message_slot
 from app.services.vision import build_user_message, is_image_document
 
@@ -57,25 +58,8 @@ def _history_digest(prior: list[dict]) -> str:
 
 
 def _shrink_prior_messages(prior: list[dict]) -> list[dict]:
-    """Keep last 2 messages + one compressed earlier block (cuts input tokens)."""
-    if len(prior) <= 4:
-        return prior
-    tail = prior[-2:]
-    bits: list[str] = []
-    for m in prior[:-2]:
-        content = (m.get("content") or "").strip().replace("\n", " ")
-        if not content:
-            continue
-        role = m.get("role") or "?"
-        bits.append(f"{role}: {content[:180]}")
-    if not bits:
-        return tail
-    return [
-        {
-            "role": "user",
-            "content": "Earlier in this thread (compressed):\n" + "\n".join(bits),
-        }
-    ] + tail
+    """Compress older turns via Tutor Retrieval (cuts input tokens)."""
+    return list(compress_chat_history(prior).messages)
 
 
 def _user_facing_chat_error(exc: BaseException) -> str:

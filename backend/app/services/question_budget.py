@@ -31,6 +31,8 @@ M_TEST_HIGH_STAKES = 5
 CEIL_PAGE = 40
 W_PER_UNIT = 120
 SESSION_SOFT = 20
+# Speculative N_page when triage has not landed yet (confidence=low seed).
+SPECULATIVE_PAGE_N = 5
 
 # Formative Test session information floor (IRT): SE=0.40 → I*=6.25
 SE_TARGET_FORMATIVE = 0.40
@@ -116,6 +118,12 @@ def information_floor_items(
         raise ValueError("se_target and i_bar must be positive")
     i_star = 1.0 / (se_target * se_target)
     return int(math.ceil(i_star / i_bar))
+
+
+def speculative_page_budget(*, mode: Mode = "learn") -> PageBudgetPlan:
+    """Seed N_page before triage lands so generation can start (confidence=low)."""
+    n = max(0, int(SPECULATIVE_PAGE_N))
+    return PageBudgetPlan(n_page=n, n_cov=float(n), mode=mode, confidence="low")
 
 
 def plan_page_budget(

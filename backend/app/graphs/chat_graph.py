@@ -8,11 +8,10 @@ from typing import Any, TypedDict
 from sqlalchemy.orm import Session
 
 from app.services.chat_retrieval import retrieve_document_chunks
-from app.services.tutor_retrieval import decide_retrieval
+from app.services.tutor_retrieval import decide_retrieval, plan_brainstorm_sample
 from app.services.token_budget import CHAT_INPUT_MAX_TOKENS, truncate_to_tokens
 
 _CHAT_CONTEXT_MAX_TOKENS = CHAT_INPUT_MAX_TOKENS
-_BRAINSTORM_CHUNK_SAMPLE = 24
 
 
 class ChatState(TypedDict, total=False):
@@ -98,9 +97,8 @@ def _brainstorm_context(db: Session, document_id: uuid.UUID) -> str:
     if chunks:
         # Evenly spaced, so the sample spans beginning to end instead of stopping
         # wherever the token budget runs out (which would be the first chapter only).
-        step = max(1, len(chunks) // _BRAINSTORM_CHUNK_SAMPLE)
-        sample = chunks[::step][:_BRAINSTORM_CHUNK_SAMPLE]
-        parts.append("Passages sampled across the source:\n\n" + "\n\n".join(sample))
+        sample = plan_brainstorm_sample(chunks)
+        parts.append("Passages sampled across the source:\n\n" + "\n\n".join(sample.texts))
 
     return truncate_to_tokens("\n\n".join(parts), _CHAT_CONTEXT_MAX_TOKENS)
 

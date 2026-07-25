@@ -171,7 +171,7 @@ def test_aspect_abandon_and_fallback() -> None:
 
 def test_empty_page_reselect_and_serve_schedule() -> None:
     from app.services.content_worthiness import plan_empty_page_reselect
-    from app.services.session_design import evaluate_serve_schedule
+    from app.services.session_design import evaluate_serve_schedule, plan_interview_rounds
     from app.services.mastery_evidence import label_path_mastery
 
     blank = plan_empty_page_reselect(prior_streak=4, vision_usable=False)
@@ -181,17 +181,52 @@ def test_empty_page_reselect_and_serve_schedule() -> None:
     sched = evaluate_serve_schedule(ready_count=2, answered_on_page=5, page_budget=10)
     assert sched.refill_now is True
     assert sched.prefetch_transition is True
+    assert sched.periodic_refill is False
+    periodic = evaluate_serve_schedule(ready_count=20, answered_on_page=2)
+    assert periodic.periodic_refill is True
+    assert periodic.refill_now is False
+    product = plan_interview_rounds("product")
+    assert product.category == "product"
+    assert product.rounds[0]["kind"] == "coding"
+    assert plan_interview_rounds("nope").category == "other"
     assert label_path_mastery([0.9, 0.8]).state == "strong"
     assert label_path_mastery([]).state == "not_started"
 
 
 def test_tutor_cache_and_brainstorm_gate() -> None:
-    from app.services.tutor_retrieval import decide_cache_reuse, decide_retrieval
+    from app.services.tutor_retrieval import (
+        compress_chat_history,
+        decide_cache_reuse,
+        decide_retrieval,
+        plan_brainstorm_sample,
+    )
 
     assert decide_cache_reuse(0.95).reuse is True
     assert decide_cache_reuse(0.5).reuse is False
     brainstorm = decide_retrieval("hello", scope={"mode": "brainstorm"}, has_history=True)
     assert brainstorm.retrieve is False and brainstorm.reason == "brainstorm"
+    sample = plan_brainstorm_sample([f"c{i}" for i in range(100)])
+    assert len(sample.texts) == sample.sample_n
+    hist = compress_chat_history(
+        [{"role": "user", "content": f"m{i}"} for i in range(6)]
+    )
+    assert hist.compressed is True
+    assert len(hist.messages) == 3
+
+
+def test_speculative_budget_and_naming_gate() -> None:
+    from app.services.newspaper_naming import evaluate_naming_confidence
+    from app.services.question_budget import speculative_page_budget
+
+    seed = speculative_page_budget(mode="learn")
+    assert seed.confidence == "low"
+    assert seed.n_page == 5
+    soft = evaluate_naming_confidence(0.4, exact_catalog_hit=False)
+    assert soft.accept_identity is True and soft.learn_alias is False
+    exact = evaluate_naming_confidence(0.4, exact_catalog_hit=True)
+    assert exact.accept_identity is True and exact.learn_alias is True
+    reject = evaluate_naming_confidence(0.2, exact_catalog_hit=False)
+    assert reject.accept_identity is False
 
 
 def test_spaced_revisit_expands_on_success() -> None:
