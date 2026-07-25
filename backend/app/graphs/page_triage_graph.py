@@ -200,7 +200,7 @@ def run_page_triage(
                         "question_budget": 0,
                         "aspects_count": 0,
                         "page_number": page_number,
-                        "newspaper_filter": verdict,
+                        "newspaper_filter": worth.reason,
                     },
                     finished=True,
                 )

@@ -6,7 +6,6 @@ Separate product from Interview. Raw SQL on qb.sd_concept / sd_problem / sd_sess
 from __future__ import annotations
 
 import json
-import re
 import uuid
 from typing import Any
 

@@ -21,14 +21,17 @@ from app.services.question_budget import (
     plan_page_budget,
     units_from_aspect_dicts,
 )
-from app.services.aspect_discovery import MAX_ASPECT_ATTEMPTS
-from app.services.content_worthiness import EMPTY_PAGE_RESELECT_STREAK
-from app.services.session_design import (
-    EAGER_TRIAGE_LOOKAHEAD,
-    READY_LOW_WATER,
-    TRANSITION_GENERATION_RATIO,
-    TRANSITION_PREFETCH_RATIO,
-)
+from app.services import aspect_discovery as _aspect_discovery
+from app.services import content_worthiness as _content_worthiness
+from app.services import session_design as _session_design
+
+# Re-export schedule / abandon / reselect thresholds for ETA / jobs / tests.
+MAX_ASPECT_ATTEMPTS = _aspect_discovery.MAX_ASPECT_ATTEMPTS
+EMPTY_PAGE_RESELECT_STREAK = _content_worthiness.EMPTY_PAGE_RESELECT_STREAK
+EAGER_TRIAGE_LOOKAHEAD = _session_design.EAGER_TRIAGE_LOOKAHEAD
+READY_LOW_WATER = _session_design.READY_LOW_WATER
+TRANSITION_GENERATION_RATIO = _session_design.TRANSITION_GENERATION_RATIO
+TRANSITION_PREFETCH_RATIO = _session_design.TRANSITION_PREFETCH_RATIO
 
 INITIAL_BATCH_SIZE = 5
 # First job writes ONE question so the learner can start immediately. Critic +
