@@ -19,6 +19,7 @@ kubectl -n zivo create secret generic zivo-secrets \
   --from-literal=MINIO_SECURE="${MINIO_SECURE:-false}" \
   --from-literal=APP_ENV="${APP_ENV:-production}" \
   --from-literal=CORS_ORIGINS="${CORS_ORIGINS:-}" \
+  --from-literal=TRUSTED_PROXY_IPS="${TRUSTED_PROXY_IPS:-}" \
   --from-literal=SECRET_KEY="${SECRET_KEY:-}" \
   --from-literal=CSRF_SECRET="${CSRF_SECRET:-}" \
   --from-literal=LITELLM_MODEL="${LITELLM_MODEL:-openai/deepseek-v4-flash}" \
