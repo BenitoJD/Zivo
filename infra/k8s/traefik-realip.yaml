@@ -1,0 +1,27 @@
+# K3s HelmChartConfig overlay: preserve real client IP at Traefik.
+#
+# Without this, K3s's default `externalTrafficPolicy: Cluster` on the Traefik
+# LoadBalancer Service causes SNAT, which rewrites the real client IP to an
+# internal one (10.42.0.1, the cni0 bridge) before Traefik sees the request.
+# Traefik then sets X-Forwarded-For to that internal IP, and the API's
+# client_ip() / rate limiter collapse every external caller into one bucket.
+#
+# `externalTrafficPolicy: Local` stops the SNAT (klipper-lb forwards to the
+# local Traefik pod with the original source), so the real client IP reaches
+# the app. Safe on a single-node K3s cluster (svclb runs on the only node, so
+# there is no risk of dropping traffic to a node without a local pod).
+#
+# Install on the VPS:
+#   sudo cp infra/k8s/traefik-realip.yaml /var/lib/rancher/k3s/server/manifests/
+# K3s auto-applies files in that dir; a `helm upgrade` of traefik will now
+# honor the override. (scripts/bootstrap-vps.sh does this on a fresh install.)
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    service:
+      externalTrafficPolicy: Local

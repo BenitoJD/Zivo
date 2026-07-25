@@ -82,6 +82,13 @@ source "$SECRETS_FILE"
 kubectl create namespace zivo --dry-run=client -o yaml | kubectl apply -f -
 bash "$(dirname "$0")/apply-k8s-secrets.sh" "$SECRETS_FILE"
 
+# Preserve real client IPs at Traefik (rate limiting + logging key on the
+# actual caller). See infra/k8s/traefik-realip.yaml for the why.
+TRAEFIK_REALIP_SRC="$(dirname "$0")/../infra/k8s/traefik-realip.yaml"
+if [[ -f "$TRAEFIK_REALIP_SRC" ]]; then
+  cp "$TRAEFIK_REALIP_SRC" /var/lib/rancher/k3s/server/manifests/traefik-realip.yaml
+fi
+
 if [[ -f "$(dirname "$0")/install-cert-manager.sh" ]]; then
   bash "$(dirname "$0")/install-cert-manager.sh"
 fi
