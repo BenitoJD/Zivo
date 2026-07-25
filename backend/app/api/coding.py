@@ -88,7 +88,7 @@ class CurateProblemIn(BaseModel):
     concept: str = Field(default="", max_length=200)
     tags: list[str] = Field(default_factory=list, max_length=12)
     editor_solution: str = Field(default="", max_length=50000)
-    published: bool = True
+    published: bool = False
     slug: str | None = Field(default=None, max_length=80)
 
 
@@ -116,15 +116,25 @@ class AssistIn(BaseModel):
 # ---------------------------------------------------------------- helpers
 
 
-def _load_coding_assertion(db: Session, assertion_id: uuid.UUID) -> dict:
-    """Fetch one coding assertion's full payload (incl. hidden tests) for grading."""
+def _load_coding_assertion(
+    db: Session, assertion_id: uuid.UUID, *, include_retracted: bool = False
+) -> dict:
+    """Fetch one coding assertion's full payload (incl. hidden tests) for grading.
+
+    Public/practice paths see only ``status = 'active'``; admin editorial paths
+    pass ``include_retracted=True`` so a curator can open, edit, or republish a
+    soft-deleted (status='retracted') problem instead of hitting a 404.
+    """
+    status_clause = (
+        "a.status IN ('active', 'retracted')" if include_retracted else "a.status = 'active'"
+    )
     row = db.execute(
         text(
-            """
+            f"""
             SELECT a.id, a.payload, a.title, a.recorded_at,
                    (a.payload->>'artifact_id') AS artifact_id
             FROM intel.assertion a
-            WHERE a.id = :id AND a.status = 'active'
+            WHERE a.id = :id AND {status_clause}
             """
         ),
         {"id": assertion_id},
@@ -276,10 +286,16 @@ def admin_seed_bank(db: Session = Depends(get_db)) -> dict:
 @router.post("/admin", dependencies=[Depends(require_admin), Depends(require_csrf)])
 def admin_create_problem(body: CurateProblemIn, db: Session = Depends(get_db)) -> dict:
     """Create a curated coding problem (human-authored)."""
+    title = body.title.strip()
+    if body.published and len(title) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Published problems need a title of at least 2 characters",
+        )
     try:
         pub = upsert_curated_problem(
             db,
-            title=body.title,
+            title=title,
             statement=body.statement,
             starter_code=body.starter_code,
             tests=[t.model_dump() for t in body.tests],
@@ -301,7 +317,7 @@ def admin_create_problem(body: CurateProblemIn, db: Session = Depends(get_db)) -
 @router.get("/admin/{assertion_id}", dependencies=[Depends(require_admin)])
 def admin_get_problem(assertion_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     """Editorial view — hidden tests + reference solution included."""
-    problem = _load_coding_assertion(db, assertion_id)
+    problem = _load_coding_assertion(db, assertion_id, include_retracted=True)
     pub = editorial_payload(problem["payload"])
     pub["id"] = str(assertion_id)
     facet = db.execute(
@@ -329,7 +345,7 @@ def admin_patch_problem(
     db: Session = Depends(get_db),
 ) -> dict:
     """Update a curated (or imported) problem. Publish-only patches allowed on any."""
-    problem = _load_coding_assertion(db, assertion_id)
+    problem = _load_coding_assertion(db, assertion_id, include_retracted=True)
     payload = problem["payload"]
 
     # Publish toggle alone — works for generated + curated.
@@ -346,6 +362,13 @@ def admin_patch_problem(
         and body.editor_solution is None
     )
     if only_publish:
+        if body.published:
+            title = str(payload.get("title") or problem.get("title") or "").strip()
+            if len(title) < 2:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Published problems need a title of at least 2 characters",
+                )
         try:
             set_published(db, assertion_id, bool(body.published))
             db.commit()
@@ -359,11 +382,20 @@ def admin_patch_problem(
     # Full rewrite path — merge with existing payload.
     existing_tests = list(payload.get("sample_tests") or []) + list(payload.get("hidden_tests") or [])
     tests = [t.model_dump() for t in body.tests] if body.tests is not None else existing_tests
+    next_title = (
+        body.title if body.title is not None else str(payload.get("title") or problem["title"] or "")
+    ).strip()
+    next_published = bool(body.published) if body.published is not None else True
+    if next_published and len(next_title) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Published problems need a title of at least 2 characters",
+        )
     try:
         pub = upsert_curated_problem(
             db,
             assertion_id=assertion_id,
-            title=body.title if body.title is not None else str(payload.get("title") or problem["title"] or ""),
+            title=next_title,
             statement=body.statement if body.statement is not None else str(payload.get("statement") or ""),
             starter_code=body.starter_code if body.starter_code is not None else str(payload.get("starter_code") or ""),
             tests=tests,
@@ -376,7 +408,7 @@ def admin_patch_problem(
                 if body.editor_solution is not None
                 else str(payload.get("editor_solution") or "")
             ),
-            published=bool(body.published) if body.published is not None else True,
+            published=next_published,
             slug=None,
         )
         # Preserve published flag from facet if not in body.
@@ -397,8 +429,8 @@ def admin_patch_problem(
 
 @router.delete("/admin/{assertion_id}", dependencies=[Depends(require_admin), Depends(require_csrf)])
 def admin_delete_problem(assertion_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
-    """Soft-delete: unpublish + inactive assertion."""
-    _load_coding_assertion(db, assertion_id)
+    """Soft-delete: unpublish + retract assertion (kept for measurement history)."""
+    _load_coding_assertion(db, assertion_id, include_retracted=True)
     soft_delete_curated(db, assertion_id)
     db.commit()
     return {"ok": True, "id": str(assertion_id)}

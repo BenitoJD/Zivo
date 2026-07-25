@@ -272,6 +272,14 @@ def editorial_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def set_published(db: Session, assertion_id: uuid.UUID, published: bool) -> None:
+    """Flip the published flag on a coding facet.
+
+    Publishing also revives a soft-deleted (status='retracted') assertion so the
+    problem actually re-appears in public lists — otherwise the facet would read
+    published=true while the assertion stays retracted and learners see nothing.
+    Unpublishing leaves status untouched (retracted stays retracted; active stays
+    active) since hiding is about the published flag, not the lifecycle.
+    """
     row = db.execute(
         text(
             """
@@ -285,14 +293,33 @@ def set_published(db: Session, assertion_id: uuid.UUID, published: bool) -> None
     ).first()
     if not row:
         raise LookupError("Not found")
+    if published:
+        db.execute(
+            text(
+                """
+                UPDATE intel.assertion
+                SET status = 'active', retracted_at = NULL, retraction_reason = NULL
+                WHERE id = :id AND status = 'retracted'
+                """
+            ),
+            {"id": assertion_id},
+        )
 
 
 def soft_delete_curated(db: Session, assertion_id: uuid.UUID) -> None:
-    """Unpublish + mark assertion inactive (keeps measurement history)."""
+    """Unpublish + retract assertion (keeps measurement history).
+
+    Uses status='retracted' (with retracted_at) — the only CHECK-valid way to
+    hide a coding assertion. 'inactive' / 'deleted' are rejected by
+    assertion_status_valid; 'superseded' needs a superseded_by pointer we don't
+    have here. Retracted assertions stay invisible to public lists (which filter
+    status='active') while preserving any measurement history.
+    """
     db.execute(
         text(
             """
-            UPDATE intel.assertion SET status = 'inactive'
+            UPDATE intel.assertion
+            SET status = 'retracted', retracted_at = NOW(), retraction_reason = 'curator_delete'
             WHERE id = :id AND (payload->>'format') = 'qb.coding.v1'
             """
         ),

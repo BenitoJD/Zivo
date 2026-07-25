@@ -644,7 +644,14 @@ export default function WorkspaceArtifactPage({
     // Waiting for the next card with an empty pool: always poll. A "connected"
     // EventSource can hang without delivering (seen as permanent 92% "Writing
     // your next question" while /learn-queue already has current_assertion_id).
+    // Stop once the queue is terminal — document done, nothing to quiz, or
+    // reselect prompt — otherwise pool_available===0 polls forever.
+    const queueSettled =
+      Boolean(queue?.document_complete) ||
+      Boolean(queue?.no_questions_reason) ||
+      Boolean(queue?.prompt_reselect_pages);
     const waitingForNextCard =
+      !queueSettled &&
       !pinnedAssertionIdRef.current &&
       !queue?.current_assertion_id &&
       (Boolean(queue?.generation_pending) || (queue?.pool_available ?? 0) === 0);
@@ -695,6 +702,8 @@ export default function WorkspaceArtifactPage({
     queue?.generation_pending,
     queue?.pool_available,
     queue?.document_complete,
+    queue?.no_questions_reason,
+    queue?.prompt_reselect_pages,
     queue?.rag_window_ready,
   ]);
 
@@ -738,7 +747,10 @@ export default function WorkspaceArtifactPage({
     setQuestion(sanitizeMcqStem(p.question ?? p.stem ?? row.title ?? "Question"));
     setOptions(normalizeMcqOptions(p.options, p.choices));
     setCurrentConcept((p.primary_concept ?? "").trim() || null);
-    setIsMulti(Array.isArray(p.correct_indices) && p.correct_indices.length >= 2);
+    setIsMulti(
+      p.is_multi === true ||
+      (Array.isArray(p.correct_indices) && p.correct_indices.length >= 2)
+    );
     setMultiSelected([]);
     setSelected(null);
     setFeedback(null);

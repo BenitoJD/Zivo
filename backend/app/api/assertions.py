@@ -18,7 +18,6 @@ from app.services.guest_session import guest_session_for_read
 from app.services.jobs import enqueue_generate
 from app.services.mcq_dedup import (
     coerce_mcq_options,
-    sanitize_mcq_explanation,
     sanitize_mcq_stem,
 )
 from app.services.rate_limit import rate_limit_dependency
@@ -39,9 +38,20 @@ def _sanitize_assertion_payload(payload: dict | None) -> dict:
     if options:
         out["options"] = options
         out.pop("choices", None)
-    explanation = sanitize_mcq_explanation(str(out.get("explanation") or ""))
-    if explanation:
-        out["explanation"] = explanation
+    # Answer key must not leak to learners before they grade. The grade
+    # endpoint (/api/mcq/grade) is the only place that returns the verdict,
+    # correct index/indices, explanation, and per-option feedback. Here we
+    # keep only a boolean is_multi so the UI can render select-all mode
+    # without revealing how many answers are correct or which they are.
+    multi_list = out.get("correct_indices")
+    if not isinstance(multi_list, list):
+        multi_list = out["correct_index"] if isinstance(out.get("correct_index"), list) else None
+    out["is_multi"] = bool(multi_list) and len(multi_list) >= 2
+    for leaked in (
+        "correct_index", "correct_indices", "explanation", "option_feedback",
+        "answer", "answers", "quality",  # internal QA/generation metadata
+    ):
+        out.pop(leaked, None)
     return out
 
 

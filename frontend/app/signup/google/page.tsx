@@ -36,7 +36,7 @@ export default function GoogleSignupPage() {
       .then((res) => {
         if (cancelled) return;
         if (!res.pending) {
-          router.replace("/login?error=" + encodeURIComponent("Google signup expired — try again"));
+          router.replace("/login?error=" + encodeURIComponent("Google signup expired - try again"));
           return;
         }
         setEmail(res.email ?? null);
@@ -44,7 +44,7 @@ export default function GoogleSignupPage() {
       })
       .catch(() => {
         if (!cancelled) {
-          router.replace("/login?error=" + encodeURIComponent("Google signup expired — try again"));
+          router.replace("/login?error=" + encodeURIComponent("Google signup expired - try again"));
         }
       });
     return () => {

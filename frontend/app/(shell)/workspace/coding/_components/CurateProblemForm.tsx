@@ -50,7 +50,7 @@ const EMPTY: FormState = {
   concept: "",
   tags: [],
   editor_solution: "",
-  published: true,
+  published: false,
   tests: [
     { stdin: "", expected_output: "" },
     { stdin: "", expected_output: "" },
@@ -102,8 +102,17 @@ export function CurateProblemForm({
   }
 
   async function handleSave() {
-    if (!form.title.trim() || !form.statement.trim()) {
+    const title = form.title.trim();
+    if (!title || !form.statement.trim()) {
       notifications.show({ title: "Missing fields", message: "Title and statement required.", color: "terracotta" });
+      return;
+    }
+    if (form.published && title.length < 2) {
+      notifications.show({
+        title: "Title too short",
+        message: "Published problems need a title of at least 2 characters.",
+        color: "terracotta",
+      });
       return;
     }
     if (form.tests.length < 3) {
@@ -117,7 +126,7 @@ export function CurateProblemForm({
     setBusy(true);
     try {
       const body = {
-        title: form.title.trim(),
+        title,
         statement: form.statement.trim(),
         starter_code: form.starter_code,
         difficulty: form.difficulty,
@@ -134,7 +143,11 @@ export function CurateProblemForm({
       if (mode === "create") {
         const created = await actions.create(body);
         actions.invalidate();
-        notifications.show({ title: "Published", message: created.title, color: "sage" });
+        notifications.show({
+          title: form.published ? "Published" : "Draft saved",
+          message: created.title,
+          color: "sage",
+        });
         router.push(`/workspace/coding/${created.id}/edit`);
       } else if (assertionId) {
         await actions.update(assertionId, body);
