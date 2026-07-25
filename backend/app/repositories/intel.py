@@ -370,20 +370,51 @@ def get_concept_entity_by_qid(db: Session, qid: str) -> uuid.UUID | None:
     return row[0] if row else None
 
 
-def count_concept_questions(db: Session, entity_id: uuid.UUID) -> int:
-    """Active MCQ assertions linked to a concept via the 'tests' role."""
+def count_concept_questions(
+    db: Session,
+    entity_id: uuid.UUID,
+    *,
+    public_only: bool = False,
+    owner_account_id: uuid.UUID | None = None,
+) -> int:
+    """Active MCQ assertions linked to a concept via the 'tests' role.
+
+    When ``public_only`` is set, restrict to assertions whose underlying document
+    is open to everyone (account_id NULL + is_public/is_demo) or owned by
+    ``owner_account_id``. This keeps private documents' questions out of the
+    unauthenticated practice-concept listing — otherwise they'd be listed but
+    ungradeable (and leak question stems from other users' private uploads).
+    """
+    joins = ""
+    where = ""
+    params: dict[str, Any] = {
+        "entity_id": entity_id,
+        "role_id": _concept_id(db, _TESTS_ROLE_URI),
+    }
+    if public_only:
+        joins = "LEFT JOIN qb.documents d ON d.id = CAST(a.payload->>'artifact_id' AS uuid)"
+        where = (
+            " AND ("
+            "  d.id IS NULL"  # assertion not tied to a doc (e.g. seed bank)
+            "  OR d.account_id IS NULL AND COALESCE(d.meta->>'is_public', d.meta->>'is_demo') IS NOT NULL"
+            + (" OR d.account_id = :owner_id" if owner_account_id else "")
+            + ")"
+        )
+        if owner_account_id:
+            params["owner_id"] = owner_account_id
     row = db.execute(
         text(
-            """
+            f"""
             SELECT count(*)
             FROM intel.assertion_participant ap
             JOIN intel.assertion a ON a.id = ap.assertion_id
+            {joins}
             WHERE ap.entity_id = :entity_id
               AND ap.role_concept_id = :role_id
-              AND a.status = 'active'
+              AND a.status = 'active'{where}
             """
         ),
-        {"entity_id": entity_id, "role_id": _concept_id(db, _TESTS_ROLE_URI)},
+        params,
     ).first()
     return int(row[0]) if row else 0
 
@@ -393,27 +424,48 @@ def get_concept_questions(
     entity_id: uuid.UUID,
     limit: int = 20,
     offset: int = 0,
+    *,
+    public_only: bool = False,
+    owner_account_id: uuid.UUID | None = None,
 ) -> list[dict[str, Any]]:
-    """Active MCQ assertions testing a concept, newest first."""
+    """Active MCQ assertions testing a concept, newest first.
+
+    See ``count_concept_questions`` for the ``public_only`` access filter.
+    """
+    joins = ""
+    where = ""
+    params: dict[str, Any] = {
+        "entity_id": entity_id,
+        "role_id": _concept_id(db, _TESTS_ROLE_URI),
+        "limit": limit,
+        "offset": offset,
+    }
+    if public_only:
+        joins = "LEFT JOIN qb.documents d ON d.id = CAST(a.payload->>'artifact_id' AS uuid)"
+        where = (
+            " AND ("
+            "  d.id IS NULL"
+            "  OR d.account_id IS NULL AND COALESCE(d.meta->>'is_public', d.meta->>'is_demo') IS NOT NULL"
+            + (" OR d.account_id = :owner_id" if owner_account_id else "")
+            + ")"
+        )
+        if owner_account_id:
+            params["owner_id"] = owner_account_id
     rows = db.execute(
         text(
-            """
+            f"""
             SELECT a.id, a.title, a.summary, a.payload, a.status
             FROM intel.assertion_participant ap
             JOIN intel.assertion a ON a.id = ap.assertion_id
+            {joins}
             WHERE ap.entity_id = :entity_id
               AND ap.role_concept_id = :role_id
-              AND a.status = 'active'
+              AND a.status = 'active'{where}
             ORDER BY a.recorded_at DESC
             LIMIT :limit OFFSET :offset
             """
         ),
-        {
-            "entity_id": entity_id,
-            "role_id": _concept_id(db, _TESTS_ROLE_URI),
-            "limit": limit,
-            "offset": offset,
-        },
+        params,
     ).mappings().all()
     return [dict(r) for r in rows]
 

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
+from app.models import Account
 from app.repositories.intel import (
     count_concept_questions,
     get_concept_entity_by_qid,
@@ -22,7 +23,7 @@ from app.repositories.intel import (
     get_concept_relations,
 )
 from app.services import wikidata
-from app.services.auth import require_csrf_or_guest
+from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.services.guest_session import guest_session_for_read
 from app.services.practice_generation import (
     DEFAULT_MIN_QUESTIONS,
@@ -195,17 +196,29 @@ class QuestionsOut(BaseModel):
 def list_questions(
     qid: str,
     db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
     limit: int = Query(20, ge=1, le=50),
     offset: int = Query(0, ge=0),
 ) -> QuestionsOut:
-    """Active MCQs testing this concept. Omits the answer unless requested via grade."""
+    """Active MCQs testing this concept. Omits the answer unless requested via grade.
+
+    Only includes assertions whose underlying document is publicly accessible
+    (account_id NULL with is_public / is_demo, e.g. newspaper editions and demo
+    docs) or owned by the signed-in caller. Questions from private documents
+    must not appear here — they'd be listed but ungradeable (the grade endpoint
+    requires document ownership), and would leak question stems from other
+    users' private uploads.
+    """
     _ensure_practice_enabled()
     qid = qid.strip().upper()
     entity_id = get_concept_entity_by_qid(db, qid)
     if not entity_id:
         return QuestionsOut(qid=qid, question_count=0, items=[])
-    total = count_concept_questions(db, entity_id)
-    rows = get_concept_questions(db, entity_id, limit=limit, offset=offset)
+    owner_id = user.id if user else None
+    total = count_concept_questions(db, entity_id, public_only=True, owner_account_id=owner_id)
+    rows = get_concept_questions(
+        db, entity_id, limit=limit, offset=offset, public_only=True, owner_account_id=owner_id
+    )
     items: list[QuestionItem] = []
     for row in rows:
         payload = _sanitize_payload(row.get("payload") if isinstance(row.get("payload"), dict) else {})
