@@ -979,10 +979,14 @@ export function useTopicExplanationQuery(artifactId: string, topicKey: string | 
 }
 
 export function useSourcesQuery(enabled = true) {
+  const session = useSessionQuery(enabled);
+  const identity =
+    session.data?.username ??
+    (session.data && session.data.authenticated === false ? "guest" : "pending");
   return useQuery({
-    queryKey: queryKeys.sources,
+    queryKey: [...queryKeys.sources, identity],
     queryFn: () => apiGet<SourceDocument[]>("/api/sources"),
-    enabled,
+    enabled: enabled && identity !== "pending",
     refetchInterval: (query) =>
       query.state.data?.some((d) => d.status === "indexing") ? 4000 : false,
   });

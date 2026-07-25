@@ -75,20 +75,36 @@ def iso_db():
     test's. This fixture lets a test hide those competing jobs *within its own
     transaction* (restored on rollback) so it sees only its DAG — without ever
     disturbing the real jobs, since the changes are never committed.
+
+    Parked DAGs are committed on a side session (see ``_submit_parked_dag``); track
+    their ids on ``iso_db.created`` so teardown can delete them.
     """
     session = SessionLocal()
+    session.created = []  # type: ignore[attr-defined]
     try:
         yield session
     finally:
         session.rollback()
         session.close()
+        created = getattr(session, "created", [])
+        if created:
+            cleanup = SessionLocal()
+            try:
+                cleanup.execute(Job.__table__.delete().where(Job.execution_id.in_(created)))
+                cleanup.execute(
+                    EtaExecution.__table__.delete().where(EtaExecution.id.in_(created))
+                )
+                cleanup.commit()
+            finally:
+                cleanup.close()
 
 
-def _hide_competing_queued_jobs(session) -> None:
+def _hide_competing_queued_jobs(session, *, keep_execution_id=None) -> None:
     # Uncommitted: only visible inside this transaction, undone by rollback.
-    session.execute(
-        Job.__table__.update().where(Job.status == JobStatus.queued).values(status=JobStatus.cancelled)
-    )
+    stmt = Job.__table__.update().where(Job.status == JobStatus.queued)
+    if keep_execution_id is not None:
+        stmt = stmt.where(Job.execution_id != keep_execution_id)
+    session.execute(stmt.values(status=JobStatus.cancelled))
 
 
 def _node(key: str, **kw) -> EtaDagNode:
@@ -154,15 +170,55 @@ def test_execution_state_rolls_up_to_succeeded(db) -> None:
 # Dependency-gated reservation
 # --------------------------------------------------------------------------- #
 
+def _submit_parked_dag(spec: EtaDagSpec, iso_db) -> EtaExecution:
+    """Commit a DAG with far ``run_after`` so live workers will not claim it."""
+    from datetime import datetime, timedelta, timezone
+
+    far = datetime.now(timezone.utc) + timedelta(days=30)
+    parked = EtaDagSpec(
+        name=spec.name,
+        nodes=[
+            EtaDagNode(
+                key=n.key,
+                name=n.name,
+                payload=n.payload,
+                workload=n.workload,
+                priority=n.priority,
+                run_after=far,
+            )
+            for n in spec.nodes
+        ],
+        edges=list(spec.edges),
+        priority=spec.priority,
+    )
+    session = SessionLocal()
+    try:
+        execution = submit_dag(session, spec=parked)
+        iso_db.created.append(execution.id)
+        return execution
+    finally:
+        session.close()
+
+
+def _release_parked_jobs_locally(session, execution_id) -> None:
+    """Clear ``run_after`` only inside this uncommitted transaction."""
+    session.execute(
+        Job.__table__.update()
+        .where(Job.execution_id == execution_id)
+        .values(run_after=None)
+    )
+    session.flush()
+
+
 def test_reservation_skips_job_with_unsatisfied_dependency(iso_db) -> None:
     """A job whose dependency hasn't succeeded must NOT be reserved."""
-    _hide_competing_queued_jobs(iso_db)
-    execution = submit_dag(iso_db, spec=EtaDagSpec(
+    execution = _submit_parked_dag(EtaDagSpec(
         name="wtest-gating",
         nodes=[_node("a"), _node("b")],
         edges=[EtaDagEdge("a", "b")],
-    ))
-    iso_db.flush()
+    ), iso_db)
+    _hide_competing_queued_jobs(iso_db, keep_execution_id=execution.id)
+    _release_parked_jobs_locally(iso_db, execution.id)
     jobs = {j.node_key: j for j in iso_db.query(Job).filter(Job.execution_id == execution.id).all()}
 
     # 'a' has no deps → reservable.
@@ -176,13 +232,13 @@ def test_reservation_skips_job_with_unsatisfied_dependency(iso_db) -> None:
 
 
 def test_reservation_picks_dependency_after_satisfied(iso_db) -> None:
-    _hide_competing_queued_jobs(iso_db)
-    execution = submit_dag(iso_db, spec=EtaDagSpec(
+    execution = _submit_parked_dag(EtaDagSpec(
         name="wtest-gating-ok",
         nodes=[_node("a"), _node("b")],
         edges=[EtaDagEdge("a", "b")],
-    ))
-    iso_db.flush()
+    ), iso_db)
+    _hide_competing_queued_jobs(iso_db, keep_execution_id=execution.id)
+    _release_parked_jobs_locally(iso_db, execution.id)
     jobs = {j.node_key: j for j in iso_db.query(Job).filter(Job.execution_id == execution.id).all()}
 
     # Reserve 'a'

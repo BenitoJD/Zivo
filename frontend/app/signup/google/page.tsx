@@ -62,6 +62,7 @@ export default function GoogleSignupPage() {
         accept_terms: form.values.accept_terms,
       });
       setCsrfToken(res.csrf_token);
+      queryClient.clear();
       queryClient.setQueryData(queryKeys.session, res);
       notifications.show({
         title: "Account created",

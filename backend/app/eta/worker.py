@@ -124,9 +124,9 @@ def _load_job_snapshot(db: Session, job_id: str) -> tuple[str, dict, int, int, o
 
 
 def _mark_succeeded(db: Session, job_id: str, result: dict, execution_id: object) -> None:
-    db.execute(
+    result_row = db.execute(
         update(Job)
-        .where(Job.id == job_id)
+        .where(Job.id == job_id, Job.status == JobStatus.running)
         .values(
             status=JobStatus.succeeded,
             result=result,
@@ -137,6 +137,8 @@ def _mark_succeeded(db: Session, job_id: str, result: dict, execution_id: object
             updated_at=func.now(),
         )
     )
+    if result_row.rowcount == 0:
+        return
     if execution_id:
         update_execution_state_sync(db, execution_id)
 
@@ -156,9 +158,9 @@ def _mark_failed(
         status = JobStatus.queued
         run_after = datetime.now(timezone.utc) + timedelta(seconds=RETRY_DELAY_SECONDS)
 
-    db.execute(
+    result_row = db.execute(
         update(Job)
-        .where(Job.id == job_id)
+        .where(Job.id == job_id, Job.status == JobStatus.running)
         .values(
             status=status,
             error=error,
@@ -169,6 +171,8 @@ def _mark_failed(
             updated_at=func.now(),
         )
     )
+    if result_row.rowcount == 0:
+        return
     if status == JobStatus.failed:
         cancel_descendants_sync(
             db,

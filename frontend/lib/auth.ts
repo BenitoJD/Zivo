@@ -37,6 +37,10 @@ export function useSubmitAuth(mode: AuthMode) {
             };
       const res = await apiPost<AuthSession>(path, payload);
       setCsrfToken(res.csrf_token);
+      // Drop the previous identity's library / progress / admin caches. Query keys
+      // like ``sources`` are not user-scoped, so login after another account (or
+      // guest) otherwise keeps serving the old empty/full list until refresh.
+      queryClient.clear();
       queryClient.setQueryData(queryKeys.session, res);
       notifications.show({
         title: mode === "login" ? "Welcome back" : "Account created",
@@ -60,7 +64,7 @@ export function useSignOut() {
     try {
       await apiPostNoContent("/api/auth/logout", {});
       clearClientSessionState();
-      await queryClient.invalidateQueries({ queryKey: queryKeys.session });
+      queryClient.clear();
       notifications.show({
         title: "Signed out",
         message: "Your session has ended.",

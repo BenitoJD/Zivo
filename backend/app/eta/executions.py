@@ -227,13 +227,17 @@ def cancel_execution(
     if not execution:
         return None
 
+    # Cancel queued and in-flight jobs. Workers only finish a job while it is
+    # still ``running`` (see _mark_succeeded / _mark_failed), so this sticks.
     db.query(Job).filter(
         Job.execution_id == execution.id,
-        Job.status == JobStatus.queued,
+        Job.status.in_([JobStatus.queued, JobStatus.running]),
     ).update(
         {
             Job.status: JobStatus.cancelled,
             Job.error: "Execution cancelled",
+            Job.locked_by: None,
+            Job.locked_at: None,
         },
         synchronize_session=False,
     )

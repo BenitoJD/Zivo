@@ -161,9 +161,9 @@ async def _load_job_snapshot(
 async def _mark_succeeded(
     session: AsyncSession, job_id: str, result: dict, execution_id: object
 ) -> None:
-    await session.execute(
+    result_row = await session.execute(
         update(Job)
-        .where(Job.id == job_id)
+        .where(Job.id == job_id, Job.status == JobStatus.running)
         .values(
             status=JobStatus.succeeded,
             result=result,
@@ -174,6 +174,8 @@ async def _mark_succeeded(
             updated_at=func.now(),
         )
     )
+    if result_row.rowcount == 0:
+        return
     if execution_id:
         await update_execution_state_async(session, execution_id)
 
@@ -193,9 +195,9 @@ async def _mark_failed(
         status = JobStatus.queued
         run_after = datetime.now(timezone.utc) + timedelta(seconds=RETRY_DELAY_SECONDS)
 
-    await session.execute(
+    result_row = await session.execute(
         update(Job)
-        .where(Job.id == job_id)
+        .where(Job.id == job_id, Job.status == JobStatus.running)
         .values(
             status=status,
             error=error,
@@ -206,6 +208,8 @@ async def _mark_failed(
             updated_at=func.now(),
         )
     )
+    if result_row.rowcount == 0:
+        return
     if status == JobStatus.failed:
         await cancel_descendants_async(
             session,

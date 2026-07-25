@@ -176,6 +176,22 @@ def test_cancel_execution_marks_queued_jobs_cancelled(db) -> None:
     assert all(j.status == JobStatus.cancelled for j in jobs)
 
 
+def test_cancel_execution_cancels_running_jobs(db) -> None:
+    execution = submit_dag(db, spec=EtaDagSpec(
+        name="itest-cancel-running", nodes=[_node("a"), _node("b")],
+    ))
+    running = list_execution_jobs(db, execution.id)[0]
+    running.status = JobStatus.running
+    running.locked_by = "itest-worker"
+    db.commit()
+
+    cancelled = cancel_execution(db, execution.id)
+    assert cancelled.status == EtaExecutionStatus.cancelled
+    jobs = list_execution_jobs(db, execution.id)
+    assert all(j.status == JobStatus.cancelled for j in jobs)
+    assert all(j.locked_by is None for j in jobs)
+
+
 def test_cancel_unknown_execution_returns_none(db) -> None:
     assert cancel_execution(db, uuid.uuid4()) is None
 

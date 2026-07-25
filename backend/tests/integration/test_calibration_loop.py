@@ -24,9 +24,9 @@ from app.services.calibration import (
     ABILITY_PROJECTION_URI,
     DEFAULT_RATING,
     DIFFICULTY_PROJECTION_URI,
-    _latest_rating,
     record_outcome,
 )
+from app.services.calibration_engine import _latest_rating
 from app.services.question_pool import _difficulty_for_ids, _lineage_successors
 
 
@@ -231,7 +231,7 @@ def test_birth_prior_seeds_difficulty_so_edge_has_signal() -> None:
 
 
 def test_first_outcome_corrects_the_birth_prior() -> None:
-    from app.services.calibration import DIFFICULTY_PROJECTION_URI, _latest_rating, seed_item_difficulty
+    from app.services.calibration import DIFFICULTY_PROJECTION_URI, seed_item_difficulty
 
     db = SessionLocal()
     try:
