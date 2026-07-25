@@ -61,6 +61,20 @@ def doctor(_: argparse.Namespace) -> int:
     print(f"{'✓' if (VENV / 'bin' / 'python').exists() else '✗'} venv: {VENV}")
     if deps_status() != 0:
         status = 1
+    judge0_url = backend_env().get("JUDGE0_URL", "http://localhost:2358")
+    try:
+        import urllib.error
+        import urllib.request
+
+        req = urllib.request.Request(f"{judge0_url.rstrip('/')}/about", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            ok = 200 <= resp.status < 300
+    except (urllib.error.URLError, TimeoutError, OSError):
+        ok = False
+    label = "Judge0 sandbox" if ok else "Judge0 sandbox (unreachable — set JUDGE0_URL in backend/.env.local)"
+    print(f"{'✓' if ok else '✗'} {label}: {judge0_url}")
+    if not ok:
+        status = 1
     return status
 
 
