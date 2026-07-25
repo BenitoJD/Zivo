@@ -5,6 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.api.access import require_document, require_document_source
@@ -443,6 +444,20 @@ def delete_document(
         raise HTTPException(status_code=404, detail="Not found")
 
     storage_key = purge_document(db, doc)
+
+    # Clean up orphaned newspaper edition if this document was a newspaper paper.
+    meta = doc.meta or {}
+    if meta.get("ingest_kind") == "newspaper":
+        db.execute(
+            text(
+                """
+                UPDATE qb.newspaper_edition
+                SET status = 'purged', updated_at = now()
+                WHERE document_id = :doc AND status <> 'purged'
+                """
+            ),
+            {"doc": doc.id},
+        )
     db.commit()
 
     purge_ingest_tmp(document_id)
