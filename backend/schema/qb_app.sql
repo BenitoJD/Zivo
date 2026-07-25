@@ -165,3 +165,18 @@ CREATE INDEX IF NOT EXISTS ix_sd_session_guest_active
 -- SEO /learn (see qb_infra.sql + Alembic 032_seo_learn_content for full DDL)
 -- Posts FK qb.documents; authored mirror lives with infra newspaper tables.
 -- -----------------------------------------------------------------------------
+
+-- -----------------------------------------------------------------------------
+-- Cluster-wide rate limiting (Alembic 033_rate_limit_hits)
+-- Replaces the per-process in-memory counter so the limit holds across all API
+-- replicas. Fixed-minute bucket keyed by client IP; one atomic upsert per hit.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS qb.rate_limit_hit (
+  bucket      INTEGER NOT NULL,
+  client_key  VARCHAR(80) NOT NULL,
+  hit_count   INTEGER NOT NULL DEFAULT 0,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT rate_limit_hit_pk PRIMARY KEY (bucket, client_key)
+);
+
+CREATE INDEX IF NOT EXISTS rate_limit_hit_bucket_idx ON qb.rate_limit_hit (bucket);
