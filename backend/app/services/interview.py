@@ -33,68 +33,14 @@ from app.services.open_response import (
     empty_interview_scores,
     shape_interview_scores,
 )
+from app.services.session_design import plan_interview_rounds
 from app.services.token_budget import truncate_to_tokens
 
 # Resumes are short; a small token budget keeps generation fast and cheap.
 RESUME_MAX_TOKENS = 6000
 
-# ---------------------------------------------------------------- round plans
-# Each round: name, kind ("mcq" | "typed"), focus (steers the question), questions (count).
-# Structure is research-backed (IN tech hiring + FAANG rubrics); editable here.
+# Round plans live in Session Design (`plan_interview_rounds`).
 Round = dict[str, Any]
-
-ROUND_PLANS: dict[str, list[Round]] = {
-    "service": [
-        {"name": "Aptitude & Coding", "kind": "mcq", "questions": 3,
-         "focus": "quantitative aptitude, logical reasoning, and basic coding / output-prediction MCQs"},
-        {"name": "Technical", "kind": "typed", "questions": 2,
-         "focus": "core CS fundamentals and project / tech-stack questions from the resume (OOP, DBMS, SQL, the candidate's listed technologies)"},
-        {"name": "HR & Behavioural", "kind": "typed", "questions": 2,
-         "focus": "behavioural / HR questions (strengths, weaknesses, motivation, teamwork) — expect STAR-style answers"},
-    ],
-    "product": [
-        {"name": "DSA / Coding", "kind": "coding", "questions": 1,
-         "focus": "a self-contained data-structures & algorithms problem solved by reading stdin and printing to stdout (LeetCode-easy/medium)"},
-        {"name": "Technical Fundamentals", "kind": "typed", "questions": 2,
-         "focus": "deep CS fundamentals relevant to the resume (operating systems, networks, databases, language internals)"},
-        {"name": "System Design (HLD)", "kind": "typed", "questions": 1,
-         "focus": "high-level system design: functional & non-functional requirements, capacity estimation, architecture, scaling, and trade-offs (CAP, consistency, caching)"},
-        {"name": "Low-Level Design (LLD)", "kind": "typed", "questions": 1,
-         "focus": "object-oriented / low-level design: class modelling, SOLID, design patterns, concurrency, and schema"},
-        {"name": "Behavioural", "kind": "typed", "questions": 2,
-         "focus": "behavioural / culture-fit questions grounded in the candidate's projects and experience — STAR answers"},
-    ],
-    "bank": [
-        {"name": "Aptitude", "kind": "mcq", "questions": 3,
-         "focus": "quantitative aptitude, logical reasoning, and basic technical MCQs"},
-        {"name": "Technical", "kind": "typed", "questions": 2,
-         "focus": "core CS fundamentals and the candidate's tech stack (OOP, DBMS, SQL, data structures)"},
-        {"name": "Domain & Systems", "kind": "typed", "questions": 2,
-         "focus": "banking / fintech domain awareness, secure & reliable system design, transactions and consistency"},
-        {"name": "HR", "kind": "typed", "questions": 2,
-         "focus": "behavioural / HR questions — stability, integrity, teamwork, communication"},
-    ],
-    "startup": [
-        {"name": "Coding", "kind": "coding", "questions": 1,
-         "focus": "a practical, self-contained coding problem solved by reading stdin and printing to stdout"},
-        {"name": "Machine Coding / Practical", "kind": "typed", "questions": 2,
-         "focus": "building a small feature end-to-end: API/component design, edge cases, and pragmatic trade-offs under time pressure"},
-        {"name": "System Design", "kind": "typed", "questions": 1,
-         "focus": "designing a small product system: requirements, architecture, data model, and scaling the pragmatic way"},
-        {"name": "Culture Fit", "kind": "typed", "questions": 2,
-         "focus": "ownership, ambiguity, bias-to-action, and impact — grounded in the candidate's projects"},
-    ],
-    "other": [
-        {"name": "Aptitude & Coding", "kind": "mcq", "questions": 3,
-         "focus": "aptitude, reasoning, and coding / output-prediction MCQs"},
-        {"name": "Technical", "kind": "typed", "questions": 2,
-         "focus": "core CS fundamentals and the candidate's tech stack from the resume"},
-        {"name": "System Design", "kind": "typed", "questions": 1,
-         "focus": "high-level system design: requirements, architecture, scaling, and trade-offs"},
-        {"name": "Behavioural", "kind": "typed", "questions": 2,
-         "focus": "behavioural questions grounded in the candidate's projects — STAR answers"},
-    ],
-}
 
 # value -> {label, blurb} for the setup picker (single source of truth; frontend renders these).
 CATEGORY_META: dict[str, dict[str, str]] = {
@@ -233,15 +179,14 @@ def reset_interview(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
 # ---------------------------------------------------------------- orchestration
 async def start_interview(db: Session, document_id: uuid.UUID, category: str) -> dict[str, Any]:
     """Begin (or resume) an interview for the chosen company category."""
-    category = (category or "").strip().lower()
-    if category not in ROUND_PLANS:
-        category = "other"
+    planned = plan_interview_rounds(category)
+    category = planned.category
 
     existing = load_interview(db, document_id)
     if existing["status"] == "in_progress" and existing["category"] == category:
         return existing  # idempotent — don't nuke progress on a repeat start
 
-    config = [dict(r) for r in ROUND_PLANS[category]]
+    config = [dict(r) for r in planned.rounds]
     resume = _resume_text(db, document_id)
     first = await _generate_question(db, category, config[0], resume, asked=[])
     state = {"round_index": 0, "q_in_round": 0, "current": first}
@@ -545,7 +490,7 @@ _parse_json_obj = extract_json_obj
 if __name__ == "__main__":  # pragma: no cover
     # ponytail: one runnable check — no DB/LLM. Exercises the pure logic: cursor
     # advance through a plan, report math, and tolerant JSON parsing.
-    cfg = [dict(r) for r in ROUND_PLANS["product"]]
+    cfg = [dict(r) for r in plan_interview_rounds("product").rounds]
     total_q = sum(r["questions"] for r in cfg)
     assert total_q == 7, total_q  # DSA round is now 1 coding question (was 3 MCQ)
     assert cfg[0]["kind"] == "coding", cfg[0]

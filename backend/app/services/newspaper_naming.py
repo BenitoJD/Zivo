@@ -24,9 +24,46 @@ from app.services.llm_json import extract_json_obj
 logger = logging.getLogger(__name__)
 
 _IST = ZoneInfo("Asia/Kolkata")
-# Accept inventing a new brand; learning aliases needs ``_LLM_LEARN_CONFIDENCE``.
-_LLM_MIN_CONFIDENCE = 0.35
-_LLM_LEARN_CONFIDENCE = 0.8
+# Identity / alias-learn confidence gates (typed verdict below).
+LLM_MIN_CONFIDENCE = 0.35
+LLM_LEARN_CONFIDENCE = 0.8
+NAMING_GATE_VERSION = "qb.newspaper_naming.v1"
+
+
+@dataclass(frozen=True)
+class NamingConfidenceVerdict:
+    accept_identity: bool
+    learn_alias: bool
+    confidence: float
+    exact_catalog_hit: bool
+    policy_version: str = NAMING_GATE_VERSION
+
+
+def evaluate_naming_confidence(
+    confidence: float,
+    *,
+    exact_catalog_hit: bool = False,
+    min_accept: float = LLM_MIN_CONFIDENCE,
+    min_learn: float = LLM_LEARN_CONFIDENCE,
+) -> NamingConfidenceVerdict:
+    """Whether LLM identity may stand / aliases may be learned.
+
+    Exact catalog hits may accept below min_learn (soft under-score), but soft
+    / partial matches still need min_accept. Alias learning needs min_learn
+    unless the catalog hit already cleared min_accept.
+    """
+    conf = float(confidence)
+    accept = bool(exact_catalog_hit) or conf >= float(min_accept)
+    learn = conf >= float(min_learn) or (
+        bool(exact_catalog_hit) and conf >= float(min_accept)
+    )
+    return NamingConfidenceVerdict(
+        accept_identity=accept,
+        learn_alias=learn,
+        confidence=conf,
+        exact_catalog_hit=bool(exact_catalog_hit),
+    )
+
 
 # Conflict guard — tokens that clearly name a brand. Used to reject cross-maps.
 _BRAND_TOKEN_FAMILIES: dict[str, frozenset[str]] = {
@@ -358,9 +395,10 @@ def _learn_aliases(
     blob: str,
 ) -> None:
     """Cache learned mappings — high confidence + no cross-brand conflict only."""
-    if confidence < _LLM_LEARN_CONFIDENCE and not (
-        exact_catalog_hit and confidence >= _LLM_MIN_CONFIDENCE
-    ):
+    gate = evaluate_naming_confidence(
+        confidence, exact_catalog_hit=exact_catalog_hit
+    )
+    if not gate.learn_alias:
         logger.info(
             "skip alias learn paper=%s confidence=%s exact=%s",
             paper_slug,
@@ -486,7 +524,8 @@ async def _llm_identify_paper_async(
         )
         return None
     # Exact catalog match may under-score confidence; soft/partial never accepted.
-    if not exact_hit and confidence < _LLM_MIN_CONFIDENCE:
+    gate = evaluate_naming_confidence(confidence, exact_catalog_hit=exact_hit)
+    if not gate.accept_identity:
         logger.info(
             "newspaper paper-id rejected title=%r confidence=%s",
             title,
@@ -574,7 +613,7 @@ def _finish_parse(
             )
 
     identity = llm_identity
-    confidence = _LLM_LEARN_CONFIDENCE
+    confidence = LLM_LEARN_CONFIDENCE
     exact_hit = True
     if identity is not None and len(identity) == 4:
         slug, title, confidence, exact_hit = identity  # type: ignore[misc]
@@ -593,7 +632,7 @@ def _finish_parse(
             )
             identity = None
         else:
-            confidence = _LLM_LEARN_CONFIDENCE
+            confidence = LLM_LEARN_CONFIDENCE
             exact_hit = True
 
     if identity is None and allow_llm:

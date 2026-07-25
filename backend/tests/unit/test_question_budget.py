@@ -12,6 +12,7 @@ from app.services.question_budget import (
     information_floor_items,
     plan_document_budget,
     plan_page_budget,
+    speculative_page_budget,
 )
 
 
@@ -79,6 +80,13 @@ def test_density_fallback_when_no_units() -> None:
     plan = plan_page_budget(None, mode="learn", words=360, substantial_paragraphs=5)
     assert plan.n_page == 3
     assert plan.confidence == "medium"
+
+
+def test_speculative_page_budget_is_low_confidence() -> None:
+    plan = speculative_page_budget(mode="learn")
+    assert plan.n_page == 5
+    assert plan.confidence == "low"
+    assert plan.budget_version == BUDGET_VERSION
 
 
 def test_information_floor_formative() -> None:

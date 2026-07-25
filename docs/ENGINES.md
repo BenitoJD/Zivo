@@ -38,7 +38,8 @@ seo: SEO Gate (usefulness + dedupe) → writer
 ```
 
 Zero-wait refill (`REFILL_BATCH_SIZE`) stays outside Budget math. Pool low-water /
-transition ratios live in **Session Design** (`evaluate_serve_schedule`).
+transition / periodic refill live in **Session Design** (`evaluate_serve_schedule`).
+Speculative pre-triage `N_page` lives in **Question Budget** (`speculative_page_budget`).
 
 **Holy grail:** decisions live in engines; orchestration must not own if-else policy. See [AGENTS.md](../AGENTS.md#holy-grail-engines).
 
@@ -53,6 +54,8 @@ transition ratios live in **Session Design** (`evaluate_serve_schedule`).
 | Semantic chat-cache reuse threshold | Tutor Retrieval | `tutor_retrieval.decide_cache_reuse` |
 | Grade-tutor chunk top_n | Tutor Retrieval | `tutor_retrieval.grade_context_top_n` |
 | Brainstorm skips vector RAG | Tutor Retrieval | `tutor_retrieval.decide_retrieval` (`reason=brainstorm`) |
+| Brainstorm whole-source chunk sample | Tutor Retrieval | `tutor_retrieval.plan_brainstorm_sample` |
+| Chat history compress | Tutor Retrieval | `tutor_retrieval.compress_chat_history` |
 | Aspect cluster threshold / `dedupe_aspects` | Aspect Discovery | `aspect_discovery.dedupe_aspects` |
 | Heuristic fallback triage density | Aspect Discovery | `aspect_discovery.heuristic_fallback_aspects` |
 | Aspect abandon after failed cooks | Aspect Discovery | `aspect_discovery.should_abandon_aspect` |
@@ -61,6 +64,7 @@ transition ratios live in **Session Design** (`evaluate_serve_schedule`).
 | Critic sample-rate default | Quality Evaluation | `quality_evaluation.DEFAULT_CRITIC_SAMPLE_RATE` |
 | Vision empty-page glance → skip reason | Content Worthiness | `content_worthiness.evaluate_vision_glance` (vision LLM stays plumbing) |
 | Empty-page reselect streak | Content Worthiness | `content_worthiness.plan_empty_page_reselect` |
+| Newspaper naming confidence | Content Worthiness | `newspaper_naming.evaluate_naming_confidence` |
 | Practice attempt bias (+unattempted / −done) | Practice Selection | `practice_selection.score_candidate` / `pick_next(attempted_ids=…)` |
 | Coding heuristic teach-gap lesson | Open Response | `open_response.heuristic_coding_teach_gap` |
 | System-design heuristic grade | Open Response | `open_response.heuristic_system_design_grade` |
@@ -70,5 +74,7 @@ transition ratios live in **Session Design** (`evaluate_serve_schedule`).
 | Cook grounding fatality (page words + min score) | Grounding / Answerability | `grounding_answerability.evaluate_grounding_for_cook` |
 | SEO near-dupe cosine | SEO Gate | `seo_gate.NEAR_DUPE_COSINE` (`seo_dedupe` plumbing) |
 | SEO daily soft publish cap | SEO Gate | `seo_gate.evaluate_publish_cap` |
-| Pool refill / transition schedule | Session Design | `session_design.evaluate_serve_schedule` |
+| Pool refill / transition / periodic cadence | Session Design | `session_design.evaluate_serve_schedule` |
+| Interview round plans by category | Session Design | `session_design.plan_interview_rounds` |
+| Speculative pre-triage `N_page` | Question Budget | `question_budget.speculative_page_budget` |
 | Practice-hub path mastery bands | Mastery / Evidence-Stop | `mastery_evidence.label_path_mastery` |
