@@ -39,8 +39,10 @@ from app.services.quality_evaluation import (
     QualitySignals,
     critique_passes,
     decide_verdict,
+    DEFAULT_CRITIC_SAMPLE_RATE,
     judge_mcq_similarity,
     merge_critique_for_rewrite,
+    pick_best_draft,
     should_run_critic,
 )
 
@@ -742,31 +744,15 @@ PIPELINE_DRAFT_SPLIT = os.getenv("ZIVO_PIPELINE_DRAFT_SPLIT", "1").lower() not i
 # The critic is the cheapest, highest-leverage quality gate and prompt caching makes
 # the repeated page context nearly free — so critique EVERY item by default, not a
 # 25% sample. (Evaluation is the moat; don't skip it to save a few tokens.) Still an
-# env knob for cost tuning.
-CRITIC_SAMPLE_RATE = float(os.getenv("ZIVO_CRITIC_SAMPLE_RATE", "1.0"))
-
-
-def _draft_score(draft: dict[str, Any]) -> tuple[int, int, float]:
-    """Lower is better. Free (no-LLM) structural-quality signal for best-of-N
-    selection: fewest fatal flaws, then fewest total flaws, then the smallest gap
-    between the correct option's length and the others' mean (guards the
-    longest-answer give-away)."""
-    flaws = run_heuristic_checks(draft)
-    fatal = sum(1 for f in flaws if f.get("code") in FATAL_FLAW_CODES)
-    options = [str(o) for o in (draft.get("options") or [])]
-    gap = 0.0
-    try:
-        ci = int(draft.get("correct_index"))
-        others = [len(o) for i, o in enumerate(options) if i != ci]
-        if others:
-            gap = abs(len(options[ci]) - sum(others) / len(others))
-    except (TypeError, ValueError, IndexError):
-        gap = 0.0
-    return (fatal, len(flaws), gap)
+# env knob for cost tuning; default owned by Quality Evaluation.
+CRITIC_SAMPLE_RATE = float(
+    os.getenv("ZIVO_CRITIC_SAMPLE_RATE", str(DEFAULT_CRITIC_SAMPLE_RATE))
+)
 
 
 def _select_best_draft(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
-    return min(candidates, key=_draft_score) if candidates else None
+    """Best-of-N: Quality Evaluation owns the structural rank."""
+    return pick_best_draft(candidates)
 
 
 def _generate_batch_drafts(
@@ -883,7 +869,7 @@ def _enrich_heuristics_with_engines(
     page_text: str,
 ) -> list[dict[str, Any]]:
     """Compose Grounding + Distractor engines onto heuristic flaws (all cook paths)."""
-    from app.services.grounding_answerability import evaluate_grounding
+    from app.services.grounding_answerability import evaluate_grounding_for_cook
     from app.services.misconception_distractor import evaluate_distractors
 
     flaws = list(heuristic_flaws)
@@ -894,19 +880,19 @@ def _enrich_heuristics_with_engines(
     correct_texts = [
         options[i] for i in correct_idx if isinstance(i, int) and 0 <= i < len(options)
     ]
-    ground = evaluate_grounding(
+    ground = evaluate_grounding_for_cook(
         stem=str(draft.get("question") or draft.get("stem") or ""),
         correct_texts=correct_texts,
         page_text=page_text,
-        min_score=0.02,
     )
-    # Only fatal-not_grounded when the page has enough text to judge; thin excerpts
-    # (and unit fixtures) stay advisory so cook yield / rewrite loops stay stable.
-    page_words = len((page_text or "").split())
-    if page_words >= 20 and not ground.grounded and ground.score < 0.02:
-        if not any(f.get("code") == "not_grounded" for f in flaws):
+    if ground.fatal and ground.flaw_codes:
+        code = ground.flaw_codes[0]
+        if not any(f.get("code") == code for f in flaws):
             flaws.append(
-                {"code": "not_grounded", "detail": f"grounding_score={ground.score:.3f}"}
+                {
+                    "code": code,
+                    "detail": ground.details or f"grounding_score={ground.score:.3f}",
+                }
             )
     distract = evaluate_distractors(
         options,

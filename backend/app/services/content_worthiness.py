@@ -17,6 +17,11 @@ from typing import Literal
 WORTH_VERSION = "qb.worth.v1"
 DEFAULT_WORTH_POLICY = "worth_v1"
 
+# Consecutive blank/empty pages before prompting the learner to reselect pages.
+import os as _os
+
+EMPTY_PAGE_RESELECT_STREAK = int(_os.getenv("ZIVO_EMPTY_PAGE_RESELECT_STREAK", "5"))
+
 WorthReason = Literal[
     "ok",
     "non_content",
@@ -146,4 +151,47 @@ def evaluate_vision_glance(
         "empty_vision_blank",
         policy=pol,
         details=detail or "Vision glance: no useful study content.",
+    )
+
+
+@dataclass(frozen=True)
+class EmptyPageReselectVerdict:
+    prompt_reselect: bool
+    streak: int
+    reason: str
+    policy: str = DEFAULT_WORTH_POLICY
+    policy_version: str = WORTH_VERSION
+
+
+def plan_empty_page_reselect(
+    *,
+    prior_streak: int,
+    vision_usable: bool,
+    already_prompted: bool = False,
+    prior_reason: str | None = None,
+    streak_threshold: int = EMPTY_PAGE_RESELECT_STREAK,
+    policy: str | None = None,
+) -> EmptyPageReselectVerdict:
+    """Whether blank-page streak / vision-usable should prompt page reselect."""
+    pol = normalize_policy(policy)
+    streak = max(0, int(prior_streak)) + 1
+    if vision_usable:
+        return EmptyPageReselectVerdict(
+            prompt_reselect=True,
+            streak=streak,
+            reason="unreadable_content",
+            policy=pol,
+        )
+    if streak >= max(1, int(streak_threshold)) or already_prompted:
+        return EmptyPageReselectVerdict(
+            prompt_reselect=True,
+            streak=streak,
+            reason=(prior_reason or "empty_pages_streak"),
+            policy=pol,
+        )
+    return EmptyPageReselectVerdict(
+        prompt_reselect=False,
+        streak=streak,
+        reason="",
+        policy=pol,
     )

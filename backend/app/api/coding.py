@@ -768,6 +768,7 @@ async def submit_problem(
         passed=passed,
         total=total,
         cases=cases_out,
+        subject_entity_id=subject_entity_id,
     )
 
     return {

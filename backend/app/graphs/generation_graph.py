@@ -168,6 +168,13 @@ def _clone_reusable_mcqs(
     start_sequence: int,
     budget: int,
 ) -> int:
+    from app.services.quality_evaluation import (
+        QualitySignals,
+        decide_verdict,
+        has_fatal_heuristic_flaws,
+        run_heuristic_checks,
+    )
+
     reusable = _reusable_mcq_payloads(
         db,
         page_hash=page_hash,
@@ -184,6 +191,21 @@ def _clone_reusable_mcqs(
     asked_keys: list[str] = []
     payloads: list[tuple[dict[str, Any], int]] = []
     for target, template in zip(targets, reusable):
+        # Re-attest via Quality Evaluation before persist (holy grail: reuse is not a bypass).
+        draft = {
+            "question": template.get("question") or template.get("stem"),
+            "options": template.get("options") or [],
+            "correct_index": template.get("correct_index"),
+            "correct_indices": template.get("correct_indices"),
+        }
+        h_flaws = run_heuristic_checks(draft)
+        if has_fatal_heuristic_flaws(h_flaws):
+            continue
+        verdict = decide_verdict(
+            QualitySignals(heuristic_flaws=h_flaws, too_similar=False)
+        )
+        if verdict.decision == "fail":
+            continue
         sequence += 1
         if sequence > budget:
             break
@@ -196,6 +218,11 @@ def _clone_reusable_mcqs(
         }
         payload["page_content_hash"] = page_hash
         payload["reused_from_shared"] = True
+        payload["quality"] = {
+            "decision": verdict.decision,
+            "policy_version": verdict.policy_version,
+            "reuse_attested": True,
+        }
         payloads.append((payload, sequence))
         if target and target.get("key"):
             asked_keys.append(str(target["key"]))

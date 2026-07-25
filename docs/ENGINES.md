@@ -19,10 +19,10 @@ Index of durable policy engines (ADR 0004 seams). Budget plans N; Quality decide
 | 11 | Spaced Revisit | [SPACED_REVISIT_ENGINE.md](SPACED_REVISIT_ENGINE.md) | `spaced_revisit.py` | grade → ease/reps + due map → Selection prefer | yes | DONE |
 | 12 | Session Design | [SESSION_DESIGN_ENGINE.md](SESSION_DESIGN_ENGINE.md) | `session_design.py` | learn-queue `session_break` | yes | DONE |
 | 13 | Item Health / Bank Hygiene | [ITEM_HEALTH_ENGINE.md](ITEM_HEALTH_ENGINE.md) | `item_health.py` | retirement ETA (flag + retire) | yes | DONE |
-| 14 | Practice Selection | (sibling of Adaptive Selection) | `practice_selection.py` | coding + system-design next | yes | DONE |
+| 14 | Practice Selection | (sibling of Adaptive Selection) | `practice_selection.py` | coding + system-design next (attempt bias on all next-pick paths) | yes | DONE |
 | 15 | Tutor Retrieval | (this index) | `tutor_retrieval.py` | chat gate + RAG window + chunk rank | yes | DONE |
-| 16 | SEO Gate | (this index) | `seo_gate.py` | seo cook usefulness + dedupe | yes | DONE |
-| 17 | Open Response Measurement | (this index) | `open_response.py` | mains grade shape + interview rubric/report | yes | DONE |
+| 16 | SEO Gate | (this index) | `seo_gate.py` | seo cook usefulness + dedupe (`NEAR_DUPE_COSINE`) | yes | DONE |
+| 17 | Open Response Measurement | (this index) | `open_response.py` | mains + interview + coding teach + SD heuristic + coding bank gate | yes | DONE |
 | 18 | Aspect Discovery | (this index) | `aspect_discovery.py` | triage pick + speculative + next-unasked | yes | DONE |
 
 ## Pipeline sketch
@@ -37,7 +37,8 @@ practice hubs: Practice Selection (overlap×difficulty)
 seo: SEO Gate (usefulness + dedupe) → writer
 ```
 
-Zero-wait refill (`REFILL_BATCH_SIZE`) stays outside Budget and Selection math.
+Zero-wait refill (`REFILL_BATCH_SIZE`) stays outside Budget math. Pool low-water /
+transition ratios live in **Session Design** (`evaluate_serve_schedule`).
 
 **Holy grail:** decisions live in engines; orchestration must not own if-else policy. See [AGENTS.md](../AGENTS.md#holy-grail-engines).
 
@@ -49,9 +50,25 @@ Zero-wait refill (`REFILL_BATCH_SIZE`) stays outside Budget and Selection math.
 | RAG window size / look-ahead | Tutor Retrieval | `tutor_retrieval.plan_rag_window` |
 | Cross-encoder rank vs truncate | Tutor Retrieval | `tutor_retrieval.finish_ranked_chunks` (calls `rerank` plumbing) |
 | Learn pin `current_page` before RAG window | Tutor Retrieval | `tutor_retrieval.decide_page_pin` |
+| Semantic chat-cache reuse threshold | Tutor Retrieval | `tutor_retrieval.decide_cache_reuse` |
+| Grade-tutor chunk top_n | Tutor Retrieval | `tutor_retrieval.grade_context_top_n` |
+| Brainstorm skips vector RAG | Tutor Retrieval | `tutor_retrieval.decide_retrieval` (`reason=brainstorm`) |
 | Aspect cluster threshold / `dedupe_aspects` | Aspect Discovery | `aspect_discovery.dedupe_aspects` |
+| Heuristic fallback triage density | Aspect Discovery | `aspect_discovery.heuristic_fallback_aspects` |
+| Aspect abandon after failed cooks | Aspect Discovery | `aspect_discovery.should_abandon_aspect` |
 | MCQ stem similarity threshold | Quality Evaluation | `quality_evaluation.judge_mcq_similarity` |
+| Best-of-N draft structural pick | Quality Evaluation | `quality_evaluation.pick_best_draft` |
+| Critic sample-rate default | Quality Evaluation | `quality_evaluation.DEFAULT_CRITIC_SAMPLE_RATE` |
 | Vision empty-page glance → skip reason | Content Worthiness | `content_worthiness.evaluate_vision_glance` (vision LLM stays plumbing) |
+| Empty-page reselect streak | Content Worthiness | `content_worthiness.plan_empty_page_reselect` |
 | Practice attempt bias (+unattempted / −done) | Practice Selection | `practice_selection.score_candidate` / `pick_next(attempted_ids=…)` |
 | Coding heuristic teach-gap lesson | Open Response | `open_response.heuristic_coding_teach_gap` |
+| System-design heuristic grade | Open Response | `open_response.heuristic_system_design_grade` |
+| Coding bank structural persist gate | Open Response | `open_response.evaluate_coding_bank_item` |
 | Cross-doc MCQ reuse scope (`off`/`demo`/`all`) | Question Graph | `question_graph.plan_mcq_reuse` |
+| Focus / mastery diversify / spaced prefer | Adaptive Selection | `adaptive_selection.narrow_serve_pool` (via `select_next`) |
+| Cook grounding fatality (page words + min score) | Grounding / Answerability | `grounding_answerability.evaluate_grounding_for_cook` |
+| SEO near-dupe cosine | SEO Gate | `seo_gate.NEAR_DUPE_COSINE` (`seo_dedupe` plumbing) |
+| SEO daily soft publish cap | SEO Gate | `seo_gate.evaluate_publish_cap` |
+| Pool refill / transition schedule | Session Design | `session_design.evaluate_serve_schedule` |
+| Practice-hub path mastery bands | Mastery / Evidence-Stop | `mastery_evidence.label_path_mastery` |

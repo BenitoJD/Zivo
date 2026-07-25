@@ -21,6 +21,14 @@ from app.services.question_budget import (
     plan_page_budget,
     units_from_aspect_dicts,
 )
+from app.services.aspect_discovery import MAX_ASPECT_ATTEMPTS
+from app.services.content_worthiness import EMPTY_PAGE_RESELECT_STREAK
+from app.services.session_design import (
+    EAGER_TRIAGE_LOOKAHEAD,
+    READY_LOW_WATER,
+    TRANSITION_GENERATION_RATIO,
+    TRANSITION_PREFETCH_RATIO,
+)
 
 INITIAL_BATCH_SIZE = 5
 # First job writes ONE question so the learner can start immediately. Critic +
@@ -37,35 +45,8 @@ REFILL_BATCH_SIZE = 5
 # multi-hour job instead of small rolling batches.
 MAX_GENERATE_BATCH_SIZE = REFILL_BATCH_SIZE
 REFILL_AFTER_ANSWERED = 2
-# Proactive low-water mark: keep refilling so the ready buffer never silently
-# drains to empty before the next question is needed. The moment the count of
-# ready, unanswered questions dips below this, a refill batch is staged — instead
-# of only topping up every REFILL_AFTER_ANSWERED answers or once fully drained.
-# Jobs law: You move. Questions are already there. Always.
-# Sized ABOVE one in-flight refill (~5) so a fast learner cannot empty the pool
-# while the next batch's draft+gates are still cooking.
-# Low-water / refill decide *when* to enqueue the next pipe chunk; N_page decides
-# *when cook stops*.
-READY_LOW_WATER = int(os.getenv("ZIVO_READY_LOW_WATER", "8"))
-# Start next-page triage/RAG/prep before the current page is nearly done so the
-# page turn never cold-starts. Was 0.70 — too late for fast learners.
-TRANSITION_PREFETCH_RATIO = float(os.getenv("ZIVO_TRANSITION_PREFETCH_RATIO", "0.45"))
-# Begin generating the next page's first batch even earlier than full transition
-# prep, once the learner has shown real engagement on the current page.
-TRANSITION_GENERATION_RATIO = float(os.getenv("ZIVO_TRANSITION_GENERATION_RATIO", "0.15"))
-# Eagerly triage the current page + this many pages ahead at init, so the document
-# is understood before the reader arrives. Triage only (cheap, ~1 call/page);
-# batches stay on-demand + next-page prefetch. Wider than 3 so long docs stay
-# ahead of the earlier transition window without speculative MCQ generation.
-EAGER_TRIAGE_LOOKAHEAD = int(os.getenv("ZIVO_EAGER_TRIAGE_LOOKAHEAD", "5"))
-# Empty-text pages after vision glance: this many quiet blanks in a row → ask the
-# learner to reselect pages (and stop burning more vision calls until they do).
-EMPTY_PAGE_RESELECT_STREAK = int(os.getenv("ZIVO_EMPTY_PAGE_RESELECT_STREAK", "5"))
-# After this many failed generation attempts, an aspect is abandoned (marked asked)
-# so a permanently un-generatable aspect — every draft rejected by the verifier,
-# critic, or dedup — can't block the page from ever completing (which would strand
-# the learner once every producible question is answered).
-MAX_ASPECT_ATTEMPTS = int(os.getenv("ZIVO_MAX_ASPECT_ATTEMPTS", "3"))
+# Schedule / abandon / reselect thresholds: re-exported from engines (session_design,
+# aspect_discovery, content_worthiness). Keep names for ETA / jobs imports.
 # A generate job left in 'running' after a worker crash blocks recovery until reclaimed.
 # Must sit well above p99 generation wall-clock — reclaiming a live job duplicates LLM
 # work and races assertion writes. Workers do not heartbeat locked_at during the handler.
@@ -245,24 +226,22 @@ def note_empty_page_triage(
     vision_usable: bool,
 ) -> dict[str, Any]:
     """Bump blank streak / set reselect prompt after an empty-text page triage."""
+    from app.services.content_worthiness import plan_empty_page_reselect
+
     doc = db.get(Document, document_id)
     if not doc:
         return {}
     progress = get_progress(doc)
-    if vision_usable:
-        patch: dict[str, Any] = {
-            "empty_page_streak": int(progress.get("empty_page_streak") or 0) + 1,
-            "prompt_reselect_pages": True,
-            "prompt_reselect_reason": "unreadable_content",
-        }
-    else:
-        streak = int(progress.get("empty_page_streak") or 0) + 1
-        patch = {"empty_page_streak": streak}
-        if streak >= EMPTY_PAGE_RESELECT_STREAK or progress.get("prompt_reselect_pages"):
-            patch["prompt_reselect_pages"] = True
-            patch["prompt_reselect_reason"] = (
-                progress.get("prompt_reselect_reason") or "empty_pages_streak"
-            )
+    verdict = plan_empty_page_reselect(
+        prior_streak=int(progress.get("empty_page_streak") or 0),
+        vision_usable=vision_usable,
+        already_prompted=bool(progress.get("prompt_reselect_pages")),
+        prior_reason=progress.get("prompt_reselect_reason"),
+    )
+    patch: dict[str, Any] = {"empty_page_streak": verdict.streak}
+    if verdict.prompt_reselect:
+        patch["prompt_reselect_pages"] = True
+        patch["prompt_reselect_reason"] = verdict.reason
     save_progress(db, doc, patch)
     return patch
 
@@ -449,19 +428,31 @@ def _concept_keys_for_ids(
     db: Session, ids: list[str]
 ) -> dict[str, str | None]:
     """Map assertion id -> primary_concept_key for the given ids."""
+    keys, _labels = _concept_signals_for_ids(db, ids)
+    return keys
+
+
+def _concept_signals_for_ids(
+    db: Session, ids: list[str]
+) -> tuple[dict[str, str | None], dict[str, str | None]]:
+    """Map assertion id -> (primary_concept_key, primary_concept label)."""
     if not ids:
-        return {}
+        return {}, {}
     rows = db.execute(
         text(
             """
-            SELECT id::text AS id, payload->>'primary_concept_key' AS key
+            SELECT id::text AS id,
+                   payload->>'primary_concept_key' AS key,
+                   payload->>'primary_concept' AS label
             FROM intel.assertion
             WHERE id::text = ANY(:ids)
             """
         ),
         {"ids": ids},
     ).mappings().all()
-    return {r["id"]: r["key"] for r in rows}
+    keys = {r["id"]: r["key"] for r in rows}
+    labels = {r["id"]: r["label"] for r in rows}
+    return keys, labels
 
 
 def _difficulty_for_ids(db: Session, ids: list[str]) -> dict[str, float]:
@@ -539,6 +530,7 @@ def select_next_assertion(
 
     See docs/ADAPTIVE_SELECTION_ENGINE.md. Classic (``sequence``) returns the first
     unanswered id. Adaptive policies score the bank; all degrade safely to sequence.
+    Orchestration loads signals; focus / mastery / spaced live in ``select_next``.
     """
     page = int(progress.get("current_page") or 1)
     answered = {str(x) for x in progress.get("answered_ids") or []}
@@ -546,38 +538,6 @@ def select_next_assertion(
     candidates = [rid for rid in rows if rid not in answered]
     if not candidates:
         return None
-
-    # Progress "Study this" — temporarily prefer unanswered items on that concept.
-    focus = str(progress.get("focus_concept") or "").strip()
-    if focus:
-        preferred = _candidates_matching_concept_label(db, candidates, focus)
-        if preferred:
-            candidates = preferred
-
-    # Mastery / Evidence-Stop: when stop fires, diversify away from last concept.
-    if progress.get("mastery_stop"):
-        last = progress.get("last_confirmed_answer") or {}
-        stop_concept = str(last.get("concept_key") or "").strip()
-        if stop_concept:
-            concept_by = _concept_keys_for_ids(db, candidates)
-            diversified = [
-                rid for rid in candidates if concept_by.get(rid) != stop_concept
-            ]
-            if diversified:
-                candidates = diversified
-
-    # Spaced Revisit: prefer concepts with soonest due hours (consume due map).
-    due_map = progress.get("concept_revisit_hours") or {}
-    if isinstance(due_map, dict) and due_map and not focus:
-        due_sorted = sorted(
-            ((str(k), float(v)) for k, v in due_map.items() if k),
-            key=lambda kv: kv[1],
-        )
-        for due_key, _hours in due_sorted[:3]:
-            preferred = _candidates_matching_concept_label(db, candidates, due_key)
-            if preferred:
-                candidates = preferred
-                break
 
     from app.config import get_settings
     from app.services.adaptive_selection import (
@@ -593,29 +553,27 @@ def select_next_assertion(
         or (get_settings().selection_policy or "sequence")
     )
     serve_mode = "test" if str(progress.get("serve_mode") or "").lower() == "test" else "learn"
-    if policy == "sequence" or len(candidates) == 1:
-        return candidates[0]
-
     state = build_learner_state(progress)
+
     difficulty_by_id: dict[str, float] = {}
     lineage_by_id: dict[str, str] = {}
     concept_by_id: dict[str, str | None] = {}
+    concept_label_by_id: dict[str, str | None] = {}
     exposure_by_id: dict[str, int] = {}
 
-    if policy in ("adaptive_v1", "difficulty_edge", "concept_reinforce"):
-        concept_by_id = _concept_keys_for_ids(db, candidates)
+    # Always load concept key/label when serve hygiene or adaptive scoring may need them.
+    needs_concepts = (
+        bool(state.focus_concept)
+        or state.mastery_stop
+        or bool(state.concept_revisit_hours)
+        or policy in ("adaptive_v1", "difficulty_edge", "concept_reinforce")
+    )
+    if needs_concepts:
+        concept_by_id, concept_label_by_id = _concept_signals_for_ids(db, candidates)
     if policy in ("adaptive_v1", "difficulty_edge"):
         difficulty_by_id = _difficulty_for_ids(db, candidates)
         if state.last_assertion_id:
             lineage_by_id = _lineage_successors(db, state.last_assertion_id, candidates)
-        # Cold lineage on legacy band policy: miss → reinforce same concept.
-        if (
-            policy == "difficulty_edge"
-            and state.last_correct is False
-            and not lineage_by_id
-            and state.last_concept_key
-        ):
-            policy = "concept_reinforce"
         if policy == "adaptive_v1":
             exposure_by_id = _exposure_for_ids(db, candidates)
 
@@ -625,6 +583,7 @@ def select_next_assertion(
         policy=policy,
         mode=serve_mode,  # type: ignore[arg-type]
         concept_by_id=concept_by_id,
+        concept_label_by_id=concept_label_by_id,
         difficulty_by_id=difficulty_by_id,
         lineage_by_id=lineage_by_id,
         exposure_by_id=exposure_by_id,
@@ -638,25 +597,15 @@ def _candidates_matching_concept_label(
     """Keep candidates whose primary_concept / key matches the Progress focus label."""
     if not candidate_ids or not focus:
         return []
-    needle = focus.strip().lower()
-    rows = db.execute(
-        text(
-            """
-            SELECT id::text AS id,
-                   lower(COALESCE(payload->>'primary_concept', '')) AS label,
-                   lower(COALESCE(payload->>'primary_concept_key', '')) AS key
-            FROM intel.assertion
-            WHERE id::text = ANY(:ids)
-            """
-        ),
-        {"ids": candidate_ids},
-    ).mappings().all()
-    matched = {
-        r["id"]
-        for r in rows
-        if needle in (r["label"] or "") or needle in (r["key"] or "") or (r["label"] or "") == needle
-    }
-    return [cid for cid in candidate_ids if cid in matched]
+    keys, labels = _concept_signals_for_ids(db, candidate_ids)
+    from app.services.adaptive_selection import concept_text_matches
+
+    needle = focus.strip()
+    return [
+        cid
+        for cid in candidate_ids
+        if concept_text_matches(needle, key=keys.get(cid), label=labels.get(cid))
+    ]
 
 
 def set_focus_concept(db: Session, doc: Document, concept: str | None) -> None:

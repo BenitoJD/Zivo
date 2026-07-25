@@ -73,6 +73,7 @@ def pick_next_coding_id(
     weak_concepts: list[str],
     tags: list[str],
     concept: str,
+    attempted_ids: list[str] | None = None,
 ) -> uuid.UUID | None:
     """Prefer published problems overlapping weak tags/concept (Practice Selection Engine)."""
     from app.services.practice_selection import PracticeCandidate, pick_next
@@ -103,8 +104,33 @@ def pick_next_coding_id(
                 difficulty=str(r["difficulty"] or "") or None,
             )
         )
-    pick = pick_next(cands, focus, exclude_id=str(exclude))
+    pick = pick_next(
+        cands,
+        focus,
+        exclude_id=str(exclude),
+        attempted_ids=attempted_ids,
+    )
     return uuid.UUID(pick.id) if pick.id else None
+
+
+def _solved_coding_ids(db: Session, subject_entity_id: uuid.UUID | None) -> list[str]:
+    if subject_entity_id is None:
+        return []
+    rows = db.execute(
+        text(
+            """
+            SELECT DISTINCT source_assertion_id::text AS id
+            FROM intel.measurement
+            WHERE subject_entity_id = :entity
+              AND source_assertion_id IS NOT NULL
+              AND metric_concept_id = (
+                SELECT id FROM intel.concept WHERE uri = '/vocab/metric/coding.passed'
+              )
+            """
+        ),
+        {"entity": subject_entity_id},
+    ).mappings().all()
+    return [str(r["id"]) for r in rows if r.get("id")]
 
 
 async def teach_after_submit(
@@ -117,6 +143,7 @@ async def teach_after_submit(
     passed: int,
     total: int,
     cases: list[dict[str, Any]],
+    subject_entity_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """LLM teach-gap with heuristic fallback. Same lesson shape as System Design."""
     import hashlib
@@ -215,6 +242,7 @@ async def teach_after_submit(
         weak_concepts=graded["weak_concepts"],
         tags=tags,
         concept=concept,
+        attempted_ids=_solved_coding_ids(db, subject_entity_id),
     )
     ref = str(payload.get("editor_solution") or "").strip()
     return {

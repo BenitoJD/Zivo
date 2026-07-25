@@ -396,47 +396,19 @@ def _non_content_result(
 
 
 def _fallback_triage(page_text: str, page_number: int, *, mode: Mode = "learn") -> dict[str, Any]:
-    # Density prior (~one idea / 120 words) with substantial paragraphs as labels —
-    # never raw ``\\n\\n`` count. Planner owns N after units are built.
-    _MIN_SUBSTANTIAL_WORDS = 12
+    # Density prior via Aspect Discovery; planner owns N after units are built.
+    from app.services.aspect_discovery import (
+        FALLBACK_MIN_SUBSTANTIAL_WORDS,
+        heuristic_fallback_aspects,
+    )
+
+    pick = heuristic_fallback_aspects(page_text, page_number)
+    aspects = list(pick.aspects)
     words = len(page_text.split()) if page_text else 0
     paragraphs = [p.strip() for p in page_text.split("\n\n") if p.strip()] if page_text else []
-    substantial = [p for p in paragraphs if len(p.split()) >= _MIN_SUBSTANTIAL_WORDS]
-    word_estimate = words // 120
-    if words > 0 and word_estimate == 0:
-        word_estimate = 1
-    if substantial:
-        aspect_count = min(len(substantial), word_estimate)
-    elif words > 0:
-        aspect_count = word_estimate
-    else:
-        aspect_count = 0
-    labels = substantial if substantial else paragraphs
-    aspects = []
-    for i, para in enumerate(labels[:aspect_count]):
-        from app.services.mcq_dedup import short_concept_label
-
-        label = short_concept_label(para.replace("\n", " "), max_chars=72)
-        aspects.append(
-            {
-                "key": f"page-{page_number}-p{i + 1}",
-                "label": label,
-                "centrality": "central",
-                "asked": False,
-                "answered": False,
-            }
-        )
-    # Some text but no usable labels — one consolidated aspect rather than zero.
-    if not aspects and words > 0:
-        aspects = [
-            {
-                "key": f"page-{page_number}-main",
-                "label": "Main ideas on this page",
-                "centrality": "central",
-                "asked": False,
-                "answered": False,
-            }
-        ]
+    substantial = [
+        p for p in paragraphs if len(p.split()) >= FALLBACK_MIN_SUBSTANTIAL_WORDS
+    ]
     # No testable text at all → genuinely non-content. Must be marked so the page
     # completes (is_page_complete treats 0 generated + not non_content as "not done"
     # and would otherwise strand the learner here with nothing to answer).

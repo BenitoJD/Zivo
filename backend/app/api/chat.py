@@ -749,7 +749,10 @@ async def grade_mcq(
             prior_messages=[],
         )
         chunks = retrieved.get("retrieved_chunks") or []
-        context = "\n\n".join(c["text"] for c in chunks[:4])
+        from app.services.tutor_retrieval import grade_context_top_n
+
+        top_n = grade_context_top_n()
+        context = "\n\n".join(c["text"] for c in chunks[:top_n])
 
     result = await grade_mcq_answer(
         db,

@@ -181,7 +181,7 @@ All O(n) over page candidates. No generation, no LLM.
 |-------|------|
 | `calibration.py` | Online Elo ability + item difficulty |
 | `selection.py` (legacy) | `sequence` / `concept_reinforce` / `difficulty_edge` |
-| `question_pool.select_next_assertion` | Loads DB signals; choose step of learn-queue |
+| `question_pool.select_next_assertion` | Loads DB signals; choose step of learn-queue (no focus/mastery/spaced if-else) |
 | Lineage edges at cook | `follow_up_after_miss` / `harder_than` |
 | Study mode Adaptive/Classic | Persists `selection_policy` on progress |
 
@@ -190,9 +190,11 @@ All O(n) over page candidates. No generation, no LLM.
 | Artifact | Purpose |
 |----------|---------|
 | `docs/ADAPTIVE_SELECTION_ENGINE.md` | Durable research + architecture |
-| `app/services/adaptive_selection.py` | Pure `select_next` + scores + policies |
+| `app/services/adaptive_selection.py` | Pure `select_next` + scores + policies + `narrow_serve_pool` |
 | Wire learn-queue / `next_assertion_id` | Single decision path |
 | Unit tests on scoring / degrade / lineage | Lock the policy |
+
+Serve hygiene (focus concept, mastery diversify, spaced due prefer, difficulty_edge→reinforce) lives in `select_next` / `LearnerState`, not in `question_pool`.
 
 ### 6.3 Hook points
 

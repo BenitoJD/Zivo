@@ -8,7 +8,7 @@ from typing import Any, TypedDict
 from sqlalchemy.orm import Session
 
 from app.services.chat_retrieval import retrieve_document_chunks
-from app.services.retrieval_gate import needs_retrieval
+from app.services.tutor_retrieval import decide_retrieval
 from app.services.token_budget import CHAT_INPUT_MAX_TOKENS, truncate_to_tokens
 
 _CHAT_CONTEXT_MAX_TOKENS = CHAT_INPUT_MAX_TOKENS
@@ -116,27 +116,26 @@ def run_retrieve(
 ) -> dict[str, Any]:
     # Adaptive retrieval gate: short follow-ups / acknowledgements in an
     # ongoing conversation with no pinned page scope get no new retrieval.
-    # We return empty citations/context and pass history through unchanged,
-    # so the LLM continues from prior context without a pgvector query or
-    # ~1,600 tokens of redundant chunks.
-    if not needs_retrieval(
+    # Brainstorm mode uses kept-ideas context instead of vector RAG.
+    gate = decide_retrieval(
         query,
         scope=scope,
         has_history=bool(prior_messages),
-    ):
+    )
+    if not gate.retrieve:
+        if gate.reason == "brainstorm" and document_ids:
+            return {
+                "retrieved_chunks": [],
+                "citations": [],
+                "messages": list(prior_messages),
+                "context_block": _brainstorm_context(db, document_ids[0]),
+                "context_note": "",
+            }
         return {
             "retrieved_chunks": [],
             "citations": [],
             "messages": list(prior_messages),
             "context_block": "",
-            "context_note": "",
-        }
-    if str(scope.get("mode") or "").lower() == "brainstorm" and document_ids:
-        return {
-            "retrieved_chunks": [],
-            "citations": [],
-            "messages": list(prior_messages),
-            "context_block": _brainstorm_context(db, document_ids[0]),
             "context_note": "",
         }
     state: ChatState = {

@@ -463,6 +463,8 @@ def _concept_scores_for_subject(
 def build_path(
     db: Session, account_id: uuid.UUID | None, guest_id: str | None
 ) -> dict[str, Any]:
+    from app.services.mastery_evidence import label_path_mastery
+
     concepts = list_concepts(db)
     samples = _concept_scores_for_subject(db, account_id, guest_id)
     items = []
@@ -470,12 +472,9 @@ def build_path(
     for c in concepts:
         key = c["key"]
         hist = samples.get(key) or []
-        if not hist:
-            state = "not_started"
-            mastery = None
-        else:
-            mastery = round(sum(hist[:5]) / min(5, len(hist)), 2)
-            state = "strong" if mastery >= 0.72 else "in_progress" if mastery >= 0.35 else "needs_work"
+        labeled = label_path_mastery(hist)
+        state = labeled.state
+        mastery = labeled.mastery
         if focus_key is None and state in ("not_started", "needs_work", "in_progress"):
             if state != "strong":
                 focus_key = key
@@ -734,47 +733,10 @@ def _clamp_score(v: Any) -> int:
 
 
 def _heuristic_grade(design: dict[str, Any], concept_keys: list[str]) -> dict[str, Any]:
-    text_blob = " ".join(
-        str(design.get(k) or "") for k in ("requirements", "apis", "data", "scale")
-    )
-    words = len(re.findall(r"\w+", text_blob))
-    blocks = design.get("blocks") or []
-    base = 2
-    if words > 80:
-        base = 3
-    if words < 25:
-        base = 1
-    dims = []
-    for key in ("framing", "api", "data", "scale", "tradeoffs", "communication"):
-        score = base
-        if key == "api" and ("api" in text_blob.lower() or "endpoint" in text_blob.lower()):
-            score = min(4, score + 1)
-        if key == "data" and any(w in text_blob.lower() for w in ("db", "database", "sql", "store")):
-            score = min(4, score + 1)
-        if key == "scale" and any(w in text_blob.lower() for w in ("cache", "shard", "qps", "cdn", "queue")):
-            score = min(4, score + 1)
-        if key == "framing" and words > 40:
-            score = min(4, max(score, 2))
-        if blocks and key == "communication":
-            score = min(4, score + 1)
-        dims.append({"key": key, "score": score, "note": "Heuristic score — model unavailable."})
-    weak = list(concept_keys[:1]) or ["requirements"]
-    return {
-        "mentor_summary": (
-            "You sketched a direction, but the interesting constraints are still thin. "
-            "Name the hot path, the data ownership, and one failure mode before drawing more boxes."
-        ),
-        "dimensions": dims,
-        "weak_concepts": weak,
-        "lesson": {
-            "title": "Start from the hot path",
-            "body": (
-                "Great designs begin with the request that happens most often and the data it "
-                "must touch. Write that path end-to-end before optimizing side features."
-            ),
-            "try_this": "On the next case, write the single most common request as a numbered sequence of hops.",
-        },
-    }
+    """Compat wrapper: Open Response owns the heuristic SD grade."""
+    from app.services.open_response import heuristic_system_design_grade
+
+    return heuristic_system_design_grade(design, concept_keys).result
 
 
 async def submit_and_grade(
@@ -853,7 +815,13 @@ async def submit_and_grade(
             # Best-effort LLM grade — heuristic keeps the mastery loop alive.
             graded = _heuristic_grade(design_clean, concept_keys)
 
-    next_id = _pick_next_problem_id(db, concept_keys=graded["weak_concepts"], exclude=uuid.UUID(sess["problem_id"]))
+    next_id = _pick_next_problem_id(
+        db,
+        concept_keys=graded["weak_concepts"],
+        exclude=uuid.UUID(sess["problem_id"]),
+        account_id=account_id,
+        guest_id=guest_id,
+    )
     db.execute(
         text(
             """
@@ -882,15 +850,36 @@ async def submit_and_grade(
 
 
 def _pick_next_problem_id(
-    db: Session, *, concept_keys: list[str], exclude: uuid.UUID
+    db: Session,
+    *,
+    concept_keys: list[str],
+    exclude: uuid.UUID,
+    account_id: uuid.UUID | None = None,
+    guest_id: str | None = None,
 ) -> uuid.UUID | None:
     from app.services.practice_selection import pick_from_rows
 
     problems = list_problems(db)
+    attempted: list[str] = []
+    if account_id is not None or guest_id:
+        where, params = _subject_filter(account_id, guest_id)
+        attempted = [
+            str(r["problem_id"])
+            for r in db.execute(
+                text(
+                    f"""
+                    SELECT DISTINCT problem_id FROM qb.sd_session
+                    WHERE status = 'done' AND {where}
+                    """
+                ),
+                params,
+            ).mappings().all()
+        ]
     pick = pick_from_rows(
         problems,
         concept_keys,
         exclude_id=str(exclude),
+        attempted_ids=attempted or None,
     )
     if not pick.id:
         return None

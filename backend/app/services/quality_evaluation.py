@@ -25,6 +25,8 @@ DEFAULT_QUALITY_POLICY = "code_driven_v1"
 
 # Stem/answer embedding cosine cutoff vs prior MCQs on the same page.
 MCQ_SIMILARITY_THRESHOLD = 0.92
+# Critic spend rate when no heuristic flaws force a call (env can still override at cook).
+DEFAULT_CRITIC_SAMPLE_RATE = 1.0
 
 Decision = Literal["pass", "fail", "revise"]
 Stage = Literal["cook", "empirical"]
@@ -454,11 +456,39 @@ def should_run_critic(
     return sample_roll < sample_rate
 
 
+def draft_structural_score(draft: dict[str, Any]) -> tuple[int, int, float]:
+    """Lower is better. Free structural signal for best-of-N draft pick.
+
+    Fewest fatal flaws, then fewest total flaws, then smallest correct-option
+    length gap vs other options (guards longest-answer giveaway).
+    """
+    flaws = run_heuristic_checks(draft)
+    fatal = sum(1 for f in flaws if f.get("code") in FATAL_FLAW_CODES)
+    options = [str(o) for o in (draft.get("options") or [])]
+    gap = 0.0
+    try:
+        ci = int(draft.get("correct_index"))
+        others = [len(o) for i, o in enumerate(options) if i != ci]
+        if others:
+            gap = abs(len(options[ci]) - sum(others) / len(others))
+    except (TypeError, ValueError, IndexError):
+        gap = 0.0
+    return (fatal, len(flaws), gap)
+
+
+def pick_best_draft(candidates: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
+    """Pick structurally best draft among LLM alternatives (no LLM)."""
+    if not candidates:
+        return None
+    return min(candidates, key=draft_structural_score)
+
+
 # Re-export leaf helpers so cook/admin can import one engine module.
 __all__ = [
     "QUALITY_VERSION",
     "DEFAULT_QUALITY_POLICY",
     "MCQ_SIMILARITY_THRESHOLD",
+    "DEFAULT_CRITIC_SAMPLE_RATE",
     "FATAL_FLAW_CODES",
     "NO_REWRITE_CODES",
     "EMPIRICAL_MIN_EXPOSURE",
@@ -476,6 +506,8 @@ __all__ = [
     "decide_verdict",
     "evaluate_empirical",
     "should_run_critic",
+    "draft_structural_score",
+    "pick_best_draft",
     "run_heuristic_checks",
     "has_fatal_heuristic_flaws",
 ]

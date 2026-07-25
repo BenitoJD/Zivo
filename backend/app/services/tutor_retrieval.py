@@ -21,6 +21,10 @@ DEFAULT_POLICY = "tutor_retrieval_v1"
 MAX_RAG_PAGES = 6
 DEFAULT_TOP_N = 6
 DEFAULT_FETCH_LIMIT = 20
+# Grade-tutor context: how many ranked chunks to paste into the prompt.
+GRADE_CONTEXT_TOP_N = 4
+# Semantic response-cache reuse (GPTCache-style). Conservative near-paraphrase.
+RESPONSE_CACHE_SIMILARITY = 0.92
 
 GateReason = Literal[
     "empty",
@@ -30,6 +34,7 @@ GateReason = Literal[
     "selection",
     "continuation",
     "content_query",
+    "brainstorm",
 ]
 
 _NO_RETRIEVE_RE = re.compile(
@@ -107,9 +112,12 @@ def decide_retrieval(
     message = (message or "").strip()
     if not message:
         return RetrievalGateVerdict(False, "empty", policy=pol)
+    scope = scope or {}
+    if str(scope.get("mode") or "").lower() == "brainstorm":
+        # Brainstorm uses kept-ideas context, not vector RAG.
+        return RetrievalGateVerdict(False, "brainstorm", policy=pol)
     if not has_history:
         return RetrievalGateVerdict(True, "first_turn", policy=pol)
-    scope = scope or {}
     if scope.get("page_start") is not None or scope.get("page_end") is not None:
         return RetrievalGateVerdict(True, "page_scope", policy=pol)
     if scope.get("current_page") is not None:
@@ -119,6 +127,38 @@ def decide_retrieval(
     if is_conversational_followup(message):
         return RetrievalGateVerdict(False, "continuation", policy=pol)
     return RetrievalGateVerdict(True, "content_query", policy=pol)
+
+
+@dataclass(frozen=True)
+class CacheReuseVerdict:
+    reuse: bool
+    similarity: float
+    threshold: float = RESPONSE_CACHE_SIMILARITY
+    policy: str = DEFAULT_POLICY
+    policy_version: str = TUTOR_RETRIEVAL_VERSION
+
+
+def decide_cache_reuse(
+    similarity: float,
+    *,
+    threshold: float = RESPONSE_CACHE_SIMILARITY,
+    policy: str | None = None,
+) -> CacheReuseVerdict:
+    """Whether a semantic chat-cache hit is close enough to reuse."""
+    pol = normalize_policy(policy)
+    sim = float(similarity)
+    thr = float(threshold)
+    return CacheReuseVerdict(
+        reuse=sim >= thr,
+        similarity=sim,
+        threshold=thr,
+        policy=pol,
+    )
+
+
+def grade_context_top_n(*, top_n: int = GRADE_CONTEXT_TOP_N) -> int:
+    """How many ranked chunks to paste into MCQ grade-tutor prompts."""
+    return max(1, int(top_n))
 
 
 def decide_page_pin(

@@ -11,8 +11,7 @@ from sqlalchemy.orm import Session
 from app.repositories import seo as seo_repo
 from app.services.embed import embed_texts
 from app.services.mcq_dedup import cosine_similarity
-
-NEAR_DUPE_COSINE = 0.85
+from app.services.seo_gate import NEAR_DUPE_COSINE
 
 _NON_WORD = re.compile(r"[^\w\s-]+", re.UNICODE)
 _SPACE = re.compile(r"\s+")
