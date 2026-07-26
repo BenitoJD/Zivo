@@ -25,6 +25,8 @@ import { IconArrowRight, IconSearch } from "@tabler/icons-react";
 import { apiGet, ensureGuestSession } from "@/lib/api/client";
 import { Shell } from "@/app/practice/_components/Shell";
 import { LearnerPageHeader } from "@/app/_components/study/LearnerPageHeader";
+import { NewspaperBrandMark } from "@/app/_components/newspaper/NewspaperBrandMark";
+import { DebugScenarioMark } from "@/app/_components/debug/DebugScenarioMark";
 
 type ConceptSummary = { qid: string; label: string; description: string };
 type SearchResponse = { query: string; results: ConceptSummary[] };
@@ -147,14 +149,22 @@ export default function PracticeHubPage() {
               <Stack gap="xs">
                 <Paper radius="xl" p="lg" withBorder bg="gray.0" shadow="paper">
                   <Group justify="space-between" align="center" wrap="wrap" gap="sm">
-                    <Box style={{ minWidth: 0, flex: "1 1 180px" }}>
-                      <Text fw={600} ff="var(--font-serif)">
-                        Newspaper
-                      </Text>
-                      <Text size="sm" c="dimmed" style={{ overflowWrap: "anywhere" }}>
-                        Daily papers as questions — pick a day, practice, ask the tutor.
-                      </Text>
-                    </Box>
+                    <Group
+                      gap="md"
+                      align="center"
+                      wrap="nowrap"
+                      style={{ minWidth: 0, flex: "1 1 180px" }}
+                    >
+                      <NewspaperBrandMark slug="the-hindu" title="The Hindu" size={48} />
+                      <Box style={{ minWidth: 0 }}>
+                        <Text fw={600} ff="var(--font-serif)">
+                          Newspaper
+                        </Text>
+                        <Text size="sm" c="dimmed" style={{ overflowWrap: "anywhere" }}>
+                          Daily papers as questions — pick a day, practice, ask the tutor.
+                        </Text>
+                      </Box>
+                    </Group>
                     <Button
                       component="a"
                       href="/practice/newspaper"
@@ -171,14 +181,22 @@ export default function PracticeHubPage() {
                 </Paper>
                 <Paper radius="xl" p="lg" withBorder bg="gray.0" shadow="paper">
                   <Group justify="space-between" align="center" wrap="wrap" gap="sm">
-                    <Box style={{ minWidth: 0, flex: "1 1 180px" }}>
-                      <Text fw={600} ff="var(--font-serif)">
-                        Debug diagnostics
-                      </Text>
-                      <Text size="sm" c="dimmed" style={{ overflowWrap: "anywhere" }}>
-                        Find what is wrong: read failures, diagnose root cause, pick the fix approach.
-                      </Text>
-                    </Box>
+                    <Group
+                      gap="md"
+                      align="center"
+                      wrap="nowrap"
+                      style={{ minWidth: 0, flex: "1 1 180px" }}
+                    >
+                      <DebugScenarioMark scenarioType="code_reading" size={48} />
+                      <Box style={{ minWidth: 0 }}>
+                        <Text fw={600} ff="var(--font-serif)">
+                          Debug diagnostics
+                        </Text>
+                        <Text size="sm" c="dimmed" style={{ overflowWrap: "anywhere" }}>
+                          Find what is wrong: read failures, diagnose root cause, pick the fix approach.
+                        </Text>
+                      </Box>
+                    </Group>
                     <Button
                       component="a"
                       href="/practice/debug"

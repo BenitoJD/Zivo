@@ -22,6 +22,7 @@ import { ensureGuestSession } from "@/lib/api/client";
 import { useNewspaperCatalogQuery } from "@/lib/api/queries";
 import { Shell } from "@/app/practice/_components/Shell";
 import { LearnerPageHeader } from "@/app/_components/study/LearnerPageHeader";
+import { NewspaperBrandMark } from "@/app/_components/newspaper/NewspaperBrandMark";
 
 export default function NewspaperDoorPage() {
   const router = useRouter();
@@ -72,15 +73,23 @@ export default function NewspaperDoorPage() {
                   shadow="paper"
                 >
                   <Group justify="space-between" align="center" wrap="wrap" gap="sm">
-                    <Box style={{ minWidth: 0, flex: "1 1 180px" }}>
-                      <Text fw={600} ff="var(--font-serif)">
-                        {p.title}
-                      </Text>
-                      <Text size="sm" c="dimmed" style={{ overflowWrap: "anywhere" }}>
-                        {p.ready_days} day{p.ready_days === 1 ? "" : "s"} ready
-                        {p.latest_date ? ` · latest ${p.latest_date}` : ""}
-                      </Text>
-                    </Box>
+                    <Group
+                      gap="md"
+                      align="center"
+                      wrap="nowrap"
+                      style={{ minWidth: 0, flex: "1 1 180px" }}
+                    >
+                      <NewspaperBrandMark slug={p.slug} title={p.title} />
+                      <Box style={{ minWidth: 0 }}>
+                        <Text fw={600} ff="var(--font-serif)">
+                          {p.title}
+                        </Text>
+                        <Text size="sm" c="dimmed" style={{ overflowWrap: "anywhere" }}>
+                          {p.ready_days} day{p.ready_days === 1 ? "" : "s"} ready
+                          {p.latest_date ? ` · latest ${p.latest_date}` : ""}
+                        </Text>
+                      </Box>
+                    </Group>
                     <Button
                       radius="xl"
                       variant="light"

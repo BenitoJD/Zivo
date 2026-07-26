@@ -241,6 +241,15 @@ export default function WorkspaceArtifactPage({
     }
   }
 
+  const displayAssertionId = pinnedAssertionId ?? queue?.current_assertion_id ?? null;
+  const assertionQuery = useAssertionQuery(displayAssertionId);
+  const questionSourcePage = useMemo(() => {
+    const pn = assertionQuery.data?.payload?.page_number;
+    if (typeof pn === "number" && pn > 0) return pn;
+    const fromQueue = queue?.current_page;
+    return typeof fromQueue === "number" && fromQueue > 0 ? fromQueue : null;
+  }, [assertionQuery.data?.payload, queue?.current_page]);
+
   // Tutor chat (per-mode conversation: hydrate, stream, regenerate, clear, plus
   // Read-mode Study-Buddy quote/ask/save) lives in its own hook.
   const {
@@ -262,6 +271,8 @@ export default function WorkspaceArtifactPage({
     mode,
     enabled: !invalidArtifactId,
     queue,
+    currentAssertionId: displayAssertionId,
+    questionPage: questionSourcePage,
     selected,
     multiSelected,
     isMulti,
@@ -355,7 +366,6 @@ export default function WorkspaceArtifactPage({
     sortedSelection.length > 0 ? sortedSelection[sortedSelection.length - 1] : 1;
   const sliderMarks = useMemo(() => buildPageSliderMarks(pageCount), [pageCount]);
 
-  const displayAssertionId = pinnedAssertionId ?? queue?.current_assertion_id ?? null;
   const stem =
     mcqLoading
       ? "Loading questions…"
@@ -403,7 +413,6 @@ export default function WorkspaceArtifactPage({
     artifactId,
     !invalidArtifactId && Boolean(artifactQuery.data) && !isNewspaper,
   );
-  const assertionQuery = useAssertionQuery(displayAssertionId);
   // Persistent report card - only fetched once a range is complete.
   const studyReportQuery = useStudyReportQuery(
     artifactId,
@@ -1384,6 +1393,12 @@ export default function WorkspaceArtifactPage({
   const newspaperContextLabel = isNewspaper
     ? [paperTitle || shortFilename, editionDate].filter(Boolean).join(" · ")
     : null;
+  const tutorNewspaperHint =
+    isNewspaper && questionSourcePage
+      ? `Page ${questionSourcePage} of ${paperTitle || "today's edition"}${editionDate ? ` (${editionDate})` : ""}. Ask about this question — I'll use that page's text.`
+      : isNewspaper
+        ? `Ask about ${paperTitle || "today's paper"}${editionDate ? ` (${editionDate})` : ""}. I know which edition page each question came from.`
+        : undefined;
   const reviewableCount = Math.max(answeredHistory.length, queue?.questions_answered ?? 0);
 
   async function openReviewPrevious() {
@@ -1434,13 +1449,12 @@ export default function WorkspaceArtifactPage({
         style={{
           display: "flex",
           flexDirection: "column",
+          // Top-anchored (not centered) so revealing the explanation grows the card
+          // downward instead of re-centering the whole panel - no layout jump.
           overflow: "hidden",
           justifyContent: "flex-start",
           paddingTop: "clamp(8px, 2vh, 20px)",
           minHeight: 0,
-          paddingLeft: `calc(var(--mantine-spacing-md) + ${floatingLane.left}px)`,
-          paddingRight: `calc(var(--mantine-spacing-md) + ${floatingLane.right}px)`,
-          transition: "padding 260ms cubic-bezier(0.32,0.72,0,1)",
         }}
       >
         <Box
@@ -1453,11 +1467,14 @@ export default function WorkspaceArtifactPage({
             // learner chooses, and the choice is remembered across sessions. The 48px
             // keeps a pinned column clear of that edge's floating trigger, which is
             // absolutely positioned over the study area - without it the option cards
-            // slide underneath.
+            // slide underneath. floatingLane reserves space for open Source/Tutor panels.
+            paddingLeft: floatingLane.left,
+            paddingRight: floatingLane.right,
+            transition: "padding 260ms cubic-bezier(0.32,0.72,0,1)",
             ...(pinned === "left"
               ? { marginLeft: pinInsetLeft, marginRight: 0 }
               : pinned === "right"
-                ? { marginLeft: "auto", marginRight: 48 }
+                ? { marginLeft: "auto", marginRight: tutorOpen ? 0 : 48 }
                 : { marginInline: "auto" }),
             flex: 1,
             maxHeight: "100%",
@@ -1904,6 +1921,7 @@ export default function WorkspaceArtifactPage({
 
             {mode !== "test" ? (
             <FloatingPanel
+              ref={tutorPanelRef}
               open={tutorOpen}
               title={ZIVO_ASSISTANT_NAME}
               icon={<IconMessageCircle size={16} stroke={2} />}
@@ -1912,6 +1930,7 @@ export default function WorkspaceArtifactPage({
               containerRef={studyRowRef}
               defaultSide="right"
               onClose={closeTutor}
+              onGeometryChange={setTutorGeometry}
             >
               <TutorPanel
                 messages={chatMessages}
@@ -1925,6 +1944,11 @@ export default function WorkspaceArtifactPage({
                 onEditUser={editChatFromUser}
                 onClear={() => void clearChat()}
                 {...brainstormChatProps}
+                emptyHint={
+                  mode === "brainstorm"
+                    ? "Think out loud about this source. Every reply ends with three angles you could pull."
+                    : tutorNewspaperHint
+                }
               />
             </FloatingPanel>
             ) : null}
@@ -1966,6 +1990,11 @@ export default function WorkspaceArtifactPage({
               onClear={() => void clearChat()}
               showHeader
               {...brainstormChatProps}
+              emptyHint={
+                mode === "brainstorm"
+                  ? "Think out loud about this source. Every reply ends with three angles you could pull."
+                  : tutorNewspaperHint
+              }
             />
           )}
         />

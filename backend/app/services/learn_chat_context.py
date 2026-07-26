@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Document
 from app.services.question_pool import (
+    assertion_page_number,
     build_learn_queue_state,
     get_progress,
     learner_key_for,
@@ -96,6 +97,34 @@ def _format_choice_labels(options: list[str], indices: list[int]) -> str:
     return ", ".join(parts) if parts else "(none)"
 
 
+def _newspaper_header(doc: Document) -> str | None:
+    meta = doc.meta or {}
+    title = str(meta.get("paper_title") or "").strip()
+    edition = str(meta.get("edition_date") or "").strip()
+    if not title and not edition:
+        return None
+    if title and edition:
+        return f"{title} · {edition}"
+    return title or edition
+
+
+def _active_assertion_id(scope: dict[str, Any] | None, state: dict[str, Any]) -> str | None:
+    if scope and scope.get("current_assertion_id"):
+        return str(scope["current_assertion_id"])
+    raw = state.get("current_assertion_id")
+    return str(raw) if raw else None
+
+
+def _question_source_page(
+    db: Session, assertion_id: str | None, fallback: int
+) -> int:
+    if assertion_id:
+        page = assertion_page_number(db, assertion_id)
+        if isinstance(page, int) and page >= 1:
+            return page
+    return max(1, int(fallback))
+
+
 def build_learn_chat_context(
     db: Session,
     document_id: uuid.UUID,
@@ -120,26 +149,39 @@ def build_learn_chat_context(
 
     newspaper = is_newspaper_document(doc)
     page_from, page_to = page_range_bounds(doc)
-    page = int(state["current_page"])
+    assertion_id = _active_assertion_id(scope, state)
+    page = _question_source_page(db, assertion_id, int(state["current_page"]))
     budget = int(state["question_budget"])
     answered = int(state["questions_answered"])
     generated = int(state["questions_generated"])
     qnum = int(state["question_number"])
 
-    rag_pages = chat_rag_window(page, selected_page_list(doc))
-    supplementary = [p for p in rag_pages if p != page]
+    if newspaper:
+        rag_pages = [page]
+        supplementary: list[int] = []
+    else:
+        rag_pages = chat_rag_window(page, selected_page_list(doc))
+        supplementary = [p for p in rag_pages if p != page]
 
     lines = [
         "Learn session (authoritative — use this for progress/position questions):",
     ]
     if newspaper:
+        header = _newspaper_header(doc)
+        if header:
+            lines.append(f"- Newspaper edition: {header} (pages {page_from}–{page_to}).")
+        else:
+            lines.append(f"- Newspaper edition: pages {page_from}–{page_to}.")
         lines.append(
-            f"- Newspaper edition: pages {page_from}–{page_to}; "
-            f"serving all pre-cooked questions ({generated} available)."
+            f"- Serving all pre-cooked questions across the edition ({generated} available)."
         )
         lines.append(
-            f"- Active question {qnum} of {max(generated, 1)} answered so far ({answered} done)."
+            f"- Active question {qnum} of {max(generated, 1)}; {answered} answered so far."
         )
+        if assertion_id:
+            lines.append(
+                f"- This question was cooked from page {page} — ground tutor answers in that page."
+            )
     else:
         lines.append(f"- Study range: pages {page_from}–{page_to}; currently on page {page}")
     if supplementary:
@@ -167,10 +209,8 @@ def build_learn_chat_context(
         )
         return "\n".join(lines)
 
-    if state.get("current_assertion_id"):
-        # Prefer the question the learner is actually looking at (sent in scope) so
-        # the tutor is never confused about "the current question".
-        assertion_id = str((scope or {}).get("current_assertion_id") or state["current_assertion_id"])
+    if state.get("current_assertion_id") or assertion_id:
+        aid = assertion_id or str(state["current_assertion_id"])
         if newspaper:
             lines.append(f"- Question {qnum} of {max(generated, 1)} in this edition")
             lines.append(f"- Answered in this edition so far: {answered}")
@@ -179,14 +219,14 @@ def build_learn_chat_context(
             lines.append(f"- Question {qnum} of {budget} on page {page}")
             lines.append(f"- Answered on this page so far: {answered}")
             lines.append(f"- Questions generated on this page: {generated}")
-        mcq = _assertion_mcq(db, assertion_id)
+        mcq = _assertion_mcq(db, aid)
         if mcq and mcq.get("stem"):
             lines.append(f'- Current question stem: "{mcq["stem"]}"')
         if mcq and mcq.get("options"):
             for i, opt in enumerate(mcq["options"]):
                 lines.append(f'  {_choice_letter(i)}. {opt}')
         choice_index, answer_correct, choice_indices = _confirmed_answer(
-            assertion_id,
+            aid,
             scope=scope,
             progress=progress,
         )
@@ -260,10 +300,21 @@ def learn_scope_fields(
     lk = learner_key_for(user, guest_id)
     progress = get_progress(doc, learner_key=lk)
     state = build_learn_queue_state(db, document_id, doc, progress, learner_key=lk)
-    assertion_id = state.get("current_assertion_id")
+    req_aid = None
+    if request_scope and request_scope.get("current_assertion_id"):
+        req_aid = str(request_scope["current_assertion_id"])
+    assertion_id = req_aid or (
+        str(state["current_assertion_id"]) if state.get("current_assertion_id") else None
+    )
+    page = _question_source_page(
+        db,
+        assertion_id,
+        int(state.get("current_page") or 1),
+    )
     fields: dict[str, int | str | bool | None] = {
         "question_number": int(state["question_number"]),
-        "current_assertion_id": str(assertion_id) if assertion_id is not None else None,
+        "current_assertion_id": assertion_id,
+        "current_page": page,
     }
     if assertion_id:
         last = progress.get("last_confirmed_answer") or {}

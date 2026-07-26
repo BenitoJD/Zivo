@@ -32,6 +32,7 @@ def test_build_learn_chat_context_includes_position_and_stem() -> None:
         patch("app.services.learn_chat_context.page_range_bounds", return_value=(25, 33)),
         patch("app.services.learn_chat_context.selected_page_list", return_value=[25, 26, 27]),
         patch("app.services.learn_chat_context.chat_rag_window", return_value=[25, 26]),
+        patch("app.services.learn_chat_context.assertion_page_number", return_value=None),
         patch(
             "app.services.learn_chat_context._assertion_mcq",
             return_value={
@@ -128,12 +129,14 @@ def test_learn_scope_fields_for_cache_key() -> None:
             "app.services.learn_chat_context.build_learn_queue_state",
             return_value={"question_number": 4, "current_assertion_id": "x"},
         ),
+        patch("app.services.learn_chat_context.assertion_page_number", return_value=None),
     ):
         fields = learn_scope_fields(MagicMock(), doc_id, doc)
 
     assert fields == {
         "question_number": 4,
         "current_assertion_id": "x",
+        "current_page": 1,
         "confirmed_choice_index": 1,
         "answer_correct": True,
     }

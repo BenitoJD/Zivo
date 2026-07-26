@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment } from "react";
+import Link from "next/link";
 import {
   Box,
   Group,
@@ -16,6 +17,7 @@ import {
   IconAlignCenter,
   IconAlignLeft,
   IconAlignRight,
+  IconArrowLeft,
   IconBook,
   IconBriefcase,
   IconBuildingMonument,
@@ -97,6 +99,8 @@ export function StudyMetaBar({
   isNewspaper = false,
   editionIndex,
   editionTotal,
+  backHref,
+  backLabel = "Back",
 }: {
   questionIndex: number;
   questionTotal: number;
@@ -118,6 +122,9 @@ export function StudyMetaBar({
   isNewspaper?: boolean;
   editionIndex?: number;
   editionTotal?: number;
+  /** Newspaper: escape hatch to the day picker. */
+  backHref?: string;
+  backLabel?: string;
 }) {
   const modeSelect = showModeSelect ?? compact;
   const newspaperEditionTotal = editionTotal ?? 0;
@@ -267,6 +274,31 @@ export function StudyMetaBar({
       </Group>
     ) : null;
 
+  const backControl = backHref ? (
+    <UnstyledButton
+      component={Link}
+      href={backHref}
+      aria-label={backLabel}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        flexShrink: 0,
+        padding: "5px 10px",
+        borderRadius: 999,
+        border: "1px solid var(--mantine-color-default-border)",
+        background: "var(--mantine-color-body)",
+        color: "var(--mantine-color-dimmed)",
+        textDecoration: "none",
+      }}
+    >
+      <IconArrowLeft size={15} stroke={1.8} />
+      <Text size="xs" fw={600}>
+        {backLabel}
+      </Text>
+    </UnstyledButton>
+  ) : null;
+
   const progress = !showBar ? null : (
     <Group gap={compact ? 8 : 12} wrap={compact ? "wrap" : "nowrap"} style={{ flex: 1, minWidth: 0 }}>
       {page && (isNewspaper || !compact) ? (
@@ -357,13 +389,15 @@ export function StudyMetaBar({
       <Stack px="sm" py={6} gap={6} style={{ flexShrink: 0 }}>
         {modeSelect ? (
           <Group gap="sm" wrap="nowrap" align="center">
+            {backControl}
             <Box style={{ flex: 1, minWidth: 0 }}>
               <CompactModeSelect mode={mode} onChange={onModeChange} />
             </Box>
             {contextChip}
           </Group>
-        ) : contextChip ? (
+        ) : contextChip || backControl ? (
           <Group gap={8} wrap="nowrap">
+            {backControl}
             {modeBadge}
           </Group>
         ) : null}
@@ -380,7 +414,7 @@ export function StudyMetaBar({
   // Desktop/tablet: the sidebar owns mode switching, so the top bar carries the
   // mode identity + question progress + the Adaptive/Classic chooser - and nothing
   // at all in modes that have none (e.g. Read), so the content starts cleanly.
-  if (!progress && !modeBadge && !studyModeControl && !alignControl) return null;
+  if (!progress && !modeBadge && !studyModeControl && !alignControl && !backControl) return null;
   return (
     <Group
       px={{ base: "sm", sm: "md", lg: "lg" }}
@@ -392,6 +426,7 @@ export function StudyMetaBar({
       style={{ flexShrink: 0 }}
     >
       <Group gap="md" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
+        {backControl}
         {modeBadge}
         {progress}
       </Group>

@@ -115,6 +115,8 @@ export type AssertionPayload = {
   choices?: string[] | unknown;
   sequence?: number;
   primary_concept?: string;
+  /** PDF page this MCQ was cooked from (newspaper editions). */
+  page_number?: number;
   /** True for select-all-that-apply items. The actual indices live server-side
    *  and are only returned by /api/mcq/grade. */
   is_multi?: boolean;

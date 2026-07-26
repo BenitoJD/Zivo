@@ -1,37 +1,40 @@
 "use client";
 
-import { useEffect, useState } from "react";
+/**
+ * Debug diagnostics door — browse published scenarios.
+ * Layout matches newspaper / coding practice siblings (left header, dense cards).
+ */
+
+import { useEffect } from "react";
 import {
-  Badge,
+  Anchor,
   Box,
+  Button,
   Container,
   Group,
   Paper,
-  SegmentedControl,
   Stack,
   Text,
-  ThemeIcon,
-  UnstyledButton,
-  Anchor,
 } from "@mantine/core";
-import { IconBug, IconPlayerPlay } from "@tabler/icons-react";
+import { IconArrowRight } from "@tabler/icons-react";
 import { useRouter } from "next/navigation";
 import { ensureGuestSession } from "@/lib/api/client";
-import {
-  useDebugPublicQuery,
-  useSessionQuery,
-  type DebugPublicFilters,
-  type DebugScenarioListItem,
-} from "@/lib/api/queries";
+import { useDebugPublicQuery, useSessionQuery } from "@/lib/api/queries";
 import { Shell } from "@/app/practice/_components/Shell";
 import { LearnerPageHeader } from "@/app/_components/study/LearnerPageHeader";
+import { DebugScenarioMark } from "@/app/_components/debug/DebugScenarioMark";
+
+function scenarioMeta(item: { step_count: number; difficulty: string; scenario_type: string }) {
+  const steps = `${item.step_count} step${item.step_count === 1 ? "" : "s"}`;
+  const kind = item.scenario_type.replace(/_/g, " ");
+  return `${steps} · ${item.difficulty} · ${kind}`;
+}
 
 export default function DebugPracticePage() {
   const router = useRouter();
   const session = useSessionQuery();
   const isAdmin = Boolean(session.data?.is_admin);
-  const [filters, setFilters] = useState<DebugPublicFilters>({});
-  const { data, isLoading } = useDebugPublicQuery(filters);
+  const { data, isLoading, isError } = useDebugPublicQuery({});
 
   useEffect(() => {
     void ensureGuestSession();
@@ -49,7 +52,7 @@ export default function DebugPracticePage() {
               compact
               eyebrow="Debug diagnostics"
               title="Find what's wrong"
-              subtitle="Read real failure cases. Diagnose root cause, pick the fix approach, reflect on process. No coding required."
+              subtitle="Read a failure case, diagnose the root cause, pick the fix. Same stepped flow, no coding required."
             />
             {isAdmin ? (
               <Anchor href="/workspace/debug" fz="sm" c="lavender.7">
@@ -58,68 +61,67 @@ export default function DebugPracticePage() {
             ) : null}
           </Group>
 
-          <SegmentedControl
-            value={filters.difficulty ?? "all"}
-            onChange={(v) =>
-              setFilters((f) => ({
-                ...f,
-                difficulty: v === "all" ? undefined : (v as DebugPublicFilters["difficulty"]),
-              }))
-            }
-            data={[
-              { label: "All", value: "all" },
-              { label: "Easy", value: "easy" },
-              { label: "Medium", value: "medium" },
-              { label: "Hard", value: "hard" },
-            ]}
-            radius="xl"
-          />
-
           {isLoading ? (
             <Text c="dimmed">Loading scenarios…</Text>
+          ) : isError ? (
+            <Text c="terracotta">Couldn&rsquo;t load scenarios right now.</Text>
           ) : items.length === 0 ? (
-            <Text c="dimmed">No published scenarios yet. Check back soon.</Text>
+            <Paper radius="xl" p="xl" withBorder bg="gray.0" shadow="paper">
+              <Stack gap="xs">
+                <Text ff="var(--font-serif)" fw={500} fz="lg">
+                  Nothing ready yet
+                </Text>
+                <Text c="dimmed" size="sm">
+                  Scenarios appear here once they are cooked and published. Check back soon.
+                </Text>
+              </Stack>
+            </Paper>
           ) : (
-            <Stack gap="sm">
+            <Stack gap="xs">
               {items.map((item) => (
-                <ScenarioRow key={item.id} item={item} onOpen={() => router.push(`/practice/debug/${item.id}`)} />
+                <Paper
+                  key={item.id}
+                  radius="xl"
+                  p="lg"
+                  withBorder
+                  bg="gray.0"
+                  shadow="paper"
+                >
+                  <Group justify="space-between" align="center" wrap="wrap" gap="sm">
+                    <Group
+                      gap="md"
+                      align="center"
+                      wrap="nowrap"
+                      style={{ minWidth: 0, flex: "1 1 180px" }}
+                    >
+                      <DebugScenarioMark scenarioType={item.scenario_type} />
+                      <Box style={{ minWidth: 0 }}>
+                        <Text fw={600} ff="var(--font-serif)">
+                          {item.title}
+                        </Text>
+                        <Text size="sm" c="dimmed" style={{ overflowWrap: "anywhere" }}>
+                          {scenarioMeta(item)}
+                        </Text>
+                      </Box>
+                    </Group>
+                    <Button
+                      radius="xl"
+                      variant="light"
+                      color="lavender"
+                      fullWidth
+                      maw={{ base: "100%", xs: 180 }}
+                      rightSection={<IconArrowRight size={16} />}
+                      onClick={() => router.push(`/practice/debug/${item.id}`)}
+                    >
+                      Open
+                    </Button>
+                  </Group>
+                </Paper>
               ))}
             </Stack>
           )}
         </Stack>
       </Container>
     </Shell>
-  );
-}
-
-function ScenarioRow({ item, onOpen }: { item: DebugScenarioListItem; onOpen: () => void }) {
-  return (
-    <UnstyledButton onClick={onOpen}>
-      <Paper p="md" radius="xl" withBorder bg="gray.0" shadow="paper">
-        <Group justify="space-between" wrap="nowrap" gap="sm">
-          <Group gap="sm" wrap="nowrap" style={{ minWidth: 0, flex: 1 }}>
-            <ThemeIcon variant="light" color="lavender" radius="xl" size={36}>
-              <IconBug size={18} />
-            </ThemeIcon>
-            <Box style={{ minWidth: 0 }}>
-              <Text fw={600} ff="var(--font-serif)" truncate>
-                {item.title}
-              </Text>
-              <Group gap={6} mt={4}>
-                <Badge size="xs" variant="light">
-                  {item.difficulty}
-                </Badge>
-                <Text size="xs" c="dimmed">
-                  {item.step_count} steps · {item.scenario_type.replace(/_/g, " ")}
-                </Text>
-              </Group>
-            </Box>
-          </Group>
-          <ThemeIcon variant="transparent" color="lavender">
-            <IconPlayerPlay size={18} />
-          </ThemeIcon>
-        </Group>
-      </Paper>
-    </UnstyledButton>
   );
 }

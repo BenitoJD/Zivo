@@ -459,7 +459,7 @@ async def chat_stream(
                 if not doc or not can_access_document(doc, user, guest_id):
                     yield _stream_error_event("Document not found.")
                     return
-                scope = normalize_chat_scope(request_scope, doc)
+                scope = dict(request_scope) if request_scope else {}
                 mode = str(request_scope.get("mode") or "").lower()
                 read_mode = mode == "read"
                 brainstorm_mode = mode == "brainstorm"
@@ -479,6 +479,7 @@ async def chat_stream(
                             guest_id=guest_id,
                         )
                     )
+                scope = normalize_chat_scope(scope, doc)
                 doc_ids = _resolve_document_ids(
                     stream_db,
                     doc.id,

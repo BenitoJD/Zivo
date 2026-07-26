@@ -71,6 +71,42 @@ export function clampPanel(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
+/** Open floating panel footprint used to reserve horizontal lane for MCQs. */
+export type FloatingLanePanel = {
+  open: boolean;
+  minimized: boolean;
+  maximized: boolean;
+  x: number;
+  w: number;
+};
+
+const FLOAT_LANE_GAP = 12;
+
+/** Reserve left/right padding so MCQs never sit under floating Source/Tutor windows. */
+export function computeFloatingLaneInsets(
+  panels: FloatingLanePanel[],
+  containerWidth: number,
+): { left: number; right: number } {
+  if (containerWidth <= 0) return { left: 0, right: 0 };
+  let left = 0;
+  let right = 0;
+  const mid = containerWidth / 2;
+  for (const panel of panels) {
+    if (!panel.open || panel.maximized) continue;
+    const center = panel.x + panel.w / 2;
+    if (center <= mid) {
+      left = Math.max(left, panel.x + panel.w + FLOAT_LANE_GAP);
+    } else {
+      right = Math.max(right, containerWidth - panel.x + FLOAT_LANE_GAP);
+    }
+  }
+  const maxLane = Math.max(0, containerWidth - 280);
+  return {
+    left: Math.min(left, maxLane),
+    right: Math.min(right, maxLane),
+  };
+}
+
 export function pagesInRange(from: number, to: number): number[] {
   const lo = Math.min(from, to);
   const hi = Math.max(from, to);

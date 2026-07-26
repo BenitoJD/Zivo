@@ -912,7 +912,7 @@ export function McqHeroPanel({
             leftSection={<IconHistory size={15} stroke={1.7} />}
             onClick={onReviewPrevious}
           >
-            Review previous
+            {isNewspaper ? "Previous question" : "Review previous"}
           </Button>
         ) : !compact ? (
           <Text size="xs" c="dimmed" ta="center" style={{ opacity: 0.85 }}>

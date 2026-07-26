@@ -33,6 +33,8 @@ export function useTutorChat({
   mode,
   enabled,
   queue,
+  currentAssertionId,
+  questionPage,
   selected,
   multiSelected,
   isMulti,
@@ -44,6 +46,10 @@ export function useTutorChat({
   mode: StudyMode;
   enabled: boolean;
   queue: McqState | null;
+  /** The question on screen (may differ from queue while feedback is pinned). */
+  currentAssertionId?: string | null;
+  /** Source page for the active question (newspaper MCQs). */
+  questionPage?: number | null;
   selected: string | null;
   multiSelected?: number[];
   isMulti?: boolean;
@@ -109,11 +115,10 @@ export function useTutorChat({
       // it must not pin the learn page/question.
       const scope: Record<string, unknown> = { mode };
       if (mode !== "read") {
-        const currentPage = queue?.current_page;
-        if (currentPage && currentPage > 0) scope.current_page = currentPage;
-        if (queue?.current_assertion_id) {
-          scope.current_assertion_id = queue.current_assertion_id;
-        }
+        const assertionId = currentAssertionId ?? queue?.current_assertion_id;
+        if (assertionId) scope.current_assertion_id = assertionId;
+        const page = questionPage ?? queue?.current_page;
+        if (page && page > 0) scope.current_page = page;
         if (isMulti && (multiSelected?.length ?? 0) > 0) {
           scope.selected_choice_indices = multiSelected;
           scope.selected_choice_index = multiSelected![0];

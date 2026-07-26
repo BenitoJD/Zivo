@@ -21,6 +21,7 @@ import { ensureGuestSession } from "@/lib/api/client";
 import { useNewspaperDaysQuery } from "@/lib/api/queries";
 import { Shell } from "@/app/practice/_components/Shell";
 import { LearnerPageHeader } from "@/app/_components/study/LearnerPageHeader";
+import { NewspaperBrandMark } from "@/app/_components/newspaper/NewspaperBrandMark";
 
 export default function NewspaperPaperPage({
   params,
@@ -41,13 +42,16 @@ export default function NewspaperPaperPage({
     <Shell>
       <Container size="md" py={{ base: 32, md: 56 }}>
         <Stack gap="lg">
-          <LearnerPageHeader
-            align="left"
-            compact
-            eyebrow="Newspaper"
-            title={title}
-            subtitle="Last 30 days. Open a day to Learn. Test is optional."
-          />
+          <Group gap="md" align="flex-start" wrap="nowrap">
+            <NewspaperBrandMark slug={slug} title={title} size={56} />
+            <LearnerPageHeader
+              align="left"
+              compact
+              eyebrow="Newspaper"
+              title={title}
+              subtitle="Last 30 days. Open a day to Learn. Test is optional."
+            />
+          </Group>
 
           {daysQ.isLoading ? (
             <Text c="dimmed">Loading days…</Text>

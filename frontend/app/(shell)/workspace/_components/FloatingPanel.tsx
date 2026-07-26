@@ -1,8 +1,24 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { ActionIcon, Box, Group, Text, Tooltip } from "@mantine/core";
-import { IconMaximize, IconMinus, IconWindowMaximize, IconX } from "@tabler/icons-react";
+import {
+  IconLayoutSidebarLeftCollapse,
+  IconLayoutSidebarRightCollapse,
+  IconMaximize,
+  IconMinus,
+  IconWindowMaximize,
+  IconX,
+} from "@tabler/icons-react";
 
 /**
  * A modern floating window for the Source / Tutor panels: a movable, resizable
@@ -18,8 +34,19 @@ const MIN_H = 220;
 const ABS_MIN_W = 220;
 const MARGIN = 12;
 
-type Rect = { x: number; y: number; w: number; h: number };
+export type FloatingPanelRect = { x: number; y: number; w: number; h: number };
 type Dir = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
+
+export type FloatingPanelGeometry = {
+  rect: FloatingPanelRect;
+  minimized: boolean;
+  maximized: boolean;
+  open: boolean;
+};
+
+export type FloatingPanelHandle = {
+  snapSide: (side: "left" | "right") => void;
+};
 
 // Shared stacking counter so clicking a panel brings it above the others.
 let zTop = 40;
@@ -34,29 +61,19 @@ function minPanelW(cw: number) {
   return Math.min(MIN_W, Math.max(ABS_MIN_W, cw - 2 * MARGIN));
 }
 
-function loadRect(key: string): Rect | null {
+function loadRect(key: string): FloatingPanelRect | null {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return null;
     const r = JSON.parse(raw);
-    if (typeof r?.x === "number" && typeof r?.w === "number") return r as Rect;
+    if (typeof r?.x === "number" && typeof r?.w === "number") return r as FloatingPanelRect;
   } catch {
     /* ignore */
   }
   return null;
 }
 
-export function FloatingPanel({
-  open,
-  title,
-  icon,
-  accent = "lavender",
-  storageKey,
-  containerRef,
-  defaultSide = "left",
-  onClose,
-  children,
-}: {
+export const FloatingPanel = forwardRef<FloatingPanelHandle, {
   open: boolean;
   title: string;
   icon?: ReactNode;
@@ -65,33 +82,68 @@ export function FloatingPanel({
   containerRef: RefObject<HTMLDivElement | null>;
   defaultSide?: "left" | "right";
   onClose: () => void;
+  onGeometryChange?: (geometry: FloatingPanelGeometry | null) => void;
   children: ReactNode;
-}) {
+}>(function FloatingPanel(
+  {
+    open,
+    title,
+    icon,
+    accent = "lavender",
+    storageKey,
+    containerRef,
+    defaultSide = "left",
+    onClose,
+    onGeometryChange,
+    children,
+  },
+  ref,
+) {
   const panelRef = useRef<HTMLDivElement>(null);
-  const [rect, setRect] = useState<Rect | null>(null);
+  const [rect, setRect] = useState<FloatingPanelRect | null>(null);
   const [minimized, setMinimized] = useState(false);
   const [maximized, setMaximized] = useState(false);
-  // While actively dragging/resizing the panel must track the pointer 1:1 (no
-  // transition). At rest it gets an eased position transition so the sidebar
-  // collapse/expand - which nudges the panel to stay put - glides instead of
-  // stepping jerkily with each ResizeObserver tick.
   const [interacting, setInteracting] = useState(false);
   const [z, setZ] = useState(() => nextZ());
-  const restore = useRef<Rect | null>(null);
+  const restore = useRef<FloatingPanelRect | null>(null);
 
   const bounds = useCallback(() => {
     const el = containerRef.current;
     return el ? { w: el.clientWidth, h: el.clientHeight } : { w: 900, h: 600 };
   }, [containerRef]);
 
-  // Initialise geometry the first time the panel opens (stored, else a sensible
-  // half-width column on its default side).
+  const snapSide = useCallback(
+    (side: "left" | "right") => {
+      setMinimized(false);
+      setMaximized(false);
+      setRect((current) => {
+        const { w: cw, h: ch } = bounds();
+        const floorW = minPanelW(cw);
+        const w = clamp(current?.w ?? Math.round(cw * 0.42), floorW, cw);
+        const h = clamp(current?.h ?? Math.max(MIN_H, ch - 2 * MARGIN), MIN_H, ch);
+        const x = side === "left" ? MARGIN : Math.max(MARGIN, cw - w - MARGIN);
+        return { x, y: current?.y ?? MARGIN, w, h };
+      });
+    },
+    [bounds],
+  );
+
+  useImperativeHandle(ref, () => ({ snapSide }), [snapSide]);
+
+  useEffect(() => {
+    if (!open || !rect) {
+      onGeometryChange?.(null);
+      return;
+    }
+    onGeometryChange?.({ rect, minimized, maximized, open });
+  }, [open, rect, minimized, maximized, onGeometryChange]);
+
   useEffect(() => {
     if (!open || rect) return;
     const { w: cw, h: ch } = bounds();
     const floorW = minPanelW(cw);
     const stored = loadRect(storageKey);
-    let next: Rect;
+    let next: FloatingPanelRect;
     if (stored) {
       next = {
         x: clamp(stored.x, 0, Math.max(0, cw - floorW)),
@@ -104,13 +156,10 @@ export function FloatingPanel({
       const h = Math.max(MIN_H, ch - 2 * MARGIN);
       next = { x: defaultSide === "left" ? MARGIN : Math.max(MARGIN, cw - w - MARGIN), y: MARGIN, w, h };
     }
-    // One-time geometry init measured from the live container (an external
-    // system), not derived render state - the effect is the right place.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time init from container
     setRect(next);
   }, [open, rect, storageKey, defaultSide, bounds]);
 
-  // Persist + keep the window inside the workspace when it (or the window) resizes.
   useEffect(() => {
     if (!rect) return;
     try {
@@ -123,10 +172,6 @@ export function FloatingPanel({
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    // Track the container's viewport-left so a sidebar collapse/expand (which
-    // slides this container's left edge) can be compensated: without this the
-    // absolutely-positioned panel lurches sideways with the reflow. We shift the
-    // panel's x by the negative of that movement so it stays pinned in the viewport.
     let prevLeft = el.getBoundingClientRect().left;
     const ro = new ResizeObserver(() => {
       const leftNow = el.getBoundingClientRect().left;
@@ -216,9 +261,6 @@ export function FloatingPanel({
 
   if (!open || !rect) return null;
 
-  // Maximized fills the workspace via inset (no need to read the container size
-  // during render); otherwise use the stored rect (collapsed to the header when
-  // minimized).
   const geom: React.CSSProperties = maximized
     ? { left: MARGIN, top: MARGIN, right: MARGIN, bottom: MARGIN }
     : { left: rect.x, top: rect.y, width: rect.w, height: minimized ? HEADER_H : rect.h };
@@ -246,15 +288,12 @@ export function FloatingPanel({
         border: "1px solid var(--mantine-color-default-border)",
         borderRadius: 14,
         boxShadow: "0 18px 50px rgba(35, 34, 32, 0.22), 0 2px 8px rgba(35, 34, 32, 0.08)",
-        // Eased glide at rest (smooths the sidebar-toggle reposition); none while
-        // the user is dragging/resizing so the pointer stays perfectly tracked.
         transition: interacting
           ? "none"
           : "left 260ms cubic-bezier(0.32,0.72,0,1), top 260ms cubic-bezier(0.32,0.72,0,1)",
         willChange: "left, top",
       }}
     >
-      {/* Title bar - drag to move; double-click to maximize/restore. */}
       <Group
         h={HEADER_H}
         px={10}
@@ -267,8 +306,6 @@ export function FloatingPanel({
           flexShrink: 0,
           cursor: maximized ? "default" : "move",
           borderBottom: minimized ? "none" : "1px solid var(--mantine-color-default-border)",
-          // accent-0/1 are remapped in dark to deep tinted surfaces - keep the
-          // accent wash instead of falling back to a flat charcoal strip.
           background: `light-dark(var(--mantine-color-${accent}-0), var(--mantine-color-${accent}-1))`,
           touchAction: "none",
           userSelect: "none",
@@ -283,6 +320,34 @@ export function FloatingPanel({
           </Text>
         </Group>
         <Group gap={2} wrap="nowrap" style={{ flexShrink: 0 }}>
+          {!maximized ? (
+            <>
+              <Tooltip label="Dock left" withArrow openDelay={400}>
+                <ActionIcon
+                  variant="subtle"
+                  color="gray"
+                  size="sm"
+                  radius="md"
+                  onClick={() => snapSide("left")}
+                  aria-label="Dock panel left"
+                >
+                  <IconLayoutSidebarLeftCollapse size={15} stroke={2} />
+                </ActionIcon>
+              </Tooltip>
+              <Tooltip label="Dock right" withArrow openDelay={400}>
+                <ActionIcon
+                  variant="subtle"
+                  color="gray"
+                  size="sm"
+                  radius="md"
+                  onClick={() => snapSide("right")}
+                  aria-label="Dock panel right"
+                >
+                  <IconLayoutSidebarRightCollapse size={15} stroke={2} />
+                </ActionIcon>
+              </Tooltip>
+            </>
+          ) : null}
           <Tooltip label={minimized ? "Restore" : "Minimize"} withArrow openDelay={400}>
             <ActionIcon variant="subtle" color="gray" size="sm" radius="md" onClick={toggleMin} aria-label="Minimize">
               <IconMinus size={15} stroke={2} />
@@ -321,4 +386,4 @@ export function FloatingPanel({
       )}
     </Box>
   );
-}
+});
