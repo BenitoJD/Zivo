@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from app.api.chat import (
+    _is_prefetched_reference,
     _learn_context_has_active_question,
+    _message_has_prefetched_reference,
     _user_requests_mcq_answer,
 )
 from app.services.prompts import DEFAULTS
@@ -22,6 +24,7 @@ def test_tutor_system_prompt_has_warm_concise_voice_directives() -> None:
     # Answers the actual question first, in plain words.
     assert "answer" in prompt and "first" in prompt
     assert "plain" in prompt
+    assert "wikipedia summary" in prompt
     # Explicitly forbids robotic document-anchored openers (the directive
     # matters, not merely that the phrase is absent — the prompt names the
     # forbidden phrases to instruct against them).
@@ -46,3 +49,11 @@ def test_learn_context_has_active_question() -> None:
     block = 'Current question stem: "Which is true?"\n  A. One'
     assert _learn_context_has_active_question(block)
     assert not _learn_context_has_active_question("Document study complete")
+
+
+def test_prefetched_reference_scope_and_message() -> None:
+    assert _is_prefetched_reference({"reference_source": "wikipedia"})
+    assert not _is_prefetched_reference({"reference_source": "other"})
+    msg = 'Wikipedia summary of "Ombudsman":\nAn ombudsman is...'
+    assert _message_has_prefetched_reference(msg)
+    assert not _message_has_prefetched_reference("Explain hashing")

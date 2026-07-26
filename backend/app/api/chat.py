@@ -116,6 +116,43 @@ def _learn_context_has_active_question(learn_context: str | None) -> bool:
     return bool(learn_context and "Current question stem:" in learn_context)
 
 
+_HIGHLIGHTED_RE = re.compile(
+    r'I highlighted(?: this while studying)?:\s*\n\n"([^"]{1,240})"',
+    re.IGNORECASE,
+)
+
+
+def _retrieval_query(message: str) -> str:
+    """Prefer the quoted highlight over the full turn text for vector search."""
+    m = _HIGHLIGHTED_RE.search(message or "")
+    if m:
+        return m.group(1).strip()
+    text = (message or "").strip()
+    return text[:500] if len(text) > 500 else text
+
+
+def _is_prefetched_reference(scope: dict | None) -> bool:
+    return (scope or {}).get("reference_source") in ("wikipedia", "dictionary")
+
+
+_WIKIPEDIA_PREFETCH_RE = re.compile(
+    r"Wikipedia summary of\s+\"",
+    re.IGNORECASE,
+)
+
+
+def _message_has_prefetched_reference(message: str) -> bool:
+    return bool(_WIKIPEDIA_PREFETCH_RE.search(message or ""))
+
+
+_PREFETCHED_REFERENCE_DIRECTIVE = (
+    "Reference lookup (this turn): The learner highlighted a term from their current "
+    "study question. Use the Wikipedia summary in their message plus the Learn session "
+    "block. Explain the highlighted term in that quiz context only. Do not discuss "
+    "unrelated topics from other newspaper pages or earlier chat turns."
+)
+
+
 def _cache_eligible(
     *,
     include_image: bool,
@@ -124,6 +161,7 @@ def _cache_eligible(
     doc_count: int,
     has_history: bool,
     conversational_followup: bool = False,
+    prefetched_reference: bool = False,
 ) -> bool:
     """Whether a semantic cache lookup/store is safe for this turn.
 
@@ -133,6 +171,8 @@ def _cache_eligible(
     after history remain eligible when the digest matches.
     """
     if include_image:
+        return False
+    if prefetched_reference:
         return False
     if selection_text:
         return False
@@ -165,6 +205,8 @@ class ChatScope(BaseModel):
     confirmed_choice_indices: list[int] | None = Field(default=None, max_length=26)
     answer_correct: bool | None = None
     mentions: list[str] = Field(default_factory=list, max_length=20)
+    # Client-side reference lookup already embedded in the message (Wikipedia, etc.).
+    reference_source: str | None = Field(default=None, max_length=32)
     # Which study surface the chat is on. "read" → the buddy is about the document
     # being read, so Learn-mode page/question context must NOT be injected.
     mode: str | None = Field(default=None, max_length=16)
@@ -480,6 +522,7 @@ async def chat_stream(
                         )
                     )
                 scope = normalize_chat_scope(scope, doc)
+                prefetched_ref = _is_prefetched_reference(scope)
                 doc_ids = _resolve_document_ids(
                     stream_db,
                     doc.id,
@@ -513,7 +556,7 @@ async def chat_stream(
                             return run_retrieve(
                                 retrieve_db,
                                 document_ids=doc_ids,
-                                query=request_message,
+                                query=_retrieval_query(request_message),
                                 scope=scope,
                                 mentions=scope.get("mentions") or [],
                                 prior_messages=prior_messages,
@@ -551,7 +594,14 @@ async def chat_stream(
                     stream_db, "brainstorm_system" if brainstorm_mode else "tutor_system"
                 )
                 messages = [{"role": "system", "content": system}]
-                messages.extend(retrieved.get("messages") or prior_messages)
+                # Wikipedia / dictionary lookups carry their own reference text. Prior
+                # chat turns (e.g. another newspaper page) would steer answers wrong.
+                model_history = (
+                    []
+                    if prefetched_ref
+                    else (retrieved.get("messages") or prior_messages)
+                )
+                messages.extend(model_history)
 
                 context_block = retrieved.get("context_block") or ""
                 user_content = build_user_message(
@@ -564,6 +614,8 @@ async def chat_stream(
                     db=stream_db,
                 )
                 trailer_parts: list[str] = []
+                if prefetched_ref:
+                    trailer_parts.append(_PREFETCHED_REFERENCE_DIRECTIVE)
                 learn_lead = learn_context or ""
                 has_history = bool(prior_messages)
                 guardrail_applies = (
@@ -602,6 +654,7 @@ async def chat_stream(
                     doc_count=len(doc_ids),
                     has_history=has_history,
                     conversational_followup=is_conversational_followup(request_message),
+                    prefetched_reference=prefetched_ref,
                 )
                 artifact_id, artifact_captured_at = _artifact_ref(doc)
                 cached: dict | None = None

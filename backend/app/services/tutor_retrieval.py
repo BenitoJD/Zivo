@@ -41,6 +41,7 @@ GateReason = Literal[
     "continuation",
     "content_query",
     "brainstorm",
+    "prefetched_reference",
 ]
 
 _NO_RETRIEVE_RE = re.compile(
@@ -122,6 +123,9 @@ def decide_retrieval(
     if str(scope.get("mode") or "").lower() == "brainstorm":
         # Brainstorm uses kept-ideas context, not vector RAG.
         return RetrievalGateVerdict(False, "brainstorm", policy=pol)
+    if scope.get("reference_source") in ("wikipedia", "dictionary"):
+        # Client already fetched the reference text — skip vector RAG on this turn.
+        return RetrievalGateVerdict(False, "prefetched_reference", policy=pol)
     if not has_history:
         return RetrievalGateVerdict(True, "first_turn", policy=pol)
     if scope.get("page_start") is not None or scope.get("page_end") is not None:

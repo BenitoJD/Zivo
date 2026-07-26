@@ -18,6 +18,16 @@ def test_gate_skips_continuation() -> None:
     assert v.policy_version == TUTOR_RETRIEVAL_VERSION
 
 
+def test_gate_skips_prefetched_reference() -> None:
+    v = decide_retrieval(
+        "long wikipedia message",
+        scope={"reference_source": "wikipedia", "current_page": 3},
+        has_history=False,
+    )
+    assert v.retrieve is False
+    assert v.reason == "prefetched_reference"
+
+
 def test_gate_retrieves_first_turn() -> None:
     v = decide_retrieval("what is CAP?", scope={}, has_history=False)
     assert v.retrieve is True

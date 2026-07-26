@@ -460,11 +460,20 @@ export function StudyMetaBar({
     </Group>
   );
 
+  const barChrome = {
+    flexShrink: 0,
+    position: "sticky" as const,
+    top: 0,
+    zIndex: 40,
+    background: "var(--mantine-color-body)",
+    borderBottom: "1px solid var(--mantine-color-default-border)",
+  };
+
   if (compact) {
     // Narrow viewports: denser chrome. Mode dropdown only on true phones
     // (tablets keep the desktop sidebar mode list).
     return (
-      <Stack px="sm" py={6} gap={6} style={{ flexShrink: 0 }}>
+      <Stack px="sm" py={6} gap={6} style={barChrome}>
         {modeSelect ? (
           <Group gap="sm" wrap="nowrap" align="center">
             {backControl}
@@ -496,29 +505,20 @@ export function StudyMetaBar({
   if (!progress && !modeBadge && !studyModeControl && !alignControl && !backControl && !lessonControl) return null;
   const barPx = inline ? 0 : { base: "sm", sm: "md", lg: "lg" } as const;
   return (
-    <Box
-      w="100%"
-      px={barPx}
-      py={8}
-      style={{
-        display: "grid",
-        gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
-        alignItems: "center",
-        columnGap: "var(--mantine-spacing-md)",
-        flexShrink: 0,
-      }}
-    >
-      <Group gap="md" wrap="nowrap" justify="flex-start" style={{ minWidth: 0 }}>
-        {backControl}
-        {modeBadge}
-        {lessonControl}
-      </Group>
-      <Group gap="md" wrap="nowrap" justify="center" style={{ minWidth: 0 }}>
-        {progress}
-      </Group>
-      <Group gap="xs" wrap="nowrap" justify="flex-end" style={{ minWidth: 0 }}>
-        {studyModeControl}
-        {alignControl}
+    <Box w="100%" px={barPx} py={8} style={barChrome}>
+      <Group justify="space-between" wrap="nowrap" align="center" w="100%" gap="md">
+        <Group gap="md" wrap="nowrap" style={{ minWidth: 0, flexShrink: 1 }}>
+          {backControl}
+          {modeBadge}
+          {lessonControl}
+        </Group>
+        <Group gap="md" wrap="nowrap" justify="center" style={{ minWidth: 0, flexShrink: 0 }}>
+          {progress}
+        </Group>
+        <Group gap="xs" wrap="nowrap" style={{ minWidth: 0, flexShrink: 0 }}>
+          {studyModeControl}
+          {alignControl}
+        </Group>
       </Group>
     </Box>
   );

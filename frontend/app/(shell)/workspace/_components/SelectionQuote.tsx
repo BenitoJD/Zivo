@@ -193,30 +193,28 @@ export function DictionaryBtn({ text }: { text: string }) {
       position="top"
     >
       <HoverCard.Target>
-        <Tooltip label="Dictionary" withArrow openDelay={300}>
-          <UnstyledButton
-            aria-label="Dictionary"
-            onMouseDown={(e) => e.preventDefault()}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "6px 12px",
-              borderRadius: "var(--mantine-radius-xl)",
-              fontSize: "var(--mantine-font-size-sm)",
-              fontWeight: 600,
-              color: "var(--mantine-color-text)",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "var(--mantine-color-lavender-0)";
-              load();
-            }}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-          >
-            <IconBook2 size={16} />
-            Dictionary
-          </UnstyledButton>
-        </Tooltip>
+        <UnstyledButton
+          aria-label="Dictionary"
+          onMouseDown={(e) => e.preventDefault()}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "6px 12px",
+            borderRadius: "var(--mantine-radius-xl)",
+            fontSize: "var(--mantine-font-size-sm)",
+            fontWeight: 600,
+            color: "var(--mantine-color-text)",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "var(--mantine-color-lavender-0)";
+            load();
+          }}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+        >
+          <IconBook2 size={16} />
+          Dictionary
+        </UnstyledButton>
       </HoverCard.Target>
       <HoverCard.Dropdown p="sm">
         {loading ? (

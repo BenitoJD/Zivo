@@ -8,13 +8,17 @@ import {
   useChatMessagesQuery,
   useSavedNotesActions,
 } from "@/lib/api/queries";
-import { apiPost, apiPostSSE, ensureGuestSession, humanizeApiFailure } from "@/lib/api/client";
+import { apiGet, apiPost, apiPostSSE, ensureGuestSession, humanizeApiFailure } from "@/lib/api/client";
 import { isTransientChatAssistantMessage } from "@/lib/constants";
 import { ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import type { McqState } from "@/lib/types";
 import type { StudyMode } from "@/app/workspace/_components/studyNav";
 
 export type ChatMessage = { role: string; content: string };
+
+type WikipediaLookup = { title: string; extract: string; source_url: string };
+
+const WIKI_EXTRACT_MAX = 480;
 
 /**
  * Tutor-chat surface, extracted from the workspace page orchestrator.
@@ -103,7 +107,7 @@ export function useTutorChat({
 
   // Core streamer - assumes chatMessages already ends with the user turn + an empty
   // assistant placeholder to fill. Shared by send, regenerate, and edit-and-resend.
-  async function runAssistant(userMsg: string) {
+  async function runAssistant(userMsg: string, extraScope?: Record<string, unknown>) {
     setChatBusy(true);
     chatAbortRef.current?.abort();
     const abort = new AbortController();
@@ -113,7 +117,7 @@ export function useTutorChat({
       // Scope the chat to the CURRENT mode. In Read mode the buddy is about the
       // document the user is reading - never the Learn queue's current page - so
       // it must not pin the learn page/question.
-      const scope: Record<string, unknown> = { mode };
+      const scope: Record<string, unknown> = { mode, ...extraScope };
       if (mode !== "read") {
         const assertionId = currentAssertionId ?? queue?.current_assertion_id;
         if (assertionId) scope.current_assertion_id = assertionId;
@@ -226,12 +230,53 @@ export function useTutorChat({
     if (!t) return;
     setChatInput(`About this passage:\n"${t}"\n\nMy question: `);
   }
-  function askBuddy(message: string) {
+  function askBuddy(message: string, extraScope?: Record<string, unknown>) {
     if (chatBusy || !chatContextReady) return;
     const msg = message.trim();
     if (!msg) return;
     setChatMessages((m) => [...m, { role: "user", content: msg }, { role: "assistant", content: "" }]);
-    void runAssistant(msg);
+    void runAssistant(msg, extraScope);
+  }
+
+  /** Wikipedia selection: show the turn immediately, fetch the summary, then stream. */
+  async function askBuddyWithWikipedia(selection: string) {
+    if (chatBusy || !chatContextReady) return;
+    const text = selection.trim();
+    if (!text) return;
+    const token = text.split(/\s+/)[0] || text;
+    setChatMessages((m) => [
+      ...m,
+      { role: "user", content: `Explain "${text}" — looking up Wikipedia…` },
+      { role: "assistant", content: "" },
+    ]);
+    setChatBusy(true);
+    let userMsg: string;
+    try {
+      const wiki = await apiGet<WikipediaLookup>(
+        `/api/reference/wikipedia?query=${encodeURIComponent(token)}`,
+      );
+      const extract =
+        wiki.extract.length > WIKI_EXTRACT_MAX
+          ? `${wiki.extract.slice(0, WIKI_EXTRACT_MAX).trimEnd()}…`
+          : wiki.extract;
+      userMsg =
+        `I highlighted this while studying:\n\n"${text}"\n\n` +
+        `Wikipedia summary of "${wiki.title}":\n${extract}\n\n` +
+        `Explain what this means in the context of what I'm learning. Keep it plain and short.`;
+    } catch {
+      userMsg =
+        `I highlighted: "${text}"\n\n` +
+        `Use Wikipedia as your source and explain what this means in plain language.`;
+    }
+    setChatMessages((m) => {
+      const copy = [...m];
+      const userIdx = copy.length - 2;
+      if (copy[userIdx]?.role === "user") {
+        copy[userIdx] = { role: "user", content: userMsg };
+      }
+      return copy;
+    });
+    await runAssistant(userMsg, { reference_source: "wikipedia" });
   }
   function saveNote(content: string, quote?: string | null) {
     const c = content.trim();
@@ -246,8 +291,11 @@ export function useTutorChat({
     const lastUserIdx = chatMessages.map((x) => x.role).lastIndexOf("user");
     if (lastUserIdx === -1) return;
     const lastUser = chatMessages[lastUserIdx].content;
+    const extraScope = lastUser.includes("Wikipedia summary of")
+      ? { reference_source: "wikipedia" }
+      : undefined;
     setChatMessages([...chatMessages.slice(0, lastUserIdx + 1), { role: "assistant", content: "" }]);
-    void runAssistant(lastUser);
+    void runAssistant(lastUser, extraScope);
   }
 
   // Edit a previous question: lift it into the composer and trim the thread from there.
@@ -273,6 +321,7 @@ export function useTutorChat({
     clearChat,
     quoteToComposer,
     askBuddy,
+    askBuddyWithWikipedia,
     saveNote,
     regenerateChat,
     editChatFromUser,

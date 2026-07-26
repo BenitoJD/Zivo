@@ -48,3 +48,7 @@ def test_turn_without_citations_is_not_eligible() -> None:
 
 def test_multi_document_mention_turn_is_not_eligible() -> None:
     assert _base(doc_count=2) is False
+
+
+def test_prefetched_reference_turn_is_not_eligible() -> None:
+    assert _base(prefetched_reference=True) is False

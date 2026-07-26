@@ -72,7 +72,6 @@ import { PageSelectionScreen, buildPageSliderMarks } from "@/app/workspace/_comp
 import {
   STUDY_DESKTOP_BP,
   STUDY_COMPACT_BP,
-  STUDY_METABAR_TOP_INSET,
   pagesInRange,
   computeFloatingLaneInsets,
   type AnsweredCard,
@@ -271,6 +270,7 @@ export default function WorkspaceArtifactPage({
     clearChat,
     quoteToComposer,
     askBuddy,
+    askBuddyWithWikipedia,
     saveNote,
     regenerateChat,
     editChatFromUser,
@@ -894,28 +894,9 @@ export default function WorkspaceArtifactPage({
     revealTutor();
     askBuddy(`Explain this in simple terms:\n\n"${text}"\n\n`);
   }
-  type WikipediaLookup = { title: string; extract: string; source_url: string };
-  async function askWikipediaAboutSelection(text: string) {
-    const query = text.trim().split(/\s+/)[0] || text;
-    try {
-      const wiki = await apiGet<WikipediaLookup>(
-        `/api/reference/wikipedia?query=${encodeURIComponent(query)}`,
-      );
-      askBuddy(
-        `I highlighted this while studying:\n\n"${text}"\n\n` +
-          `Use this Wikipedia summary about "${wiki.title}" as your main source (cite it briefly if helpful):\n\n` +
-          `${wiki.extract}\n\n` +
-          `Explain what this means in the context of what I'm learning. Keep it plain and short.`,
-      );
-    } catch {
-      askBuddy(
-        `I highlighted: "${text}"\n\nUse Wikipedia as your source and explain what this means in plain language.`,
-      );
-    }
-  }
   function wikipediaSelectionInChat(text: string) {
     revealTutor();
-    void askWikipediaAboutSelection(text);
+    void askBuddyWithWikipedia(text);
   }
 
   function handleMcqSelect(value: string) {
@@ -1465,6 +1446,32 @@ export default function WorkspaceArtifactPage({
         : undefined;
   const reviewableCount = Math.max(answeredHistory.length, queue?.questions_answered ?? 0);
 
+  const studyMetaBar = (
+    <StudyMetaBar
+      questionIndex={questionIndex}
+      questionTotal={questionTotal}
+      page={queue?.current_page}
+      mode={mode}
+      onModeChange={handleStudyModeChange}
+      showProgress={(mode === "learn" || mode === "test") && !mcqLoading && Boolean(displayAssertionId) && !showPageComplete && !showDocumentComplete}
+      compact={isNarrow}
+      showModeSelect={isCompact}
+      studyMode={queue?.study_mode}
+      onStudyModeChange={(m) => void setStudyMode(m)}
+      align={studyAlign}
+      onAlignChange={handleStudyAlignChange}
+      contextLabel={newspaperContextLabel}
+      isNewspaper={isNewspaper}
+      editionIndex={editionQuestionIndex}
+      editionTotal={editionQuestionTotal}
+      editionAnswered={queue?.questions_answered ?? 0}
+      backHref={isNewspaper ? newspaperBackHref : undefined}
+      backLabel="Days"
+      showLessonPill={lessonReadyForPage}
+      onReopenLesson={reopenLesson}
+    />
+  );
+
   async function openReviewPrevious() {
     let history = answeredHistory;
     if (history.length === 0 && reviewableCount > 0) {
@@ -1498,29 +1505,6 @@ export default function WorkspaceArtifactPage({
           paddingRight: floatingLane.right,
         }}
       >
-        <StudyMetaBar
-          questionIndex={questionIndex}
-          questionTotal={questionTotal}
-          page={queue?.current_page}
-          mode={mode}
-          onModeChange={handleStudyModeChange}
-          showProgress={(mode === "learn" || mode === "test") && !mcqLoading && Boolean(displayAssertionId) && !showPageComplete && !showDocumentComplete}
-          compact={isNarrow}
-          showModeSelect={isCompact}
-          studyMode={queue?.study_mode}
-          onStudyModeChange={(m) => void setStudyMode(m)}
-          align={studyAlign}
-          onAlignChange={handleStudyAlignChange}
-          contextLabel={newspaperContextLabel}
-          isNewspaper={isNewspaper}
-          editionIndex={editionQuestionIndex}
-          editionTotal={editionQuestionTotal}
-          editionAnswered={queue?.questions_answered ?? 0}
-          backHref={isNewspaper ? newspaperBackHref : undefined}
-          backLabel="Days"
-          showLessonPill={lessonReadyForPage}
-          onReopenLesson={reopenLesson}
-        />
         <Box
           w="100%"
           maw={MCQ_CONTENT_MAX}
@@ -1826,14 +1810,7 @@ export default function WorkspaceArtifactPage({
           h="100%"
           style={{ display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}
         >
-        <StudyMetaBar
-          questionIndex={0}
-          questionTotal={0}
-          mode={mode}
-          onModeChange={handleStudyModeChange}
-          showProgress={false}
-          compact={isNarrow}
-        />
+        {studyMetaBar}
         {stacked ? (
           <Group justify="flex-end" px={{ base: "sm", sm: "md" }} pt={6} pb={6} style={{ flexShrink: 0 }}>
             <Button
@@ -1881,7 +1858,8 @@ export default function WorkspaceArtifactPage({
               onAsk={(m) => { askBuddy(m); if (stacked) setReaderMobileTab("buddy"); }}
               onWikipedia={(t) => {
                 if (stacked) setReaderMobileTab("buddy");
-                void askWikipediaAboutSelection(t);
+                revealTutor();
+                void askBuddyWithWikipedia(t);
               }}
               onSaveQuote={(t) => saveNote(t, t)}
             />
@@ -1967,6 +1945,7 @@ export default function WorkspaceArtifactPage({
         h="100%"
         style={{ display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}
       >
+      {studyMetaBar}
       {isLg ? (
         <>
           <Box
@@ -2012,7 +1991,7 @@ export default function WorkspaceArtifactPage({
               storageKey="zv-float-source"
               containerRef={studyRowRef}
               defaultSide="left"
-              topInset={STUDY_METABAR_TOP_INSET}
+              topInset={0}
               onClose={closeSource}
               onGeometryChange={setSourceGeometry}
             >
@@ -2043,7 +2022,7 @@ export default function WorkspaceArtifactPage({
               storageKey="zv-float-tutor"
               containerRef={studyRowRef}
               defaultSide="right"
-              topInset={STUDY_METABAR_TOP_INSET}
+              topInset={0}
               onClose={closeTutor}
               onGeometryChange={setTutorGeometry}
             >
