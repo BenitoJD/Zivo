@@ -56,6 +56,17 @@ function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
 }
 
+/** Vertical bounds for user-driven move/resize (full viewport; not the meta-bar default). */
+function moveYBounds(ch: number, panelH: number, minimized: boolean) {
+  const h = minimized ? HEADER_H : panelH;
+  return { min: MARGIN, max: Math.max(MARGIN, ch - h - MARGIN) };
+}
+
+/** Default y floor so new/docked panels clear StudyMetaBar without blocking drag-up. */
+function defaultTopMin(topInset: number) {
+  return Math.max(MARGIN, topInset);
+}
+
 /** Never ask for more width than the workspace can give (narrow tablets). */
 function minPanelW(cw: number) {
   return Math.min(MIN_W, Math.max(ABS_MIN_W, cw - 2 * MARGIN));
@@ -122,7 +133,7 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
       setRect((current) => {
         const { w: cw, h: ch } = bounds();
         const floorW = minPanelW(cw);
-        const topMin = Math.max(MARGIN, topInset);
+        const topMin = defaultTopMin(topInset);
         const w = clamp(current?.w ?? Math.round(cw * 0.42), floorW, cw);
         const h = clamp(current?.h ?? Math.max(MIN_H, ch - topMin - MARGIN), MIN_H, ch);
         const x = side === "left" ? MARGIN : Math.max(MARGIN, cw - w - MARGIN);
@@ -151,13 +162,14 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
     const floorW = minPanelW(cw);
     // The panel must clear the StudyMetaBar strip at the top of the study row, so
     // clamp its y to the reserved inset instead of 0.
-    const topMin = Math.max(MARGIN, topInset);
+    const topMin = defaultTopMin(topInset);
     const stored = loadRect(storageKey);
     let next: FloatingPanelRect;
     if (stored) {
+      const { min: yMin, max: yMax } = moveYBounds(ch, stored.h, false);
       next = {
         x: clamp(stored.x, 0, Math.max(0, cw - floorW)),
-        y: clamp(stored.y, topMin, Math.max(topMin, ch - MIN_H)),
+        y: clamp(stored.y, yMin, Math.max(yMin, yMax)),
         w: clamp(stored.w, floorW, cw),
         h: clamp(stored.h, MIN_H, ch),
       };
@@ -191,18 +203,18 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
         if (!r) return r;
         const { w: cw, h: ch } = bounds();
         const floorW = minPanelW(cw);
-        const topMin = Math.max(MARGIN, topInset);
+        const { min: yMin, max: yMax } = moveYBounds(ch, r.h, minimized);
         return {
           w: clamp(r.w, floorW, cw),
           h: clamp(r.h, MIN_H, ch),
           x: clamp(r.x - shift, 0, Math.max(0, cw - Math.min(r.w, cw))),
-          y: clamp(r.y, topMin, Math.max(topMin, ch - HEADER_H)),
+          y: clamp(r.y, yMin, Math.max(yMin, yMax)),
         };
       });
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [containerRef, bounds, topInset]);
+  }, [containerRef, bounds, minimized]);
 
   const startDrag = useCallback(
     (mode: "move" | Dir, e: React.PointerEvent) => {
@@ -213,7 +225,7 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
       const s = rect;
       const { w: cw, h: ch } = bounds();
       const floorW = minPanelW(cw);
-      const topMin = Math.max(MARGIN, topInset);
+      const { min: yMin, max: yMax } = moveYBounds(ch, s.h, minimized);
       setInteracting(true);
       document.body.style.userSelect = "none";
       if (mode !== "move") document.body.style.cursor = `${mode}-resize`;
@@ -224,21 +236,20 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
         if (mode === "move") {
           setRect({
             ...s,
-            x: clamp(s.x + dx, 0, Math.max(0, cw - s.w)),
-            y: clamp(s.y + dy, topMin, Math.max(topMin, ch - HEADER_H)),
+            x: clamp(s.x + dx, MARGIN, Math.max(MARGIN, cw - s.w - MARGIN)),
+            y: clamp(s.y + dy, yMin, Math.max(yMin, yMax)),
           });
           return;
         }
         let { x, y, w, h } = s;
         if (mode.includes("e")) w = clamp(s.w + dx, floorW, cw - s.x);
-        if (mode.includes("s")) h = clamp(s.h + dy, MIN_H, ch - s.y);
+        if (mode.includes("s")) h = clamp(s.h + dy, MIN_H, ch - s.y - MARGIN);
         if (mode.includes("w")) {
           w = clamp(s.w - dx, floorW, s.x + s.w);
           x = s.x + s.w - w;
         }
         if (mode.includes("n")) {
-          // Don't let the top edge climb into the StudyMetaBar strip.
-          h = clamp(s.h - dy, MIN_H, s.y + s.h - topMin);
+          h = clamp(s.h - dy, MIN_H, s.y + s.h - MARGIN);
           y = s.y + s.h - h;
         }
         setRect({ x, y, w, h });
@@ -253,7 +264,7 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
     },
-    [rect, maximized, bounds, topInset],
+    [rect, maximized, minimized, bounds],
   );
 
   const bringToFront = useCallback(() => setZ(nextZ()), []);
@@ -275,7 +286,7 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
   if (!open || !rect) return null;
 
   const geom: React.CSSProperties = maximized
-    ? { left: MARGIN, top: Math.max(MARGIN, topInset), right: MARGIN, bottom: MARGIN }
+    ? { left: MARGIN, top: defaultTopMin(topInset), right: MARGIN, bottom: MARGIN }
     : { left: rect.x, top: rect.y, width: rect.w, height: minimized ? HEADER_H : rect.h };
 
   const handle = (dir: Dir, style: React.CSSProperties) => (
