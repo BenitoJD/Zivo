@@ -564,15 +564,8 @@ async def chat_stream(
                     db=stream_db,
                 )
                 trailer_parts: list[str] = []
-                if learn_context:
-                    trailer_parts.append(learn_context)
+                learn_lead = learn_context or ""
                 has_history = bool(prior_messages)
-                # The quiz answer guardrail stops the tutor from revealing the
-                # correct option. But on a purely conversational follow-up
-                # ("thanks", "go on", "can you rephrase that") re-appending it
-                # biases the model to re-lecture from excerpts instead of just
-                # responding. Keep it only when the turn is a real content
-                # question that could otherwise leak the answer.
                 guardrail_applies = (
                     learn_context
                     and _learn_context_has_active_question(learn_context)
@@ -581,20 +574,23 @@ async def chat_stream(
                 )
                 if guardrail_applies:
                     trailer_parts.append(_MCQ_ANSWER_GUARDRAIL)
-                # Quiz formatting rides the final turn too (was appended to the
-                # system prompt, which flipped the prefix's first bytes per turn).
                 if _looks_like_quiz(request_message):
                     trailer_parts.append(get_prompt(stream_db, "mcq_format"))
                 if trailer_parts:
                     user_content = user_content + "\n\n" + "\n\n".join(trailer_parts)
+                body_parts: list[str] = []
+                if learn_lead:
+                    body_parts.append(learn_lead)
                 if context_block:
-                    user_content = (
-                        "Document excerpts (retrieved for this turn):\n\n"
-                        + context_block
-                        + "\n\n---\n\n"
-                        + user_content
+                    body_parts.append(
+                        "Document excerpts (retrieved for this turn):\n\n" + context_block
                     )
-                messages.append({"role": "user", "content": user_content})
+                body_parts.append(user_content)
+                if len(body_parts) == 1:
+                    final_user_content = body_parts[0]
+                else:
+                    final_user_content = "\n\n---\n\n".join(body_parts)
+                messages.append({"role": "user", "content": final_user_content})
 
                 # Brainstorm never serves the semantic response cache. Two near-identical
                 # prompts returning the identical stored answer is fine for a tutor and

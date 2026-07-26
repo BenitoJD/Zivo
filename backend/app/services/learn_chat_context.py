@@ -51,6 +51,31 @@ def _assertion_mcq(db: Session, assertion_id: str) -> dict[str, Any] | None:
     }
 
 
+def format_active_question_retrieval_chunk(
+    db: Session,
+    assertion_id: str,
+    *,
+    page: int | None = None,
+) -> str | None:
+    """Text block pinned at the top of tutor retrieval for the on-screen MCQ."""
+    mcq = _assertion_mcq(db, assertion_id)
+    if not mcq or not mcq.get("stem"):
+        return None
+    lines = ["Active quiz question (authoritative — the learner is answering this now):"]
+    if page is not None and page >= 1:
+        lines.append(f"Source page: {page}")
+    lines.append(f"Stem: {mcq['stem']}")
+    options = mcq.get("options") or []
+    if options:
+        for i, opt in enumerate(options):
+            lines.append(f"  {_choice_letter(i)}. {opt}")
+    lines.append(
+        "When the learner asks about a phrase from this stem, explain that phrase "
+        "as part of this question — do not claim it is missing from the session."
+    )
+    return "\n".join(lines)
+
+
 def _choice_letter(index: int) -> str:
     return chr(65 + max(0, index))
 
@@ -187,8 +212,19 @@ def build_learn_chat_context(
             lines.append(
                 f"- Ground tutor answers in page {page} of this edition."
             )
+        lines.append(
+            "- The current question stem and options (below) are part of this session's "
+            "material. If the learner asks about a term that appears in the stem, treat "
+            "it as in scope — use the stem, the source page excerpts, and clear teaching "
+            "language. Do not say it is absent just because a retrieved excerpt omitted it."
+        )
     else:
         lines.append(f"- Study range: pages {page_from}–{page_to}; currently on page {page}")
+        lines.append(
+            "- The current question stem and options (when listed below) are part of this "
+            "session's material. Explain terms that appear in the stem using the stem, "
+            "page excerpts, and teaching language — not by claiming they are missing."
+        )
     if supplementary:
         sup = ", ".join(str(p) for p in supplementary)
         lines.append(

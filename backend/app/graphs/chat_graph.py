@@ -8,6 +8,7 @@ from typing import Any, TypedDict
 from sqlalchemy.orm import Session
 
 from app.services.chat_retrieval import retrieve_document_chunks
+from app.services.learn_chat_context import format_active_question_retrieval_chunk
 from app.services.tutor_retrieval import decide_retrieval, plan_brainstorm_sample
 from app.services.token_budget import CHAT_INPUT_MAX_TOKENS, truncate_to_tokens
 
@@ -37,6 +38,25 @@ def retrieve_context(state: ChatState, *, db: Session) -> dict[str, Any]:
     scope = state.get("scope") or {}
     query = state.get("query", "")
     chunks = retrieve_document_chunks(db, document_ids=doc_ids, query=query, scope=scope)
+    assertion_id = scope.get("current_assertion_id")
+    if assertion_id:
+        page = scope.get("current_page")
+        page_num = int(page) if page is not None else None
+        active_text = format_active_question_retrieval_chunk(
+            db, str(assertion_id), page=page_num
+        )
+        if active_text:
+            chunks.insert(
+                0,
+                {
+                    "chunk_id": "active_question",
+                    "document_id": str(doc_ids[0]) if doc_ids else "",
+                    "page_start": page_num or scope.get("page_start") or 1,
+                    "page_end": page_num or scope.get("page_end") or scope.get("page_start") or 1,
+                    "text": active_text,
+                    "score": 1.0,
+                },
+            )
     if scope.get("selection_text"):
         chunks.insert(
             0,
