@@ -358,6 +358,7 @@ def on_triage_completed(
         # Even a non-content page can be programmable (e.g. a code-only snippet
         # the LLM won't turn into MCQs but is perfect for a coding challenge).
         _maybe_spawn_coding(db, doc, page=page)
+        _maybe_spawn_debug(db, doc, page=page)
         from app.services.newspaper import maybe_mark_newspaper_edition_ready
 
         maybe_mark_newspaper_edition_ready(db, doc)
@@ -365,6 +366,7 @@ def on_triage_completed(
     generated = count_assertions_on_page(db, document_id, page)
     if generated > 0:
         _maybe_spawn_coding(db, doc, page=page)
+        _maybe_spawn_debug(db, doc, page=page)
         from app.services.newspaper import maybe_mark_newspaper_edition_ready
 
         maybe_mark_newspaper_edition_ready(db, doc)
@@ -374,7 +376,26 @@ def on_triage_completed(
     # Coding generation is independent of MCQ budget — a programmable page spawns
     # one coding problem whether or not MCQs are also being generated for it.
     _maybe_spawn_coding(db, doc, page=page)
+    _maybe_spawn_debug(db, doc, page=page)
     return job
+
+
+def _maybe_spawn_debug(db: Session, doc: Document, *, page: int) -> None:
+    """Spawn debug diagnostics cook when triage flagged the page as debuggable."""
+    coverage = get_page_coverage(doc, page)
+    if not coverage.get("debuggable"):
+        return
+    try:
+        from app.services.question_generation import enqueue_debug_generation_for_page
+
+        enqueue_debug_generation_for_page(
+            db, doc.id, page=page, account_id=doc.account_id
+        )
+    except Exception:
+        logger.warning(
+            "debug generation enqueue failed for doc=%s page=%s",
+            doc.id, page, exc_info=True,
+        )
 
 
 def _maybe_spawn_coding(db: Session, doc: Document, *, page: int) -> None:

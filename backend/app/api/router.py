@@ -8,6 +8,7 @@ from app.api import (
     chat,
     chunked_uploads,
     coding,
+    debug,
     documents,
     health,
     learn,
@@ -42,6 +43,7 @@ api_router.include_router(mcq.router, prefix="/mcq", tags=["mcq"])
 api_router.include_router(models.router, prefix="/models", tags=["models"])
 api_router.include_router(practice.router, prefix="/practice", tags=["practice"])
 api_router.include_router(coding.router, prefix="/coding", tags=["coding"])
+api_router.include_router(debug.router, prefix="/debug", tags=["debug"])
 api_router.include_router(system_design.router, prefix="/system-design", tags=["system-design"])
 api_router.include_router(newspaper.router, prefix="/newspaper", tags=["newspaper"])
 api_router.include_router(seo_learn.router, prefix="/learn", tags=["learn-blog"])

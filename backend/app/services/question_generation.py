@@ -48,3 +48,27 @@ def enqueue_coding_generation_for_page(
         account_id=account_id,
     )
 
+
+def enqueue_debug_generation_for_page(
+    db: Session,
+    document_id: uuid.UUID,
+    *,
+    page: int,
+    account_id: uuid.UUID | None = None,
+    count: int = 2,
+) -> Job | None:
+    """Spawn a ``generate.debug`` ETA job for one debuggable page."""
+    from app.services.jobs import enqueue_job
+
+    return enqueue_job(
+        db,
+        name="generate.debug",
+        workload=JobWorkload.cpu,
+        payload={
+            "document_id": str(document_id),
+            "page_number": int(page),
+            "count": int(count),
+        },
+        account_id=account_id,
+    )
+

@@ -287,6 +287,7 @@ def save_page_coverage(
     content_type: str | None = None,
     non_content: bool = False,
     programmable: bool = False,
+    debuggable: bool = False,
     budget_confidence: str | None = None,
     budget_mode: str | None = None,
     budget_version: str | None = None,
@@ -308,6 +309,7 @@ def save_page_coverage(
         # Triage's verdict on whether this page is about programming/algorithms —
         # the gate the coding-bank ETA job reads to decide whether to spawn.
         "programmable": bool(programmable),
+        "debuggable": bool(debuggable),
     }
     if aspect_dedup:
         entry["aspect_dedup"] = aspect_dedup

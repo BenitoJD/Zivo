@@ -39,6 +39,12 @@ export const queryKeys = {
   codingLanguages: () => ["coding", "languages"] as const,
   codingAdmin: () => ["coding", "admin"] as const,
   codingAdminProblem: (id: string) => ["coding", "admin", id] as const,
+  debugPublic: (filters?: string) =>
+    filters ? (["debug", "public", filters] as const) : (["debug", "public"] as const),
+  debugScenario: (id: string) => ["debug", "scenario", id] as const,
+  debugCookJob: (id: string) => ["debug", "cook", id] as const,
+  debugAdmin: () => ["debug", "admin"] as const,
+  debugAdminScenario: (id: string) => ["debug", "admin", id] as const,
   systemDesignPath: () => ["system-design", "path"] as const,
   systemDesignRecommended: () => ["system-design", "recommended"] as const,
   systemDesignProblem: (id: string) => ["system-design", "problem", id] as const,
@@ -638,6 +644,140 @@ export function useCodingCurateActions() {
     update: (id: string, body: Record<string, unknown>) =>
       apiPatch<CodingProblem>(`/api/coding/admin/${id}`, body),
     remove: (id: string) => apiDelete(`/api/coding/admin/${id}`),
+    invalidate,
+  };
+}
+
+// -------------------------------------------------------------- debug diagnostics
+export type DebugArtifact = {
+  kind: string;
+  language?: string;
+  label?: string;
+  content: string;
+};
+export type DebugStep = {
+  key: string;
+  question: string;
+  options: string[];
+};
+export type DebugScenarioListItem = {
+  id: string;
+  title: string;
+  scenario_type: string;
+  difficulty: "easy" | "medium" | "hard";
+  step_count: number;
+  tags?: string[];
+  origin?: string;
+  published?: boolean;
+  review_status?: string;
+};
+export type DebugScenario = {
+  id: string;
+  format: string;
+  title: string;
+  scenario_type: string;
+  difficulty: string;
+  tags: string[];
+  origin?: string;
+  case: { summary?: string; artifacts?: DebugArtifact[] };
+  steps: DebugStep[];
+  step_count: number;
+};
+export type DebugGradeStepResult = {
+  correct: boolean;
+  correct_index: number;
+  explanation: string;
+  step_key: string;
+};
+export type DebugCookJob = {
+  id: string;
+  status: string;
+  review_status: string;
+  scenario_ids: string[];
+  material_preview?: string;
+  brief?: string;
+  error?: string | null;
+};
+
+export type DebugPublicFilters = {
+  difficulty?: "easy" | "medium" | "hard";
+  scenario_type?: string;
+  tag?: string;
+};
+
+export function useDebugPublicQuery(filters: DebugPublicFilters = {}) {
+  const qs = new URLSearchParams();
+  if (filters.difficulty) qs.set("difficulty", filters.difficulty);
+  if (filters.scenario_type) qs.set("scenario_type", filters.scenario_type);
+  if (filters.tag) qs.set("tag", filters.tag);
+  const q = qs.toString();
+  return useQuery({
+    queryKey: queryKeys.debugPublic(q || undefined),
+    queryFn: () =>
+      apiGet<{ items: DebugScenarioListItem[]; limit: number; offset: number }>(
+        `/api/debug${q ? `?${q}` : ""}`,
+      ),
+  });
+}
+
+export function useDebugScenarioQuery(id: string | null | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.debugScenario(id ?? ""),
+    queryFn: () => apiGet<DebugScenario>(`/api/debug/${id}`),
+    enabled: enabled && Boolean(id),
+  });
+}
+
+export function useDebugCookJobQuery(id: string | null | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.debugCookJob(id ?? ""),
+    queryFn: () => apiGet<DebugCookJob>(`/api/debug/cook/${id}`),
+    enabled: enabled && Boolean(id),
+    refetchInterval: (query) => {
+      const st = query.state.data?.status;
+      return st === "queued" || st === "cooking" ? 3000 : false;
+    },
+  });
+}
+
+export function useDebugAdminQuery(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.debugAdmin(),
+    queryFn: () => apiGet<{ items: DebugScenarioListItem[] }>(`/api/debug/admin/list`),
+    enabled,
+    retry: false,
+  });
+}
+
+export function useDebugActions() {
+  const qc = useQueryClient();
+  return {
+    startCook: (body: { material: string; brief?: string; scenario_count?: number }) =>
+      apiPost<DebugCookJob>("/api/debug/cook", body),
+    submitToLibrary: (jobId: string) =>
+      apiPost<DebugCookJob>(`/api/debug/cook/${jobId}/submit-to-library`, {}),
+    gradeStep: (id: string, body: { step_key: string; choice_index: number; steps_correct?: number; steps_total?: number }) =>
+      apiPost<DebugGradeStepResult>(`/api/debug/${id}/grade-step`, body),
+    invalidatePublic: () => qc.invalidateQueries({ queryKey: ["debug", "public"] }),
+    invalidateCook: (jobId: string) =>
+      qc.invalidateQueries({ queryKey: queryKeys.debugCookJob(jobId) }),
+  };
+}
+
+export function useDebugCurateActions() {
+  const qc = useQueryClient();
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: queryKeys.debugAdmin() });
+    qc.invalidateQueries({ queryKey: ["debug", "public"] });
+  };
+  return {
+    seed: () => apiPost<{ created: number; updated: number; total: number }>("/api/debug/admin/seed", {}),
+    create: (body: Record<string, unknown>) => apiPost<DebugScenario>("/api/debug/admin", body),
+    update: (id: string, body: Record<string, unknown>) =>
+      apiPatch<DebugScenario>(`/api/debug/admin/${id}`, body),
+    review: (id: string, body: { review_status: string; published?: boolean }) =>
+      apiPatch<{ id: string; review_status: string }>(`/api/debug/admin/${id}/review`, body),
+    remove: (id: string) => apiDelete(`/api/debug/admin/${id}`),
     invalidate,
   };
 }

@@ -305,6 +305,7 @@ def _persist_triage_coverage(
         content_type=result.get("content_type"),
         non_content=bool(result.get("non_content")),
         programmable=bool(result.get("programmable")),
+        debuggable=bool(result.get("debuggable") or result.get("programmable")),
         budget_confidence=result.get("budget_confidence"),
         budget_mode=result.get("budget_mode"),
         budget_version=result.get("budget_version"),

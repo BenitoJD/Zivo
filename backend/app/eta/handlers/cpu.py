@@ -404,3 +404,39 @@ def generate_coding_job(payload: dict) -> dict:
             "problems": saved,
         }
 
+
+@eta(name="generate.debug", workload=JobWorkload.cpu)
+def generate_debug_job(payload: dict) -> dict:
+    """Cook debug diagnostic scenarios from a cook job or document page."""
+    from app.services.debug_generation import generate_debug_for_page, run_cook_job
+
+    cook_job_id = payload.get("cook_job_id")
+    if cook_job_id:
+        with SessionLocal() as db:
+            result = run_cook_job(db, UUID(cook_job_id))
+            return result
+
+    document_id = UUID(payload["document_id"])
+    page_number = int(payload.get("page_number") or 0)
+    count = int(payload.get("count") or 2)
+    with SessionLocal() as db:
+        from app.services.retrieval import fetch_chunks_for_page_range
+
+        chunks = fetch_chunks_for_page_range(
+            db,
+            document_ids=[document_id],
+            page_start=page_number,
+            page_end=page_number,
+        )
+        page_text = "\n\n".join(c.get("text", "") for c in chunks if c.get("text")).strip()
+        if not page_text:
+            return {"document_id": str(document_id), "page_number": page_number, "saved": 0}
+        saved = generate_debug_for_page(
+            db, document_id, page_number=page_number, page_text=page_text, count=count
+        )
+        return {
+            "document_id": str(document_id),
+            "page_number": page_number,
+            "saved": saved,
+        }
+

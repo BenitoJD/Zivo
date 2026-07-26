@@ -173,6 +173,30 @@ export default function PracticeHubPage() {
                   <Group justify="space-between" align="center" wrap="wrap" gap="sm">
                     <Box style={{ minWidth: 0, flex: "1 1 180px" }}>
                       <Text fw={600} ff="var(--font-serif)">
+                        Debug diagnostics
+                      </Text>
+                      <Text size="sm" c="dimmed" style={{ overflowWrap: "anywhere" }}>
+                        Find what is wrong: read failures, diagnose root cause, pick the fix approach.
+                      </Text>
+                    </Box>
+                    <Button
+                      component="a"
+                      href="/practice/debug"
+                      radius="xl"
+                      variant="light"
+                      color="lavender"
+                      fullWidth
+                      maw={{ base: "100%", xs: 180 }}
+                      rightSection={<IconArrowRight size={16} />}
+                    >
+                      Open bank
+                    </Button>
+                  </Group>
+                </Paper>
+                <Paper radius="xl" p="lg" withBorder bg="gray.0" shadow="paper">
+                  <Group justify="space-between" align="center" wrap="wrap" gap="sm">
+                    <Box style={{ minWidth: 0, flex: "1 1 180px" }}>
+                      <Text fw={600} ff="var(--font-serif)">
                         Coding practice
                       </Text>
                       <Text size="sm" c="dimmed" style={{ overflowWrap: "anywhere" }}>
