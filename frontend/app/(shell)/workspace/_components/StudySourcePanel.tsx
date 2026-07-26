@@ -495,8 +495,12 @@ function PdfReaderToolbar({
         display: "flex",
         alignItems: "center",
         gap: 6,
-        padding: "6px 8px",
+        padding: "6px 10px",
         borderRadius: 999,
+        width: "max-content",
+        maxWidth: "calc(100% - 28px)",
+        flexShrink: 0,
+        whiteSpace: "nowrap",
         background: "color-mix(in srgb, var(--mantine-color-body) 86%, transparent)",
         backdropFilter: "blur(12px)",
         WebkitBackdropFilter: "blur(12px)",
@@ -513,12 +517,21 @@ function PdfReaderToolbar({
           leftSection={<IconArrowsMaximize size={13} />}
           onClick={onFitWidth}
           px="sm"
+          style={{ flexShrink: 0 }}
+          styles={{ label: { overflow: "visible", textOverflow: "clip" } }}
         >
           Fit width
         </Button>
       </Tooltip>
-      <Box style={{ width: 1, height: 18, background: "var(--mantine-color-default-border)" }} />
-      <Group gap={2} wrap="nowrap" align="center">
+      <Box
+        style={{
+          width: 1,
+          height: 18,
+          flexShrink: 0,
+          background: "var(--mantine-color-default-border)",
+        }}
+      />
+      <Group gap={2} wrap="nowrap" align="center" style={{ flexShrink: 0 }}>
         <Tooltip label="Zoom out" withArrow>
           <ActionIcon
             variant="subtle"
@@ -528,11 +541,12 @@ function PdfReaderToolbar({
             onClick={onZoomOut}
             disabled={zoom <= zoomMin}
             aria-label="Zoom out"
+            style={{ flexShrink: 0 }}
           >
             <IconZoomOut size={15} stroke={2} />
           </ActionIcon>
         </Tooltip>
-        <Text size="11px" fw={700} w={40} ta="center" ff="monospace">
+        <Text size="11px" fw={700} miw={44} ta="center" ff="monospace" style={{ flexShrink: 0 }}>
           {Math.round(zoom * 100)}%
         </Text>
         <Tooltip label="Zoom in" withArrow>
@@ -544,6 +558,7 @@ function PdfReaderToolbar({
             onClick={onZoomIn}
             disabled={zoom >= zoomMax}
             aria-label="Zoom in"
+            style={{ flexShrink: 0 }}
           >
             <IconZoomIn size={15} stroke={2} />
           </ActionIcon>
