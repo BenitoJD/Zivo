@@ -88,7 +88,7 @@ export function GenerationStages({
   ];
 
   return (
-    <Stack gap={0} w="100%" maw={320} mx="auto">
+    <Stack gap="xs" w="100%">
       <style>{`
         @keyframes zv-stage-pulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(0.7); opacity: 0.5; } }
         .zv-stage-dot { animation: zv-stage-pulse 1.2s ease-in-out infinite; }
@@ -105,50 +105,83 @@ export function GenerationStages({
                 ? "var(--mantine-color-dark-2)"
                 : "var(--mantine-color-gray-4)";
         return (
-          <Box key={i} style={{ display: "flex", gap: 12, alignItems: "stretch" }}>
-            {/* indicator rail */}
-            <Box style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
-              <Box
-                style={{
-                  width: 22,
-                  height: 22,
-                  borderRadius: "50%",
-                  display: "grid",
-                  placeItems: "center",
-                  flexShrink: 0,
-                  background: st.state === "done" ? "var(--mantine-color-sage-6)" : "transparent",
-                  border: st.state === "done" ? "none" : `2px solid ${dotColor}`,
-                }}
-              >
-                {st.state === "done" ? (
-                  <IconCheck size={12} stroke={3} color={isDark ? "#1A1917" : "#FFFFFF"} />
-                ) : st.state === "active" ? (
-                  <Box className="zv-stage-dot" style={{ width: 8, height: 8, borderRadius: "50%", background: dotColor }} />
+          <Box
+            key={i}
+            p={st.state === "active" ? (compact ? "xs" : "sm") : compact ? "2px 0" : "4px 0"}
+            style={{
+              borderRadius: "var(--mantine-radius-lg)",
+              background:
+                st.state === "active"
+                  ? isDark
+                    ? "var(--mantine-color-lavender-1)"
+                    : "var(--mantine-color-lavender-0)"
+                  : undefined,
+              border:
+                st.state === "active"
+                  ? `1px solid var(--mantine-color-lavender-${isDark ? 3 : 2})`
+                  : undefined,
+            }}
+          >
+            <Box style={{ display: "flex", gap: 12, alignItems: "stretch" }}>
+              <Box style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
+                <Box
+                  style={{
+                    width: 22,
+                    height: 22,
+                    borderRadius: "50%",
+                    display: "grid",
+                    placeItems: "center",
+                    flexShrink: 0,
+                    background: st.state === "done" ? "var(--mantine-color-sage-6)" : "transparent",
+                    border: st.state === "done" ? "none" : `2px solid ${dotColor}`,
+                  }}
+                >
+                  {st.state === "done" ? (
+                    <IconCheck size={12} stroke={3} color={isDark ? "#1A1917" : "#FFFFFF"} />
+                  ) : st.state === "active" ? (
+                    <Box
+                      className="zv-stage-dot"
+                      style={{ width: 8, height: 8, borderRadius: "50%", background: dotColor }}
+                    />
+                  ) : null}
+                </Box>
+                {!last ? (
+                  <Box
+                    style={{
+                      width: 2,
+                      flex: 1,
+                      minHeight: 18,
+                      marginTop: 2,
+                      marginBottom: 2,
+                      background:
+                        st.state === "done"
+                          ? "var(--mantine-color-sage-4)"
+                          : isDark
+                            ? "var(--mantine-color-dark-3)"
+                            : "var(--mantine-color-gray-4)",
+                    }}
+                  />
                 ) : null}
               </Box>
-              {!last ? (
-                <Box style={{ width: 2, flex: 1, minHeight: 18, marginTop: 2, marginBottom: 2, background: st.state === "done" ? "var(--mantine-color-sage-4)" : isDark ? "var(--mantine-color-dark-3)" : "var(--mantine-color-gray-4)" }} />
-              ) : null}
-            </Box>
-            {/* label */}
-            <Box style={{ paddingBottom: last ? 0 : compact ? 10 : 14, textAlign: "left", minWidth: 0 }}>
-              <Text
-                fz={compact ? "sm" : "md"}
-                fw={st.state === "active" ? 600 : 500}
-                c={st.state === "todo" ? "dimmed" : "var(--mantine-color-text)"}
-                style={{ lineHeight: 1.25, letterSpacing: "-0.01em" }}
-              >
-                {st.title}
-              </Text>
-              <Text fz="xs" c="dimmed" style={{ lineHeight: 1.4 }}>
-                {st.sub}
-              </Text>
+              <Box style={{ paddingBottom: last ? 0 : compact ? 6 : 10, textAlign: "left", minWidth: 0 }}>
+                <Text
+                  fz={compact ? "sm" : "md"}
+                  fw={st.state === "active" ? 600 : 500}
+                  c={st.state === "todo" ? "dimmed" : "var(--mantine-color-text)"}
+                  style={{ lineHeight: 1.25, letterSpacing: "-0.01em" }}
+                >
+                  {st.title}
+                </Text>
+                <Text fz="xs" c="dimmed" style={{ lineHeight: 1.45 }}>
+                  {st.sub}
+                </Text>
+              </Box>
             </Box>
           </Box>
         );
       })}
-      <Text fz="xs" c="dimmed" ta="center" mt={compact ? "sm" : "md"} style={{ opacity: 0.85, lineHeight: 1.5 }}>
-        Zivo&rsquo;s AI reads your pages and writes fresh questions - that&rsquo;s the short wait.
+      <Text fz="xs" c="dimmed" mt={compact ? 4 : "xs"} lh={1.5}>
+        Zivo reads your pages and writes fresh questions. This short wait is normal.
       </Text>
     </Stack>
   );

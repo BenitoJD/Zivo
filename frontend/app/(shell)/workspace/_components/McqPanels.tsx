@@ -406,177 +406,238 @@ export function McqHeroPanel({
           : generated > 0
             ? 92
             : 52;
-    const RING = compact ? 124 : 140;
-    const R = RING / 2 - 12;
+    const RING = compact ? 108 : 120;
+    const R = RING / 2 - 10;
     const CIRC = 2 * Math.PI * R;
     const center = RING / 2;
     return (
-      <Center h="100%" flex={1} mih={0} px="sm" py={compact ? "md" : "lg"}>
+      <Box
+        w="100%"
+        py={compact ? "md" : "xl"}
+        px={{ base: "xs", sm: "sm" }}
+        style={{ minHeight: "100%" }}
+      >
         <style>{`
           @keyframes zivo-ring-spin { to { transform: rotate(360deg); } }
-          @keyframes zivo-blob-a { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(9px,-11px) scale(1.16); } }
-          @keyframes zivo-blob-b { 0%,100% { transform: translate(0,0) scale(1.06); } 50% { transform: translate(-11px,9px) scale(0.9); } }
-          @keyframes zivo-blob-c { 0%,100% { transform: translate(0,0) scale(0.95); } 50% { transform: translate(7px,11px) scale(1.12); } }
+          @keyframes zivo-ring-glow { 0%,100% { opacity: 0.35; transform: scale(0.94); } 50% { opacity: 0.55; transform: scale(1.04); } }
           @keyframes zivo-fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-          @keyframes zivo-bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
           .zivo-load-copy { animation: zivo-fade-up 380ms cubic-bezier(0.32,0.72,0,1) both; }
           @media (prefers-reduced-motion: reduce) {
-            .zivo-blob, .zivo-ring-spin, .zivo-bob, .zivo-load-copy { animation: none !important; }
+            .zivo-ring-spin, .zivo-ring-glow, .zivo-load-copy { animation: none !important; }
           }
         `}</style>
         <Paper
           withBorder
-          shadow="paper-lg"
+          shadow="paper"
           radius="xl"
           p={compact ? "lg" : "xl"}
           w="100%"
-          maw={compact ? 400 : 460}
+          maw={MCQ_CONTENT_MAX}
+          mx="auto"
           bg="gray.0"
         >
-        <Stack align="center" gap={compact ? "md" : "lg"}>
-          <ThemeIcon
-            size={compact ? 36 : 42}
-            radius="xl"
-            variant="light"
-            color={isTest ? "forest" : "lavender"}
-            style={{ color: `var(--mantine-color-${isTest ? "forest" : "lavender"}-7)` }}
+          <Group
+            align="flex-start"
+            wrap={compact ? "wrap" : "nowrap"}
+            gap={compact ? "lg" : "xl"}
           >
-            {isTest ? <IconClipboardList size={20} stroke={2} /> : <IconBulb size={20} stroke={2} />}
-          </ThemeIcon>
-          <Box pos="relative" w={RING} h={RING} style={{ display: "grid", placeItems: "center" }}>
-            {/* Colorful aurora - three soft brand-tinted blobs drifting behind the ring */}
-            <Box className="zivo-blob" pos="absolute" style={{ inset: -6, borderRadius: "50%", filter: "blur(22px)", background: "radial-gradient(60% 60% at 30% 30%, var(--mantine-color-lavender-4), transparent 70%)", opacity: 0.55, animation: "zivo-blob-a 4.5s ease-in-out infinite" }} />
-            <Box className="zivo-blob" pos="absolute" style={{ inset: -6, borderRadius: "50%", filter: "blur(22px)", background: "radial-gradient(55% 55% at 72% 42%, var(--mantine-color-sage-4), transparent 70%)", opacity: 0.5, animation: "zivo-blob-b 5.4s ease-in-out infinite" }} />
-            <Box className="zivo-blob" pos="absolute" style={{ inset: -6, borderRadius: "50%", filter: "blur(22px)", background: "radial-gradient(55% 55% at 50% 76%, var(--mantine-color-terracotta-3), transparent 70%)", opacity: 0.45, animation: "zivo-blob-c 5s ease-in-out infinite" }} />
-            <svg width={RING} height={RING} viewBox={`0 0 ${RING} ${RING}`} style={{ position: "relative" }}>
-              <defs>
-                <linearGradient id="zivo-ring-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stopColor="var(--mantine-color-lavender-5)" />
-                  <stop offset="50%" stopColor="var(--mantine-color-sage-5)" />
-                  <stop offset="100%" stopColor="var(--mantine-color-terracotta-5)" />
-                </linearGradient>
-              </defs>
-              <circle cx={center} cy={center} r={R} fill="none" stroke="var(--mantine-color-default-border)" strokeOpacity={0.5} strokeWidth={8} />
-              {progressPct !== null ? (
-                <circle
-                  cx={center}
-                  cy={center}
-                  r={R}
-                  fill="none"
-                  stroke="url(#zivo-ring-grad)"
-                  strokeWidth={8}
-                  strokeLinecap="round"
-                  strokeDasharray={CIRC}
-                  strokeDashoffset={CIRC * (1 - progressPct / 100)}
-                  transform={`rotate(-90 ${center} ${center})`}
-                  style={{ transition: "stroke-dashoffset 600ms cubic-bezier(0.32,0.72,0,1)" }}
-                />
-              ) : (
-                <circle
-                  cx={center}
-                  cy={center}
-                  r={R}
-                  fill="none"
-                  stroke="url(#zivo-ring-grad)"
-                  strokeWidth={8}
-                  strokeLinecap="round"
-                  strokeDasharray={`${CIRC * 0.22} ${CIRC * 0.78}`}
-                  className="zivo-ring-spin"
-                  style={{ animation: "zivo-ring-spin 1.1s linear infinite", transformOrigin: "center" }}
-                />
-              )}
-            </svg>
-            <Box pos="absolute" style={{ display: "grid", placeItems: "center" }}>
-              {progressPct !== null ? (
-                <Text
-                  fz={compact ? 22 : 26}
-                  fw={600}
-                  c="var(--mantine-color-text)"
-                  style={{ fontFamily: "var(--font-serif), Georgia, serif", letterSpacing: "-0.02em", lineHeight: 1 }}
-                >
-                  {progressPct}%
-                </Text>
-              ) : (
-                <Loader size={compact ? 28 : 32} color="lavender" type="oval" />
-              )}
-            </Box>
-          </Box>
-
-          <Stack key={waitStatus.rotateKey} className="zivo-load-copy" gap={4} align="center">
-            <Text
-              fz={compact ? "md" : "lg"}
-              fw={600}
-              ta="center"
-              c="var(--mantine-color-text)"
-              style={{ letterSpacing: "-0.02em", fontFamily: "var(--font-serif), Georgia, serif" }}
+            {/* Progress ring sits beside the story — not stacked under a lone bulb icon. */}
+            <Box
+              w={compact ? "100%" : RING + 8}
+              style={{
+                flexShrink: 0,
+                display: "flex",
+                justifyContent: compact ? "center" : "flex-start",
+              }}
             >
-              {waitStatus.title}
-            </Text>
-            <Text size="sm" c="dimmed" ta="center" lh={1.55} maw={290}>
-              {waitStatus.detail}
-            </Text>
-          </Stack>
-
-          {readingPhase ? (
-            artifactStatus === "indexing" && (indexProgress ?? 0) > 0 ? (
-            <Stack gap={6} w="100%" maw={280}>
-              <Group justify="space-between" gap="xs">
-                <Text size="xs" c="dimmed" fw={600}>
-                  Reading your source
-                </Text>
-                <Text size="xs" c="dimmed" ff="monospace">
-                  {indexProgress ?? 0}%
-                </Text>
-              </Group>
-              <Progress value={indexProgress ?? 0} size="sm" radius="xl" color="lavender" animated />
-            </Stack>
-            ) : queue?.rag_window_ready === false ? (
-            <Stack gap={6} w="100%" maw={280}>
-              <Text size="xs" c="dimmed" fw={600} ta="center">
-                Processing pages around your study material
-              </Text>
-              <Progress value={58} size="sm" radius="xl" color="lavender" animated />
-            </Stack>
-            ) : null
-          ) : null}
-
-          {!newspaperReady ? (
-            <GenerationStages
-              artifactStatus={artifactStatus}
-              indexProgress={indexProgress}
-              ragWindowReady={queue?.rag_window_ready}
-              pageTriageComplete={queue?.page_triage_complete}
-              generationPending={queue?.generation_pending}
-              questionsGenerated={generated}
-              questionBudget={budget}
-              compact={compact}
-              isDark={isDark}
-            />
-          ) : (
-            <Text fz="xs" c="dimmed" ta="center" style={{ opacity: 0.85, lineHeight: 1.5 }}>
-              This edition was prepared ahead of time. Questions open as soon as they load.
-            </Text>
-          )}
-
-          {stuckSeconds >= 45 && onRetry ? (
-            <Stack gap={6} align="center">
-              <Text size="sm" c="var(--mantine-color-text)" ta="center">
-                Something&apos;s taking a while.
-              </Text>
-              <Button variant="default" color="lavender" size="compact-sm" radius="xl" onClick={onRetry}>
-                Retry
-              </Button>
-            </Stack>
-          ) : null}
-
-          {!compact && !isTest && catEnabled ? (
-            <Box w="100%" maw={320} style={{ height: 88 }}>
-              <PetPlayground count={1} species="cat" wander height={88} style={{ width: "100%" }} />
+              <Box pos="relative" w={RING} h={RING} style={{ display: "grid", placeItems: "center" }}>
+                <Box
+                  className="zivo-ring-glow"
+                  pos="absolute"
+                  style={{
+                    inset: -4,
+                    borderRadius: "50%",
+                    background:
+                      "radial-gradient(circle, var(--mantine-color-lavender-3) 0%, transparent 68%)",
+                    opacity: 0.45,
+                  }}
+                />
+                <svg width={RING} height={RING} viewBox={`0 0 ${RING} ${RING}`} style={{ position: "relative" }}>
+                  <defs>
+                    <linearGradient id="zivo-ring-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                      <stop offset="0%" stopColor="var(--mantine-color-lavender-5)" />
+                      <stop offset="55%" stopColor="var(--mantine-color-sage-5)" />
+                      <stop offset="100%" stopColor="var(--mantine-color-sage-6)" />
+                    </linearGradient>
+                  </defs>
+                  <circle
+                    cx={center}
+                    cy={center}
+                    r={R}
+                    fill="none"
+                    stroke="var(--mantine-color-default-border)"
+                    strokeOpacity={0.45}
+                    strokeWidth={7}
+                  />
+                  {progressPct !== null ? (
+                    <circle
+                      cx={center}
+                      cy={center}
+                      r={R}
+                      fill="none"
+                      stroke="url(#zivo-ring-grad)"
+                      strokeWidth={7}
+                      strokeLinecap="round"
+                      strokeDasharray={CIRC}
+                      strokeDashoffset={CIRC * (1 - progressPct / 100)}
+                      transform={`rotate(-90 ${center} ${center})`}
+                      style={{ transition: "stroke-dashoffset 600ms cubic-bezier(0.32,0.72,0,1)" }}
+                    />
+                  ) : (
+                    <circle
+                      cx={center}
+                      cy={center}
+                      r={R}
+                      fill="none"
+                      stroke="url(#zivo-ring-grad)"
+                      strokeWidth={7}
+                      strokeLinecap="round"
+                      strokeDasharray={`${CIRC * 0.22} ${CIRC * 0.78}`}
+                      className="zivo-ring-spin"
+                      style={{
+                        animation: "zivo-ring-spin 1.1s linear infinite",
+                        transformOrigin: "center",
+                      }}
+                    />
+                  )}
+                </svg>
+                <Box pos="absolute" style={{ display: "grid", placeItems: "center" }}>
+                  {progressPct !== null ? (
+                    <Text
+                      fz={compact ? 20 : 22}
+                      fw={600}
+                      c="var(--mantine-color-text)"
+                      style={{
+                        fontFamily: "var(--font-serif), Georgia, serif",
+                        letterSpacing: "-0.02em",
+                        lineHeight: 1,
+                        fontVariantNumeric: "tabular-nums",
+                      }}
+                    >
+                      {progressPct}%
+                    </Text>
+                  ) : (
+                    <Loader size={compact ? 24 : 28} color="lavender" type="oval" />
+                  )}
+                </Box>
+              </Box>
             </Box>
-          ) : null}
-        </Stack>
+
+            <Stack gap="md" style={{ flex: 1, minWidth: 0 }} align="stretch">
+              <Group gap="sm" wrap="nowrap" align="center">
+                <Box
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "4px 10px",
+                    borderRadius: 999,
+                    flexShrink: 0,
+                    background: isDark
+                      ? `var(--mantine-color-${accent}-1)`
+                      : `var(--mantine-color-${accent}-0)`,
+                    border: `1px solid var(--mantine-color-${accent}-${isDark ? 3 : 2})`,
+                  }}
+                >
+                  {isTest ? (
+                    <IconClipboardList size={13} stroke={2} style={{ color: `var(--mantine-color-${accent}-7)` }} />
+                  ) : (
+                    <IconBulb size={13} stroke={2} style={{ color: `var(--mantine-color-${accent}-7)` }} />
+                  )}
+                  <Text fz="xs" fw={600} c={`var(--mantine-color-${accent}-${isDark ? 8 : 7})`}>
+                    {isTest ? "Test mode" : "Learn mode"}
+                  </Text>
+                </Box>
+              </Group>
+
+              <Stack key={waitStatus.rotateKey} className="zivo-load-copy" gap={6}>
+                <Title
+                  order={3}
+                  fw={500}
+                  style={{
+                    letterSpacing: "-0.02em",
+                    lineHeight: 1.2,
+                    fontFamily: "var(--font-serif), Georgia, serif",
+                  }}
+                >
+                  {waitStatus.title}
+                </Title>
+                <Text size="sm" c="dimmed" lh={1.55} maw={520}>
+                  {waitStatus.detail}
+                </Text>
+              </Stack>
+
+              {readingPhase ? (
+                artifactStatus === "indexing" && (indexProgress ?? 0) > 0 ? (
+                  <Stack gap={6} w="100%">
+                    <Group justify="space-between" gap="xs">
+                      <Text size="xs" c="dimmed" fw={600}>
+                        Reading your source
+                      </Text>
+                      <Text size="xs" c="dimmed" ff="monospace">
+                        {indexProgress ?? 0}%
+                      </Text>
+                    </Group>
+                    <Progress value={indexProgress ?? 0} size="sm" radius="xl" color="lavender" animated />
+                  </Stack>
+                ) : queue?.rag_window_ready === false ? (
+                  <Stack gap={6} w="100%">
+                    <Text size="xs" c="dimmed" fw={600}>
+                      Processing pages around your study material
+                    </Text>
+                    <Progress value={58} size="sm" radius="xl" color="lavender" animated />
+                  </Stack>
+                ) : null
+              ) : null}
+
+              {!newspaperReady ? (
+                <GenerationStages
+                  artifactStatus={artifactStatus}
+                  indexProgress={indexProgress}
+                  ragWindowReady={queue?.rag_window_ready}
+                  pageTriageComplete={queue?.page_triage_complete}
+                  generationPending={queue?.generation_pending}
+                  questionsGenerated={generated}
+                  questionBudget={budget}
+                  compact={compact}
+                  isDark={isDark}
+                />
+              ) : (
+                <Text fz="sm" c="dimmed" lh={1.5}>
+                  This edition was prepared ahead of time. Questions open as soon as they load.
+                </Text>
+              )}
+
+              {stuckSeconds >= 45 && onRetry ? (
+                <Stack gap={6}>
+                  <Text size="sm" c="var(--mantine-color-text)">
+                    Something&apos;s taking a while.
+                  </Text>
+                  <Button variant="default" color="lavender" size="compact-sm" radius="xl" onClick={onRetry}>
+                    Retry
+                  </Button>
+                </Stack>
+              ) : null}
+
+              {!compact && !isTest && catEnabled ? (
+                <Box w="100%" maw={360} style={{ height: 72 }}>
+                  <PetPlayground count={1} species="cat" wander height={72} style={{ width: "100%" }} />
+                </Box>
+              ) : null}
+            </Stack>
+          </Group>
         </Paper>
-      </Center>
+      </Box>
     );
   }
 
