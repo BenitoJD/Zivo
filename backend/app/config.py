@@ -46,8 +46,9 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     zai_api_base: str = "https://api.z.ai/api/coding/paas/v4"
     zai_api_key: str = ""
-    # Step Fun (stepfun.com) — OpenAI-compatible. step-3.5-flash is a fast,
-    # non-reasoning model well-suited to high-volume MCQ generation.
+    # Step Fun (stepfun.com) — OpenAI-compatible. Off by default; set STEPFUN_ENABLED=true
+    # to register models and sync keys from env.
+    stepfun_enabled: bool = False
     stepfun_api_base: str = "https://api.stepfun.ai/step_plan/v1"
     stepfun_api_key: str = ""
     openrouter_api_base: str = "https://openrouter.ai/api/v1"

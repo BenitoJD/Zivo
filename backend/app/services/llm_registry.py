@@ -360,6 +360,21 @@ def _upsert_model(
     return model
 
 
+def _disable_stepfun(db: Session, stepfun: LlmProvider) -> bool:
+    """Turn off Step Fun provider + models (pool and admin toggles respect is_enabled)."""
+    dirty = False
+    if stepfun.is_enabled:
+        stepfun.is_enabled = False
+        dirty = True
+    for model in db.query(LlmModel).filter(LlmModel.provider_id == stepfun.id).all():
+        if model.is_enabled or model.is_default:
+            model.is_enabled = False
+            if model.is_default:
+                model.is_default = False
+            dirty = True
+    return dirty
+
+
 def _clear_defaults_for_kind(db: Session, kind: LlmModelKind) -> None:
     # synchronize_session="fetch" (NOT False): also clear is_default on rows already
     # loaded/dirtied in this session. With False, a model set is_default=True earlier in
@@ -462,7 +477,7 @@ def ensure_registry_providers(db: Session, settings: Settings | None = None) -> 
         display_name="Step Fun",
         litellm_prefix="openai",
         api_base_url=settings.stepfun_api_base.rstrip("/") or None,
-        api_key=settings.stepfun_api_key or None,
+        api_key=settings.stepfun_api_key or None if settings.stepfun_enabled else None,
     )
     before = (
         db.query(LlmModel)
@@ -522,18 +537,39 @@ def ensure_registry_providers(db: Session, settings: Settings | None = None) -> 
         if changed:
             stepfun_model.meta = meta or None
             dirty = True
-    # When a Step Fun key is configured (and DeepSeek isn't — DeepSeek is the
-    # primary), pin step-3.5-flash as the default chat model on existing DBs too.
-    # Runs on every boot, so it tracks key presence without a manual admin step.
-    if (
-        settings.stepfun_api_key
-        and not settings.deepseek_api_key
-        and stepfun_model
-        and not stepfun_model.is_default
-    ):
-        _clear_defaults_for_kind(db, LlmModelKind.chat)
-        stepfun_model.is_default = True
-        dirty = True
+    if settings.stepfun_enabled:
+        if stepfun_model and not stepfun_model.is_enabled:
+            stepfun_model.is_enabled = True
+            dirty = True
+        if not stepfun.is_enabled:
+            stepfun.is_enabled = True
+            dirty = True
+        step37 = (
+            db.query(LlmModel)
+            .filter(LlmModel.provider_id == stepfun.id, LlmModel.slug == "step-3.7-flash")
+            .first()
+        )
+        if step37 and not step37.is_enabled:
+            step37.is_enabled = True
+            dirty = True
+        # When a Step Fun key is configured (and DeepSeek isn't — DeepSeek is the
+        # primary), pin step-3.5-flash as the default chat model on existing DBs too.
+        if (
+            settings.stepfun_api_key
+            and not settings.deepseek_api_key
+            and stepfun_model
+            and not stepfun_model.is_default
+        ):
+            _clear_defaults_for_kind(db, LlmModelKind.chat)
+            stepfun_model.is_default = True
+            dirty = True
+    else:
+        if _disable_stepfun(db, stepfun):
+            dirty = True
+            if settings.deepseek_api_key and deepseek_model and not deepseek_model.is_default:
+                _clear_defaults_for_kind(db, LlmModelKind.chat)
+                deepseek_model.is_default = True
+                dirty = True
 
     openrouter = _upsert_provider(
         db,
@@ -648,7 +684,7 @@ def refresh_llm_registry_from_env(
                 provider.api_base_url = settings.zai_api_base.rstrip("/")
                 dirty = True
 
-    if settings.stepfun_api_key or settings.stepfun_api_base:
+    if settings.stepfun_enabled and (settings.stepfun_api_key or settings.stepfun_api_base):
         provider = db.query(LlmProvider).filter(LlmProvider.slug == "stepfun").first()
         if provider:
             if settings.stepfun_api_key and (force_keys or not provider.api_key):
@@ -885,43 +921,40 @@ def bootstrap_llm_registry_from_env(db: Session, settings: Settings | None = Non
             max_output_tokens=8_192,
         )
 
-        stepfun = _upsert_provider(
-            db,
-            slug="stepfun",
-            display_name="Step Fun",
-            litellm_prefix="openai",
-            api_base_url=settings.stepfun_api_base.rstrip("/") or None,
-            api_key=settings.stepfun_api_key or None,
-        )
-        # step-3.5-flash is the pinned default only when DeepSeek (the primary)
-        # has no key configured.
-        stepfun_is_default = bool(settings.stepfun_api_key) and not settings.deepseek_api_key
-        _upsert_model(
-            db,
-            provider=stepfun,
-            slug="step-3.5-flash",
-            litellm_model="openai/step-3.5-flash",
-            display_name="Step 3.5 Flash",
-            kind=LlmModelKind.chat,
-            is_default=stepfun_is_default,
-            sort_order=5,
-            max_input_tokens=128_000,
-            max_output_tokens=8_192,
-        )
-        # step-3.7-flash — newer Step Fun flash model; first failover after the
-        # primary (step-3.5-flash). Never the default (primary stays 3.5).
-        _upsert_model(
-            db,
-            provider=stepfun,
-            slug="step-3.7-flash",
-            litellm_model="openai/step-3.7-flash",
-            display_name="Step 3.7 Flash",
-            kind=LlmModelKind.chat,
-            is_default=False,
-            sort_order=6,
-            max_input_tokens=128_000,
-            max_output_tokens=8_192,
-        )
+        if settings.stepfun_enabled:
+            stepfun = _upsert_provider(
+                db,
+                slug="stepfun",
+                display_name="Step Fun",
+                litellm_prefix="openai",
+                api_base_url=settings.stepfun_api_base.rstrip("/") or None,
+                api_key=settings.stepfun_api_key or None,
+            )
+            stepfun_is_default = bool(settings.stepfun_api_key) and not settings.deepseek_api_key
+            _upsert_model(
+                db,
+                provider=stepfun,
+                slug="step-3.5-flash",
+                litellm_model="openai/step-3.5-flash",
+                display_name="Step 3.5 Flash",
+                kind=LlmModelKind.chat,
+                is_default=stepfun_is_default,
+                sort_order=5,
+                max_input_tokens=128_000,
+                max_output_tokens=8_192,
+            )
+            _upsert_model(
+                db,
+                provider=stepfun,
+                slug="step-3.7-flash",
+                litellm_model="openai/step-3.7-flash",
+                display_name="Step 3.7 Flash",
+                kind=LlmModelKind.chat,
+                is_default=False,
+                sort_order=6,
+                max_input_tokens=128_000,
+                max_output_tokens=8_192,
+            )
 
         openrouter = _upsert_provider(
             db,
