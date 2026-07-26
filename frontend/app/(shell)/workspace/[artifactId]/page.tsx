@@ -1437,6 +1437,27 @@ export default function WorkspaceArtifactPage({
           paddingRight: floatingLane.right,
         }}
       >
+        <StudyMetaBar
+          questionIndex={questionIndex}
+          questionTotal={questionTotal}
+          page={queue?.current_page}
+          mode={mode}
+          onModeChange={handleStudyModeChange}
+          showProgress={(mode === "learn" || mode === "test") && !mcqLoading && Boolean(displayAssertionId) && !showPageComplete && !showDocumentComplete}
+          compact={isNarrow}
+          showModeSelect={isCompact}
+          studyMode={queue?.study_mode}
+          onStudyModeChange={(m) => void setStudyMode(m)}
+          align={studyAlign}
+          onAlignChange={handleStudyAlignChange}
+          contextLabel={newspaperContextLabel}
+          isNewspaper={isNewspaper}
+          editionIndex={editionQuestionIndex}
+          editionTotal={editionQuestionTotal}
+          editionAnswered={queue?.questions_answered ?? 0}
+          backHref={isNewspaper ? newspaperBackHref : undefined}
+          backLabel="Days"
+        />
         <Box
           w="100%"
           maw={MCQ_CONTENT_MAX}
@@ -1455,28 +1476,6 @@ export default function WorkspaceArtifactPage({
               pinned === "right" ? (tutorOpen ? 0 : 48) : pinned === "left" ? 0 : undefined,
           }}
         >
-      <StudyMetaBar
-        questionIndex={questionIndex}
-        questionTotal={questionTotal}
-        page={queue?.current_page}
-        mode={mode}
-        onModeChange={handleStudyModeChange}
-        showProgress={(mode === "learn" || mode === "test") && !mcqLoading && Boolean(displayAssertionId) && !showPageComplete && !showDocumentComplete}
-        compact={isNarrow}
-        showModeSelect={isCompact}
-        studyMode={queue?.study_mode}
-        onStudyModeChange={(m) => void setStudyMode(m)}
-        align={studyAlign}
-        onAlignChange={handleStudyAlignChange}
-        contextLabel={newspaperContextLabel}
-        isNewspaper={isNewspaper}
-        editionIndex={editionQuestionIndex}
-        editionTotal={editionQuestionTotal}
-        editionAnswered={queue?.questions_answered ?? 0}
-        backHref={isNewspaper ? newspaperBackHref : undefined}
-        backLabel="Days"
-        inline
-      />
       <Box
         flex={1}
         mih={0}

@@ -460,6 +460,7 @@ export function StudyMetaBar({
   const barPx = inline ? 0 : { base: "sm", sm: "md", lg: "lg" } as const;
   return (
     <Box
+      w="100%"
       px={barPx}
       py={8}
       style={{
