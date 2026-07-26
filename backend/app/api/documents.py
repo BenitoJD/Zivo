@@ -13,8 +13,6 @@ from app.db import get_db
 from app.models import Account, Document, DocumentChunk, User
 from app.services.auth import get_current_user, get_optional_user, require_csrf, require_csrf_or_guest
 from app.services.document_create import (
-    ALLOWED_IMAGE_PREFIX,
-    ALLOWED_TYPES,
     assert_upload_content_type_allowed,
     create_document_record,
     normalize_upload_content_type,
