@@ -21,9 +21,7 @@ from app.services.question_pool import (
     clear_stale_coverage_complete,
     bump_aspect_attempts,
     get_page_coverage,
-    get_progress,
     get_question_budget,
-    mark_aspect_asked,
     mark_aspects_asked,
     on_batch_completed,
     save_page_coverage,
@@ -452,7 +450,6 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
     if not doc:
         return {"questions_saved": 0, "page_number": page_number}
 
-    progress = get_progress(doc)
     budget = get_question_budget(doc, page_number, mode=serve_mode)
 
     remaining = budget - start_sequence

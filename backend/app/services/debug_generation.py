@@ -244,11 +244,10 @@ def run_cook_job(db: Session, cook_job_id: uuid.UUID) -> dict[str, Any]:
     db.commit()
 
     try:
-        job = get_cook_job(db, cook_job_id)
+        get_cook_job(db, cook_job_id)
     except LookupError:
         return {"saved": 0, "error": "job_not_found"}
 
-    material = job.get("material_preview", "")
     row = db.execute(
         text("SELECT material, brief, scenario_count, origin, owner_user_id FROM qb.debug_cook_job WHERE id = :id"),
         {"id": cook_job_id},

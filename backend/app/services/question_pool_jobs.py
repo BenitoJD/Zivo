@@ -36,7 +36,6 @@ from app.services.question_pool import (
     count_answered_on_page,
     count_assertions_on_page,
     default_progress,
-    edition_assertion_ids,
     effective_question_budget,
     get_page_coverage,
     get_progress,
@@ -1209,7 +1208,6 @@ def record_answer(
     if not doc:
         return
     from app.services.newspaper import is_newspaper_document
-    from app.services.question_budget import parse_budget_mode
     from app.services.question_pool import (
         answered_ids_storage_key,
         edition_assertion_ids,
