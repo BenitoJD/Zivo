@@ -26,6 +26,16 @@ from app.services.study_artifacts import NOTE_KINDS, ensure_flashcards, ensure_n
 router = APIRouter()
 
 
+def _owner(user: Account | None) -> uuid.UUID | None:
+    """The account_id to scope notes/ideas by.
+
+    Authenticated callers own their notes (and only see/delete their own); guests
+    pass None, which the service maps to the legacy NULL bucket — shared, as
+    before, because guests have no stable identity to scope by.
+    """
+    return user.id if user else None
+
+
 
 
 @router.get("/{artifact_id}/notes")
@@ -104,7 +114,7 @@ def get_saved_notes(
 ) -> dict:
     """All notes the learner saved while reading this source (newest first)."""
     require_document(db, artifact_id, user, guest_id)
-    return {"notes": saved_notes_service.list_notes(db, artifact_id)}
+    return {"notes": saved_notes_service.list_notes(db, artifact_id, account_id=_owner(user))}
 
 
 @router.post("/{artifact_id}/saved-notes", dependencies=[Depends(require_csrf_or_guest)])
@@ -117,7 +127,9 @@ def create_saved_note(
 ) -> dict:
     """Save an answer (and the passage it came from) as a note linked to this source."""
     require_document(db, artifact_id, user, guest_id)
-    return saved_notes_service.add_note(db, artifact_id, content=body.content, quote=body.quote)
+    return saved_notes_service.add_note(
+        db, artifact_id, content=body.content, quote=body.quote, account_id=_owner(user)
+    )
 
 
 # --------------------------------------------------- brainstorm mode (kept ideas)
@@ -140,7 +152,7 @@ def get_brainstorm_ideas(
     idea board flattens it. Returns {tree: [{id,text,angle,children:[…]}]}.
     """
     require_document(db, artifact_id, user, guest_id)
-    ideas = brainstorm_service.list_ideas(db, artifact_id)
+    ideas = brainstorm_service.list_ideas(db, artifact_id, account_id=_owner(user))
     return {"tree": brainstorm_service.build_tree(ideas)}
 
 
@@ -161,6 +173,7 @@ def create_brainstorm_idea(
             idea_text=body.text,
             angle=body.angle,
             parent_id=body.parent_id,
+            account_id=_owner(user),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -180,7 +193,7 @@ def delete_brainstorm_idea(
 ):
     """Delete an idea and everything branched off it."""
     require_document(db, artifact_id, user, guest_id)
-    brainstorm_service.delete_idea(db, artifact_id, idea_id)
+    brainstorm_service.delete_idea(db, artifact_id, idea_id, account_id=_owner(user))
 
 
 @router.get("/{artifact_id}/brainstorm-ideas/export.md")
@@ -192,7 +205,7 @@ def export_brainstorm_ideas(
 ) -> Response:
     """The idea tree as nested markdown — the download target for "Export"."""
     doc = require_document(db, artifact_id, user, guest_id)
-    ideas = brainstorm_service.list_ideas(db, artifact_id)
+    ideas = brainstorm_service.list_ideas(db, artifact_id, account_id=_owner(user))
     title = (doc.filename or "").rsplit(".", 1)[0]
     body = brainstorm_service.to_markdown(title, ideas)
     return Response(
@@ -530,4 +543,4 @@ def delete_saved_note(
 ):
     """Delete one saved note."""
     require_document(db, artifact_id, user, guest_id)
-    saved_notes_service.delete_note(db, artifact_id, note_id)
+    saved_notes_service.delete_note(db, artifact_id, note_id, account_id=_owner(user))

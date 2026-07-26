@@ -1,7 +1,13 @@
 """Saved-notes storage for Read / Study-Buddy mode.
 
-An append-only list of notes per document (a saved answer + the passage it came from),
-kept linked to the document. Raw parameterized SQL on qb.document_saved_notes.
+An append-only list of notes per document (a saved answer + the passage it came
+from), kept linked to the document and scoped to the owning account.
+
+Owner scoping (``account_id``) closes an IDOR on shared documents: when
+``require_document`` grants read access to every user (``is_demo`` /
+``is_public`` practice sources), only the note's author may delete or list their
+own notes. ``account_id IS NULL`` rows are legacy / guest notes and stay visible
+to all callers of the document. Raw parameterized SQL on qb.document_saved_notes.
 """
 
 from __future__ import annotations
@@ -15,13 +21,18 @@ from sqlalchemy.orm import Session
 _MAX_NOTES = 500
 
 
-def list_notes(db: Session, document_id: uuid.UUID) -> list[dict[str, Any]]:
+def list_notes(
+    db: Session, document_id: uuid.UUID, *, account_id: uuid.UUID | None
+) -> list[dict[str, Any]]:
+    # Owner scope: a caller sees their own notes plus legacy NULL rows. They
+    # never see another user's notes on a shared document.
     rows = db.execute(
         text(
             "SELECT id, content, quote, created_at FROM qb.document_saved_notes "
-            "WHERE document_id = :d ORDER BY created_at DESC LIMIT :lim"
+            "WHERE document_id = :d AND (account_id IS NULL OR account_id IS NOT DISTINCT FROM :uid) "
+            "ORDER BY created_at DESC LIMIT :lim"
         ),
-        {"d": document_id, "lim": _MAX_NOTES},
+        {"d": document_id, "uid": account_id, "lim": _MAX_NOTES},
     ).mappings().all()
     return [
         {
@@ -35,18 +46,23 @@ def list_notes(db: Session, document_id: uuid.UUID) -> list[dict[str, Any]]:
 
 
 def add_note(
-    db: Session, document_id: uuid.UUID, *, content: str, quote: str | None = None
+    db: Session,
+    document_id: uuid.UUID,
+    *,
+    content: str,
+    quote: str | None = None,
+    account_id: uuid.UUID | None,
 ) -> dict[str, Any]:
     note_id = uuid.uuid4()
     row = db.execute(
         text(
             """
-            INSERT INTO qb.document_saved_notes (id, document_id, content, quote)
-            VALUES (:id, :d, :content, :quote)
+            INSERT INTO qb.document_saved_notes (id, document_id, account_id, content, quote)
+            VALUES (:id, :d, :uid, :content, :quote)
             RETURNING id, content, quote, created_at
             """
         ),
-        {"id": note_id, "d": document_id, "content": content, "quote": quote},
+        {"id": note_id, "d": document_id, "uid": account_id, "content": content, "quote": quote},
     ).mappings().first()
     db.commit()
     return {
@@ -57,10 +73,18 @@ def add_note(
     }
 
 
-def delete_note(db: Session, document_id: uuid.UUID, note_id: uuid.UUID) -> bool:
+def delete_note(
+    db: Session, document_id: uuid.UUID, note_id: uuid.UUID, *, account_id: uuid.UUID | None
+) -> bool:
+    # A caller may only delete notes they authored (``account_id`` matches) or
+    # legacy NULL-owned notes — never another user's notes on a shared document.
     res = db.execute(
-        text("DELETE FROM qb.document_saved_notes WHERE id = :id AND document_id = :d"),
-        {"id": note_id, "d": document_id},
+        text(
+            "DELETE FROM qb.document_saved_notes "
+            "WHERE id = :id AND document_id = :d "
+            "AND (account_id IS NULL OR account_id IS NOT DISTINCT FROM :uid)"
+        ),
+        {"id": note_id, "d": document_id, "uid": account_id},
     )
     db.commit()
     return res.rowcount > 0

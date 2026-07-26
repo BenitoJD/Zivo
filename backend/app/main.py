@@ -51,7 +51,17 @@ async def lifespan(_: FastAPI):
     eta_scheduler_service.stop()
 
 
-app = FastAPI(title="Zivo API", version="0.1.0", lifespan=lifespan)
+# Hide /docs, /redoc, /openapi.json in production — the ingress routes "/" with
+# Prefix, so without this the full API surface (including admin paths) would be
+# publicly discoverable at api.zivo.fyi. Dev keeps the docs for local iteration.
+app = FastAPI(
+    title="Zivo API",
+    version="0.1.0",
+    lifespan=lifespan,
+    docs_url=None if settings.is_production else "/docs",
+    redoc_url=None if settings.is_production else "/redoc",
+    openapi_url=None if settings.is_production else "/openapi.json",
+)
 
 
 @app.exception_handler(SQLAlchemyError)

@@ -7,7 +7,13 @@ learner explicitly saves, on qb.document_brainstorm_ideas.
 ``parent_id`` is the whole design. The idea board and the mind map are not two
 features over two stores — they are one tree read two ways: ``list_ideas`` returns
 the flat rows (board, newest first), ``build_tree`` nests the same rows (map).
-Raw parameterized SQL, matching ``app.services.saved_notes``.
+
+Owner scoping (``account_id``) closes an IDOR on shared documents: when
+``require_document`` grants read access to every user (``is_demo`` /
+``is_public`` practice sources), only the idea's author may delete or list their
+own ideas. ``account_id IS NULL`` rows are legacy / guest ideas and stay visible
+to all callers of the document. Raw parameterized SQL, matching
+``app.services.saved_notes``.
 """
 
 from __future__ import annotations
@@ -34,14 +40,18 @@ def _row(r: Any) -> dict[str, Any]:
     }
 
 
-def list_ideas(db: Session, document_id: uuid.UUID) -> list[dict[str, Any]]:
-    """Every kept idea for this source, newest first (the board ordering)."""
+def list_ideas(
+    db: Session, document_id: uuid.UUID, *, account_id: uuid.UUID | None
+) -> list[dict[str, Any]]:
+    """Every kept idea this caller owns for this source, newest first (the board
+    ordering). Legacy NULL-owned ideas are included; another user's ideas never are."""
     rows = db.execute(
         text(
             "SELECT id, parent_id, text, angle, created_at FROM qb.document_brainstorm_ideas "
-            "WHERE document_id = :d ORDER BY created_at DESC LIMIT :lim"
+            "WHERE document_id = :d AND (account_id IS NULL OR account_id IS NOT DISTINCT FROM :uid) "
+            "ORDER BY created_at DESC LIMIT :lim"
         ),
-        {"d": document_id, "lim": _MAX_IDEAS},
+        {"d": document_id, "uid": account_id, "lim": _MAX_IDEAS},
     ).mappings().all()
     return [_row(r) for r in rows]
 
@@ -53,6 +63,7 @@ def add_idea(
     idea_text: str,
     angle: str = "",
     parent_id: uuid.UUID | None = None,
+    account_id: uuid.UUID | None,
 ) -> dict[str, Any]:
     """Keep one idea. ``parent_id`` branches it off an existing idea (mind-map edge).
 
@@ -60,23 +71,30 @@ def add_idea(
     FK alone would accept it, since it only constrains the ideas table.
     """
     if parent_id is not None:
-        owner = db.execute(
-            text("SELECT document_id FROM qb.document_brainstorm_ideas WHERE id = :p"),
-            {"p": parent_id},
+        # Parent must both belong to this document AND be visible to this caller
+        # (own or legacy) — otherwise an attacker on a shared document could attach
+        # a child under another user's private idea and the tree would surface it.
+        parent = db.execute(
+            text(
+                "SELECT document_id FROM qb.document_brainstorm_ideas "
+                "WHERE id = :p AND (account_id IS NULL OR account_id IS NOT DISTINCT FROM :uid)"
+            ),
+            {"p": parent_id, "uid": account_id},
         ).scalar()
-        if owner != document_id:
+        if parent != document_id:
             raise ValueError("parent idea does not belong to this document")
     row = db.execute(
         text(
             """
-            INSERT INTO qb.document_brainstorm_ideas (id, document_id, parent_id, text, angle)
-            VALUES (:id, :d, :parent, :text, :angle)
+            INSERT INTO qb.document_brainstorm_ideas (id, document_id, account_id, parent_id, text, angle)
+            VALUES (:id, :d, :uid, :parent, :text, :angle)
             RETURNING id, parent_id, text, angle, created_at
             """
         ),
         {
             "id": uuid.uuid4(),
             "d": document_id,
+            "uid": account_id,
             "parent": parent_id,
             "text": idea_text,
             "angle": angle,
@@ -86,11 +104,20 @@ def add_idea(
     return _row(row)
 
 
-def delete_idea(db: Session, document_id: uuid.UUID, idea_id: uuid.UUID) -> bool:
-    """Delete an idea and (via ON DELETE CASCADE) everything branched off it."""
+def delete_idea(
+    db: Session, document_id: uuid.UUID, idea_id: uuid.UUID, *, account_id: uuid.UUID | None
+) -> bool:
+    """Delete an idea and (via ON DELETE CASCADE) everything branched off it.
+
+    A caller may only delete ideas they authored (or legacy NULL-owned ones) —
+    never another user's ideas on a shared document."""
     res = db.execute(
-        text("DELETE FROM qb.document_brainstorm_ideas WHERE id = :id AND document_id = :d"),
-        {"id": idea_id, "d": document_id},
+        text(
+            "DELETE FROM qb.document_brainstorm_ideas "
+            "WHERE id = :id AND document_id = :d "
+            "AND (account_id IS NULL OR account_id IS NOT DISTINCT FROM :uid)"
+        ),
+        {"id": idea_id, "d": document_id, "uid": account_id},
     )
     db.commit()
     return res.rowcount > 0

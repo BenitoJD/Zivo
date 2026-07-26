@@ -232,16 +232,28 @@ def complete_upload_session(
     ]
     complete_multipart_upload(row["storage_key"], row["multipart_upload_id"], part_list)
 
-    doc = create_document_from_storage(
-        db,
-        user=user,
-        guest_id=guest_id,
-        filename=row["filename"],
-        content_type=row["content_type"],
-        storage_key=row["storage_key"],
-        size_bytes=int(row["total_size"]),
-        guest_id_override=row["guest_id"],
-    )
+    try:
+        doc = create_document_from_storage(
+            db,
+            user=user,
+            guest_id=guest_id,
+            filename=row["filename"],
+            content_type=row["content_type"],
+            storage_key=row["storage_key"],
+            size_bytes=int(row["total_size"]),
+            guest_id_override=row["guest_id"],
+        )
+    except HTTPException:
+        # Type gate (or quota) rejected the assembled bytes — abort and clean up
+        # so we don't leave an orphaned object in MinIO that an attacker could
+        # still retrieve if they ever learned the storage key.
+        try:
+            abort_multipart_upload(row["storage_key"], row["multipart_upload_id"])
+        except Exception:
+            logger.debug("multipart upload abort failed post-reject", exc_info=True)
+        db.execute(text("DELETE FROM qb.upload_session WHERE id = :id"), {"id": session_id})
+        db.commit()
+        raise
     db.execute(text("DELETE FROM qb.upload_session WHERE id = :id"), {"id": session_id})
     db.commit()
     return doc

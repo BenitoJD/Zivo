@@ -12,7 +12,13 @@ from app.api.access import require_document, require_document_source
 from app.db import get_db
 from app.models import Account, Document, DocumentChunk, User
 from app.services.auth import get_current_user, get_optional_user, require_csrf, require_csrf_or_guest
-from app.services.document_create import create_document_record
+from app.services.document_create import (
+    ALLOWED_IMAGE_PREFIX,
+    ALLOWED_TYPES,
+    assert_upload_content_type_allowed,
+    create_document_record,
+    normalize_upload_content_type,
+)
 from app.services.document_purge import purge_document, purge_ingest_tmp
 from app.services.guest import document_owned_by_guest
 from app.services.guest_session import guest_session_for_read, optional_guest_session
@@ -43,45 +49,6 @@ _LIST_DOCUMENTS_LIMIT = 100
 _CHUNK_PAGE_LIMIT = 500
 
 DEMO_DOC_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
-ALLOWED_TYPES = {
-    "application/pdf",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    "text/plain",
-}
-# Image study uploads are rejected until OCR ingest is production-ready.
-ALLOWED_IMAGE_PREFIX = "image/"
-_DOCX_CT = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-_PPTX_CT = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-
-
-def _normalize_upload_content_type(filename: str, content_type: str, data: bytes) -> str:
-    """Sniff real type; browsers often mislabel .docx as application/msword."""
-    ct = (content_type or "application/octet-stream").lower()
-    name = (filename or "").lower()
-    if data[:4] == b"%PDF" or name.endswith(".pdf"):
-        return "application/pdf"
-    # OOXML (.docx / .pptx) is a ZIP; legacy .doc is OLE compound (D0 CF 11 E0).
-    is_zip = data[:2] == b"PK"
-    if name.endswith(".pptx") or (is_zip and "presentationml" in ct):
-        return _PPTX_CT
-    if name.endswith(".docx") or (is_zip and ("wordprocessingml" in ct or ct == "application/msword")):
-        return _DOCX_CT
-    if name.endswith(".ppt") or "ms-powerpoint" in ct:
-        raise HTTPException(
-            status_code=415,
-            detail="Legacy .ppt isn’t supported — save as .pptx or PDF and upload again.",
-        )
-    if name.endswith(".doc") or ct == "application/msword":
-        if is_zip:
-            return _DOCX_CT
-        raise HTTPException(
-            status_code=415,
-            detail="Legacy .doc isn’t supported — save as .docx or PDF and upload again.",
-        )
-    if name.endswith((".txt", ".md")) or ct.startswith("text/"):
-        return "text/plain"
-    return ct
 
 
 class DocumentOut(BaseModel):
@@ -265,17 +232,10 @@ async def upload_document(
 ) -> Document:
     data = await _read_upload_capped(request, file)
 
-    try:
-        ct = _normalize_upload_content_type(file.filename or "document", file.content_type or "", data)
-    except HTTPException:
-        raise
-    if ct.startswith(ALLOWED_IMAGE_PREFIX):
-        raise HTTPException(
-            status_code=422,
-            detail="Image study isn’t available yet — upload a PDF, Word, PowerPoint, or paste text.",
-        )
-    if ct not in ALLOWED_TYPES:
-        raise HTTPException(status_code=415, detail="Unsupported file type")
+    ct = normalize_upload_content_type(
+        file.filename or "document", file.content_type or "", data
+    )
+    assert_upload_content_type_allowed(ct)
 
     return await asyncio.to_thread(
         create_document_record,

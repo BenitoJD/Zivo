@@ -39,6 +39,7 @@ from app.services.google_oauth import (
 )
 from app.services.guest import claim_guest_documents
 from app.services.guest_session import publish_guest_id, read_guest_id_from_cookie
+from app.services.rate_limit import rate_limit_dependency
 from app.services.usage import DEMO_COOKIE, ensure_demo_cookie
 
 router = APIRouter()
@@ -105,7 +106,7 @@ def mint_guest_session(
     return {"guest_id": guest_id}
 
 
-@router.post("/signup", response_model=AuthResponse)
+@router.post("/signup", response_model=AuthResponse, dependencies=[Depends(rate_limit_dependency)])
 def signup(
     body: SignUpRequest,
     response: Response,
@@ -140,7 +141,7 @@ def signup(
     return AuthResponse(username=user.username, csrf_token=csrf, is_admin=user.is_admin)
 
 
-@router.post("/login", response_model=AuthResponse)
+@router.post("/login", response_model=AuthResponse, dependencies=[Depends(rate_limit_dependency)])
 def login(
     body: LoginRequest,
     response: Response,
@@ -248,7 +249,11 @@ def google_pending(
     return {"pending": True, "email": email}
 
 
-@router.post("/google/complete", response_model=AuthResponse)
+@router.post(
+    "/google/complete",
+    response_model=AuthResponse,
+    dependencies=[Depends(rate_limit_dependency)],
+)
 def google_complete(
     body: GoogleCompleteRequest,
     response: Response,

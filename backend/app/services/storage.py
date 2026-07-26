@@ -138,9 +138,20 @@ def delete_object(storage_key: str) -> None:
 
 def presigned_get_url(storage_key: str, expires: int = 3600) -> str:
     client = _presign_client()
+    # Force download, never inline rendering. User-uploaded bytes are served via
+    # this URL through GET /sources/{id}/file; without these overrides MinIO
+    # serves the object with whatever Content-Type was stored, so a malicious
+    # text/html / image/svg+xml object would execute in a viewer's browser
+    # (stored XSS). The upload type gate blocks such types at write time; this
+    # is the defense-in-depth that holds even if that gate is ever weakened.
     return client.generate_presigned_url(
         "get_object",
-        Params={"Bucket": settings.minio_bucket, "Key": storage_key},
+        Params={
+            "Bucket": settings.minio_bucket,
+            "Key": storage_key,
+            "ResponseContentType": "application/octet-stream",
+            "ResponseContentDisposition": "attachment",
+        },
         ExpiresIn=expires,
     )
 
