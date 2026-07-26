@@ -6,7 +6,6 @@ import pytest
 
 from app.services.question_budget import (
     BUDGET_VERSION,
-    CEIL_PAGE,
     Unit,
     density_unit_count,
     information_floor_items,
@@ -63,10 +62,16 @@ def test_non_content_is_zero() -> None:
     assert plan.n_page == 0
 
 
-def test_ceil_cuts_large_plans() -> None:
+def test_no_ceil_cuts_large_plans_by_default() -> None:
     units = [Unit(f"u{i}", "central") for i in range(100)]
-    plan = plan_page_budget(units, mode="test", ceil_page=CEIL_PAGE)
-    assert plan.n_page == CEIL_PAGE
+    plan = plan_page_budget(units, mode="test")
+    assert plan.n_page == 300
+
+
+def test_optional_ceil_page_caps_when_passed() -> None:
+    units = [Unit(f"u{i}", "central") for i in range(100)]
+    plan = plan_page_budget(units, mode="test", ceil_page=40)
+    assert plan.n_page == 40
 
 
 def test_density_prior_matches_legacy_spirit() -> None:

@@ -94,6 +94,10 @@ export type McqState = {
   edition_page_questions_answered?: number;
   /** Newspaper: 1-based index on the current source page. */
   current_page_question_number?: number;
+  /** Newspaper: learner finished the Learn pool. */
+  learn_complete?: boolean | null;
+  /** Newspaper: at least one Test-pool MCQ has been cooked. */
+  test_pool_ready?: boolean | null;
 };
 
 export type McqGradeResponse = {

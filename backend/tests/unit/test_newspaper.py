@@ -643,11 +643,11 @@ def test_maybe_refill_newspaper_cooks_next_page_after_page_one() -> None:
         patch("app.services.question_pool_jobs.is_coverage_complete", side_effect=lambda _doc, page: page == 1),
         patch(
             "app.services.question_pool_jobs.count_assertions_on_page",
-            side_effect=lambda _db, _doc_id, page: 5 if page == 1 else 0,
+            side_effect=lambda _db, _doc_id, page, **kwargs: 5 if page == 1 else 0,
         ),
         patch(
             "app.services.question_pool_jobs.get_question_budget",
-            side_effect=lambda _doc, page, *_a, **_k: 5 if page == 1 else 8,
+            side_effect=lambda _doc, page, *args, **kwargs: 5 if page == 1 else 8,
         ),
         patch("app.services.question_pool_jobs.enqueue_page_batch") as enqueue,
     ):
@@ -690,3 +690,114 @@ def test_on_triage_precompute_newspaper_enqueues_first_batch() -> None:
 
     enqueue.assert_called_once()
     assert enqueue.call_args.kwargs["page"] == 4
+
+
+def test_page_assertion_ids_filters_serve_mode() -> None:
+    from unittest.mock import MagicMock
+    from uuid import uuid4
+
+    from app.services.question_pool import page_assertion_ids
+
+    db = MagicMock()
+    doc_id = uuid4()
+    db.execute.return_value.scalars.return_value.all.return_value = ["learn-1", "learn-2"]
+
+    learn = page_assertion_ids(db, doc_id, 1, serve_mode="learn")
+    assert learn == ["learn-1", "learn-2"]
+    sql = db.execute.call_args[0][0].text
+    assert "serve_mode" in sql
+
+
+def test_newspaper_learn_complete_enables_test_queue() -> None:
+    from unittest.mock import MagicMock, patch
+    from uuid import uuid4
+
+    from app.models import Document
+    from app.services.question_pool import build_learn_queue_state
+
+    doc = Document(
+        slug="news",
+        filename="paper.pdf",
+        content_type="application/pdf",
+        size_bytes=1,
+        storage_key="k",
+        status="ready",
+        meta={
+            "ingest_kind": "newspaper",
+            "newspaper": True,
+            "selected_range": {"from": 1, "to": 2, "pages": [1, 2]},
+        },
+    )
+    doc.id = uuid4()
+    progress = {
+        "current_page": 1,
+        "learn_answered_ids": ["q1", "q2"],
+        "budget_serve_mode": "learn",
+        "generation_pending": False,
+    }
+    db = MagicMock()
+
+    def _edition_ids(_db, _doc_id, _doc, *, serve_mode=None):
+        if serve_mode == "learn":
+            return ["q1", "q2"]
+        if serve_mode == "test":
+            return ["t1", "t2", "t3"]
+        return []
+
+    with (
+        patch("app.services.newspaper.is_newspaper_document", return_value=True),
+        patch("app.services.question_pool.edition_assertion_ids", side_effect=_edition_ids),
+        patch("app.services.question_pool.page_assertion_ids", return_value=[]),
+        patch("app.services.question_pool.select_next_assertion", return_value=None),
+        patch("app.services.question_pool.get_page_coverage", return_value={"question_budget": 2}),
+        patch("app.services.question_pool.is_coverage_complete", return_value=True),
+        patch("app.services.question_pool.page_budgets_for_document", return_value=[2, 0]),
+        patch("app.services.rag_window.chat_rag_window", return_value=[1, 2]),
+        patch("app.services.rag_window.is_rag_window_ready", return_value=True),
+    ):
+        state = build_learn_queue_state(db, doc.id, doc, progress, mode="learn")
+
+    assert state["learn_complete"] is True
+    assert state["test_pool_ready"] is True
+    assert state["document_complete"] is True
+    assert state["questions_generated"] == 2
+
+
+def test_learn_api_blocks_test_until_learn_complete() -> None:
+    from unittest.mock import MagicMock, patch
+    from uuid import uuid4
+
+    from app.api.learn import _learn_queue_payload
+    from app.models import Document
+
+    doc = Document(
+        slug="news",
+        filename="paper.pdf",
+        content_type="application/pdf",
+        size_bytes=1,
+        storage_key="k",
+        status="ready",
+        meta={"ingest_kind": "newspaper", "newspaper": True},
+    )
+    doc.id = uuid4()
+    db = MagicMock()
+
+    with (
+        patch("app.api.learn.require_document", return_value=doc),
+        patch("app.api.learn.newspaper_learn_pool_complete", return_value=False),
+        patch("app.api.learn.set_serve_budget_mode") as set_mode,
+        patch("app.api.learn.get_progress", return_value={"answered_ids": []}),
+        patch(
+            "app.api.learn.build_learn_queue_state",
+            return_value={"budget_mode": "learn", "page_complete": False},
+        ),
+        patch("app.api.learn._workspace_state", return_value={}),
+        patch("app.api.learn._artifact_concepts", return_value=[]),
+        patch("app.services.newspaper.is_newspaper_document", return_value=True),
+        patch("app.api.learn.is_page_complete", return_value=False),
+    ):
+        out = _learn_queue_payload(db, doc.id, doc, None, mode="test")
+
+    set_mode.assert_called_once()
+    assert set_mode.call_args[0][2] == "learn"
+    assert out["budget_mode"] == "learn"

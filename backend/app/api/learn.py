@@ -22,6 +22,7 @@ from app.repositories.intel import concept_id
 from app.services.answer_signal import ANSWER_CORRECT_METRIC_URI, resolve_subject_entity
 from app.services.guest_session import guest_session_for_read
 from app.services.mcq_dedup import short_concept_label
+from app.services.learn_answered_review import build_learn_answered_review
 from app.services.question_pool import (
     advance_to_next_page,
     build_learn_queue_state,
@@ -30,6 +31,7 @@ from app.services.question_pool import (
     get_study_mode,
     is_page_complete,
     learner_key_for,
+    newspaper_learn_pool_complete,
     page_range_bounds,
     selected_page_list,
     set_focus_concept,
@@ -98,11 +100,15 @@ def _learn_queue_payload(
 ) -> dict:
     lk = learner_key_for(user, guest_id)
     serve_mode = parse_budget_mode(mode)
+    from app.services.newspaper import is_newspaper_document
+
+    progress = get_progress(doc, learner_key=lk)
+    if is_newspaper_document(doc) and serve_mode == "test":
+        if not newspaper_learn_pool_complete(db, artifact_id, doc, progress):
+            serve_mode = "learn"
     set_serve_budget_mode(db, doc, serve_mode, learner_key=lk)
     db.refresh(doc)
     progress = get_progress(doc, learner_key=lk)
-    from app.services.newspaper import is_newspaper_document
-
     if not is_newspaper_document(doc) and is_page_complete(db, doc, progress):
         page = int(progress.get("current_page") or 1)
         _, page_to = page_range_bounds(doc)
@@ -171,6 +177,18 @@ async def learn_queue(
     return await asyncio.to_thread(
         _learn_queue_handler, artifact_id, user, guest_id, mode=mode
     )
+
+
+@router.get("/{artifact_id}/learn-answered")
+async def learn_answered(
+    artifact_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    doc = require_document(db, artifact_id, user, guest_id)
+    items = build_learn_answered_review(db, artifact_id, doc, user, guest_id)
+    return {"items": items}
 
 
 @router.get("/{artifact_id}/learn-queue/stream")

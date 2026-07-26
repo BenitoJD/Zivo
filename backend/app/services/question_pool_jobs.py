@@ -23,6 +23,7 @@ from app.repositories.intel import create_activity
 from app.repositories import workspace as workspace_repo
 from app.services.document_learn_state import save_progress_row
 from app.services.jobs import enqueue_generate, enqueue_rag_window, enqueue_transition_prep
+from app.services.question_budget import Mode
 from app.services.question_pool import (
     EAGER_TRIAGE_LOOKAHEAD,
     FIRST_QUESTION_BATCH_SIZE,
@@ -35,6 +36,7 @@ from app.services.question_pool import (
     count_answered_on_page,
     count_assertions_on_page,
     default_progress,
+    edition_assertion_ids,
     effective_question_budget,
     get_page_coverage,
     get_progress,
@@ -57,21 +59,45 @@ def _is_newspaper_doc(doc: Document) -> bool:
 
 def _next_newspaper_cook_page(
     db: Session, document_id: uuid.UUID, doc: Document
-) -> int | None:
-    """First study page that still needs MCQ batches under its cook budget."""
+) -> tuple[int, Mode] | None:
+    """First study page that still needs MCQ batches under learn or test cook budget."""
+    from app.services.question_pool import get_test_question_budget
+
     for page in selected_page_list(doc):
         if _has_active_generate_job_for_page(db, document_id, page):
             continue
         cov = get_page_coverage(doc, page)
         if not cov or cov.get("non_content"):
             continue
-        budget = get_question_budget(doc, page)
-        if budget <= 0:
+        learn_budget = get_question_budget(doc, page, mode="learn")
+        if learn_budget <= 0:
             continue
-        generated = count_assertions_on_page(db, document_id, page)
-        if is_coverage_complete(doc, page) or generated >= budget:
+        learn_generated = count_assertions_on_page(
+            db, document_id, page, serve_mode="learn"
+        )
+        if not is_coverage_complete(doc, page) or learn_generated < learn_budget:
+            return page, "learn"
+
+    for page in selected_page_list(doc):
+        if _has_active_generate_job_for_page(db, document_id, page):
             continue
-        return page
+        cov = get_page_coverage(doc, page)
+        if not cov or cov.get("non_content"):
+            continue
+        learn_budget = get_question_budget(doc, page, mode="learn")
+        learn_generated = count_assertions_on_page(
+            db, document_id, page, serve_mode="learn"
+        )
+        if learn_budget > 0 and learn_generated < learn_budget:
+            continue
+        test_budget = get_test_question_budget(doc, page)
+        if test_budget <= 0:
+            continue
+        test_generated = count_assertions_on_page(
+            db, document_id, page, serve_mode="test"
+        )
+        if test_generated < test_budget:
+            return page, "test"
     return None
 
 
@@ -135,15 +161,18 @@ def _maybe_refill_newspaper_edition(
     db: Session, document_id: uuid.UUID, doc: Document
 ) -> Job | None:
     ingest_job = _maybe_enqueue_newspaper_missing_pages(db, document_id, doc)
-    page = _next_newspaper_cook_page(db, document_id, doc)
-    if page is None:
+    cook = _next_newspaper_cook_page(db, document_id, doc)
+    if cook is None:
         triage_page = _next_newspaper_page_needing_triage(db, document_id, doc)
         if triage_page is not None:
             triage_job = enqueue_page_triage(db, doc, page=triage_page, precompute=True)
             return ingest_job or triage_job
         return ingest_job
-    generated = count_assertions_on_page(db, document_id, page)
-    budget = get_question_budget(doc, page)
+    page, cook_mode = cook
+    generated = count_assertions_on_page(
+        db, document_id, page, serve_mode=cook_mode
+    )
+    budget = get_question_budget(doc, page, mode=cook_mode)
     remaining = budget - generated
     batch = min(REFILL_BATCH_SIZE, remaining)
     if batch <= 0:
@@ -154,6 +183,7 @@ def _maybe_refill_newspaper_edition(
         page=page,
         batch_size=batch,
         start_sequence=generated,
+        cook_mode=cook_mode,
     )
     return gen_job or ingest_job
 
@@ -194,11 +224,15 @@ def enqueue_page_batch(
     page: int,
     batch_size: int,
     start_sequence: int,
+    cook_mode: str = "learn",
 ) -> Job | None:
-    generated = count_assertions_on_page(db, doc.id, page)
+    from app.services.question_budget import parse_budget_mode
+
+    mode = parse_budget_mode(cook_mode)
+    generated = count_assertions_on_page(db, doc.id, page, serve_mode=mode)
     start_sequence = max(start_sequence, generated)
     progress = get_progress(doc)
-    budget = effective_question_budget(doc, page, progress)
+    budget = get_question_budget(doc, page, mode=mode)
     remaining = budget - generated
     current_page = int(progress.get("current_page") or page_range_bounds(doc)[0])
     is_current_page = page == current_page
@@ -248,6 +282,7 @@ def enqueue_page_batch(
             "page_number": page,
             "batch_size": batch_size,
             "start_sequence": start_sequence,
+            "cook_mode": mode,
         },
     )
     db.commit()
@@ -579,7 +614,7 @@ def mark_aspect_asked(db: Session, document_id: uuid.UUID, page: int, aspect_key
 
 
 def mark_aspects_asked(
-    db: Session, document_id: uuid.UUID, page: int, aspect_keys: list[str]
+    db: Session, document_id: uuid.UUID, page: int, aspect_keys: list[str], *, cook_mode: str = "learn"
 ) -> None:
     """Mark multiple aspects asked in one coverage read + one progress write.
 
@@ -591,13 +626,17 @@ def mark_aspects_asked(
     doc = db.get(Document, document_id)
     if not doc:
         return
+    from app.services.question_budget import parse_budget_mode
+
+    mode = parse_budget_mode(cook_mode)
     entry = dict(get_page_coverage(doc, page))
-    aspects = list(entry.get("aspects") or [])
+    aspect_field = "test_aspects" if mode == "test" else "aspects"
+    aspects = list(entry.get(aspect_field) or entry.get("aspects") or [])
     wanted = set(aspect_keys)
     for aspect in aspects:
         if aspect.get("key") in wanted:
             aspect["asked"] = True
-    entry["aspects"] = aspects
+    entry[aspect_field] = aspects
     save_progress(db, doc, {"page_coverage": {_page_key(page): entry}})
 
 
@@ -1170,17 +1209,36 @@ def record_answer(
     if not doc:
         return
     from app.services.newspaper import is_newspaper_document
+    from app.services.question_budget import parse_budget_mode
+    from app.services.question_pool import (
+        answered_ids_storage_key,
+        edition_assertion_ids,
+        mode_answered_ids,
+        serve_budget_mode,
+    )
 
     progress = get_progress(doc, learner_key=learner_key)
     aid = str(assertion_id)
-    answered = [str(x) for x in progress.get("answered_ids") or []]
+    newspaper = is_newspaper_document(doc)
+    serve_mode = serve_budget_mode(doc, learner_key=learner_key)
+    if newspaper:
+        storage_key = answered_ids_storage_key(serve_mode)
+        answered = list(mode_answered_ids(progress, serve_mode))
+    else:
+        storage_key = "answered_ids"
+        answered = [str(x) for x in progress.get("answered_ids") or []]
     if aid in answered:
         return
     answered.append(aid)
     patch: dict[str, Any] = {
+        storage_key: answered,
         "answered_ids": answered,
         "answered_on_page": int(progress.get("answered_on_page") or 0) + 1,
     }
+    if newspaper and serve_mode == "learn":
+        learn_ids = edition_assertion_ids(db, document_id, doc, serve_mode="learn")
+        if learn_ids and all(row_id in answered for row_id in learn_ids):
+            patch["learn_complete"] = True
     row = db.execute(
         text(
             """

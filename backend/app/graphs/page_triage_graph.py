@@ -219,6 +219,28 @@ def run_page_triage(
         from app.services.newspaper_ad_filter import NEWSPAPER_EXAM_CONTENT_TYPE
 
         content_type = NEWSPAPER_EXAM_CONTENT_TYPE
+        aspects_raw = result.get("aspects") or []
+        units = _units_from_aspects(aspects_raw)
+        conf_raw = result.get("budget_confidence")
+        conf: Literal["high", "medium", "low"] | None = None
+        if conf_raw in ("high", "medium", "low"):
+            conf = conf_raw
+        test_plan = plan_page_budget(
+            units if units else None,
+            mode="test",
+            non_content=False,
+            words=len(page_text.split()) if page_text else 0,
+            substantial_paragraphs=len(
+                [p for p in page_text.split("\n\n") if p.strip()] if page_text else []
+            ),
+            confidence=conf,
+        )
+        test_selected = _select_aspects_for_plan(aspects_raw, n_page=test_plan.n_page)
+        result = {
+            **result,
+            "test_question_budget": test_plan.n_page,
+            "test_aspects": test_selected,
+        }
 
     if content_type is not None:
         result = {**result, "content_type": content_type}
@@ -310,6 +332,8 @@ def _persist_triage_coverage(
         budget_mode=result.get("budget_mode"),
         budget_version=result.get("budget_version"),
         n_cov=result.get("n_cov"),
+        test_question_budget=result.get("test_question_budget"),
+        test_aspects=result.get("test_aspects"),
     )
 
 

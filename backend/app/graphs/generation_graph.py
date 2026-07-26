@@ -19,10 +19,10 @@ from app.services.mcq_dedup import prior_mcq_from_payload
 from app.services.mcq_quality import generate_quality_mcq_batch
 from app.services.question_pool import (
     clear_stale_coverage_complete,
-    effective_question_budget,
     bump_aspect_attempts,
     get_page_coverage,
     get_progress,
+    get_question_budget,
     mark_aspect_asked,
     mark_aspects_asked,
     on_batch_completed,
@@ -270,6 +270,8 @@ def _assertion_sequence_exists(
     document_id: uuid.UUID,
     page_number: int,
     sequence: int,
+    *,
+    serve_mode: str = "learn",
 ) -> bool:
     exists = db.execute(
         text(
@@ -279,6 +281,7 @@ def _assertion_sequence_exists(
               AND status = 'active'
               AND (payload->>'page_number')::int = :page
               AND (payload->>'sequence')::int = :sequence
+              AND COALESCE(payload->>'serve_mode', 'learn') = :serve_mode
             LIMIT 1
             """
         ),
@@ -286,6 +289,7 @@ def _assertion_sequence_exists(
             "artifact_id": str(document_id),
             "page": page_number,
             "sequence": sequence,
+            "serve_mode": serve_mode,
         },
     ).scalar()
     return exists is not None
@@ -295,6 +299,8 @@ def _prior_mcqs_on_page(
     db: Session,
     document_id: uuid.UUID,
     page_number: int,
+    *,
+    serve_mode: str = "learn",
 ) -> list[dict[str, Any]]:
     rows = db.execute(
         text(
@@ -303,10 +309,15 @@ def _prior_mcqs_on_page(
             WHERE payload->>'artifact_id' = :artifact_id
               AND status = 'active'
               AND (payload->>'page_number')::int = :page
+              AND COALESCE(payload->>'serve_mode', 'learn') = :serve_mode
             ORDER BY (payload->>'sequence')::int ASC
             """
         ),
-        {"artifact_id": str(document_id), "page": page_number},
+        {
+            "artifact_id": str(document_id),
+            "page": page_number,
+            "serve_mode": serve_mode,
+        },
     ).scalars().all()
     prior: list[dict[str, Any]] = []
     for raw in rows:
@@ -315,10 +326,16 @@ def _prior_mcqs_on_page(
     return prior
 
 
-def _next_aspects(doc: Document, page_number: int, n: int) -> list[dict[str, Any]]:
+def _next_aspects(
+    doc: Document, page_number: int, n: int, *, cook_mode: str = "learn"
+) -> list[dict[str, Any]]:
     """The next up-to-n aspects on this page that have not been asked yet."""
+    from app.services.question_budget import parse_budget_mode
+
+    mode = parse_budget_mode(cook_mode)
     cov = get_page_coverage(doc, page_number)
-    return list(next_unasked(cov.get("aspects") or [], n=n).aspects)
+    aspect_field = "test_aspects" if mode == "test" else "aspects"
+    return list(next_unasked(cov.get(aspect_field) or cov.get("aspects") or [], n=n).aspects)
 
 
 def _speculative_aspects(page_text: str, page_number: int, n: int) -> list[dict[str, Any]]:
@@ -337,6 +354,10 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
     activity_id = options.get("activity_id")
     page_number = int(options["page_number"])
     batch_size = int(options.get("batch_size", 5))
+    cook_mode = str(options.get("cook_mode") or "learn")
+    from app.services.question_budget import parse_budget_mode
+
+    serve_mode = parse_budget_mode(cook_mode)
     start_sequence = resolve_start_sequence(
         db,
         document_id,
@@ -432,10 +453,12 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
         return {"questions_saved": 0, "page_number": page_number}
 
     progress = get_progress(doc)
-    budget = effective_question_budget(doc, page_number, progress)
+    budget = get_question_budget(doc, page_number, mode=serve_mode)
 
     remaining = budget - start_sequence
-    targets = _next_aspects(doc, page_number, min(batch_size, max(0, remaining)))
+    targets = _next_aspects(
+        doc, page_number, min(batch_size, max(0, remaining)), cook_mode=cook_mode
+    )
     if not targets:
         coverage = get_page_coverage(doc, page_number)
         triage_ran = bool(coverage.get("aspects"))
@@ -460,7 +483,9 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
             db.commit()
             return {"questions_saved": 0, "page_number": page_number, "error": "no_targets"}
 
-    prior_mcqs = _prior_mcqs_on_page(db, document_id, page_number)
+    prior_mcqs = _prior_mcqs_on_page(
+        db, document_id, page_number, serve_mode=serve_mode
+    )
     page_hash = _page_content_hash(page_text)
     cloned = _clone_reusable_mcqs(
         db,
@@ -504,10 +529,13 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
         if seq > budget:
             state["hit_budget"] = True
             return False
-        if _assertion_sequence_exists(db, document_id, page_number, seq):
+        if _assertion_sequence_exists(
+            db, document_id, page_number, seq, serve_mode=serve_mode
+        ):
             return True  # sequence taken — skip but keep generating
         p = dict(payload)
         p["page_content_hash"] = page_hash
+        p["serve_mode"] = serve_mode
         _persist_assertions(
             db,
             document_id,
@@ -515,6 +543,7 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
             page_number=page_number,
             facet_rows=[],
             pinned_qid=pinned_qid,
+            serve_mode=serve_mode,
         )
         db.commit()  # make this question immediately available to the learner
         if target and target.get("key"):
@@ -537,7 +566,7 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
     sequence = state["sequence"]
     hit_budget = state["hit_budget"]
     if asked_keys:
-        mark_aspects_asked(db, document_id, page_number, asked_keys)
+        mark_aspects_asked(db, document_id, page_number, asked_keys, cook_mode=cook_mode)
     if saved:
         checkpoint_after_save(
             db,
@@ -545,7 +574,7 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
             sequence=sequence,
             saved_total=saved,
         )
-    if hit_budget:
+    if hit_budget and serve_mode == "learn":
         set_coverage_complete(db, document_id, page_number)
 
     if saved == 0 and targets:
@@ -558,7 +587,9 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
             sequence += 1
             if sequence > budget:
                 break
-            if _assertion_sequence_exists(db, document_id, page_number, sequence):
+            if _assertion_sequence_exists(
+                db, document_id, page_number, sequence, serve_mode=serve_mode
+            ):
                 continue
             payload = generate_quality_mcq(
                 db,
@@ -573,11 +604,23 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
                 continue
             payload = dict(payload)
             payload["page_content_hash"] = page_hash
+            payload["serve_mode"] = serve_mode
             _persist_assertion(
-                db, document_id, payload, page_number=page_number, sequence=sequence
+                db,
+                document_id,
+                payload,
+                page_number=page_number,
+                sequence=sequence,
+                serve_mode=serve_mode,
             )
             if target.get("key"):
-                mark_aspect_asked(db, document_id, page_number, str(target["key"]))
+                mark_aspects_asked(
+                    db,
+                    document_id,
+                    page_number,
+                    [str(target["key"])],
+                    cook_mode=cook_mode,
+                )
             saved += 1
             # O(n^2) fix: mutate the in-memory list instead of re-querying all
             # MCQs on the page after every save. The next target's generation
@@ -603,7 +646,12 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
     db.refresh(doc)
     asked_now = {
         str(a.get("key"))
-        for a in (get_page_coverage(doc, page_number).get("aspects") or [])
+        for a in (
+            get_page_coverage(doc, page_number).get(
+                "test_aspects" if serve_mode == "test" else "aspects"
+            )
+            or []
+        )
         if a.get("asked")
     }
     still_unasked = {str(t["key"]) for t in targets if t.get("key") and str(t["key"]) not in asked_now}
@@ -703,6 +751,7 @@ def _persist_assertion(
     *,
     page_number: int,
     sequence: int,
+    serve_mode: str = "learn",
 ) -> None:
     from app.repositories.intel import _concept_id, _source_id
 
@@ -713,6 +762,7 @@ def _persist_assertion(
         "format": "qb.mcq.v1",
         "page_number": page_number,
         "sequence": sequence,
+        "serve_mode": serve_mode,
     }
     db.execute(
         text(
@@ -732,7 +782,7 @@ def _persist_assertion(
             "type_id": _concept_id(db, "/vocab/assertion/question.mcq"),
             "source_id": _source_id(db, "user-upload"),
             "uri": f"qb://assertion/{assertion_id}",
-            "fp": f"{document_id}:{page_number}:{sequence}",
+            "fp": f"{document_id}:{page_number}:{serve_mode}:{sequence}",
             "title": (payload.get("question") or "")[:200],
             "summary": payload.get("explanation"),
             "payload": json.dumps(payload),
@@ -760,6 +810,7 @@ def _persist_assertions(
     page_number: int,
     facet_rows: list[dict[str, Any]] | None = None,
     pinned_qid: str | None = None,
+    serve_mode: str = "learn",
 ) -> list[dict[str, Any]]:
     """Batched persist — one executemany INSERT for assertions + one for facets.
 
@@ -788,6 +839,7 @@ def _persist_assertions(
             "format": "qb.mcq.v1",
             "page_number": page_number,
             "sequence": sequence,
+            "serve_mode": serve_mode,
         }
         assertion_rows.append(
             {
@@ -795,7 +847,7 @@ def _persist_assertions(
                 "type_id": type_id,
                 "source_id": source_id,
                 "uri": f"qb://assertion/{assertion_id}",
-                "fp": f"{document_id}:{page_number}:{sequence}",
+                "fp": f"{document_id}:{page_number}:{serve_mode}:{sequence}",
                 "title": (payload.get("question") or "")[:200],
                 "summary": payload.get("explanation"),
                 "payload": json.dumps(payload),

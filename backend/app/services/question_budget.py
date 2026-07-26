@@ -28,7 +28,6 @@ M_LEARN = 1
 M_TEST_FORMATIVE = 3
 M_TEST_HIGH_STAKES = 5
 
-CEIL_PAGE = 40
 W_PER_UNIT = 120
 SESSION_SOFT = 20
 # Speculative N_page when triage has not landed yet (confidence=low seed).
@@ -134,7 +133,7 @@ def plan_page_budget(
     high_stakes: bool = False,
     words: int = 0,
     substantial_paragraphs: int = 0,
-    ceil_page: int = CEIL_PAGE,
+    ceil_page: int | None = None,
     confidence: Literal["high", "medium", "low"] | None = None,
 ) -> PageBudgetPlan:
     """Compute N_page from weighted units × mode evidence (or density prior)."""
@@ -156,7 +155,9 @@ def plan_page_budget(
         conf = confidence or ("medium" if u_hat else "high")
 
     n_page = int(round(n_cov))
-    n_page = max(0, min(ceil_page, n_page))
+    n_page = max(0, n_page)
+    if ceil_page is not None:
+        n_page = min(ceil_page, n_page)
     return PageBudgetPlan(n_page=n_page, n_cov=n_cov, mode=mode, confidence=conf)
 
 

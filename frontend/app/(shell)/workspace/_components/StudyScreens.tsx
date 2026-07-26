@@ -319,6 +319,8 @@ export function DocumentCompleteScreen({
   onChoosePages,
   actionLabel,
   hideNextSuggestion = false,
+  onContinueToTest,
+  continueToTestLabel = "Continue to Test mode",
 }: {
   completedFrom: number;
   completedTo: number;
@@ -334,6 +336,9 @@ export function DocumentCompleteScreen({
   actionLabel?: string;
   /** Hide "suggested next pages" (no page picker for this surface). */
   hideNextSuggestion?: boolean;
+  /** Newspaper Learn complete: optional second pass into Test. */
+  onContinueToTest?: () => void;
+  continueToTestLabel?: string;
 }) {
   const pageLabel =
     completedFrom === completedTo
@@ -361,10 +366,12 @@ export function DocumentCompleteScreen({
             fw={500}
             style={{ letterSpacing: "-0.01em", lineHeight: 1.2, fontFamily: "var(--font-serif), Georgia, serif" }}
           >
-            {pageLabel} complete
+            {onContinueToTest ? "Learn complete" : `${pageLabel} complete`}
           </Title>
           <Text size="sm" c="dimmed" ta="center" lh={1.6} maw={360}>
-            {bookFinished
+            {onContinueToTest
+              ? "You have worked through every Learn question in this edition. Continue to Test mode for a second pass with new questions, or head back to the paper."
+              : bookFinished
               ? `You've worked through every page in this ${pageCount}-page book. Pick any range to study again, or continue elsewhere in your library.`
               : "Every question in this range is done. When you're ready, choose the next pages from the same source."}
           </Text>
@@ -384,7 +391,19 @@ export function DocumentCompleteScreen({
         )}
 
         <Stack gap="sm" w="100%" maw={320}>
-          <Button size="md" radius="xl" fullWidth onClick={onChoosePages}>
+          {onContinueToTest ? (
+            <Button size="md" radius="xl" fullWidth onClick={onContinueToTest}>
+              {continueToTestLabel}
+            </Button>
+          ) : null}
+          <Button
+            size="md"
+            radius="xl"
+            fullWidth
+            variant={onContinueToTest ? "light" : "filled"}
+            color={onContinueToTest ? "gray" : undefined}
+            onClick={onChoosePages}
+          >
             {actionLabel ?? (bookFinished ? "Choose pages to study" : "Choose next pages")}
           </Button>
         </Stack>

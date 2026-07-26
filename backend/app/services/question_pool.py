@@ -65,6 +65,9 @@ GENERATE_JOB_STALE_SECONDS = int(os.getenv("ZIVO_GENERATE_JOB_STALE_SECONDS", "1
 _LEARNER_PROGRESS_KEYS = frozenset(
     {
         "answered_ids",
+        "learn_answered_ids",
+        "test_answered_ids",
+        "learn_complete",
         "answered_on_page",
         "generated_on_page",
         "last_confirmed_answer",
@@ -86,6 +89,31 @@ _LEARNER_PROGRESS_KEYS = frozenset(
         "budget_serve_mode",
     }
 )
+
+_SERVE_MODE_SQL = "COALESCE(payload->>'serve_mode', 'learn')"
+
+
+def answered_ids_storage_key(mode: Mode) -> str:
+    return "learn_answered_ids" if mode == "learn" else "test_answered_ids"
+
+
+def mode_answered_ids(progress: dict[str, Any], mode: Mode) -> list[str]:
+    key = answered_ids_storage_key(mode)
+    scoped = progress.get(key)
+    if isinstance(scoped, list) and scoped:
+        return [str(x) for x in scoped]
+    if mode == "learn":
+        legacy = progress.get("answered_ids")
+        if isinstance(legacy, list) and legacy:
+            return [str(x) for x in legacy]
+    return []
+
+
+def overlay_mode_answered_ids(progress: dict[str, Any], mode: Mode) -> dict[str, Any]:
+    """Newspaper: expose the active pool's answered ids as answered_ids."""
+    out = dict(progress)
+    out["answered_ids"] = mode_answered_ids(progress, mode)
+    return out
 
 
 def learner_key_for(user: Any | None, guest_id: str | None) -> str | None:
@@ -144,6 +172,8 @@ def _load_shared_progress(doc: Document) -> dict[str, Any]:
 def _learner_progress_defaults() -> dict[str, Any]:
     return {
         "answered_ids": [],
+        "learn_answered_ids": [],
+        "test_answered_ids": [],
         "answered_on_page": 0,
         "generated_on_page": 0,
         "session_items_answered": 0,
@@ -175,6 +205,13 @@ def get_progress(doc: Document, *, learner_key: str | None = None) -> dict[str, 
                 progress[key] = learner_defaults[key]
             else:
                 progress.pop(key, None)
+    if is_newspaper_document(doc):
+        serve_mode = parse_budget_mode(
+            progress.get("budget_serve_mode")
+            if isinstance(progress.get("budget_serve_mode"), str)
+            else None
+        )
+        return overlay_mode_answered_ids(progress, serve_mode)
     return progress
 
 
@@ -292,6 +329,8 @@ def save_page_coverage(
     budget_mode: str | None = None,
     budget_version: str | None = None,
     n_cov: float | None = None,
+    test_question_budget: int | None = None,
+    test_aspects: list[dict[str, Any]] | None = None,
 ) -> None:
     doc = db.get(Document, document_id)
     if not doc:
@@ -321,6 +360,10 @@ def save_page_coverage(
         entry["budget_version"] = budget_version
     if n_cov is not None:
         entry["n_cov"] = n_cov
+    if test_question_budget is not None:
+        entry["test_question_budget"] = test_question_budget
+    if test_aspects is not None:
+        entry["test_aspects"] = test_aspects
     save_progress(db, doc, {"page_coverage": {_page_key(page): entry}})
     db.commit()
     db.refresh(doc)
@@ -373,13 +416,36 @@ def reset_empty_page_streak(db: Session, document_id: uuid.UUID) -> None:
     save_progress(db, doc, {"empty_page_streak": 0})
 
 
+def get_test_question_budget(doc: Document, page: int) -> int:
+    """Newspaper test pool cook target (m=3); 0 when non-content or unset."""
+    cov = get_page_coverage(doc, page)
+    if cov.get("non_content"):
+        return 0
+    raw = cov.get("test_question_budget")
+    if raw is not None:
+        return max(0, int(raw))
+    aspects = cov.get("aspects") if isinstance(cov.get("aspects"), list) else None
+    if aspects:
+        units = units_from_aspect_dicts(aspects)
+        conf_raw = cov.get("budget_confidence")
+        conf: Literal["high", "medium", "low"] | None = None
+        if conf_raw in ("high", "medium", "low"):
+            conf = conf_raw
+        return plan_page_budget(units, mode="test", confidence=conf).n_page
+    return 0
+
+
 def get_question_budget(doc: Document, page: int, *, mode: Mode | None = None) -> int:
+    from app.services.newspaper import is_newspaper_document
+
     cov = get_page_coverage(doc, page)
     # A deliberate zero verdict is honoured exactly (no floor) — the whole point
     # of open-world: ask nothing on a cover page rather than force filler.
     if cov.get("non_content"):
         return 0
     serve_mode = mode if mode is not None else serve_budget_mode(doc)
+    if is_newspaper_document(doc) and serve_mode == "test":
+        return get_test_question_budget(doc, page)
     # When serve mode differs from the cook plan (typically Test after Learn cook),
     # re-plan from stored aspects so Y and refill target follow the multiplier.
     persisted_mode = parse_budget_mode(cov.get("budget_mode") if isinstance(cov.get("budget_mode"), str) else None)
@@ -404,7 +470,10 @@ def get_question_budget(doc: Document, page: int, *, mode: Mode | None = None) -
 
 def page_budgets_for_document(doc: Document, *, mode: Mode | None = None) -> list[int]:
     """N_page values for selected cookable pages (missing triage → skip)."""
+    from app.services.newspaper import is_newspaper_document
+
     serve_mode = mode if mode is not None else serve_budget_mode(doc)
+    newspaper = is_newspaper_document(doc)
     pages = selected_page_list(doc)
     progress = get_progress(doc)
     coverage = progress.get("page_coverage") or {}
@@ -415,6 +484,9 @@ def page_budgets_for_document(doc: Document, *, mode: Mode | None = None) -> lis
             continue
         if entry.get("non_content"):
             out.append(0)
+            continue
+        if newspaper and serve_mode == "test":
+            out.append(get_test_question_budget(doc, page))
             continue
         # Prefer mode-aware planner when aspects exist; else persisted cook N.
         aspects = entry.get("aspects") if isinstance(entry.get("aspects"), list) else None
@@ -482,37 +554,74 @@ def is_coverage_complete(doc: Document, page: int) -> bool:
     return is_page_covered(cov)
 
 
-def count_assertions_on_page(db: Session, document_id: uuid.UUID, page: int) -> int:
-    return len(page_assertion_ids(db, document_id, page))
+def count_assertions_on_page(
+    db: Session,
+    document_id: uuid.UUID,
+    page: int,
+    *,
+    serve_mode: Mode | None = None,
+) -> int:
+    return len(page_assertion_ids(db, document_id, page, serve_mode=serve_mode))
 
 
-def page_assertion_ids(db: Session, document_id: uuid.UUID, page: int) -> list[str]:
+def page_assertion_ids(
+    db: Session,
+    document_id: uuid.UUID,
+    page: int,
+    *,
+    serve_mode: Mode | None = None,
+) -> list[str]:
     """Ordered assertion ids for a page — facet table first, JSONB fallback."""
-    from_facets = page_assertion_ids_from_facets(db, document_id, page)
-    if from_facets:
+    from_facets = page_assertion_ids_from_facets(
+        db, document_id, page, serve_mode=serve_mode
+    )
+    if from_facets is not None:
         return from_facets
+    mode_filter = ""
+    params: dict[str, Any] = {"artifact_id": str(document_id), "page": page}
+    if serve_mode is not None:
+        mode_filter = f"AND {_SERVE_MODE_SQL} = :serve_mode"
+        params["serve_mode"] = serve_mode
     return list(
         db.execute(
             text(
-                """
+                f"""
                 SELECT id::text FROM intel.assertion
                 WHERE payload->>'artifact_id' = :artifact_id
                   AND status = 'active'
                   AND (payload->>'page_number')::int = :page
+                  {mode_filter}
                 ORDER BY (payload->>'sequence')::int ASC
                 """
             ),
-            {"artifact_id": str(document_id), "page": page},
+            params,
         ).scalars().all()
     )
 
 
-def edition_assertion_ids(db: Session, document_id: uuid.UUID, doc: Document) -> list[str]:
+def edition_assertion_ids(
+    db: Session,
+    document_id: uuid.UUID,
+    doc: Document,
+    *,
+    serve_mode: Mode | None = None,
+) -> list[str]:
     """All active MCQs across the study range — newspaper serves the full cooked pool."""
     ids: list[str] = []
     for page in selected_page_list(doc):
-        ids.extend(page_assertion_ids(db, document_id, page))
+        ids.extend(page_assertion_ids(db, document_id, page, serve_mode=serve_mode))
     return ids
+
+
+def newspaper_learn_pool_complete(
+    db: Session, document_id: uuid.UUID, doc: Document, progress: dict[str, Any]
+) -> bool:
+    """True when every learn-pool MCQ in the edition has been answered."""
+    learn_ids = edition_assertion_ids(db, document_id, doc, serve_mode="learn")
+    if not learn_ids:
+        return False
+    answered = set(mode_answered_ids(progress, "learn"))
+    return all(row_id in answered for row_id in learn_ids)
 
 
 def assertion_page_number(db: Session, assertion_id: str) -> int | None:
@@ -694,7 +803,9 @@ def select_next_assertion(
         str(progress.get("selection_policy") or "").strip().lower()
         or (get_settings().selection_policy or "sequence")
     )
-    serve_mode = "test" if str(progress.get("serve_mode") or "").lower() == "test" else "learn"
+    serve_mode = parse_budget_mode(
+        progress.get("budget_serve_mode") if isinstance(progress.get("budget_serve_mode"), str) else None
+    )
     state = build_learner_state(progress)
 
     difficulty_by_id: dict[str, float] = {}
@@ -870,10 +981,15 @@ def build_learn_queue_state(
     page_from, page_to = page_range_bounds(doc)
     answered_ids = [str(x) for x in progress.get("answered_ids") or []]
     answered_set = set(answered_ids)
+    pool_mode: Mode | None = serve_mode if newspaper else None
     if newspaper:
-        page_ids = edition_assertion_ids(db, document_id, doc)
+        page_ids = edition_assertion_ids(db, document_id, doc, serve_mode=pool_mode)
+        learn_pool_ids = edition_assertion_ids(db, document_id, doc, serve_mode="learn")
+        test_pool_ids = edition_assertion_ids(db, document_id, doc, serve_mode="test")
     else:
         page_ids = page_assertion_ids(db, document_id, page)
+        learn_pool_ids = []
+        test_pool_ids = []
     questions_generated = len(page_ids)
     questions_answered = sum(1 for row_id in page_ids if row_id in answered_set)
     edition_page_question_total: int | None = None
@@ -882,7 +998,16 @@ def build_learn_queue_state(
     cov = get_page_coverage(doc, page)
     if newspaper:
         plan_budget = max(questions_generated, 1)
+        learn_answered_set = set(mode_answered_ids(progress, "learn"))
+        learn_complete = (
+            len(learn_pool_ids) > 0
+            and all(row_id in learn_answered_set for row_id in learn_pool_ids)
+            and not bool(progress.get("generation_pending"))
+        )
+        test_pool_ready = len(test_pool_ids) > 0
     else:
+        learn_complete = False
+        test_pool_ready = False
         plan_budget = get_question_budget(doc, page, mode=serve_mode)
     # FE compat: generation_cap used to be a generate-ahead pace; now equals plan.
     generation_cap = plan_budget
@@ -978,6 +1103,8 @@ def build_learn_queue_state(
         "non_content": non_content,
         "no_questions_reason": no_questions_reason,
         "document_complete": document_complete,
+        "learn_complete": learn_complete if newspaper else None,
+        "test_pool_ready": test_pool_ready if newspaper else None,
         "prompt_reselect_pages": bool(progress.get("prompt_reselect_pages")),
         "prompt_reselect_reason": progress.get("prompt_reselect_reason"),
         "pool_available": sum(1 for row_id in page_ids if row_id not in answered_set),

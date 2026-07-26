@@ -50,13 +50,13 @@ import {
   READ_CHAT_SUGGESTIONS,
   BRAINSTORM_SUGGESTIONS,
 } from "@/app/workspace/_components/TutorPanel";
-import { useStudyNav } from "@/app/workspace/_components/studyNav";
+import { useStudyNav, type StudyMode } from "@/app/workspace/_components/studyNav";
 import { useTutorChat } from "@/app/workspace/_components/useTutorChat";
 import { McqHeroPanel, McqReviewView } from "@/app/workspace/_components/McqPanels";
 import { MCQ_CONTENT_MAX } from "@/app/_components/mcq/McqCard";
 import { StudySourcePanel } from "@/app/workspace/_components/StudySourcePanel";
 import { StudyEdgeTrigger } from "@/app/workspace/_components/StudyRails";
-import { FloatingPanel } from "@/app/workspace/_components/FloatingPanel";
+import { FloatingPanel, type FloatingPanelGeometry, type FloatingPanelHandle } from "@/app/workspace/_components/FloatingPanel";
 import { StudyMobileShell } from "@/app/workspace/_components/StudyMobileShell";
 import { SelectionQuote } from "@/app/workspace/_components/SelectionQuote";
 import { StudyMetaBar, type StudyAlign } from "@/app/workspace/_components/StudyMetaBar";
@@ -72,6 +72,7 @@ import {
   STUDY_DESKTOP_BP,
   STUDY_COMPACT_BP,
   pagesInRange,
+  computeFloatingLaneInsets,
   type AnsweredCard,
 } from "@/app/workspace/_components/studyLayout";
 import { PetPlayground } from "@/app/_components/pets/PetPlayground";
@@ -89,6 +90,38 @@ import {
 } from "@/lib/types";
 import { useIsDark } from "@/lib/useIsDark";
 import { useSearchParam } from "@/lib/useSearchParam";
+
+type LearnAnsweredItem = {
+  assertion_id: string;
+  stem: string;
+  options: string[];
+  selected_index: number;
+  selected_indices?: number[];
+  correct: boolean;
+  correct_index: number;
+  correct_indices?: number[];
+  feedback: string | null;
+  concept?: string | null;
+  first_try_correct: boolean;
+};
+
+function learnAnsweredToCards(items: LearnAnsweredItem[]): AnsweredCard[] {
+  return items.map((item) => ({
+    assertionId: item.assertion_id,
+    stem: item.stem,
+    options: item.options,
+    selectedIndex: item.selected_index,
+    selectedIndices: item.selected_indices,
+    gradeState: {
+      correct: item.correct,
+      correctIndex: item.correct_index,
+      correctIndices: item.correct_indices,
+    },
+    feedback: item.feedback,
+    concept: item.concept ?? null,
+    firstTryCorrect: item.first_try_correct,
+  }));
+}
 
 export default function WorkspaceArtifactPage({
   params,
@@ -166,6 +199,11 @@ export default function WorkspaceArtifactPage({
   // The floating Source/Tutor windows own their own geometry (see FloatingPanel),
   // so the workspace only needs the row ref to bound them.
   const studyRowRef = useRef<HTMLDivElement>(null);
+  const tutorPanelRef = useRef<FloatingPanelHandle>(null);
+  const sourcePanelRef = useRef<FloatingPanelHandle>(null);
+  const [tutorGeometry, setTutorGeometry] = useState<FloatingPanelGeometry | null>(null);
+  const [sourceGeometry, setSourceGeometry] = useState<FloatingPanelGeometry | null>(null);
+  const [studyRowWidth, setStudyRowWidth] = useState(0);
   const [reselectOpen, setReselectOpen] = useState(false);
   // Bumped when the learner quotes selected MCQ text into chat, so the mobile
   // shell can jump to the tutor tab (desktop just opens the floating panel).
@@ -181,6 +219,27 @@ export default function WorkspaceArtifactPage({
     defaultValue: "center",
     getInitialValueInEffect: false,
   });
+
+  useEffect(() => {
+    const el = studyRowRef.current;
+    if (!el) return;
+    const measure = () => setStudyRowWidth(el.clientWidth);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [isLg]);
+
+  function handleStudyAlignChange(align: StudyAlign) {
+    setStudyAlign(align);
+    if (align === "left") {
+      if (tutorOpen) tutorPanelRef.current?.snapSide("right");
+      if (sourceOpen) sourcePanelRef.current?.snapSide("left");
+    } else if (align === "right") {
+      if (tutorOpen) tutorPanelRef.current?.snapSide("left");
+      if (sourceOpen) sourcePanelRef.current?.snapSide("right");
+    }
+  }
 
   // Tutor chat (per-mode conversation: hydrate, stream, regenerate, clear, plus
   // Read-mode Study-Buddy quote/ask/save) lives in its own hook.
@@ -1046,6 +1105,32 @@ export default function WorkspaceArtifactPage({
     setReselectOpen(true);
   }
 
+  const newspaperLearnComplete = Boolean(queue?.learn_complete);
+  const newspaperTestReady = Boolean(queue?.test_pool_ready);
+
+  function handleStudyModeChange(next: StudyMode) {
+    if (isNewspaper && !newspaperLearnComplete && next === "test") return;
+    setMode(next);
+  }
+
+  function startNewspaperTest() {
+    setAnsweredHistory([]);
+    setReviewIndex(null);
+    setSelected(null);
+    setMultiSelected([]);
+    setGradeState(null);
+    setFeedback(null);
+    setQuestion("Loading questions…");
+    setOptions([]);
+    setMcqLoading(true);
+    pinnedAssertionIdRef.current = null;
+    setPinnedAssertionId(null);
+    pendingNextAssertionIdRef.current = null;
+    setPendingNextAssertionId(null);
+    setMode("test");
+    router.replace(`/workspace/${artifactId}?mode=test`);
+  }
+
   function handleRangeChange(from: number, to: number) {
     const lo = Math.min(from, to);
     const hi = Math.max(from, to);
@@ -1268,19 +1353,56 @@ export default function WorkspaceArtifactPage({
 
   // Both edges carry a floating trigger (SOURCE on the left, Zivo on the right), so a
   // pinned column has to leave room for one or it slides underneath.
-  // Newspaper hides Source — only tutor edge may claim right-side inset.
+  // Newspaper has no Source trigger on the left, so left-pin uses a smaller inset.
   const pinned = isNarrow
     ? null
     : studyAlign === "left"
-      ? isNewspaper
-        ? null
-        : "left"
+      ? "left"
       : studyAlign === "right"
         ? "right"
         : null;
+  const pinInsetLeft = isNewspaper ? 16 : 48;
+  const floatingLane = computeFloatingLaneInsets(
+    [
+      {
+        open: sourceOpen,
+        minimized: sourceGeometry?.minimized ?? false,
+        maximized: sourceGeometry?.maximized ?? false,
+        x: sourceGeometry?.rect.x ?? 0,
+        w: sourceGeometry?.rect.w ?? 0,
+      },
+      {
+        open: tutorOpen && mode !== "test",
+        minimized: tutorGeometry?.minimized ?? false,
+        maximized: tutorGeometry?.maximized ?? false,
+        x: tutorGeometry?.rect.x ?? 0,
+        w: tutorGeometry?.rect.w ?? 0,
+      },
+    ],
+    studyRowWidth,
+  );
   const newspaperContextLabel = isNewspaper
     ? [paperTitle || shortFilename, editionDate].filter(Boolean).join(" · ")
     : null;
+  const reviewableCount = Math.max(answeredHistory.length, queue?.questions_answered ?? 0);
+
+  async function openReviewPrevious() {
+    let history = answeredHistory;
+    if (history.length === 0 && reviewableCount > 0) {
+      try {
+        const data = await apiGet<{ items: LearnAnsweredItem[] }>(
+          `/api/artifacts/${artifactId}/learn-answered`,
+        );
+        history = learnAnsweredToCards(data.items ?? []);
+        if (history.length > 0) setAnsweredHistory(history);
+      } catch {
+        return;
+      }
+    }
+    if (history.length === 0) return;
+    const idx = gradeState ? Math.max(0, history.length - 2) : history.length - 1;
+    setReviewIndex(idx);
+  }
 
   const questionColumn = (
     <Box flex={1} mih={0} h="100%" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -1289,18 +1411,20 @@ export default function WorkspaceArtifactPage({
         questionTotal={questionTotal}
         page={queue?.current_page}
         mode={mode}
-        onModeChange={setMode}
+        onModeChange={handleStudyModeChange}
         showProgress={(mode === "learn" || mode === "test") && !mcqLoading && Boolean(displayAssertionId) && !showPageComplete && !showDocumentComplete}
         compact={isNarrow}
         showModeSelect={isCompact}
         studyMode={queue?.study_mode}
         onStudyModeChange={(m) => void setStudyMode(m)}
         align={studyAlign}
-        onAlignChange={setStudyAlign}
+        onAlignChange={handleStudyAlignChange}
         contextLabel={newspaperContextLabel}
         isNewspaper={isNewspaper}
         editionIndex={editionQuestionIndex}
         editionTotal={editionQuestionTotal}
+        backHref={isNewspaper ? newspaperBackHref : undefined}
+        backLabel="Days"
       />
       <Box
         flex={1}
@@ -1310,12 +1434,13 @@ export default function WorkspaceArtifactPage({
         style={{
           display: "flex",
           flexDirection: "column",
-          // Top-anchored (not centered) so revealing the explanation grows the card
-          // downward instead of re-centering the whole panel - no layout jump.
           overflow: "hidden",
           justifyContent: "flex-start",
           paddingTop: "clamp(8px, 2vh, 20px)",
           minHeight: 0,
+          paddingLeft: `calc(var(--mantine-spacing-md) + ${floatingLane.left}px)`,
+          paddingRight: `calc(var(--mantine-spacing-md) + ${floatingLane.right}px)`,
+          transition: "padding 260ms cubic-bezier(0.32,0.72,0,1)",
         }}
       >
         <Box
@@ -1330,7 +1455,7 @@ export default function WorkspaceArtifactPage({
             // absolutely positioned over the study area - without it the option cards
             // slide underneath.
             ...(pinned === "left"
-              ? { marginLeft: 48, marginRight: 0 }
+              ? { marginLeft: pinInsetLeft, marginRight: 0 }
               : pinned === "right"
                 ? { marginLeft: "auto", marginRight: 48 }
                 : { marginInline: "auto" }),
@@ -1432,6 +1557,11 @@ export default function WorkspaceArtifactPage({
               onChoosePages={openReselectPages}
               actionLabel={isNewspaper ? "Back to days" : undefined}
               hideNextSuggestion={isNewspaper}
+              onContinueToTest={
+                isNewspaper && mode === "learn" && newspaperLearnComplete && newspaperTestReady
+                  ? startNewspaperTest
+                  : undefined
+              }
             />
           ) : showPageComplete ? (
             <PageCompleteInterstitial
@@ -1482,10 +1612,8 @@ export default function WorkspaceArtifactPage({
             gradeState={gradeState}
             submitting={submitting}
             compact={isNarrow}
-            canReview={gradeState ? answeredHistory.length >= 2 : answeredHistory.length >= 1}
-            onReviewPrevious={() =>
-              setReviewIndex(gradeState ? answeredHistory.length - 2 : answeredHistory.length - 1)
-            }
+            canReview={gradeState ? reviewableCount >= 2 : reviewableCount >= 1}
+            onReviewPrevious={() => void openReviewPrevious()}
             onSubmit={() => void submitMcq()}
             onContinue={() => void advanceMcq()}
             onRetry={() => {
@@ -1576,7 +1704,7 @@ export default function WorkspaceArtifactPage({
           questionIndex={0}
           questionTotal={0}
           mode={mode}
-          onModeChange={setMode}
+          onModeChange={handleStudyModeChange}
           showProgress={false}
           compact={isNarrow}
         />
@@ -1746,6 +1874,7 @@ export default function WorkspaceArtifactPage({
 
             {!isNewspaper ? (
             <FloatingPanel
+              ref={sourcePanelRef}
               open={sourceOpen}
               title={shortFilename}
               icon={<IconFileText size={16} stroke={2} />}
@@ -1754,6 +1883,7 @@ export default function WorkspaceArtifactPage({
               containerRef={studyRowRef}
               defaultSide="left"
               onClose={closeSource}
+              onGeometryChange={setSourceGeometry}
             >
               <StudySourcePanel
                 filename={artifact.filename}

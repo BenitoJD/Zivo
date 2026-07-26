@@ -62,7 +62,14 @@ def resolve_start_sequence(
     from app.services.question_pool import count_assertions_on_page
 
     start = int(options.get("start_sequence") or 0)
-    start = max(start, count_assertions_on_page(db, document_id, page_number))
+    cook_mode = str(options.get("cook_mode") or "learn")
+    from app.services.question_budget import parse_budget_mode
+
+    serve_mode = parse_budget_mode(cook_mode)
+    start = max(
+        start,
+        count_assertions_on_page(db, document_id, page_number, serve_mode=serve_mode),
+    )
 
     jid = job_id or eta_context.get_current_job_id()
     if jid is not None:

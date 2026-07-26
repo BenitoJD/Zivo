@@ -98,17 +98,33 @@ def upsert_facets(
 
 
 def page_assertion_ids_from_facets(
-    db: Session, artifact_id: uuid.UUID, page: int
+    db: Session,
+    artifact_id: uuid.UUID,
+    page: int,
+    *,
+    serve_mode: str | None = None,
 ) -> list[str] | None:
+    mode_filter = ""
+    params: dict[str, Any] = {"artifact_id": artifact_id, "page": page}
+    if serve_mode is not None:
+        mode_filter = (
+            " AND EXISTS (SELECT 1 FROM intel.assertion a "
+            "WHERE a.id = f.assertion_id "
+            "AND COALESCE(a.payload->>'serve_mode', 'learn') = :serve_mode)"
+        )
+        params["serve_mode"] = serve_mode
     rows = db.execute(
         text(
-            """
-            SELECT assertion_id::text
-            FROM qb.mcq_assertion_facets
-            WHERE artifact_id = :artifact_id AND page_number = :page
-            ORDER BY sequence ASC
+            f"""
+            SELECT f.assertion_id::text
+            FROM qb.mcq_assertion_facets f
+            WHERE f.artifact_id = :artifact_id AND f.page_number = :page
+            {mode_filter}
+            ORDER BY f.sequence ASC
             """
         ),
-        {"artifact_id": artifact_id, "page": page},
+        params,
     ).scalars().all()
-    return list(rows) if rows else None
+    if not rows:
+        return None if serve_mode is None else []
+    return list(rows)
