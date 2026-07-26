@@ -211,9 +211,10 @@ def insert_post(
 ) -> uuid.UUID:
     post_id = uuid.uuid4()
     emb = pgvector_literal(embedding) if embedding else None
+    embedding_sql = "CAST(:emb AS vector)" if emb else "NULL"
     db.execute(
         text(
-            """
+            f"""
             INSERT INTO qb.seo_post (
               id, slug, title, lede, body_md, format, stream, author_name,
               status, topic_fingerprint, embedding, source_kind, source_ref,
@@ -221,7 +222,7 @@ def insert_post(
             ) VALUES (
               :id, :slug, :title, :lede, :body, :fmt, :stream, :author,
               :status, :fp,
-              CASE WHEN :emb IS NULL THEN NULL ELSE CAST(:emb AS vector) END,
+              {embedding_sql},
               :sk, CAST(:sref AS jsonb), CAST(:faq AS jsonb), :cta, :aid,
               CASE WHEN :status = 'published' THEN now() ELSE NULL END,
               now(), now()
@@ -239,7 +240,7 @@ def insert_post(
             "author": author_name,
             "status": status,
             "fp": topic_fingerprint,
-            "emb": emb,
+            **({"emb": emb} if emb else {}),
             "sk": source_kind,
             "sref": json.dumps(source_ref),
             "faq": json.dumps(faq_jsonld or []),
