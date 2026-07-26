@@ -7,6 +7,7 @@ import {
   Button,
   Center,
   Group,
+  Loader,
   Menu,
   Paper,
   Progress,
@@ -397,7 +398,7 @@ export function McqHeroPanel({
     const progressPct = newspaperReady
       ? generated > 0
         ? 72
-        : 48
+        : null
       : readingPhase
         ? Math.min(28, Math.round((indexProgress ?? 0) * 0.28))
         : planningPhase
@@ -456,29 +457,48 @@ export function McqHeroPanel({
                 </linearGradient>
               </defs>
               <circle cx={center} cy={center} r={R} fill="none" stroke="var(--mantine-color-default-border)" strokeOpacity={0.5} strokeWidth={8} />
-              <circle
-                cx={center}
-                cy={center}
-                r={R}
-                fill="none"
-                stroke="url(#zivo-ring-grad)"
-                strokeWidth={8}
-                strokeLinecap="round"
-                strokeDasharray={CIRC}
-                strokeDashoffset={CIRC * (1 - progressPct / 100)}
-                transform={`rotate(-90 ${center} ${center})`}
-                style={{ transition: "stroke-dashoffset 600ms cubic-bezier(0.32,0.72,0,1)" }}
-              />
+              {progressPct !== null ? (
+                <circle
+                  cx={center}
+                  cy={center}
+                  r={R}
+                  fill="none"
+                  stroke="url(#zivo-ring-grad)"
+                  strokeWidth={8}
+                  strokeLinecap="round"
+                  strokeDasharray={CIRC}
+                  strokeDashoffset={CIRC * (1 - progressPct / 100)}
+                  transform={`rotate(-90 ${center} ${center})`}
+                  style={{ transition: "stroke-dashoffset 600ms cubic-bezier(0.32,0.72,0,1)" }}
+                />
+              ) : (
+                <circle
+                  cx={center}
+                  cy={center}
+                  r={R}
+                  fill="none"
+                  stroke="url(#zivo-ring-grad)"
+                  strokeWidth={8}
+                  strokeLinecap="round"
+                  strokeDasharray={`${CIRC * 0.22} ${CIRC * 0.78}`}
+                  className="zivo-ring-spin"
+                  style={{ animation: "zivo-ring-spin 1.1s linear infinite", transformOrigin: "center" }}
+                />
+              )}
             </svg>
             <Box pos="absolute" style={{ display: "grid", placeItems: "center" }}>
-              <Text
-                fz={compact ? 22 : 26}
-                fw={600}
-                c="var(--mantine-color-text)"
-                style={{ fontFamily: "var(--font-serif), Georgia, serif", letterSpacing: "-0.02em", lineHeight: 1 }}
-              >
-                {progressPct}%
-              </Text>
+              {progressPct !== null ? (
+                <Text
+                  fz={compact ? 22 : 26}
+                  fw={600}
+                  c="var(--mantine-color-text)"
+                  style={{ fontFamily: "var(--font-serif), Georgia, serif", letterSpacing: "-0.02em", lineHeight: 1 }}
+                >
+                  {progressPct}%
+                </Text>
+              ) : (
+                <Loader size={compact ? 28 : 32} color="lavender" type="oval" />
+              )}
             </Box>
           </Box>
 

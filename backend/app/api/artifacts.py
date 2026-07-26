@@ -19,6 +19,7 @@ from app.services.guest_session import optional_guest_session
 from app.services.jobs import enqueue_rag_window
 from app.services.parse import refresh_document_page_count
 from app.services.question_pool import reset_for_new_page_range
+from app.services.rag_window import maybe_recover_stuck_indexing
 from app.services.storage import presigned_get_url
 
 
@@ -58,6 +59,7 @@ def get_artifact(
     # Heal stale page_count / bogus single-page selection before the FE decides
     # whether to show the page picker.
     refresh_document_page_count(db, doc)
+    maybe_recover_stuck_indexing(db, doc)
     db.refresh(doc)
     return ArtifactOut(
         id=doc.id,

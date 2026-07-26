@@ -6,15 +6,63 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.models import Document
+from app.models import Document, JobWorkload
 from app.services.chunks import indexed_pages_for_document
 from app.services.question_pool import get_progress, selected_page_list
 from app.services.tutor_retrieval import MAX_RAG_PAGES, plan_rag_window
 
 _INGESTED_PAGES_KEY = "ingested_pages"
+
+_INGEST_JOB_NAMES = (
+    "ingest.page",
+    "ingest.rag_window",
+    "ingest.document",
+    "ingest.parse_document",
+    "ingest.chunk_pages",
+    "ingest.embed_chunks",
+    "ingest.fetch_file",
+)
+
+_MARK_PAGE_INGESTED_SQL = text(
+    """
+    UPDATE qb.documents d
+    SET meta = jsonb_set(
+        COALESCE(d.meta, '{}'::jsonb),
+        '{ingested_pages}',
+        (
+            SELECT COALESCE(jsonb_agg(val ORDER BY val), '[]'::jsonb)
+            FROM (
+                SELECT DISTINCT val
+                FROM (
+                    SELECT jsonb_array_elements_text(
+                        COALESCE(d.meta->'ingested_pages', '[]'::jsonb)
+                    )::int AS val
+                    UNION ALL
+                    SELECT :page::int AS val
+                ) AS combined
+            ) AS distinct_vals
+        ),
+        true
+    )
+    WHERE d.id = :document_id
+    RETURNING meta
+    """
+)
+
+_HAS_ACTIVE_INGEST_JOBS_SQL = text(
+    """
+    SELECT 1
+    FROM qb.jobs j
+    WHERE j.payload->>'document_id' = :document_id
+      AND j.name = ANY(CAST(:names AS text[]))
+      AND j.status IN ('queued', 'running')
+    LIMIT 1
+    """
+)
 
 
 def ingested_pages_for_document(doc: Document) -> set[int]:
@@ -24,21 +72,59 @@ def ingested_pages_for_document(doc: Document) -> set[int]:
     return {int(p) for p in raw if int(p) >= 1}
 
 
+def has_active_ingest_jobs(db: Session, document_id: uuid.UUID) -> bool:
+    row = db.execute(
+        _HAS_ACTIVE_INGEST_JOBS_SQL,
+        {"document_id": str(document_id), "names": list(_INGEST_JOB_NAMES)},
+    ).first()
+    return row is not None
+
+
+def enqueue_missing_page_ingests(
+    db: Session, document_id: uuid.UUID, pages: list[int]
+) -> None:
+    if not pages:
+        return
+    from app.services.jobs import batch_enqueue_jobs
+
+    batch_enqueue_jobs(
+        db,
+        [
+            {
+                "name": "ingest.page",
+                "workload": JobWorkload.cpu,
+                "payload": {
+                    "document_id": str(document_id),
+                    "page_number": int(page),
+                },
+            }
+            for page in pages
+        ],
+        chunk_size=50,
+    )
+
+
 def mark_page_ingested(db: Session, doc: Document, page: int) -> None:
     """Record that ingest.page finished for this page — even when text was empty.
 
     Empty pages write no chunks, so indexed_pages alone can never include them.
     Without this mark, triage defers forever and the RAG window never becomes ready.
+
+    Uses a single atomic SQL UPDATE so concurrent ingest.page workers do not lose
+    each other's pages (lost-update on doc.meta left RAG windows stuck at 50%).
     """
     page = int(page)
     if page < 1:
         return
-    meta = dict(doc.meta or {})
-    pages = sorted(ingested_pages_for_document(doc) | {page})
-    if meta.get(_INGESTED_PAGES_KEY) == pages:
+    if page in ingested_pages_for_document(doc):
         return
-    meta[_INGESTED_PAGES_KEY] = pages
-    doc.meta = meta
+    row = db.execute(
+        _MARK_PAGE_INGESTED_SQL,
+        {"document_id": doc.id, "page": page},
+    ).mappings().first()
+    if not row:
+        return
+    doc.meta = dict(row["meta"] or {})
     flag_modified(doc, "meta")
     db.add(doc)
 
@@ -148,6 +234,33 @@ def is_rag_window_ready(db: Session, document_id: uuid.UUID, doc: Document | Non
     return all(p in ready for p in target)
 
 
+def maybe_recover_stuck_indexing(db: Session, doc: Document) -> None:
+    """Re-queue missing RAG-window pages when indexing stalled with no active jobs."""
+    if doc.status != "indexing":
+        return
+    if has_active_ingest_jobs(db, doc.id):
+        return
+    target = get_rag_window(doc)
+    if not target:
+        from app.services.jobs import enqueue_rag_window
+
+        enqueue_rag_window(
+            db,
+            doc.id,
+            account_id=doc.account_id,
+            current_page=int((get_progress(doc) or {}).get("current_page") or 1),
+        )
+        db.commit()
+        return
+    if is_rag_window_ready(db, doc.id, doc):
+        refresh_rag_window_status(db, doc.id)
+        return
+    missing = sync_rag_window(db, doc.id, target)
+    if missing:
+        enqueue_missing_page_ingests(db, doc.id, missing)
+        db.commit()
+
+
 def refresh_rag_window_status(db: Session, document_id: uuid.UUID) -> bool:
     """Update index_progress and ready flag; return True when window fully indexed."""
     doc = db.get(Document, document_id)
@@ -157,6 +270,11 @@ def refresh_rag_window_status(db: Session, document_id: uuid.UUID) -> bool:
     pct = rag_window_index_progress(db, document_id, target)
     doc.index_progress = pct
     ready = is_rag_window_ready(db, document_id, doc)
+    if not ready:
+        missing = sync_rag_window(db, document_id, target)
+        if missing and not has_active_ingest_jobs(db, document_id):
+            enqueue_missing_page_ingests(db, document_id, missing)
+            ready = False
     meta = dict(doc.meta or {})
     if ready:
         doc.status = "ready"

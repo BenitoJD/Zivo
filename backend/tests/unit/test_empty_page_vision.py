@@ -37,11 +37,17 @@ def test_pages_ready_includes_ingested_empty(monkeypatch) -> None:
 def test_mark_page_ingested_records_meta() -> None:
     doc = _doc()
     db = MagicMock()
+    db.execute.return_value.mappings.return_value.first.return_value = {
+        "meta": {"ingested_pages": [4]},
+    }
     rw.mark_page_ingested(db, doc, 4)
     assert doc.meta["ingested_pages"] == [4]
+    db.execute.return_value.mappings.return_value.first.return_value = {
+        "meta": {"ingested_pages": [2, 4]},
+    }
     rw.mark_page_ingested(db, doc, 2)
     assert doc.meta["ingested_pages"] == [2, 4]
-    db.add.assert_called()
+    assert db.execute.call_count == 2
 
 
 def test_note_empty_page_triage_asks_on_usable() -> None:
