@@ -78,6 +78,7 @@ import { PetPlayground } from "@/app/_components/pets/PetPlayground";
 import { indexingStage } from "@/lib/constants";
 import { getCachedPdfDocument, loadPdfForArtifact } from "@/lib/pdf";
 import { budgetModeQuery, defaultWorkspaceMode } from "@/lib/studyPreferences";
+import { formatMcqStemForDisplay } from "@/lib/mcqStemFormat";
 import {
   normalizeMcqOptions,
   sanitizeMcqStem,
@@ -744,7 +745,7 @@ export default function WorkspaceArtifactPage({
     }
     const row = assertionQuery.data;
     const p = (row.payload ?? {}) as AssertionPayload;
-    setQuestion(sanitizeMcqStem(p.question ?? p.stem ?? row.title ?? "Question"));
+    setQuestion(formatMcqStemForDisplay(p.question ?? p.stem ?? row.title ?? "Question"));
     setOptions(normalizeMcqOptions(p.options, p.choices));
     setCurrentConcept((p.primary_concept ?? "").trim() || null);
     setIsMulti(

@@ -31,6 +31,7 @@ import { GenerationStages } from "@/app/workspace/_components/GenerationStages";
 import { PetPlayground } from "@/app/_components/pets/PetPlayground";
 import { CAT_ENABLED_KEY } from "@/app/_components/pets/PetPlayground";
 import { MCQ_CONTENT_MAX, mcqOptionChrome, McqFeedbackCard } from "@/app/_components/mcq/McqCard";
+import { formatMcqStemForDisplay, isStatementStyleStem } from "@/lib/mcqStemFormat";
 import { normalizeMcqOptions, type McqState } from "@/lib/types";
 import { learnHasUnansweredReady, learnWaitStatus } from "@/lib/learnStatus";
 import { type AnsweredCard } from "@/app/workspace/_components/studyLayout";
@@ -214,6 +215,8 @@ export function McqHeroPanel({
   isNewspaper?: boolean;
 }) {
   const isDark = useIsDark();
+  const displayStem = formatMcqStemForDisplay(stem);
+  const statementStem = isStatementStyleStem(displayStem);
   // Roaming study cat - opt-in (off by default); toggled in Settings and applied live.
   const [catEnabled] = useLocalStorage({ key: CAT_ENABLED_KEY, defaultValue: false });
   const safeOptions = normalizeMcqOptions(options);
@@ -525,7 +528,7 @@ export function McqHeroPanel({
   }
 
   return (
-    <Stack key={stem} h="100%" gap={0} align="stretch" style={{ overflow: "hidden" }}>
+    <Stack key={displayStem} h="100%" gap={0} align="stretch" style={{ overflow: "hidden" }}>
       <style>{`
         @keyframes mcq-rise {
           from { opacity: 0; transform: translateY(14px) scale(0.99); filter: blur(4px); }
@@ -620,22 +623,21 @@ export function McqHeroPanel({
         order={2}
         className="mcq-q"
         fw={500}
-        lh={1.3}
-        ta="center"
+        lh={statementStem ? 1.55 : 1.3}
+        ta={statementStem ? "left" : "center"}
         c="var(--mantine-color-text)"
         style={{
           fontFamily: "var(--font-serif), Georgia, serif",
           fontSize: compact ? "clamp(1rem, 4.4vw, 1.3rem)" : "clamp(1.2rem, 2.2vw, 1.9rem)",
           letterSpacing: "-0.01em",
-          maxWidth: "100%",
+          maxWidth: statementStem ? MCQ_CONTENT_MAX : "100%",
           marginInline: "auto",
           overflowWrap: "anywhere",
-          whiteSpace: "pre-line", // statement/matching/code stems arrive with \n line breaks
-          // Keep absolute flag from covering the last words of a long stem.
+          whiteSpace: "pre-line",
           paddingInline: onFlagQuestion && !isTest ? 28 : 0,
         }}
       >
-        {stem}
+        {displayStem}
       </Title>
       </Box>
 
@@ -931,6 +933,8 @@ export function McqReviewView({
   onExit: () => void;
 }) {
   const isDark = useIsDark();
+  const displayStem = formatMcqStemForDisplay(card.stem);
+  const statementStem = isStatementStyleStem(displayStem);
   const safeOptions = normalizeMcqOptions(card.options);
   const { correct, correctIndex, correctIndices } = card.gradeState;
   const isCorrect = (i: number) =>
@@ -981,8 +985,8 @@ export function McqReviewView({
           <Title
             order={2}
             fw={500}
-            lh={1.3}
-            ta="center"
+            lh={statementStem ? 1.55 : 1.3}
+            ta={statementStem ? "left" : "center"}
             c="var(--mantine-color-text)"
             style={{
               fontFamily: "var(--font-serif), Georgia, serif",
@@ -991,10 +995,10 @@ export function McqReviewView({
               maxWidth: "100%",
               marginInline: "auto",
               overflowWrap: "anywhere",
-              whiteSpace: "pre-line", // statement/matching/code stems arrive with \n line breaks
+              whiteSpace: "pre-line",
             }}
           >
-            {card.stem}
+            {displayStem}
           </Title>
 
           <Stack gap={compact ? 8 : 10} mih={0} style={{ flexShrink: 0 }}>
