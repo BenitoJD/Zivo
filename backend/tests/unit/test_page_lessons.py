@@ -16,7 +16,6 @@ import uuid
 from unittest.mock import MagicMock
 
 from app.graphs.lesson_graph import LESSON_POLICY_VERSION, _aspects_block, _parse_lesson
-from app.services.artifact_store import ArtifactStore
 from app.services.page_lessons import _LESSON_STORE, _row_to_state
 
 
