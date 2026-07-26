@@ -303,15 +303,10 @@ CREATE TABLE IF NOT EXISTS qb.newspaper_edition (
   telegram_msg_id   BIGINT,
   location_raw      TEXT NOT NULL DEFAULT '',
   status            TEXT NOT NULL DEFAULT 'pending',
-  blog_post_id      UUID REFERENCES qb.seo_post (id) ON DELETE SET NULL,
-  blog_status       TEXT NOT NULL DEFAULT 'none',
-  blog_published_at TIMESTAMPTZ,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT newspaper_edition_status_check
     CHECK (status IN ('pending', 'indexing', 'ready', 'failed', 'purged')),
-  CONSTRAINT newspaper_edition_blog_status_check
-    CHECK (blog_status IN ('none', 'pending', 'published', 'skipped', 'failed')),
   CONSTRAINT newspaper_edition_paper_day_unique
     UNIQUE (paper_slug, edition_date)
 );
@@ -322,10 +317,6 @@ CREATE INDEX IF NOT EXISTS ix_newspaper_edition_ready_date
 
 CREATE INDEX IF NOT EXISTS ix_newspaper_edition_paper
   ON qb.newspaper_edition (paper_slug, edition_date DESC);
-
-CREATE INDEX IF NOT EXISTS ix_newspaper_edition_blog_published
-  ON qb.newspaper_edition (paper_slug, edition_date DESC)
-  WHERE blog_status = 'published';
 
 -- Newspaper brand allowlist (additive; also 029_newspaper_brands)
 ALTER TABLE qb.newspaper_settings
@@ -422,6 +413,24 @@ CREATE INDEX IF NOT EXISTS ix_seo_post_published_at
 CREATE INDEX IF NOT EXISTS ix_seo_post_embedding_hnsw
   ON qb.seo_post USING hnsw (embedding vector_cosine_ops)
   WHERE embedding IS NOT NULL AND status = 'published';
+
+-- Newspaper edition blog link (additive; also 037_newspaper_edition_blog)
+ALTER TABLE qb.newspaper_edition
+  ADD COLUMN IF NOT EXISTS blog_post_id UUID
+    REFERENCES qb.seo_post (id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS blog_status TEXT NOT NULL DEFAULT 'none',
+  ADD COLUMN IF NOT EXISTS blog_published_at TIMESTAMPTZ;
+
+ALTER TABLE qb.newspaper_edition
+  DROP CONSTRAINT IF EXISTS newspaper_edition_blog_status_check;
+
+ALTER TABLE qb.newspaper_edition
+  ADD CONSTRAINT newspaper_edition_blog_status_check
+    CHECK (blog_status IN ('none', 'pending', 'published', 'skipped', 'failed'));
+
+CREATE INDEX IF NOT EXISTS ix_newspaper_edition_blog_published
+  ON qb.newspaper_edition (paper_slug, edition_date DESC)
+  WHERE blog_status = 'published';
 
 CREATE TABLE IF NOT EXISTS qb.seo_post_assertion (
   post_id       UUID NOT NULL REFERENCES qb.seo_post (id) ON DELETE CASCADE,
