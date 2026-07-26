@@ -224,7 +224,10 @@ export default function WorkspaceArtifactPage({
   useEffect(() => {
     const el = studyRowRef.current;
     if (!el) return;
-    const measure = () => setStudyRowWidth(el.clientWidth);
+    const measure = () => {
+      const w = el.clientWidth;
+      setStudyRowWidth((prev) => (Math.abs(prev - w) < 2 ? prev : w));
+    };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -367,12 +370,11 @@ export default function WorkspaceArtifactPage({
     sortedSelection.length > 0 ? sortedSelection[sortedSelection.length - 1] : 1;
   const sliderMarks = useMemo(() => buildPageSliderMarks(pageCount), [pageCount]);
 
-  const stem =
-    mcqLoading
-      ? "Loading questions…"
-      : queue && !displayAssertionId
-        ? "Questions will appear once indexing finishes."
-        : question;
+  const stem = displayAssertionId
+    ? mcqLoading && !question
+      ? ""
+      : question
+    : "";
 
   useEffect(() => {
     if (invalidArtifactId) {
@@ -1421,7 +1423,38 @@ export default function WorkspaceArtifactPage({
   }
 
   const questionColumn = (
-    <Box flex={1} mih={0} h="100%" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <Box flex={1} mih={0} miw={0} h="100%" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <Box
+        flex={1}
+        mih={0}
+        miw={0}
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          minHeight: 0,
+          paddingLeft: floatingLane.left,
+          paddingRight: floatingLane.right,
+        }}
+      >
+        <Box
+          w="100%"
+          maw={MCQ_CONTENT_MAX}
+          miw={0}
+          flex={1}
+          mih={0}
+          px={{ base: "sm", sm: "md", lg: "lg" }}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+            alignSelf:
+              pinned === "left" ? "flex-start" : pinned === "right" ? "flex-end" : "center",
+            marginLeft: pinned === "left" ? pinInsetLeft : undefined,
+            marginRight:
+              pinned === "right" ? (tutorOpen ? 0 : 48) : pinned === "left" ? 0 : undefined,
+          }}
+        >
       <StudyMetaBar
         questionIndex={questionIndex}
         questionTotal={questionTotal}
@@ -1442,44 +1475,26 @@ export default function WorkspaceArtifactPage({
         editionAnswered={queue?.questions_answered ?? 0}
         backHref={isNewspaper ? newspaperBackHref : undefined}
         backLabel="Days"
+        inline
       />
       <Box
         flex={1}
         mih={0}
-        px={{ base: "sm", sm: "md", lg: "lg" }}
         pb={{ base: "xs", sm: "md" }}
         style={{
           display: "flex",
           flexDirection: "column",
-          // Top-anchored (not centered) so revealing the explanation grows the card
-          // downward instead of re-centering the whole panel - no layout jump.
           overflow: "hidden",
           justifyContent: "flex-start",
-          paddingTop: "clamp(8px, 2vh, 20px)",
+          paddingTop: isNarrow ? 4 : 8,
           minHeight: 0,
         }}
       >
         <Box
           mih={0}
+          miw={0}
           px={4}
           style={{
-            // Phones always centre (the column already fills the width); on desktop the
-            // learner chooses, and the choice is remembered across sessions. alignSelf
-            // pins the column on the cross axis (flex-start / center / flex-end) instead
-            // of margin auto on a flex:1 child, which would still stretch full width and
-            // make left-pin invisible when the tutor lane is reserved. The inset keeps a
-            // pinned column clear of that edge's floating trigger. floatingLane reserves
-            // space for open Source/Tutor panels.
-            width: "100%",
-            maxWidth: MCQ_CONTENT_MAX,
-            alignSelf:
-              pinned === "left" ? "flex-start" : pinned === "right" ? "flex-end" : "center",
-            paddingLeft: floatingLane.left,
-            paddingRight: floatingLane.right,
-            transition: "padding 260ms cubic-bezier(0.32,0.72,0,1)",
-            marginLeft: pinned === "left" ? pinInsetLeft : undefined,
-            marginRight:
-              pinned === "right" ? (tutorOpen ? 0 : 48) : pinned === "left" ? 0 : undefined,
             flex: 1,
             maxHeight: "100%",
             overflowY: "auto",
@@ -1659,6 +1674,8 @@ export default function WorkspaceArtifactPage({
           </SelectionQuote>
           </Box>
           )}
+        </Box>
+      </Box>
         </Box>
       </Box>
     </Box>
@@ -1869,7 +1886,7 @@ export default function WorkspaceArtifactPage({
           >
             {/* Base layer: the question column fills the row; the Source and Tutor
                 windows float above it so the learner can keep answering. */}
-            <Box flex={1} mih={0} pos="relative" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <Box flex={1} mih={0} miw={0} pos="relative" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
               {questionColumn}
             </Box>
 

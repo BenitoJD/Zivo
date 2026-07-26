@@ -75,6 +75,33 @@ def test_in_progress_page_is_not_complete_but_has_a_next_question() -> None:
     assert nxt.called  # a next question exists → learner can proceed
 
 
+def test_served_pool_exhausted_resolves_without_active_batch() -> None:
+    # Cook produced fewer MCQs than triage budget; learner answered them all and
+    # no generate job is running — must advance (LLM stall / abandoned aspects).
+    cov = {
+        "non_content": False,
+        "aspects": [{"key": "a", "asked": False}],
+        "question_budget": 15,
+    }
+    doc = _doc(2, cov)
+    progress = {
+        "current_page": 2,
+        "answered_ids": ["q1", "q2"],
+        "generation_pending": False,
+    }
+    with (
+        patch("app.services.question_pool.next_assertion_id", return_value=None),
+        patch(
+            "app.services.question_pool_jobs._has_active_generate_job_for_page",
+            return_value=False,
+        ),
+        patch("app.services.question_pool.get_question_budget", return_value=15),
+    ):
+        assert is_page_complete(
+            MagicMock(), doc, progress, page_ids=["q1", "q2"]
+        ) is True
+
+
 def test_empty_aspects_without_non_content_is_treated_as_unresolved_not_complete() -> None:
     # The dangerous shape (0 aspects + not flagged non_content) must NOT be
     # reported complete by coverage — triage is responsible for never persisting

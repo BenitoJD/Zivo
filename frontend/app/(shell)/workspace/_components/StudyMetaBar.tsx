@@ -103,6 +103,7 @@ export function StudyMetaBar({
   editionAnswered,
   backHref,
   backLabel = "Back",
+  inline = false,
 }: {
   questionIndex: number;
   questionTotal: number;
@@ -128,6 +129,8 @@ export function StudyMetaBar({
   /** Newspaper: escape hatch to the day picker. */
   backHref?: string;
   backLabel?: string;
+  /** Parent owns horizontal padding (shared MCQ column with the question). */
+  inline?: boolean;
 }) {
   const modeSelect = showModeSelect ?? compact;
   const newspaperEditionTotal = editionTotal ?? 0;
@@ -454,9 +457,10 @@ export function StudyMetaBar({
   // mode identity + question progress + the Adaptive/Classic chooser - and nothing
   // at all in modes that have none (e.g. Read), so the content starts cleanly.
   if (!progress && !modeBadge && !studyModeControl && !alignControl && !backControl) return null;
+  const barPx = inline ? 0 : { base: "sm", sm: "md", lg: "lg" } as const;
   return (
     <Group
-      px={{ base: "sm", sm: "md", lg: "lg" }}
+      px={barPx}
       py={8}
       justify="space-between"
       align="center"

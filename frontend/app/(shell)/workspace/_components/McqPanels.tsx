@@ -9,6 +9,7 @@ import {
   Group,
   Menu,
   Paper,
+  Progress,
   Stack,
   Text,
   ThemeIcon,
@@ -39,7 +40,7 @@ import {
 } from "@/app/_components/mcq/McqCard";
 import { formatMcqStemForDisplay, isStatementStyleStem } from "@/lib/mcqStemFormat";
 import { normalizeMcqOptions, type McqState } from "@/lib/types";
-import { learnHasUnansweredReady, learnWaitStatus } from "@/lib/learnStatus";
+import { learnWaitStatus } from "@/lib/learnStatus";
 import { type AnsweredCard } from "@/app/workspace/_components/studyLayout";
 import { useIsDark } from "@/lib/useIsDark";
 
@@ -247,26 +248,13 @@ export function McqHeroPanel({
   // If learn-queue already has a next assertion (or unanswered generated cards),
   // advance instantly — never flash "Writing questions" over a ready card
   // (regression: 92% ring + "2 ready" while blocking).
-  const poolHasNext =
-    Boolean(queue?.current_assertion_id) ||
-    learnHasUnansweredReady({
-      poolAvailable: queue?.pool_available,
-      questionsGenerated: queue?.questions_generated,
-      questionsAnswered: queue?.questions_answered,
-    });
   const newspaperReady = isNewspaper && artifactStatus === "ready";
-  const waiting = newspaperReady
-    ? !hasQuestion &&
-      !poolHasNext &&
-      (mcqLoading ||
-        (queue?.questions_generated ?? 0) === 0 ||
-        Boolean(queue?.generation_pending))
-    : artifactStatus === "indexing" ||
-      (!hasQuestion && !poolHasNext && (mcqLoading || Boolean(queue?.generation_pending)));
+  /** No question card on screen — show preparing chrome, not an empty hero + disabled buttons. */
+  const showWaitChrome = !hasQuestion && !graded && !checking;
 
   const [statusTick, setStatusTick] = useState(0);
   const stagnant =
-    waiting && Boolean(queue?.generation_pending) && (queue?.questions_generated ?? 0) === 0;
+    showWaitChrome && Boolean(queue?.generation_pending) && (queue?.questions_generated ?? 0) === 0;
   // How long generation has been stuck with 0 questions produced, so we can offer a
   // retry after ~45s. Driven by an interval (not a ref read during render, which can
   // produce stale UI and is a React anti-pattern).
@@ -301,10 +289,10 @@ export function McqHeroPanel({
     statusTick,
   );
   // autoInvoke - without it Mantine's useInterval never starts, so the wait-status
-  // copy never rotated. The `if (waiting)` guard keeps it a no-op while idle.
+  // copy never rotated. The `if (showWaitChrome)` guard keeps it a no-op while idle.
   useInterval(
     () => {
-      if (waiting) setStatusTick((t) => t + 1);
+      if (showWaitChrome) setStatusTick((t) => t + 1);
     },
     1200,
     { autoInvoke: true },
@@ -317,7 +305,7 @@ export function McqHeroPanel({
   // Keyboard: A-D (or 1-4) to pick an option, Enter to check / advance.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (waiting) return;
+      if (showWaitChrome) return;
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       // Enter OR Space advances / checks - whichever hand is on the keyboard, no
@@ -396,9 +384,9 @@ export function McqHeroPanel({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [waiting, graded, hasSelection, submitting, optionsLocked, checking, selected, safeOptions.length, multiSelect, onSelect, onToggle, onSubmit, onContinue]);
+  }, [showWaitChrome, graded, hasSelection, submitting, optionsLocked, checking, selected, safeOptions.length, multiSelect, onSelect, onToggle, onSubmit, onContinue]);
 
-  if (waiting) {
+  if (showWaitChrome) {
     // Determinate progress during generation: ring fills toward the FIRST
     // question (then the learner leaves this wait), not the full page budget —
     // a 400-idea plan must not pin the ring at ~48% for an hour.
@@ -422,7 +410,7 @@ export function McqHeroPanel({
     const CIRC = 2 * Math.PI * R;
     const center = RING / 2;
     return (
-      <Center h="100%" px="sm" py={compact ? "md" : "lg"}>
+      <Center h="100%" flex={1} mih={0} px="sm" py={compact ? "md" : "lg"}>
         <style>{`
           @keyframes zivo-ring-spin { to { transform: rotate(360deg); } }
           @keyframes zivo-blob-a { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(9px,-11px) scale(1.16); } }
@@ -437,13 +425,23 @@ export function McqHeroPanel({
         `}</style>
         <Paper
           withBorder
+          shadow="paper-lg"
           radius="xl"
           p={compact ? "lg" : "xl"}
           w="100%"
-          maw={compact ? 380 : 440}
-          style={{ background: "var(--mantine-color-body)" }}
+          maw={compact ? 400 : 460}
+          bg="gray.0"
         >
         <Stack align="center" gap={compact ? "md" : "lg"}>
+          <ThemeIcon
+            size={compact ? 36 : 42}
+            radius="xl"
+            variant="light"
+            color={isTest ? "forest" : "lavender"}
+            style={{ color: `var(--mantine-color-${isTest ? "forest" : "lavender"}-7)` }}
+          >
+            {isTest ? <IconClipboardList size={20} stroke={2} /> : <IconBulb size={20} stroke={2} />}
+          </ThemeIcon>
           <Box pos="relative" w={RING} h={RING} style={{ display: "grid", placeItems: "center" }}>
             {/* Colorful aurora - three soft brand-tinted blobs drifting behind the ring */}
             <Box className="zivo-blob" pos="absolute" style={{ inset: -6, borderRadius: "50%", filter: "blur(22px)", background: "radial-gradient(60% 60% at 30% 30%, var(--mantine-color-lavender-4), transparent 70%)", opacity: 0.55, animation: "zivo-blob-a 4.5s ease-in-out infinite" }} />
@@ -499,6 +497,29 @@ export function McqHeroPanel({
             </Text>
           </Stack>
 
+          {readingPhase ? (
+            artifactStatus === "indexing" && (indexProgress ?? 0) > 0 ? (
+            <Stack gap={6} w="100%" maw={280}>
+              <Group justify="space-between" gap="xs">
+                <Text size="xs" c="dimmed" fw={600}>
+                  Reading your source
+                </Text>
+                <Text size="xs" c="dimmed" ff="monospace">
+                  {indexProgress ?? 0}%
+                </Text>
+              </Group>
+              <Progress value={indexProgress ?? 0} size="sm" radius="xl" color="lavender" animated />
+            </Stack>
+            ) : queue?.rag_window_ready === false ? (
+            <Stack gap={6} w="100%" maw={280}>
+              <Text size="xs" c="dimmed" fw={600} ta="center">
+                Processing pages around your study material
+              </Text>
+              <Progress value={58} size="sm" radius="xl" color="lavender" animated />
+            </Stack>
+            ) : null
+          ) : null}
+
           {!newspaperReady ? (
             <GenerationStages
               artifactStatus={artifactStatus}
@@ -522,10 +543,16 @@ export function McqHeroPanel({
               <Text size="sm" c="var(--mantine-color-text)" ta="center">
                 Something&apos;s taking a while.
               </Text>
-              <Button variant="default" color="lavender" size="compact-sm" onClick={onRetry}>
-                Retry generation
+              <Button variant="default" color="lavender" size="compact-sm" radius="xl" onClick={onRetry}>
+                Retry
               </Button>
             </Stack>
+          ) : null}
+
+          {!compact && !isTest && catEnabled ? (
+            <Box w="100%" maw={320} style={{ height: 88 }}>
+              <PetPlayground count={1} species="cat" wander height={88} style={{ width: "100%" }} />
+            </Box>
           ) : null}
         </Stack>
         </Paper>
@@ -534,7 +561,7 @@ export function McqHeroPanel({
   }
 
   return (
-    <Stack key={displayStem} h="100%" gap={0} align="stretch" style={{ overflow: "hidden" }}>
+    <Stack key={displayStem} h="100%" gap={0} align="stretch" miw={0} style={{ overflow: "hidden", minWidth: 0 }}>
       <style>{`
         @keyframes mcq-rise {
           from { opacity: 0; transform: translateY(14px) scale(0.99); filter: blur(4px); }
@@ -577,6 +604,7 @@ export function McqHeroPanel({
       <Box
         maw={MCQ_CONTENT_MAX}
         w="100%"
+        miw={0}
         mx="auto"
         style={{
           display: "flex",
@@ -633,7 +661,8 @@ export function McqHeroPanel({
           letterSpacing: "-0.01em",
           maxWidth: statementStem ? MCQ_CONTENT_MAX : "100%",
           marginInline: "auto",
-          overflowWrap: "anywhere",
+          overflowWrap: "break-word",
+          wordBreak: "normal",
           whiteSpace: "pre-line",
           paddingInline: onFlagQuestion && !isTest ? 28 : 0,
         }}
@@ -736,7 +765,7 @@ export function McqHeroPanel({
                   style={{
                     flex: 1,
                     minWidth: 0,
-                    overflowWrap: "anywhere",
+                    overflowWrap: "break-word",
                   }}
                 >
                   {opt}
@@ -809,14 +838,14 @@ export function McqHeroPanel({
           (the gate no longer depends on `graded`), so the same cat persists and
           keeps roaming from where it was instead of respawning every turn.
           Desktop Learn only - that's where the free space is. */}
-      {catEnabled && !isTest && !compact && (
+      {catEnabled && !isTest && !compact && !graded ? (
         <Box style={{ flex: 1, minHeight: 150, width: "100%" }}>
           <PetPlayground count={1} species="cat" wander height="100%" style={{ width: "100%" }} />
         </Box>
-      )}
+      ) : null}
 
-      {/* Anchored to the bottom of the question area - turns the old dead space into a
-          calm, mode-defining strip (and the live test tally). */}
+      {/* Mode strip sits in the footer stack on desktop — StudyMetaBar already shows Learn/Test. */}
+      {!compact && !graded ? (
       <Center style={{ marginTop: "auto", paddingTop: compact ? 14 : 22, flexShrink: 0 }}>
         <Box
           style={{
@@ -863,6 +892,7 @@ export function McqHeroPanel({
           </Text>
         </Box>
       </Center>
+      ) : null}
       </ScrollHintArea>
 
       <Stack align="center" gap={8} pt={compact ? "sm" : "md"} style={{ flexShrink: 0 }}>
@@ -1010,7 +1040,8 @@ export function McqReviewView({
               letterSpacing: "-0.01em",
               maxWidth: "100%",
               marginInline: "auto",
-              overflowWrap: "anywhere",
+              overflowWrap: "break-word",
+              wordBreak: "normal",
               whiteSpace: "pre-line",
             }}
           >
@@ -1077,7 +1108,7 @@ export function McqReviewView({
                       style={{
                         flex: 1,
                         minWidth: 0,
-                        overflowWrap: "anywhere",
+                        overflowWrap: "break-word",
                       }}
                     >
                       {opt}

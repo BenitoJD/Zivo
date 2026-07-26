@@ -943,6 +943,15 @@ def is_page_complete(
     # strand the learner when the pool still has cards to show.
     if next_assertion_id(db, doc.id, progress, page_ids=page_ids):
         return False
+    rows = page_ids if page_ids is not None else page_assertion_ids(db, doc.id, page)
+    answered = {str(x) for x in progress.get("answered_ids") or []}
+    # Learner answered every card on the served page list and nothing is cooking —
+    # resolve even when triage budget > generated (LLM stall / abandoned aspects).
+    if rows and all(rid in answered for rid in rows):
+        from app.services.question_pool_jobs import _has_active_generate_job_for_page
+
+        if not _has_active_generate_job_for_page(db, doc.id, page):
+            return True
     budget = get_question_budget(doc, page)
     generated = len(page_ids) if page_ids is not None else count_assertions_on_page(db, doc.id, page)
     if generated == 0:

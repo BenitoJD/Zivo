@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import {
   ActionIcon,
   Box,
@@ -283,21 +283,11 @@ function SourceRow({
 }) {
   const label = sourceLabel(doc.filename);
   const meta = sourceStatusMeta(doc.status, doc.index_progress);
-  const titleRef = useRef<HTMLParagraphElement>(null);
-  // On hover, slide a truncated name to reveal its hidden end ("run" it), back on leave.
-  const revealTitle = (on: boolean) => {
-    const el = titleRef.current;
-    if (!el) return;
-    const overflow = el.scrollWidth - el.clientWidth;
-    el.style.textIndent = on && overflow > 1 ? `-${overflow}px` : "0px";
-  };
   return (
     <UnstyledButton
       className="zivo-source-row"
       data-active={active || undefined}
       onClick={onNavigate}
-      onMouseEnter={() => revealTitle(true)}
-      onMouseLeave={() => revealTitle(false)}
       aria-label={label}
     >
       <span className="zivo-source-chip" aria-hidden>
@@ -311,12 +301,10 @@ function SourceRow({
       </span>
       <span className="zivo-source-body">
         <Text
-          ref={titleRef}
           size="sm"
           fw={500}
           truncate
           className="zivo-source-title"
-          style={{ transition: "text-indent 1.6s ease" }}
         >
           {label}
         </Text>
@@ -438,6 +426,7 @@ export function Sidebar({
           min-height: 46px;
           border-radius: 12px;
           border: 1px solid transparent;
+          overflow: hidden;
           transition: background 140ms ease, border-color 140ms ease;
         }
         .zivo-source-row:hover { background: var(--mantine-color-default-hover); }
@@ -485,7 +474,15 @@ export function Sidebar({
         }
         .zivo-chip-dot-pulse { animation: zivo-dot-pulse 1.6s ease-in-out infinite; }
         @keyframes zivo-dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-        .zivo-source-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; text-align: left; }
+        .zivo-source-body {
+          flex: 1;
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          text-align: left;
+          padding-right: 30px;
+        }
         .zivo-source-row[data-active] .zivo-source-title { color: var(--mantine-color-lavender-8); }
         [data-mantine-color-scheme="dark"] .zivo-source-row[data-active] .zivo-source-title {
           color: var(--mantine-color-lavender-9);
@@ -519,12 +516,24 @@ export function Sidebar({
           color: var(--mantine-color-dimmed);
           background: var(--mantine-color-gray-2);
           opacity: 0;
-          transition: opacity 120ms ease, background 140ms ease, color 140ms ease;
+          visibility: hidden;
+          pointer-events: none;
+          transition: opacity 120ms ease, visibility 120ms ease, background 140ms ease, color 140ms ease;
           cursor: pointer;
         }
         .zivo-source-row:hover .zivo-source-del,
-        .zivo-source-row:focus-visible .zivo-source-del { opacity: 1; }
-        @media (hover: none) { .zivo-source-del { opacity: 1; } }
+        .zivo-source-row:focus-visible .zivo-source-del {
+          opacity: 1;
+          visibility: visible;
+          pointer-events: auto;
+        }
+        @media (hover: none) {
+          .zivo-source-del {
+            opacity: 1;
+            visibility: visible;
+            pointer-events: auto;
+          }
+        }
         .zivo-source-del:hover { background: var(--mantine-color-terracotta-0); color: var(--mantine-color-terracotta-6); }
 
         /* Section header count - a soft pill beside the label, not a stray number. */

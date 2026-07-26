@@ -111,10 +111,18 @@ export function computeFloatingLaneInsets(
     }
   }
   const maxLane = Math.max(0, containerWidth - 280);
-  return {
-    left: Math.min(left, maxLane),
-    right: Math.min(right, maxLane),
-  };
+  left = Math.min(left, maxLane);
+  right = Math.min(right, maxLane);
+  // Source + Tutor open together can exceed the row width — never crush the MCQ
+  // column below STUDY_CENTER_MIN (one-char vertical stems).
+  const maxCombined = Math.max(0, containerWidth - STUDY_CENTER_MIN);
+  if (left + right > maxCombined) {
+    const trim = left + right - maxCombined;
+    const leftShare = left / (left + right);
+    left = Math.max(0, Math.floor(left - trim * leftShare));
+    right = Math.max(0, maxCombined - left);
+  }
+  return { left, right };
 }
 
 export function pagesInRange(from: number, to: number): number[] {

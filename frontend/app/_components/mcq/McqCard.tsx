@@ -20,8 +20,8 @@ export const MCQ_CONTENT_MAX = 800;
 
 /** Fixed stem size — no vw/clamp so every question reads at the same measure. */
 export const MCQ_STEM_FONT_SIZE = {
-  compact: "1.0625rem",
-  default: "1.125rem",
+  compact: "1.125rem",
+  default: "1.3125rem",
 } as const;
 
 /** Option body text — paired with stem tokens for consistent MCQ chrome. */
