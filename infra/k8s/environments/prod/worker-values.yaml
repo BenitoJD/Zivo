@@ -2,7 +2,7 @@ namespace: zivo
 replicaCount: 2
 image:
   repository: ghcr.io/benitojd/zivo-api
-  tag: Zivo_0.1.277
+  tag: Zivo_0.1.278
   pullPolicy: IfNotPresent
 secretName: zivo-secrets
 # Images are built on the VPS and imported into k3s containerd before rollout
