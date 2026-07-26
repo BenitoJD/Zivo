@@ -545,3 +545,36 @@ def test_newspaper_get_progress_ignores_shared_answered_ids_for_new_learner() ->
         progress = get_progress(doc, learner_key="guest:new")
 
     assert progress["answered_ids"] == []
+
+
+def test_newspaper_save_progress_without_learner_key_skips_learner_fields() -> None:
+    from unittest.mock import MagicMock, patch
+    from uuid import uuid4
+
+    from app.models import Document
+    from app.services.question_pool import save_progress
+
+    doc = Document(
+        slug="news",
+        filename="paper.pdf",
+        content_type="application/pdf",
+        size_bytes=1,
+        storage_key="k",
+        status="ready",
+        meta={"ingest_kind": "newspaper", "newspaper": True},
+    )
+    doc.id = uuid4()
+    db = MagicMock()
+
+    with (
+        patch("app.services.newspaper.is_newspaper_document", return_value=True),
+        patch("app.services.question_pool.get_progress", return_value={"current_page": 1}),
+        patch("app.services.question_pool.save_progress_row") as save_row,
+        patch("app.services.question_pool.save_learner_progress_row") as save_learner,
+    ):
+        save_progress(db, doc, {"answered_ids": ["q1"], "current_page": 2})
+
+    save_row.assert_called_once()
+    assert save_row.call_args[0][2]["current_page"] == 2
+    assert "answered_ids" not in save_row.call_args[0][2]
+    save_learner.assert_not_called()

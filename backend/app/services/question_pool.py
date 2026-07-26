@@ -217,6 +217,13 @@ def save_progress(
             }
             save_learner_progress_row(db, doc.id, learner_key, learner_only)
         return
+    if newspaper:
+        shared_patch = {k: v for k, v in progress.items() if k not in _LEARNER_PROGRESS_KEYS}
+        if not shared_patch:
+            return
+        merged = _merge_progress(get_progress(doc), shared_patch)
+        save_progress_row(db, doc.id, merged)
+        return
 
     merged = _merge_progress(get_progress(doc, learner_key=learner_key), progress)
     save_progress_row(db, doc.id, merged)

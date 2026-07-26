@@ -81,7 +81,8 @@ def acknowledge(
     """Mark a question answered so learn-queue advances (idempotent)."""
     _require_actor(user, guest_id)
     artifact_id = _resolve_assertion_artifact(db, body.assertion_id, user, guest_id)
-    record_answer(db, artifact_id, body.assertion_id)
+    lk = learner_key_for(user, guest_id)
+    record_answer(db, artifact_id, body.assertion_id, learner_key=lk)
     return {"ok": True}
 
 
