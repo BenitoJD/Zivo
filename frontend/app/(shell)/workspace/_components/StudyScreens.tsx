@@ -10,6 +10,7 @@ import {
   Group,
   Paper,
   Progress,
+  SimpleGrid,
   Stack,
   Text,
   ThemeIcon,
@@ -17,6 +18,7 @@ import {
 } from "@mantine/core";
 import { IconCheck, IconClipboardList, IconHistory, IconX } from "@tabler/icons-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
+import { MCQ_CONTENT_MAX } from "@/app/_components/mcq/McqCard";
 import {
   SELECTION_PAD_X,
   SELECTION_PAD_X_COMPACT,
@@ -73,116 +75,138 @@ export function StudyReportCard({
     .filter((t) => t.correct < t.total)
     .sort((a, b) => a.correct / a.total - b.correct / b.total);
   const strong = topics.filter((t) => t.correct === t.total);
+  const accuracy = Math.round((correct / total) * 100);
 
   return (
-    <Paper withBorder radius="lg" p={compact ? "md" : "lg"} w="100%" bg="var(--mantine-color-body)">
-      <Stack gap={compact ? "sm" : "md"}>
+    <Paper
+      withBorder
+      radius="xl"
+      p={compact ? "md" : "xl"}
+      w="100%"
+      bg="var(--mantine-color-body)"
+      shadow="paper"
+    >
+      <Stack gap={compact ? "lg" : "xl"} w="100%">
         <Text size="xs" tt="uppercase" fw={700} c="dimmed" style={{ letterSpacing: "0.1em" }}>
           Report card
         </Text>
 
         {showSummary ? (
-          <Group gap="lg" wrap="nowrap" align="center">
-            <Group gap={8} wrap="nowrap">
-              <ThemeIcon size={34} radius="xl" variant="light" color="sage">
-                <IconCheck size={18} stroke={2.4} />
-              </ThemeIcon>
+          <SimpleGrid cols={{ base: 1, xs: 3 }} spacing={compact ? "sm" : "md"}>
+            <Paper withBorder radius="lg" p="md" bg="var(--mantine-color-gray-0)">
+              <Group gap="sm" wrap="nowrap">
+                <ThemeIcon size={38} radius="xl" variant="light" color="sage">
+                  <IconCheck size={20} stroke={2.4} />
+                </ThemeIcon>
+                <Box miw={0}>
+                  <Text fz={compact ? 28 : 32} fw={700} lh={1} c="var(--mantine-color-text)">
+                    {correct}
+                  </Text>
+                  <Text fz="xs" c="dimmed" mt={4}>
+                    correct first try
+                  </Text>
+                </Box>
+              </Group>
+            </Paper>
+            <Paper withBorder radius="lg" p="md" bg="var(--mantine-color-gray-0)">
+              <Group gap="sm" wrap="nowrap">
+                <ThemeIcon size={38} radius="xl" variant="light" color="terracotta">
+                  <IconX size={20} stroke={2.4} />
+                </ThemeIcon>
+                <Box miw={0}>
+                  <Text fz={compact ? 28 : 32} fw={700} lh={1} c="var(--mantine-color-text)">
+                    {wrong}
+                  </Text>
+                  <Text fz="xs" c="dimmed" mt={4}>
+                    to revisit
+                  </Text>
+                </Box>
+              </Group>
+            </Paper>
+            <Paper withBorder radius="lg" p="md" bg="var(--mantine-color-gray-0)">
               <Box>
-                <Text fz={compact ? 22 : 26} fw={700} lh={1} c="var(--mantine-color-text)">
-                  {correct}
+                <Text
+                  fz={compact ? 28 : 32}
+                  fw={700}
+                  lh={1}
+                  c="var(--mantine-color-text)"
+                  style={{ fontFamily: "var(--font-serif), Georgia, serif", fontVariantNumeric: "tabular-nums" }}
+                >
+                  {accuracy}%
                 </Text>
-                <Text fz="xs" c="dimmed">
-                  correct first try
+                <Text fz="xs" c="dimmed" mt={4} style={{ fontVariantNumeric: "tabular-nums" }}>
+                  {correct} / {total} first try
                 </Text>
               </Box>
-            </Group>
-            <Group gap={8} wrap="nowrap">
-              <ThemeIcon size={34} radius="xl" variant="light" color="terracotta">
-                <IconX size={18} stroke={2.4} />
-              </ThemeIcon>
-              <Box>
-                <Text fz={compact ? 22 : 26} fw={700} lh={1} c="var(--mantine-color-text)">
-                  {wrong}
-                </Text>
-                <Text fz="xs" c="dimmed">
-                  to revisit
-                </Text>
-              </Box>
-            </Group>
-            <Box style={{ marginLeft: "auto", textAlign: "right" }}>
-              <Text
-                fz={compact ? 22 : 26}
-                fw={700}
-                lh={1}
-                c="var(--mantine-color-text)"
-                style={{ fontFamily: "var(--font-serif), Georgia, serif" }}
-              >
-                {Math.round((correct / total) * 100)}%
-              </Text>
-              <Text fz="xs" c="dimmed" style={{ fontVariantNumeric: "tabular-nums" }}>
-                {correct} / {total}
-              </Text>
-            </Box>
-          </Group>
+            </Paper>
+          </SimpleGrid>
         ) : null}
 
         {weak.length > 0 ? (
-          <Stack gap={8}>
+          <Stack gap="sm">
             <Text fz="sm" fw={600} c="var(--mantine-color-text)">
               Topics to focus on
             </Text>
-            {weak.map((t) => (
-              <Box key={t.name}>
-                <Group justify="space-between" gap="sm" wrap="nowrap" mb={3} align="flex-start">
-                  <Text fz="sm" c="var(--mantine-color-text)" style={{ minWidth: 0 }}>
-                    {t.name}
-                  </Text>
-                  <Text
-                    fz="xs"
-                    c="dimmed"
-                    style={{ flexShrink: 0, fontVariantNumeric: "tabular-nums" }}
-                  >
-                    {t.correct}/{t.total} first try
-                  </Text>
-                </Group>
-                <Progress
-                  value={Math.round((t.correct / Math.max(t.total, 1)) * 100)}
-                  color="terracotta"
-                  size="sm"
-                  radius="xl"
-                />
-              </Box>
-            ))}
+            <Stack gap="md">
+              {weak.map((t) => (
+                <Box key={t.name}>
+                  <Group justify="space-between" gap="md" wrap="nowrap" mb={6} align="flex-start">
+                    <Text
+                      fz="sm"
+                      lh={1.45}
+                      c="var(--mantine-color-text)"
+                      lineClamp={3}
+                      style={{ flex: 1, minWidth: 0 }}
+                    >
+                      {t.name}
+                    </Text>
+                    <Text
+                      fz="xs"
+                      c="dimmed"
+                      style={{ flexShrink: 0, fontVariantNumeric: "tabular-nums" }}
+                    >
+                      {t.correct}/{t.total} first try
+                    </Text>
+                  </Group>
+                  <Progress
+                    value={Math.round((t.correct / Math.max(t.total, 1)) * 100)}
+                    color="terracotta"
+                    size="md"
+                    radius="xl"
+                  />
+                </Box>
+              ))}
+            </Stack>
           </Stack>
         ) : null}
 
         {strong.length > 0 ? (
-          <Stack gap={6}>
+          <Stack gap="sm">
             <Text fz="sm" fw={600} c="var(--mantine-color-text)">
               Strong topics
             </Text>
-            <Group gap={6}>
+            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
               {strong.map((t) => (
-                <Badge
-                  key={t.name}
-                  radius="sm"
-                  tt="none"
-                  styles={{
-                    // Explicit high-contrast sage so the chips read clearly in both
-                    // light and dark (Mantine's `variant="light"` auto text-shade is
-                    // washed out on the report surface - see the inverted dark scale).
-                    root: {
-                      background: "var(--mantine-color-sage-2)",
-                      color: "var(--mantine-color-sage-9)",
-                      border: "1px solid var(--mantine-color-sage-4)",
-                      fontWeight: 600,
-                    },
-                  }}
-                >
-                  {t.name}
-                </Badge>
+                <Group key={t.name} gap="sm" wrap="nowrap" align="flex-start" py={4}>
+                  <ThemeIcon size={24} radius="xl" variant="light" color="sage" style={{ flexShrink: 0 }}>
+                    <IconCheck size={14} stroke={2.4} />
+                  </ThemeIcon>
+                  <Text fz="sm" lh={1.45} c="var(--mantine-color-text)" lineClamp={2} style={{ flex: 1, minWidth: 0 }}>
+                    {t.name}
+                  </Text>
+                  <Badge
+                    size="sm"
+                    radius="sm"
+                    variant="light"
+                    color="sage"
+                    tt="none"
+                    style={{ flexShrink: 0, fontVariantNumeric: "tabular-nums" }}
+                  >
+                    {t.correct}/{t.total}
+                  </Badge>
+                </Group>
               ))}
-            </Group>
+            </SimpleGrid>
           </Stack>
         ) : null}
       </Stack>
@@ -244,8 +268,8 @@ export function TestResultsScreen({
   const C = 2 * Math.PI * R;
   const center = RING / 2;
   return (
-    <Center h="100%" py={compact ? "md" : "lg"}>
-      <Stack align="center" gap={compact ? "md" : "lg"} maw={440} px="md">
+    <Box w="100%" py={compact ? "lg" : "xl"} px={{ base: "xs", sm: "sm" }} style={{ minHeight: "100%" }}>
+      <Stack align="center" gap={compact ? "lg" : "xl"} w="100%" maw={MCQ_CONTENT_MAX} mx="auto">
         <style>{`
           @keyframes zv-score-in { from { opacity: 0; transform: translateY(10px) scale(0.96); } to { opacity: 1; transform: none; } }
           @keyframes zv-ring-draw { from { stroke-dashoffset: ${C}; } }
@@ -291,7 +315,7 @@ export function TestResultsScreen({
           </Text>
         </Stack>
         <StudyReportCard answered={answered} report={report} showSummary={false} compact={compact} />
-        <Stack gap={8} w="100%" maw={300} mt="xs">
+        <Stack gap={8} w="100%" maw={360} mt="xs">
           <Button radius="xl" size="md" color="forest" onClick={onReview} leftSection={<IconHistory size={16} stroke={2} />}>
             Review answers
           </Button>
@@ -302,7 +326,7 @@ export function TestResultsScreen({
           ) : null}
         </Stack>
       </Stack>
-    </Center>
+    </Box>
   );
 }
 
@@ -346,11 +370,9 @@ export function DocumentCompleteScreen({
       : `Pages ${completedFrom}-${completedTo}`;
 
   return (
-    <Center py={compact ? "lg" : "xl"} px="md" h="100%">
-      <Stack align="center" gap={compact ? "lg" : "xl"} maw={440}>
-        <Stack align="center" gap="xs">
-          {/* Filled gradient emblem - the old `variant="light"` sage tile was
-              near-invisible on the dark study background. */}
+    <Box w="100%" py={compact ? "lg" : "xl"} px={{ base: "xs", sm: "sm" }} style={{ minHeight: "100%" }}>
+      <Stack gap={compact ? "lg" : "xl"} w="100%" maw={MCQ_CONTENT_MAX} mx="auto" align="stretch">
+        <Stack align="center" gap="xs" ta="center">
           <ThemeIcon
             size={56}
             radius="xl"
@@ -368,7 +390,7 @@ export function DocumentCompleteScreen({
           >
             {onContinueToTest ? "Learn complete" : `${pageLabel} complete`}
           </Title>
-          <Text size="sm" c="dimmed" ta="center" lh={1.6} maw={360}>
+          <Text size="sm" c="dimmed" ta="center" lh={1.6} maw={520}>
             {onContinueToTest
               ? "You have worked through every Learn question in this edition. Continue to Test mode for a second pass with new questions, or head back to the paper."
               : bookFinished
@@ -390,7 +412,7 @@ export function DocumentCompleteScreen({
           </Paper>
         )}
 
-        <Stack gap="sm" w="100%" maw={320}>
+        <Stack gap="sm" w="100%" maw={360} mx="auto">
           {onContinueToTest ? (
             <Button size="md" radius="xl" fullWidth onClick={onContinueToTest}>
               {continueToTestLabel}
@@ -408,7 +430,7 @@ export function DocumentCompleteScreen({
           </Button>
         </Stack>
       </Stack>
-    </Center>
+    </Box>
   );
 }
 
