@@ -578,19 +578,14 @@ export function McqHeroPanel({
           gap: compact ? 14 : 20,
         }}
       >
-      {/* The stem stays put (sticky) while the options + explanation scroll under it. */}
+      {/* Stem, options, and feedback scroll together inside ScrollHintArea. */}
       <Box
         style={{
-          position: "sticky",
-          top: 0,
-          zIndex: 3,
+          position: "relative",
           flexShrink: 0,
-          minHeight: compact ? 56 : 72,
           display: "flex",
           flexDirection: "column",
-          justifyContent: "center",
           paddingBottom: 6,
-          background: "var(--mantine-color-body)",
         }}
       >
       {onFlagQuestion && !isTest ? (

@@ -26,6 +26,7 @@ from app.services.prompts import get_prompt
 from app.services.token_budget import PAGE_INPUT_MAX_TOKENS, truncate_to_tokens
 from app.services.mcq_heuristics import (
     FATAL_FLAW_CODES,
+    find_invented_entity_flaws,
     has_fatal_heuristic_flaws,
     run_heuristic_checks,
 )
@@ -894,6 +895,9 @@ def _enrich_heuristics_with_engines(
                     "detail": ground.details or f"grounding_score={ground.score:.3f}",
                 }
             )
+    for invented in find_invented_entity_flaws(draft, page_text):
+        if not any(f.get("code") == invented.get("code") for f in flaws):
+            flaws.append(invented)
     distract = evaluate_distractors(
         options,
         [int(i) for i in correct_idx if isinstance(i, int)],

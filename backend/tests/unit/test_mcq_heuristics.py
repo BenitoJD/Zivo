@@ -10,7 +10,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.mcq_heuristics import has_fatal_heuristic_flaws, run_heuristic_checks
+from app.services.mcq_heuristics import (
+    find_invented_entity_flaws,
+    has_fatal_heuristic_flaws,
+    run_heuristic_checks,
+)
 from app.services.prompts import DEFAULTS
 
 # The four standard assertion–reason judgement options, in canonical order.
@@ -142,6 +146,35 @@ def test_clean_standard_question_has_no_fatal_flaws() -> None:
     assert has_fatal_heuristic_flaws(run_heuristic_checks(mcq)) is False
 
 
+def test_invented_exam_compound_rejected_when_not_in_source() -> None:
+    page = (
+        "Protesters chanted slogans targeting the ALPHA ethanol blending policy "
+        "after the minister resigned."
+    )
+    mcq = {
+        "question": (
+            "Consider the following statements:\n"
+            "1. The slogan targeted the ALPHA examination.\n"
+            "Which of the statements given above is/are correct?"
+        ),
+        "options": ["1 only", "2 only", "1 and 2 only", "None"],
+        "correct_index": 0,
+    }
+    flaws = find_invented_entity_flaws(mcq, page)
+    assert flaws and flaws[0]["code"] == "invented_entity"
+    assert has_fatal_heuristic_flaws(flaws) is True
+
+
+def test_grounded_exam_phrase_passes_invented_entity_check() -> None:
+    page = "Students protested demanding reforms to the NEET exam schedule."
+    mcq = {
+        "question": "What did students protest about regarding the NEET exam?",
+        "options": ["Schedule", "Fees", "Syllabus", "Centres"],
+        "correct_index": 0,
+    }
+    assert find_invented_entity_flaws(mcq, page) == []
+
+
 def test_writer_prompt_matches_the_gate() -> None:
     system = DEFAULTS["mcq_page_generate_system"]
     # The explicit auto-reject checklist (the core of the speed fix) is present.
@@ -164,3 +197,4 @@ def test_prompt_warns_about_every_avoidable_fatal_trigger() -> None:
     assert "page" in s and "book" in s  # meta_page_reference
     assert "longest" in s  # longest_option_correct
     assert "?" in DEFAULTS["mcq_page_generate_system"]  # stem-ends-with-? rule stated
+    assert "named labels" in s  # invented_entity / domain remap rule in writer prompt

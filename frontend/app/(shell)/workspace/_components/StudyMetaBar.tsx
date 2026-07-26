@@ -99,6 +99,8 @@ export function StudyMetaBar({
   isNewspaper = false,
   editionIndex,
   editionTotal,
+  /** Newspaper: edition-wide questions already answered (for % complete). */
+  editionAnswered,
   backHref,
   backLabel = "Back",
 }: {
@@ -122,6 +124,7 @@ export function StudyMetaBar({
   isNewspaper?: boolean;
   editionIndex?: number;
   editionTotal?: number;
+  editionAnswered?: number;
   /** Newspaper: escape hatch to the day picker. */
   backHref?: string;
   backLabel?: string;
@@ -129,11 +132,19 @@ export function StudyMetaBar({
   const modeSelect = showModeSelect ?? compact;
   const newspaperEditionTotal = editionTotal ?? 0;
   const newspaperEditionIndex = editionIndex ?? 0;
+  const newspaperEditionAnswered = editionAnswered ?? 0;
   const showBar = showProgress && (isNewspaper ? questionTotal > 0 || newspaperEditionTotal > 0 : questionTotal > 0);
   const progressDenominator = questionTotal;
-  const pct = showBar && progressDenominator > 0
-    ? Math.min(100, Math.round((questionIndex / progressDenominator) * 100))
-    : 0;
+  const pagePct =
+    showBar && progressDenominator > 0
+      ? Math.min(100, Math.round((questionIndex / progressDenominator) * 100))
+      : 0;
+  const editionPct =
+    isNewspaper && newspaperEditionTotal > 0
+      ? Math.min(100, Math.round((newspaperEditionAnswered / newspaperEditionTotal) * 100))
+      : 0;
+  /** Bar + label: edition-wide for newspaper, per-page elsewhere. */
+  const barPct = isNewspaper ? editionPct : pagePct;
   const segmented = showBar && !isNewspaper && questionTotal <= 16;
   const isTestMode = mode === "test";
   // Test wears the brand's deep green; Learn keeps lavender - a constant, glanceable
@@ -316,10 +327,10 @@ export function StudyMetaBar({
           isNewspaper
             ? progressHint ??
               (questionTotal > 0
-                ? `Question ${questionIndex} of ${questionTotal} on page ${page ?? "?"}. ${newspaperEditionTotal} questions in this edition. You're on question ${newspaperEditionIndex} of ${newspaperEditionTotal} overall.`
-                : `${newspaperEditionTotal} questions in this edition. You're on question ${newspaperEditionIndex} of ${newspaperEditionTotal} overall.`)
+                ? `You've completed ${newspaperEditionAnswered} of ${newspaperEditionTotal} questions in this edition (${editionPct}%). On page ${page ?? "?"}: question ${questionIndex} of ${questionTotal} (${pagePct}% through this page).`
+                : `${newspaperEditionAnswered} of ${newspaperEditionTotal} answered in this edition (${editionPct}%). You're on question ${newspaperEditionIndex} overall.`)
             : progressHint ??
-              `Question ${questionIndex} of ${questionTotal}. The total is sized to this page - roughly one question per distinct idea worth testing.`
+              `Question ${questionIndex} of ${questionTotal} (${pagePct}% through this page). The total is sized to this page - roughly one question per distinct idea worth testing.`
         }
         position="bottom"
         withArrow
@@ -353,8 +364,8 @@ export function StudyMetaBar({
           {isNewspaper && newspaperEditionTotal > 0 ? (
             <Text size="xs" c="dimmed" fw={600} style={{ letterSpacing: "0.01em", whiteSpace: "nowrap" }}>
               {compact
-                ? `${newspaperEditionTotal} ed.`
-                : `${newspaperEditionTotal} in edition`}
+                ? `${newspaperEditionAnswered}/${newspaperEditionTotal}`
+                : `${newspaperEditionAnswered} of ${newspaperEditionTotal}`}
             </Text>
           ) : null}
         </Group>
@@ -375,9 +386,37 @@ export function StudyMetaBar({
           ))}
         </Group>
       ) : progressDenominator > 0 ? (
-        <Box style={{ flex: 1, minWidth: 72, maxWidth: 380, height: 5, borderRadius: 99, background: "var(--mantine-color-gray-3)", overflow: "hidden" }}>
-          <Box style={{ width: `${pct}%`, height: "100%", borderRadius: 99, background: `var(--mantine-color-${barAccent}-6)`, transition: "width 320ms cubic-bezier(0.32,0.72,0,1)" }} />
-        </Box>
+        <Group gap={8} wrap="nowrap" style={{ flex: 1, minWidth: 72, maxWidth: 380 }}>
+          <Box
+            style={{
+              flex: 1,
+              minWidth: 48,
+              height: 5,
+              borderRadius: 99,
+              background: "var(--mantine-color-gray-3)",
+              overflow: "hidden",
+            }}
+          >
+            <Box
+              style={{
+                width: `${barPct}%`,
+                height: "100%",
+                borderRadius: 99,
+                background: `var(--mantine-color-${barAccent}-6)`,
+                transition: "width 320ms cubic-bezier(0.32,0.72,0,1)",
+              }}
+            />
+          </Box>
+          <Text
+            size="xs"
+            fw={700}
+            ff="monospace"
+            c={`var(--mantine-color-${barAccent}-7)`}
+            style={{ flexShrink: 0, letterSpacing: "0.02em", minWidth: 28, textAlign: "right" }}
+          >
+            {barPct}%
+          </Text>
+        </Group>
       ) : null}
     </Group>
   );

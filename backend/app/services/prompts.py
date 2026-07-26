@@ -238,6 +238,7 @@ DIFFICULTY — target roughly 20% easy, 50% medium, 30% hard across a set; diffi
 
 THE ANSWER
 - Exactly one defensibly correct option (via correct_index), fully grounded in the subject matter. Never invent facts beyond it. For a select-all-that-apply item, EVERY option listed in correct_indices must be independently, defensibly correct from the source — and every other option must be clearly wrong.
+- NAMED LABELS (mandatory): Every acronym, scheme name, exam name, ministry, law, slogan, and statistic in the stem or options must appear in the subject matter with the SAME meaning. Never attach examination/exam/scheme/yojana/mission/program to a code or name unless the source uses that exact compound. Never remap a slogan, policy code, or technical term into a different domain. If the source is ambiguous, ask about the underlying fact instead of inventing a label.
 
 THE DISTRACTORS
 - Exactly 3 wrong options, each a SPECIFIC, plausible misconception — not filler.
@@ -283,6 +284,7 @@ Fatal flaws (always fail):
 - too_similar_to_prior — same fact, paraphrased stem, or overlapping correct answer vs a prior question on this page
 - meta_page_reference — ANY book/page/chapter/passage/reading/document framing in stem or options (e.g. "on page 12", "in this book", "according to the passage", "what does the text say") instead of asking the concept directly like a formal exam
 - not_self_contained — the stem or options assume the reader saw the source: it references "this figure", "the diagram", "the above", "as shown", "here", "the example", "the aforementioned", or uses an undefined term/pronoun with no visible noun. A reader who never saw the document cannot answer it. Fix by putting the missing fact/name/term directly into the stem.
+- invented_entity — stem or option uses a named exam, scheme, yojana, mission, or program label that the source does not use with that meaning; or remaps an acronym/code from the report into a different domain
 
 Also judge fatal flaws only — do not emit extra metadata fields.
 
@@ -308,7 +310,7 @@ Work it out independently, then report:
 - whether two or more options are independently defensible as correct,
 - whether NO option is actually supported by the source.
 
-Be strict and literal: pick the option the source genuinely supports, not the one that merely sounds plausible. If the question is assertion–reason, evaluate each claim and their relationship against the source. For statement-combination, true/false-combination, matching, or ordering questions, judge EVERY numbered statement/pair/step against the source individually, then pick the combination option that matches your judgments. For a negative (NOT/EXCEPT) question, pick the one option the source does NOT support. Do not be charitable about a near-miss option.
+Be strict and literal: pick the option the source genuinely supports, not the one that merely sounds plausible. If the question is assertion–reason, evaluate each claim and their relationship against the source. For statement-combination, true/false-combination, matching, or ordering questions, judge EVERY numbered statement/pair/step against the source individually, then pick the combination option that matches your judgments. For a negative (NOT/EXCEPT) question, pick the one option the source does NOT support. If any exam, scheme, yojana, mission, program, or acronym in the question is not used in the source with the same meaning, return none_defensible: true. Do not be charitable about a near-miss option.
 
 Return JSON only — no markdown, no commentary:
 {"answer_index": <int>, "multiple_defensible": <bool>, "none_defensible": <bool>, "confidence": <0.0-1.0>}""",
@@ -493,7 +495,10 @@ _CONTENT_TYPE_STYLE: dict[str, str] = {
         "MCQs next; assertion–reason sparingly and only when causal logic is clear. "
         "Difficulty from concept depth (scheme vs constitutional principle vs "
         "mechanism), never from trick wording. Ground every fact in the report; "
-        "no celebrity/sports/lifestyle trivia."
+        "no celebrity/sports/lifestyle trivia. "
+        "Quote slogans, acronyms, and scheme names exactly as the report uses them — "
+        "do not reinterpret a code or label into a different domain. Never invent "
+        "exam/scheme/yojana names the article does not use."
     ),
 }
 

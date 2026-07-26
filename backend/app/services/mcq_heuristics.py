@@ -36,6 +36,7 @@ FATAL_FLAW_CODES = frozenset(
         "too_similar_to_prior",
         "meta_page_reference",
         "not_self_contained",
+        "invented_entity",
     }
 )
 
@@ -77,6 +78,67 @@ _ABSOLUTE_RE = re.compile(r"\b(always|never|only|all|none)\b", re.IGNORECASE)
 # question-mark rule doesn't fatally reject a valid A/R item — the writer is told
 # to produce these, so rejecting them was pure wasted generation.
 _ASSERTION_REASON_RE = re.compile(r"\bassertion\b.*\breason\b", re.IGNORECASE | re.DOTALL)
+# Compound labels invented by attaching exam/scheme words to a code from the article.
+_INVENTED_LABEL_RE = re.compile(
+    r"\b([A-Za-z0-9][\w-]{0,24})\s+"
+    r"(examinations?|exams?|schemes?|yojanas?|missions?|programs?|programmes?)\b",
+    re.IGNORECASE,
+)
+
+
+def _norm_compact(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").lower()).strip()
+
+
+def _label_suffix_in_source(page_text: str, label: str, suffix: str, window: int = 48) -> bool:
+    """True when label and suffix appear near each other in the source."""
+    page_lower = page_text.lower()
+    label_lower = label.lower()
+    suffix_lower = suffix.lower()
+    start = 0
+    while True:
+        idx = page_lower.find(label_lower, start)
+        if idx == -1:
+            return False
+        snippet = page_lower[idx : idx + len(label_lower) + window]
+        if suffix_lower in snippet:
+            return True
+        start = idx + 1
+
+
+def find_invented_entity_flaws(
+    mcq: dict[str, Any],
+    page_text: str,
+) -> list[dict[str, str]]:
+    """Reject exam/scheme compounds not grounded in the page text."""
+    if not (page_text or "").strip():
+        return []
+    combined = "\n".join(
+        [
+            str(mcq.get("question") or mcq.get("stem") or ""),
+            *[str(o) for o in (mcq.get("options") or mcq.get("choices") or [])],
+        ]
+    )
+    page_norm = _norm_compact(page_text)
+    for match in _INVENTED_LABEL_RE.finditer(combined):
+        full = match.group(0)
+        full_norm = _norm_compact(full)
+        if full_norm in page_norm:
+            continue
+        label = match.group(1)
+        suffix = match.group(2)
+        if _label_suffix_in_source(page_text, label, suffix):
+            continue
+        return [
+            {
+                "code": "invented_entity",
+                "message": (
+                    f"Label '{full}' is not used in the source — "
+                    "do not attach exam/scheme words to acronyms the article does not combine"
+                ),
+            }
+        ]
+    return []
 
 
 def _is_assertion_reason(question: str) -> bool:

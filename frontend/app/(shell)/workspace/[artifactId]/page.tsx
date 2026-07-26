@@ -884,8 +884,8 @@ export default function WorkspaceArtifactPage({
     revealTutor();
   }
   function explainSelectionInChat(text: string) {
-    setChatInput(`Explain this in simple terms:\n\n"${text}"\n\n`);
     revealTutor();
+    askBuddy(`Explain this in simple terms:\n\n"${text}"\n\n`);
   }
 
   function handleMcqSelect(value: string) {
@@ -1439,6 +1439,7 @@ export default function WorkspaceArtifactPage({
         isNewspaper={isNewspaper}
         editionIndex={editionQuestionIndex}
         editionTotal={editionQuestionTotal}
+        editionAnswered={queue?.questions_answered ?? 0}
         backHref={isNewspaper ? newspaperBackHref : undefined}
         backLabel="Days"
       />
@@ -1606,8 +1607,7 @@ export default function WorkspaceArtifactPage({
           />
           </Box>
           ) : (
-          // Fill the whole study area - the question is its own page: the stem stays
-          // sticky at the top while options + explanation scroll beneath it.
+          // Fill the study area: stem, options, and feedback scroll together as one page.
           <Box style={{ height: "100%", minHeight: 0, width: "100%", overflow: "hidden" }}>
           <SelectionQuote
             onAsk={quoteSelectionToChat}

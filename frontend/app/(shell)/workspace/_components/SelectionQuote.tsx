@@ -24,7 +24,7 @@ export function SelectionQuote({
   children: ReactNode;
   /** Quote the passage into the composer (does not send). */
   onAsk: (text: string) => void;
-  /** Prefill an "explain this" prompt into the composer (does not send). */
+  /** Send an "explain this" prompt to the tutor (does not prefill the composer). */
   onExplain?: (text: string) => void;
   disabled?: boolean;
 }) {
