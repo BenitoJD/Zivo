@@ -11,6 +11,13 @@ imagePullSecrets: []
 service:
   port: 80
 
+# Server-side /api fetches from RSC (learn blog, sitemap). Override in prod.
+env:
+  - name: API_PROXY_URL
+    value: http://zivo-api:8000
+  - name: NEXT_PUBLIC_API_URL
+    value: https://api.zivo.fyi
+
 ingress:
   enabled: false
   className: traefik

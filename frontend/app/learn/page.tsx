@@ -8,6 +8,7 @@ import {
 } from "@mantine/core";
 import type { Metadata } from "next";
 import { LinkAnchor, LinkBox } from "@/app/learn/_components/AppLink";
+import { serverApiBase } from "@/lib/serverApi";
 
 export const metadata: Metadata = {
   title: "Learn | Question Better.",
@@ -30,13 +31,9 @@ type LearnListResponse = {
   total: number;
 };
 
-function apiBase(): string {
-  return process.env.API_PROXY_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8200";
-}
-
 async function fetchPosts(): Promise<LearnListResponse> {
   try {
-    const res = await fetch(`${apiBase()}/api/learn/posts?limit=40`, {
+    const res = await fetch(`${serverApiBase()}/api/learn/posts?limit=40`, {
       next: { revalidate: 300 },
     });
     if (!res.ok) return { items: [], total: 0 };

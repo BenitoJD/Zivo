@@ -16,6 +16,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+ENV API_PROXY_URL=http://zivo-api:8000
 
 RUN addgroup -S app && adduser -S app -G app
 

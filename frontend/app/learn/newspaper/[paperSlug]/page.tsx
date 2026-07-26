@@ -8,6 +8,7 @@ import {
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { LinkAnchor, LinkBox } from "@/app/learn/_components/AppLink";
+import { serverApiBase } from "@/lib/serverApi";
 
 type ArchiveItem = {
   edition_id: string;
@@ -24,14 +25,10 @@ type ArchiveResponse = {
   items: ArchiveItem[];
 };
 
-function apiBase(): string {
-  return process.env.API_PROXY_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8200";
-}
-
 async function fetchArchive(paperSlug: string): Promise<ArchiveResponse | null> {
   try {
     const res = await fetch(
-      `${apiBase()}/api/learn/newspaper/${encodeURIComponent(paperSlug)}`,
+      `${serverApiBase()}/api/learn/newspaper/${encodeURIComponent(paperSlug)}`,
       { next: { revalidate: 300 } },
     );
     if (res.status === 404) return null;

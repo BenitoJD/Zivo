@@ -12,6 +12,7 @@ import { AssistantMarkdown } from "@/lib/chatMarkdown";
 import { LearnMcqSection } from "@/app/learn/_components/LearnMcqSection";
 import { LinkAnchor, LinkButton } from "@/app/learn/_components/AppLink";
 import { MCQ_CONTENT_MAX } from "@/app/_components/mcq/McqCard";
+import { serverApiBase } from "@/lib/serverApi";
 
 type LearnPost = {
   slug: string;
@@ -26,13 +27,9 @@ type LearnPost = {
   cta_kind?: string;
 };
 
-function apiBase(): string {
-  return process.env.API_PROXY_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8200";
-}
-
 async function fetchPost(slug: string): Promise<LearnPost | null> {
   try {
-    const res = await fetch(`${apiBase()}/api/learn/posts/${encodeURIComponent(slug)}`, {
+    const res = await fetch(`${serverApiBase()}/api/learn/posts/${encodeURIComponent(slug)}`, {
       next: { revalidate: 300 },
     });
     if (res.status === 404) return null;

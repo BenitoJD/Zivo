@@ -10,6 +10,11 @@ image:
 imagePullSecrets: []
 service:
   port: 80
+env:
+  - name: API_PROXY_URL
+    value: http://zivo-api:8000
+  - name: NEXT_PUBLIC_API_URL
+    value: https://api.zivo.fyi
 ingress:
   enabled: true
   className: traefik

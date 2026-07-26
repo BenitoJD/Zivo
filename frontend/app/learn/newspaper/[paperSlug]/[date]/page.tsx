@@ -12,6 +12,7 @@ import { AssistantMarkdown } from "@/lib/chatMarkdown";
 import { LearnMcqSection } from "@/app/learn/_components/LearnMcqSection";
 import { LinkAnchor, LinkButton } from "@/app/learn/_components/AppLink";
 import { MCQ_CONTENT_MAX } from "@/app/_components/mcq/McqCard";
+import { serverApiBase } from "@/lib/serverApi";
 
 type EditionBlog = {
   slug: string;
@@ -27,17 +28,13 @@ type EditionBlog = {
   practice_href: string;
 };
 
-function apiBase(): string {
-  return process.env.API_PROXY_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8200";
-}
-
 async function fetchEditionBlog(
   paperSlug: string,
   editionDate: string,
 ): Promise<EditionBlog | null> {
   try {
     const res = await fetch(
-      `${apiBase()}/api/learn/newspaper/${encodeURIComponent(paperSlug)}/${encodeURIComponent(editionDate)}`,
+      `${serverApiBase()}/api/learn/newspaper/${encodeURIComponent(paperSlug)}/${encodeURIComponent(editionDate)}`,
       { next: { revalidate: 300 } },
     );
     if (res.status === 404) return null;
