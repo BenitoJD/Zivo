@@ -180,6 +180,7 @@ export function McqHeroPanel({
   onFlagQuestion,
   flagBusy = false,
   flagged = false,
+  isNewspaper = false,
 }: {
   stem: string;
   options: string[];
@@ -209,6 +210,8 @@ export function McqHeroPanel({
   onFlagQuestion?: (reason: string) => void;
   flagBusy?: boolean;
   flagged?: boolean;
+  /** Pre-cooked newspaper — no upload-style generation stages. */
+  isNewspaper?: boolean;
 }) {
   const isDark = useIsDark();
   // Roaming study cat - opt-in (off by default); toggled in Settings and applied live.
@@ -242,9 +245,15 @@ export function McqHeroPanel({
       questionsGenerated: queue?.questions_generated,
       questionsAnswered: queue?.questions_answered,
     });
-  const waiting =
-    artifactStatus === "indexing" ||
-    (!hasQuestion && !poolHasNext && (mcqLoading || Boolean(queue?.generation_pending)));
+  const newspaperReady = isNewspaper && artifactStatus === "ready";
+  const waiting = newspaperReady
+    ? !hasQuestion &&
+      !poolHasNext &&
+      (mcqLoading ||
+        (queue?.questions_generated ?? 0) === 0 ||
+        Boolean(queue?.generation_pending))
+    : artifactStatus === "indexing" ||
+      (!hasQuestion && !poolHasNext && (mcqLoading || Boolean(queue?.generation_pending)));
 
   const [statusTick, setStatusTick] = useState(0);
   const stagnant =
@@ -278,6 +287,7 @@ export function McqHeroPanel({
       questionsAnswered: queue?.questions_answered,
       questionBudget: queue?.question_budget,
       poolAvailable: queue?.pool_available,
+      isNewspaper,
     },
     statusTick,
   );
@@ -387,13 +397,17 @@ export function McqHeroPanel({
     const budget = queue?.plan_budget ?? queue?.question_budget ?? queue?.generation_cap ?? 0;
     const readingPhase = artifactStatus === "indexing" || queue?.rag_window_ready === false;
     const planningPhase = !readingPhase && !queue?.page_triage_complete;
-    const progressPct = readingPhase
-      ? Math.min(28, Math.round((indexProgress ?? 0) * 0.28))
-      : planningPhase
-        ? 40
-        : generated > 0
-          ? 92
-          : 52;
+    const progressPct = newspaperReady
+      ? generated > 0
+        ? 72
+        : 48
+      : readingPhase
+        ? Math.min(28, Math.round((indexProgress ?? 0) * 0.28))
+        : planningPhase
+          ? 40
+          : generated > 0
+            ? 92
+            : 52;
     const RING = compact ? 124 : 140;
     const R = RING / 2 - 12;
     const CIRC = 2 * Math.PI * R;
@@ -476,17 +490,23 @@ export function McqHeroPanel({
             </Text>
           </Stack>
 
-          <GenerationStages
-            artifactStatus={artifactStatus}
-            indexProgress={indexProgress}
-            ragWindowReady={queue?.rag_window_ready}
-            pageTriageComplete={queue?.page_triage_complete}
-            generationPending={queue?.generation_pending}
-            questionsGenerated={generated}
-            questionBudget={budget}
-            compact={compact}
-            isDark={isDark}
-          />
+          {!newspaperReady ? (
+            <GenerationStages
+              artifactStatus={artifactStatus}
+              indexProgress={indexProgress}
+              ragWindowReady={queue?.rag_window_ready}
+              pageTriageComplete={queue?.page_triage_complete}
+              generationPending={queue?.generation_pending}
+              questionsGenerated={generated}
+              questionBudget={budget}
+              compact={compact}
+              isDark={isDark}
+            />
+          ) : (
+            <Text fz="xs" c="dimmed" ta="center" style={{ opacity: 0.85, lineHeight: 1.5 }}>
+              This edition was prepared ahead of time. Questions open as soon as they load.
+            </Text>
+          )}
 
           {stuckSeconds >= 45 && onRetry ? (
             <Stack gap={6} align="center">

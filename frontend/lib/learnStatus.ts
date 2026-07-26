@@ -13,6 +13,8 @@ export type LearnWaitContext = {
   questionsAnswered?: number;
   questionBudget?: number;
   poolAvailable?: number;
+  /** Pre-cooked newspaper edition — never show upload-style generation chrome. */
+  isNewspaper?: boolean;
 };
 
 /** True when Learn already has a card the learner can open (never full-screen wait). */
@@ -42,9 +44,27 @@ const TRIAGE_LINES = [
 ] as const;
 
 export function learnWaitStatus(ctx: LearnWaitContext, tick: number): LearnWaitStatus {
+  const newspaper = Boolean(ctx.isNewspaper) && ctx.artifactStatus === "ready";
+
   if (ctx.artifactStatus === "indexing") {
     const stage = indexingStage(ctx.indexProgress ?? 0);
     return { title: stage.title, detail: stage.detail, rotateKey: `index-${stage.min}` };
+  }
+
+  if (newspaper) {
+    if (ctx.mcqLoading || (ctx.poolAvailable ?? 0) === 0) {
+      const generated = ctx.questionsGenerated ?? 0;
+      return {
+        title: generated > 0 ? "Loading next question" : "Opening today's quiz",
+        detail: generated > 0 ? "Your next card is on its way" : "Almost there",
+        rotateKey: generated > 0 ? "news-next" : "news-open",
+      };
+    }
+    return {
+      title: "Opening today's quiz",
+      detail: "Almost there",
+      rotateKey: "news-open",
+    };
   }
 
   if (ctx.ragWindowReady === false) {

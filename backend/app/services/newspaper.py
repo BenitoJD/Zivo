@@ -362,8 +362,29 @@ def is_newspaper_document(doc: Document) -> bool:
     return bool(meta.get("newspaper") or meta.get("hide_source") or meta.get("ingest_kind") == "newspaper")
 
 
+def newspaper_learn_ready(db: Session, doc: Document) -> bool:
+    """True when Learn can open instantly (triage done + at least one MCQ on page 1).
+
+    Newspaper editions stay ``indexing`` in the catalog until this passes so learners
+    never see the upload-style "Writing your questions" cook screen on first open.
+    """
+    if not is_newspaper_document(doc):
+        return False
+    from app.services.question_pool import get_page_coverage, page_range_bounds
+    from app.services.question_pool_jobs import count_assertions_on_page
+
+    page_from, _ = page_range_bounds(doc)
+    cov = get_page_coverage(doc, page_from)
+    if not cov:
+        return False
+    budget = int(cov.get("question_budget") or 0)
+    if budget <= 0 or cov.get("non_content"):
+        return True
+    return count_assertions_on_page(db, doc.id, page_from) >= 1
+
+
 def mark_doc_ready_hook(db: Session, doc: Document) -> None:
-    """Call after newspaper doc status flips to ready."""
+    """Mark the catalog edition ready once newspaper_learn_ready passes."""
     if not is_newspaper_document(doc):
         return
     db.execute(
@@ -376,3 +397,11 @@ def mark_doc_ready_hook(db: Session, doc: Document) -> None:
         ),
         {"d": doc.id},
     )
+
+
+def maybe_mark_newspaper_edition_ready(db: Session, doc: Document) -> None:
+    """Promote edition to catalog-ready after background cook lands the first MCQ."""
+    if not newspaper_learn_ready(db, doc):
+        return
+    mark_doc_ready_hook(db, doc)
+    db.commit()

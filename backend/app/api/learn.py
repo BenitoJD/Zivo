@@ -98,7 +98,9 @@ def _learn_queue_payload(
     set_serve_budget_mode(db, doc, serve_mode)
     db.refresh(doc)
     progress = get_progress(doc)
-    if is_page_complete(db, doc, progress):
+    from app.services.newspaper import is_newspaper_document
+
+    if not is_newspaper_document(doc) and is_page_complete(db, doc, progress):
         page = int(progress.get("current_page") or 1)
         _, page_to = page_range_bounds(doc)
         if page < page_to:

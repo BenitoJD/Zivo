@@ -392,6 +392,27 @@ def page_assertion_ids(db: Session, document_id: uuid.UUID, page: int) -> list[s
     )
 
 
+def edition_assertion_ids(db: Session, document_id: uuid.UUID, doc: Document) -> list[str]:
+    """All active MCQs across the study range — newspaper serves the full cooked pool."""
+    ids: list[str] = []
+    for page in selected_page_list(doc):
+        ids.extend(page_assertion_ids(db, document_id, page))
+    return ids
+
+
+def assertion_page_number(db: Session, assertion_id: str) -> int | None:
+    row = db.execute(
+        text(
+            """
+            SELECT (payload->>'page_number')::int AS page
+            FROM intel.assertion WHERE id::text = :id
+            """
+        ),
+        {"id": assertion_id},
+    ).scalar()
+    return int(row) if row is not None else None
+
+
 def count_answered_on_page(
     db: Session,
     document_id: uuid.UUID,
@@ -721,19 +742,27 @@ def build_learn_queue_state(
     *,
     mode: Mode | None = None,
 ) -> dict[str, Any]:
+    from app.services.newspaper import is_newspaper_document
     from app.services.session_design import SESSION_SOFT_DEFAULT, plan_session
 
     serve_mode = mode if mode is not None else serve_budget_mode(doc)
+    newspaper = is_newspaper_document(doc)
     page = int(progress.get("current_page") or 1)
     study_pages = selected_page_list(doc)
     page_from, page_to = page_range_bounds(doc)
     answered_ids = [str(x) for x in progress.get("answered_ids") or []]
     answered_set = set(answered_ids)
-    page_ids = page_assertion_ids(db, document_id, page)
+    if newspaper:
+        page_ids = edition_assertion_ids(db, document_id, doc)
+    else:
+        page_ids = page_assertion_ids(db, document_id, page)
     questions_generated = len(page_ids)
     questions_answered = sum(1 for row_id in page_ids if row_id in answered_set)
     cov = get_page_coverage(doc, page)
-    plan_budget = get_question_budget(doc, page, mode=serve_mode)
+    if newspaper:
+        plan_budget = max(questions_generated, 1)
+    else:
+        plan_budget = get_question_budget(doc, page, mode=serve_mode)
     # FE compat: generation_cap used to be a generate-ahead pace; now equals plan.
     generation_cap = plan_budget
     doc_plan = plan_document_budget(page_budgets_for_document(doc, mode=serve_mode), mode=serve_mode)
@@ -746,11 +775,23 @@ def build_learn_queue_state(
     session_break = bool(session.n_session > 0 and session_items >= session.n_session)
     # Loop's choosing step (policy-driven; defaults to sequence order).
     next_id = select_next_assertion(db, document_id, doc, progress, page_ids=page_ids)
+    if newspaper and next_id:
+        focus_page = assertion_page_number(db, next_id)
+        if focus_page is not None:
+            page = focus_page
     coverage_complete = is_coverage_complete(doc, page)
-    page_complete = is_page_complete(db, doc, progress, page_ids=page_ids)
-    non_content = is_non_content_page(doc, page)
-    last_study_page = study_pages[-1] if study_pages else page_to
-    document_complete = page_complete and page == last_study_page
+    if newspaper:
+        page_complete = False
+        last_study_page = study_pages[-1] if study_pages else page_to
+        document_complete = (
+            next_id is None
+            and questions_generated > 0
+            and not bool(progress.get("generation_pending"))
+        )
+    else:
+        page_complete = is_page_complete(db, doc, progress, page_ids=page_ids)
+        last_study_page = study_pages[-1] if study_pages else page_to
+        document_complete = page_complete and page == last_study_page
 
     # Open-world empty state: surface a reason only when the whole study range
     # genuinely produced nothing to ask, so the UI can say so instead of spinning.
@@ -758,11 +799,21 @@ def build_learn_queue_state(
     if document_complete and questions_generated == 0 and questions_answered == 0:
         if _study_range_has_no_questions(db, document_id, doc):
             no_questions_reason = "no_testable_content"
+    elif newspaper and questions_generated == 0 and not bool(progress.get("generation_pending")):
+        if _study_range_has_no_questions(db, document_id, doc):
+            no_questions_reason = "no_testable_content"
 
-    from app.services.rag_window import get_rag_window, is_rag_window_ready
+    from app.services.rag_window import chat_rag_window, get_rag_window, is_rag_window_ready
 
-    rag_pages = get_rag_window(doc)
+    if newspaper:
+        rag_pages = chat_rag_window(page, study_pages)
+    else:
+        rag_pages = get_rag_window(doc)
     rag_ready = is_rag_window_ready(db, document_id, doc)
+    non_content = is_non_content_page(doc, page)
+    triage_complete = bool(cov)
+    if newspaper:
+        triage_complete = any(get_page_coverage(doc, p) for p in study_pages) or questions_generated > 0
 
     return {
         "current_page": page,
@@ -789,7 +840,7 @@ def build_learn_queue_state(
         "questions_answered": questions_answered,
         "questions_generated": questions_generated,
         "generation_pending": bool(progress.get("generation_pending")),
-        "page_triage_complete": bool(cov),
+        "page_triage_complete": triage_complete,
         "coverage_complete": coverage_complete,
         "page_complete": page_complete,
         "non_content": non_content,
@@ -804,6 +855,7 @@ def build_learn_queue_state(
         "rag_window_pages": rag_pages,
         "rag_window_ready": rag_ready,
         "study_mode": get_study_mode(doc),
+        "edition_pool": newspaper,
     }
 
 

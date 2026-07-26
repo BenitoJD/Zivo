@@ -112,6 +112,9 @@ def build_learn_chat_context(
 
     progress = get_progress(doc)
     state = build_learn_queue_state(db, document_id, doc, progress)
+    from app.services.newspaper import is_newspaper_document
+
+    newspaper = is_newspaper_document(doc)
     page_from, page_to = page_range_bounds(doc)
     page = int(state["current_page"])
     budget = int(state["question_budget"])
@@ -124,8 +127,17 @@ def build_learn_chat_context(
 
     lines = [
         "Learn session (authoritative — use this for progress/position questions):",
-        f"- Study range: pages {page_from}–{page_to}; currently on page {page}",
     ]
+    if newspaper:
+        lines.append(
+            f"- Newspaper edition: pages {page_from}–{page_to}; "
+            f"serving all pre-cooked questions ({generated} available)."
+        )
+        lines.append(
+            f"- Active question {qnum} of {max(generated, 1)} answered so far ({answered} done)."
+        )
+    else:
+        lines.append(f"- Study range: pages {page_from}–{page_to}; currently on page {page}")
     if supplementary:
         sup = ", ".join(str(p) for p in supplementary)
         lines.append(
@@ -155,9 +167,14 @@ def build_learn_chat_context(
         # Prefer the question the learner is actually looking at (sent in scope) so
         # the tutor is never confused about "the current question".
         assertion_id = str((scope or {}).get("current_assertion_id") or state["current_assertion_id"])
-        lines.append(f"- Question {qnum} of {budget} on page {page}")
-        lines.append(f"- Answered on this page so far: {answered}")
-        lines.append(f"- Questions generated on this page: {generated}")
+        if newspaper:
+            lines.append(f"- Question {qnum} of {max(generated, 1)} in this edition")
+            lines.append(f"- Answered in this edition so far: {answered}")
+            lines.append(f"- Source page for this question: {page}")
+        else:
+            lines.append(f"- Question {qnum} of {budget} on page {page}")
+            lines.append(f"- Answered on this page so far: {answered}")
+            lines.append(f"- Questions generated on this page: {generated}")
         mcq = _assertion_mcq(db, assertion_id)
         if mcq and mcq.get("stem"):
             lines.append(f'- Current question stem: "{mcq["stem"]}"')

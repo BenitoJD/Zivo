@@ -1226,7 +1226,10 @@ export default function WorkspaceArtifactPage({
   const questionIndex = queue?.question_number ?? (queue?.questions_answered ?? 0) + 1;
   const questionTotal = queue?.question_budget ?? queue?.max_per_page ?? 0;
   const showPageComplete =
-    Boolean(queue?.page_complete) && !queue?.current_assertion_id && !queue?.document_complete;
+    !isNewspaper &&
+    Boolean(queue?.page_complete) &&
+    !queue?.current_assertion_id &&
+    !queue?.document_complete;
   const showDocumentComplete = Boolean(queue?.document_complete) && !reselectOpen;
   const showNoQuestions = Boolean(queue?.no_questions_reason) && !reselectOpen;
   // Newspaper editions are fixed-range — no page reselect UI.
@@ -1474,6 +1477,7 @@ export default function WorkspaceArtifactPage({
               if (assertionQuery.isError) void assertionQuery.refetch();
               else void refreshQueue();
             }}
+            isNewspaper={isNewspaper}
             flagged={Boolean(displayAssertionId && flaggedIds[displayAssertionId])}
             flagBusy={flagBusy}
             onFlagQuestion={

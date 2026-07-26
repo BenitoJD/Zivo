@@ -235,10 +235,16 @@ def on_triage_completed(
         # Even a non-content page can be programmable (e.g. a code-only snippet
         # the LLM won't turn into MCQs but is perfect for a coding challenge).
         _maybe_spawn_coding(db, doc, page=page)
+        from app.services.newspaper import maybe_mark_newspaper_edition_ready
+
+        maybe_mark_newspaper_edition_ready(db, doc)
         return None
     generated = count_assertions_on_page(db, document_id, page)
     if generated > 0:
         _maybe_spawn_coding(db, doc, page=page)
+        from app.services.newspaper import maybe_mark_newspaper_edition_ready
+
+        maybe_mark_newspaper_edition_ready(db, doc)
         return None
     batch = min(FIRST_QUESTION_BATCH_SIZE, budget)
     job = enqueue_page_batch(db, doc, page=page, batch_size=batch, start_sequence=0)
@@ -403,6 +409,9 @@ def on_batch_completed(db: Session, document_id: uuid.UUID, *, page: int, saved:
         # for the next answer used to leave a drained pool with no job queued
         # after a batch finished — the classic empty-spinner cliff.
         maybe_refill_pool(db, document_id)
+    from app.services.newspaper import maybe_mark_newspaper_edition_ready
+
+    maybe_mark_newspaper_edition_ready(db, doc)
 
 
 def on_batch_failed(db: Session, document_id: uuid.UUID, *, page: int) -> None:

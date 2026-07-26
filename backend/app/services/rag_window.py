@@ -165,10 +165,9 @@ def refresh_rag_window_status(db: Session, document_id: uuid.UUID) -> bool:
     flag_modified(doc, "meta")
     db.commit()
     if ready:
-        from app.services.newspaper import mark_doc_ready_hook
         from app.services.question_generation import enqueue_generate_if_needed
 
-        mark_doc_ready_hook(db, doc)
-        db.commit()
+        # Newspaper catalog "ready" waits for the first cooked MCQ (see
+        # maybe_mark_newspaper_edition_ready) — not merely RAG index complete.
         enqueue_generate_if_needed(db, document_id)
     return ready

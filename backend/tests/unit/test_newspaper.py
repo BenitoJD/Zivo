@@ -373,3 +373,102 @@ def test_paper_id_fingerprint_shared_across_cities() -> None:
     b = _paper_id_fingerprint(filename="TH -Bangalore -25-07-2026.pdf", caption="")
     c = _paper_id_fingerprint(filename="thdelhi24072026.pdf", caption="")
     assert a == b == c == "th"
+
+
+def test_newspaper_learn_ready_requires_first_mcq() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from uuid import uuid4
+
+    from app.models import Document
+    from app.services.newspaper import newspaper_learn_ready
+
+    doc = Document(
+        slug="news",
+        filename="paper.pdf",
+        content_type="application/pdf",
+        size_bytes=1,
+        storage_key="k",
+        status="ready",
+        meta={
+            "ingest_kind": "newspaper",
+            "newspaper": True,
+            "selected_range": {"from": 1, "to": 3, "pages": [1, 2, 3]},
+        },
+    )
+    doc.id = uuid4()
+    db = SimpleNamespace()
+
+    with patch("app.services.question_pool.get_page_coverage", return_value={}):
+        assert newspaper_learn_ready(db, doc) is False
+
+    with (
+        patch(
+            "app.services.question_pool.get_page_coverage",
+            return_value={"question_budget": 5, "non_content": False},
+        ),
+        patch("app.services.question_pool_jobs.count_assertions_on_page", return_value=0),
+    ):
+        assert newspaper_learn_ready(db, doc) is False
+
+    with (
+        patch(
+            "app.services.question_pool.get_page_coverage",
+            return_value={"question_budget": 5, "non_content": False},
+        ),
+        patch("app.services.question_pool_jobs.count_assertions_on_page", return_value=2),
+    ):
+        assert newspaper_learn_ready(db, doc) is True
+
+
+def test_newspaper_learn_queue_uses_edition_wide_pool() -> None:
+    from unittest.mock import MagicMock, patch
+    from uuid import uuid4
+
+    from app.models import Document
+    from app.services.question_pool import build_learn_queue_state
+
+    doc = Document(
+        slug="news",
+        filename="paper.pdf",
+        content_type="application/pdf",
+        size_bytes=1,
+        storage_key="k",
+        status="ready",
+        meta={
+            "ingest_kind": "newspaper",
+            "newspaper": True,
+            "selected_range": {"from": 1, "to": 3, "pages": [1, 2, 3]},
+            "question_pool_initialized": True,
+        },
+    )
+    doc.id = uuid4()
+    progress = {
+        "current_page": 1,
+        "answered_ids": ["q1"],
+        "generation_pending": False,
+        "page_coverage": {"1": {"question_budget": 2}},
+    }
+    edition_ids = ["q1", "q2", "q3", "q4"]
+    db = MagicMock()
+
+    with (
+        patch("app.services.newspaper.is_newspaper_document", return_value=True),
+        patch("app.services.question_pool.edition_assertion_ids", return_value=edition_ids),
+        patch("app.services.question_pool.select_next_assertion", return_value="q2"),
+        patch("app.services.question_pool.assertion_page_number", return_value=2),
+        patch("app.services.question_pool.get_page_coverage", return_value={"question_budget": 2}),
+        patch("app.services.question_pool.is_coverage_complete", return_value=False),
+        patch("app.services.question_pool.page_budgets_for_document", return_value=[]),
+        patch("app.services.rag_window.chat_rag_window", return_value=[1, 2, 3]),
+        patch("app.services.rag_window.is_rag_window_ready", return_value=True),
+    ):
+        state = build_learn_queue_state(db, doc.id, doc, progress)
+
+    assert state["edition_pool"] is True
+    assert state["questions_generated"] == 4
+    assert state["questions_answered"] == 1
+    assert state["question_number"] == 2
+    assert state["current_page"] == 2
+    assert state["page_complete"] is False
+    assert state["current_assertion_id"] == "q2"

@@ -59,7 +59,7 @@ export default function NewspaperPaperPage({
             <Stack gap="xs">
               {daysQ.data!.days.map((d) => {
                 const ready = d.status === "ready";
-                const canOpen = Boolean(d.document_id) && (ready || d.status === "indexing");
+                const canOpen = Boolean(d.document_id) && ready;
                 return (
                   <Paper key={d.id} radius="xl" p="lg" withBorder bg="gray.0" shadow="paper">
                     <Group justify="space-between" align="center" wrap="wrap" gap="sm">

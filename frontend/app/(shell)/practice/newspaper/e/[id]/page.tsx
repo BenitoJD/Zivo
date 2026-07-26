@@ -43,7 +43,7 @@ export default function NewspaperEditionRedirect({
           ? `/practice/newspaper/${ed.paper_slug}`
           : "/practice/newspaper";
         setBackHref(days);
-        if (ed.document_id && (ed.status === "ready" || ed.status === "indexing")) {
+        if (ed.document_id && ed.status === "ready") {
           router.replace(`/workspace/${ed.document_id}`);
           return;
         }
