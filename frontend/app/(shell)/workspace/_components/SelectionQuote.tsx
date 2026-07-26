@@ -155,13 +155,14 @@ export function SelectionQuote({
 }
 
 export function DictionaryBtn({ text }: { text: string }) {
-  const [opened, setOpened] = useState(false);
   const [loading, setLoading] = useState(false);
   const [entry, setEntry] = useState<DictionaryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const loadingRef = useRef(false);
 
   const load = useCallback(() => {
-    if (loading) return;
+    if (loadingRef.current || entry || error) return;
+    loadingRef.current = true;
     setLoading(true);
     setError(null);
     void apiGet<DictionaryResponse>(
@@ -175,8 +176,11 @@ export function DictionaryBtn({ text }: { text: string }) {
         setEntry(null);
         setError(exc instanceof Error ? exc.message : "No definition found");
       })
-      .finally(() => setLoading(false));
-  }, [loading, text]);
+      .finally(() => {
+        loadingRef.current = false;
+        setLoading(false);
+      });
+  }, [entry, error, text]);
 
   return (
     <HoverCard
@@ -187,11 +191,6 @@ export function DictionaryBtn({ text }: { text: string }) {
       openDelay={200}
       closeDelay={120}
       position="top"
-      opened={opened}
-      onChange={(next) => {
-        setOpened(next);
-        if (next && !entry && !error && !loading) load();
-      }}
     >
       <HoverCard.Target>
         <Tooltip label="Dictionary" withArrow openDelay={300}>
@@ -208,9 +207,10 @@ export function DictionaryBtn({ text }: { text: string }) {
               fontWeight: 600,
               color: "var(--mantine-color-text)",
             }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.background = "var(--mantine-color-lavender-0)")
-            }
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "var(--mantine-color-lavender-0)";
+              load();
+            }}
             onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
           >
             <IconBook2 size={16} />
