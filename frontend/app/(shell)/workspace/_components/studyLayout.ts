@@ -17,6 +17,16 @@ export const TUTOR_PANEL_MAX = 560;
 export const STUDY_CENTER_MIN = 380;
 export const PANEL_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
 export const PANEL_MS = 280;
+/**
+ * Reserved clear space at the TOP of the study row for the StudyMetaBar (the
+ * Learn/Test progress + alignment strip). Floating Source/Tutor panels are
+ * bounded to start below this so their header never overlays the bar - without
+ * it the panel covers the "Pin to the left / Centre / right" controls, which the
+ * learner can then not click while the tutor is open (the default newspaper state).
+ * py=8 on the bar + ~15px single-line content ≈ 31px; the extra air keeps the
+ * panel header visually clear of the strip.
+ */
+export const STUDY_METABAR_TOP_INSET = 44;
 
 // --- responsive breakpoints --------------------------------------------------
 // Desktop 3-pane only ≥992px (62em); below that the clean single-column mobile

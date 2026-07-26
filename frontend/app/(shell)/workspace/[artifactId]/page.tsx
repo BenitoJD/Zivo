@@ -71,6 +71,7 @@ import { PageSelectionScreen, buildPageSliderMarks } from "@/app/workspace/_comp
 import {
   STUDY_DESKTOP_BP,
   STUDY_COMPACT_BP,
+  STUDY_METABAR_TOP_INSET,
   pagesInRange,
   computeFloatingLaneInsets,
   type AnsweredCard,
@@ -1458,24 +1459,26 @@ export default function WorkspaceArtifactPage({
         }}
       >
         <Box
-          maw={MCQ_CONTENT_MAX}
-          w="100%"
           mih={0}
           px={4}
           style={{
             // Phones always centre (the column already fills the width); on desktop the
-            // learner chooses, and the choice is remembered across sessions. The 48px
-            // keeps a pinned column clear of that edge's floating trigger, which is
-            // absolutely positioned over the study area - without it the option cards
-            // slide underneath. floatingLane reserves space for open Source/Tutor panels.
+            // learner chooses, and the choice is remembered across sessions. alignSelf
+            // pins the column on the cross axis (flex-start / center / flex-end) instead
+            // of margin auto on a flex:1 child, which would still stretch full width and
+            // make left-pin invisible when the tutor lane is reserved. The inset keeps a
+            // pinned column clear of that edge's floating trigger. floatingLane reserves
+            // space for open Source/Tutor panels.
+            width: "100%",
+            maxWidth: MCQ_CONTENT_MAX,
+            alignSelf:
+              pinned === "left" ? "flex-start" : pinned === "right" ? "flex-end" : "center",
             paddingLeft: floatingLane.left,
             paddingRight: floatingLane.right,
             transition: "padding 260ms cubic-bezier(0.32,0.72,0,1)",
-            ...(pinned === "left"
-              ? { marginLeft: pinInsetLeft, marginRight: 0 }
-              : pinned === "right"
-                ? { marginLeft: "auto", marginRight: tutorOpen ? 0 : 48 }
-                : { marginInline: "auto" }),
+            marginLeft: pinned === "left" ? pinInsetLeft : undefined,
+            marginRight:
+              pinned === "right" ? (tutorOpen ? 0 : 48) : pinned === "left" ? 0 : undefined,
             flex: 1,
             maxHeight: "100%",
             overflowY: "auto",
@@ -1899,6 +1902,7 @@ export default function WorkspaceArtifactPage({
               storageKey="zv-float-source"
               containerRef={studyRowRef}
               defaultSide="left"
+              topInset={STUDY_METABAR_TOP_INSET}
               onClose={closeSource}
               onGeometryChange={setSourceGeometry}
             >
@@ -1929,6 +1933,7 @@ export default function WorkspaceArtifactPage({
               storageKey="zv-float-tutor"
               containerRef={studyRowRef}
               defaultSide="right"
+              topInset={STUDY_METABAR_TOP_INSET}
               onClose={closeTutor}
               onGeometryChange={setTutorGeometry}
             >

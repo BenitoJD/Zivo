@@ -83,6 +83,8 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
   defaultSide?: "left" | "right";
   onClose: () => void;
   onGeometryChange?: (geometry: FloatingPanelGeometry | null) => void;
+  /** Keep the panel clear of StudyMetaBar (alignment controls). Defaults to 0. */
+  topInset?: number;
   children: ReactNode;
 }>(function FloatingPanel(
   {
@@ -95,6 +97,7 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
     defaultSide = "left",
     onClose,
     onGeometryChange,
+    topInset = 0,
     children,
   },
   ref,
@@ -119,13 +122,17 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
       setRect((current) => {
         const { w: cw, h: ch } = bounds();
         const floorW = minPanelW(cw);
+        const topMin = Math.max(MARGIN, topInset);
         const w = clamp(current?.w ?? Math.round(cw * 0.42), floorW, cw);
-        const h = clamp(current?.h ?? Math.max(MIN_H, ch - 2 * MARGIN), MIN_H, ch);
+        const h = clamp(current?.h ?? Math.max(MIN_H, ch - topMin - MARGIN), MIN_H, ch);
         const x = side === "left" ? MARGIN : Math.max(MARGIN, cw - w - MARGIN);
-        return { x, y: current?.y ?? MARGIN, w, h };
+        // Keep the panel below the meta bar even on a side dock: never reuse the
+        // old y if it was parked in the reserved strip.
+        const y = current && current.y >= topMin ? current.y : topMin;
+        return { x, y, w, h };
       });
     },
-    [bounds],
+    [bounds, topInset],
   );
 
   useImperativeHandle(ref, () => ({ snapSide }), [snapSide]);
@@ -142,23 +149,26 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
     if (!open || rect) return;
     const { w: cw, h: ch } = bounds();
     const floorW = minPanelW(cw);
+    // The panel must clear the StudyMetaBar strip at the top of the study row, so
+    // clamp its y to the reserved inset instead of 0.
+    const topMin = Math.max(MARGIN, topInset);
     const stored = loadRect(storageKey);
     let next: FloatingPanelRect;
     if (stored) {
       next = {
         x: clamp(stored.x, 0, Math.max(0, cw - floorW)),
-        y: clamp(stored.y, 0, Math.max(0, ch - MIN_H)),
+        y: clamp(stored.y, topMin, Math.max(topMin, ch - MIN_H)),
         w: clamp(stored.w, floorW, cw),
         h: clamp(stored.h, MIN_H, ch),
       };
     } else {
       const w = clamp(Math.round(cw * 0.42), floorW, Math.max(floorW, cw - 2 * MARGIN));
-      const h = Math.max(MIN_H, ch - 2 * MARGIN);
-      next = { x: defaultSide === "left" ? MARGIN : Math.max(MARGIN, cw - w - MARGIN), y: MARGIN, w, h };
+      const h = Math.max(MIN_H, ch - topMin - MARGIN);
+      next = { x: defaultSide === "left" ? MARGIN : Math.max(MARGIN, cw - w - MARGIN), y: topMin, w, h };
     }
     // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time init from container
     setRect(next);
-  }, [open, rect, storageKey, defaultSide, bounds]);
+  }, [open, rect, storageKey, defaultSide, bounds, topInset]);
 
   useEffect(() => {
     if (!rect) return;
@@ -181,17 +191,18 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
         if (!r) return r;
         const { w: cw, h: ch } = bounds();
         const floorW = minPanelW(cw);
+        const topMin = Math.max(MARGIN, topInset);
         return {
           w: clamp(r.w, floorW, cw),
           h: clamp(r.h, MIN_H, ch),
           x: clamp(r.x - shift, 0, Math.max(0, cw - Math.min(r.w, cw))),
-          y: clamp(r.y, 0, Math.max(0, ch - HEADER_H)),
+          y: clamp(r.y, topMin, Math.max(topMin, ch - HEADER_H)),
         };
       });
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [containerRef, bounds]);
+  }, [containerRef, bounds, topInset]);
 
   const startDrag = useCallback(
     (mode: "move" | Dir, e: React.PointerEvent) => {
@@ -202,6 +213,7 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
       const s = rect;
       const { w: cw, h: ch } = bounds();
       const floorW = minPanelW(cw);
+      const topMin = Math.max(MARGIN, topInset);
       setInteracting(true);
       document.body.style.userSelect = "none";
       if (mode !== "move") document.body.style.cursor = `${mode}-resize`;
@@ -213,7 +225,7 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
           setRect({
             ...s,
             x: clamp(s.x + dx, 0, Math.max(0, cw - s.w)),
-            y: clamp(s.y + dy, 0, Math.max(0, ch - HEADER_H)),
+            y: clamp(s.y + dy, topMin, Math.max(topMin, ch - HEADER_H)),
           });
           return;
         }
@@ -225,7 +237,8 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
           x = s.x + s.w - w;
         }
         if (mode.includes("n")) {
-          h = clamp(s.h - dy, MIN_H, s.y + s.h);
+          // Don't let the top edge climb into the StudyMetaBar strip.
+          h = clamp(s.h - dy, MIN_H, s.y + s.h - topMin);
           y = s.y + s.h - h;
         }
         setRect({ x, y, w, h });
@@ -240,7 +253,7 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
     },
-    [rect, maximized, bounds],
+    [rect, maximized, bounds, topInset],
   );
 
   const bringToFront = useCallback(() => setZ(nextZ()), []);
@@ -262,7 +275,7 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
   if (!open || !rect) return null;
 
   const geom: React.CSSProperties = maximized
-    ? { left: MARGIN, top: MARGIN, right: MARGIN, bottom: MARGIN }
+    ? { left: MARGIN, top: Math.max(MARGIN, topInset), right: MARGIN, bottom: MARGIN }
     : { left: rect.x, top: rect.y, width: rect.w, height: minimized ? HEADER_H : rect.h };
 
   const handle = (dir: Dir, style: React.CSSProperties) => (
