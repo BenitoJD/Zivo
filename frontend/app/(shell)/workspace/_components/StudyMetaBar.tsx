@@ -22,6 +22,7 @@ import {
   IconBriefcase,
   IconBuildingMonument,
   IconBulb,
+  IconBook2,
   IconCards,
   IconChartBar,
   IconCheck,
@@ -104,6 +105,9 @@ export function StudyMetaBar({
   backHref,
   backLabel = "Back",
   inline = false,
+  /** Learn-only: show a "Lesson" pill to re-open the page's dismissed lesson. */
+  showLessonPill = false,
+  onReopenLesson,
 }: {
   questionIndex: number;
   questionTotal: number;
@@ -131,6 +135,10 @@ export function StudyMetaBar({
   backLabel?: string;
   /** Parent owns horizontal padding (shared MCQ column with the question). */
   inline?: boolean;
+  /** Learn-only: true when a ready lesson exists for the current page and the
+   *  learner has dismissed it — the pill re-opens the lesson over the MCQ. */
+  showLessonPill?: boolean;
+  onReopenLesson?: () => void;
 }) {
   const modeSelect = showModeSelect ?? compact;
   const newspaperEditionTotal = editionTotal ?? 0;
@@ -198,6 +206,34 @@ export function StudyMetaBar({
         </Group>
         {contextChip}
       </Group>
+    ) : null;
+
+  // Learn-only re-open affordance: a quiet lavender pill that brings the page's
+  // dismissed lesson back over the MCQ. Shown only when a ready lesson exists
+  // for the current page and the learner has moved past it.
+  const lessonControl =
+    showLessonPill && onReopenLesson ? (
+      <UnstyledButton
+        onClick={onReopenLesson}
+        aria-label="Re-read the lesson for this page"
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "4px 10px",
+          borderRadius: 999,
+          background: "var(--mantine-color-lavender-1)",
+          border: "1px solid var(--mantine-color-lavender-3)",
+          color: "var(--mantine-color-lavender-8)",
+          fontSize: "0.72rem",
+          fontWeight: 600,
+          letterSpacing: "0.01em",
+          flexShrink: 0,
+        }}
+      >
+        <IconBook2 size={13} stroke={2.1} />
+        Lesson
+      </UnstyledButton>
     ) : null;
 
   // Adaptive vs Classic, switchable per document. Adaptive picks each next
@@ -441,6 +477,7 @@ export function StudyMetaBar({
           <Group gap={8} wrap="nowrap">
             {backControl}
             {modeBadge}
+            {lessonControl}
           </Group>
         ) : null}
         {progress || studyModeControl ? (
@@ -456,7 +493,7 @@ export function StudyMetaBar({
   // Desktop/tablet: the sidebar owns mode switching, so the top bar carries the
   // mode identity + question progress + the Adaptive/Classic chooser - and nothing
   // at all in modes that have none (e.g. Read), so the content starts cleanly.
-  if (!progress && !modeBadge && !studyModeControl && !alignControl && !backControl) return null;
+  if (!progress && !modeBadge && !studyModeControl && !alignControl && !backControl && !lessonControl) return null;
   const barPx = inline ? 0 : { base: "sm", sm: "md", lg: "lg" } as const;
   return (
     <Box
@@ -474,6 +511,7 @@ export function StudyMetaBar({
       <Group gap="md" wrap="nowrap" justify="flex-start" style={{ minWidth: 0 }}>
         {backControl}
         {modeBadge}
+        {lessonControl}
       </Group>
       <Group gap="md" wrap="nowrap" justify="center" style={{ minWidth: 0 }}>
         {progress}

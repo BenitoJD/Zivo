@@ -484,6 +484,33 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
         db, document_id, page_number, serve_mode=serve_mode
     )
     page_hash = _page_content_hash(page_text)
+    # Learn lesson: teach the concepts this page tests BEFORE the MCQ loop runs.
+    # The lesson is generated from the triaged aspects (the same spine the MCQs
+    # probe) and the page text, so it is question-aware yet anti-spoiler by
+    # construction — no MCQ stems exist at this point, so it can teach the
+    # concept but cannot reveal an answer. Test mode never pre-teaches. Best-effort:
+    # any failure is caught inside the cook so MCQ generation is never blocked.
+    if serve_mode == "learn":
+        cov_aspects = get_page_coverage(doc, page_number).get("aspects") or targets
+        if cov_aspects:
+            try:
+                from app.services.page_lessons import cook_page_lesson
+
+                cook_page_lesson(
+                    db,
+                    document_id,
+                    page=page_number,
+                    page_text=page_text,
+                    aspects=cov_aspects,
+                    content_hash=page_hash,
+                )
+            except Exception:
+                logger.warning(
+                    "lesson cook failed doc=%s page=%s",
+                    document_id,
+                    page_number,
+                    exc_info=True,
+                )
     cloned = _clone_reusable_mcqs(
         db,
         document_id,

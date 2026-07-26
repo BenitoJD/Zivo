@@ -1079,6 +1079,15 @@ def build_learn_queue_state(
     if newspaper:
         triage_complete = any(get_page_coverage(doc, p) for p in study_pages) or questions_generated > 0
 
+    # Learn lesson: ready lessons surface to the UI; everything else (missing /
+    # generating / failed) collapses to null so the frontend falls straight
+    # through to the MCQs. Loaded once per queue tick — a single indexed row read.
+    page_lesson = None
+    if serve_mode == "learn" and not non_content:
+        from app.services.page_lessons import get_lesson
+
+        page_lesson = get_lesson(db, document_id, page)
+
     return {
         "current_page": page,
         "page_from": page_from,
@@ -1112,6 +1121,7 @@ def build_learn_queue_state(
         "document_complete": document_complete,
         "learn_complete": learn_complete if newspaper else None,
         "test_pool_ready": test_pool_ready if newspaper else None,
+        "page_lesson": page_lesson,
         "prompt_reselect_pages": bool(progress.get("prompt_reselect_pages")),
         "prompt_reselect_reason": progress.get("prompt_reselect_reason"),
         "pool_available": sum(1 for row_id in selection_ids if row_id not in answered_set),

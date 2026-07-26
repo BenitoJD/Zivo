@@ -98,6 +98,9 @@ export type McqState = {
   learn_complete?: boolean | null;
   /** Newspaper: at least one Test-pool MCQ has been cooked. */
   test_pool_ready?: boolean | null;
+  /** Learn-only: AI-written teaching prose shown before this page's MCQs.
+   *  Present only when status === "ready" with a body; absent in Test mode. */
+  page_lesson?: { status: string; title: string | null; body: string | null } | null;
 };
 
 export type McqGradeResponse = {

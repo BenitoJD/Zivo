@@ -24,6 +24,7 @@ Index of durable policy engines (ADR 0004 seams). Budget plans N; Quality decide
 | 16 | SEO Gate | (this index) | `seo_gate.py` | seo cook usefulness + dedupe (`NEAR_DUPE_COSINE`) | yes | DONE |
 | 17 | Open Response Measurement | (this index) | `open_response.py` | mains + interview + coding teach + SD heuristic + coding bank gate | yes | DONE |
 | 18 | Aspect Discovery | (this index) | `aspect_discovery.py` | triage pick + speculative + next-unasked | yes | DONE |
+| 19 | Learn Lesson | (this index) | `page_lessons.py` | page cook (before MCQ loop) → learn-queue `page_lesson` | yes | DONE |
 
 ## Pipeline sketch
 

@@ -76,6 +76,7 @@ _LONGFORM_GENERATION_LOG_TAGS = frozenset(
         "memory_palace_generate",
         "quiz_generate",
         "seo_write",
+        "lesson_page",
     }
 )
 
@@ -126,6 +127,9 @@ LOG_TAG_MAX_TOKENS: dict[str, int] = {
     # Batched per-option coaching (one blurb per option in a JSON map), generated
     # off the answer path — needs room for up to ~6 options.
     "coach_mcq": int(os.getenv("ZIVO_COACH_MAX_TOKENS", "1200")),
+    # Per-page Learn lesson (~150-250 words of teaching prose + title, fenced as
+    # JSON). Generated before the MCQ loop, so it is never on the answer path.
+    "lesson_page": int(os.getenv("ZIVO_LESSON_MAX_TOKENS", "900")),
     "chat": CHAT_DEFAULT_MAX_TOKENS,
     "complete": CHAT_DEFAULT_MAX_TOKENS,
     "mains_gen": 1400,

@@ -60,6 +60,7 @@ import { FloatingPanel, type FloatingPanelGeometry, type FloatingPanelHandle } f
 import { StudyMobileShell } from "@/app/workspace/_components/StudyMobileShell";
 import { SelectionQuote } from "@/app/workspace/_components/SelectionQuote";
 import { StudyMetaBar, type StudyAlign } from "@/app/workspace/_components/StudyMetaBar";
+import { LessonScreen } from "@/app/workspace/_components/LessonScreen";
 import {
   suggestNextPageRange,
   TestResultsScreen,
@@ -206,6 +207,10 @@ export default function WorkspaceArtifactPage({
   const [sourceGeometry, setSourceGeometry] = useState<FloatingPanelGeometry | null>(null);
   const [studyRowWidth, setStudyRowWidth] = useState(0);
   const [reselectOpen, setReselectOpen] = useState(false);
+  // Learn lessons the learner has dismissed with "Start the questions" (one per
+  // page). A page not in this set shows its lesson before the MCQs; the meta-bar
+  // "Lesson" pill removes it so the lesson can be re-read mid-question.
+  const [lessonDismissed, setLessonDismissed] = useState<Set<number>>(new Set());
   // Bumped when the learner quotes selected MCQ text into chat, so the mobile
   // shell can jump to the tutor tab (desktop just opens the floating panel).
   const [mobileTutorFocus, setMobileTutorFocus] = useState(0);
@@ -1358,6 +1363,39 @@ export default function WorkspaceArtifactPage({
   // one score + a full review. (Learn keeps its encouraging per-page completion.)
   const testCorrect = answeredHistory.filter((c) => c.gradeState.correct).length;
   const showTestResults = mode === "test" && showDocumentComplete && answeredHistory.length > 0;
+  const currentPage = queue?.current_page ?? 0;
+  // Learn-only: show the page's pre-question lesson once per page, before the
+  // MCQ hero. Suppressed in Test mode (you can't pre-teach a test), when the
+  // page/document is complete, and once the learner has dismissed it for this
+  // page. Deliberately NOT gated on !isNewspaper — newspaper Learn shows lessons
+  // too (unlike showPageComplete above). Anything but a ready lesson falls through.
+  const showLesson =
+    mode === "learn" &&
+    queue?.page_lesson?.status === "ready" &&
+    Boolean(queue?.page_lesson?.body) &&
+    !lessonDismissed.has(currentPage) &&
+    !showPageComplete &&
+    !showDocumentComplete &&
+    !showTestResults;
+  // Learn-only meta-bar pill: re-open a lesson the learner has dismissed for
+  // the current page. Visible only while the MCQ hero is showing (not on the
+  // lesson screen itself, nor on page/document-complete screens).
+  const lessonReadyForPage = showLesson ? false : Boolean(
+    mode === "learn" &&
+      queue?.page_lesson?.status === "ready" &&
+      Boolean(queue?.page_lesson?.body) &&
+      lessonDismissed.has(currentPage) &&
+      !showPageComplete &&
+      !showDocumentComplete &&
+      !showTestResults
+  );
+  const reopenLesson = () =>
+    setLessonDismissed((prev) => {
+      if (!prev.has(currentPage)) return prev;
+      const next = new Set(prev);
+      next.delete(currentPage);
+      return next;
+    });
   const completedRange = selectedRange;
   const nextRangeSuggestion = completedRange
     ? suggestNextPageRange(completedRange, pageCount)
@@ -1457,6 +1495,8 @@ export default function WorkspaceArtifactPage({
           editionAnswered={queue?.questions_answered ?? 0}
           backHref={isNewspaper ? newspaperBackHref : undefined}
           backLabel="Days"
+          showLessonPill={lessonReadyForPage}
+          onReopenLesson={reopenLesson}
         />
         <Box
           w="100%"
@@ -1620,6 +1660,23 @@ export default function WorkspaceArtifactPage({
             onExit={() => setReviewIndex(null)}
           />
           </Box>
+          ) : showLesson && queue?.page_lesson ? (
+          // Learn-only pre-question lesson: the learner reads the page's teaching
+          // prose, then "Start the questions" dismisses it for this page and the
+          // MCQ hero renders on the next pass.
+          <LessonScreen
+            title={queue.page_lesson.title}
+            body={queue.page_lesson.body}
+            status={queue.page_lesson.status}
+            onStart={() =>
+              setLessonDismissed((prev) => {
+                if (prev.has(currentPage)) return prev;
+                const next = new Set(prev);
+                next.add(currentPage);
+                return next;
+              })
+            }
+          />
           ) : (
           // Fill the study area: stem, options, and feedback scroll together as one page.
           <Box style={{ height: "100%", minHeight: 0, width: "100%", overflow: "hidden" }}>
