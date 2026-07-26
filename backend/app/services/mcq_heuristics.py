@@ -37,6 +37,7 @@ FATAL_FLAW_CODES = frozenset(
         "meta_page_reference",
         "not_self_contained",
         "invented_entity",
+        "all_statements_combination_bias",
     }
 )
 
@@ -135,6 +136,59 @@ def find_invented_entity_flaws(
                 "message": (
                     f"Label '{full}' is not used in the source — "
                     "do not attach exam/scheme words to acronyms the article does not combine"
+                ),
+            }
+        ]
+    return []
+
+
+_STATEMENT_STEM_RE = re.compile(r"consider the following statements", re.IGNORECASE)
+_STMT_NUM_RE = re.compile(r"(?:^|\n)\s*(\d+)\.\s", re.MULTILINE)
+
+
+def _statement_numbers_in_stem(question: str) -> list[int]:
+    return sorted({int(m.group(1)) for m in _STMT_NUM_RE.finditer(question)})
+
+
+def _numbers_in_text(text: str) -> set[int]:
+    return {int(x) for x in re.findall(r"\d+", text)}
+
+
+def is_all_statements_correct_combination(mcq: dict[str, Any]) -> bool:
+    """True when a statement-based item keys every numbered statement as correct."""
+    question = str(mcq.get("question") or mcq.get("stem") or "").strip()
+    if not _STATEMENT_STEM_RE.search(question):
+        return False
+    stmt_nums = _statement_numbers_in_stem(question)
+    if len(stmt_nums) < 2:
+        return False
+    options = mcq.get("options") or mcq.get("choices") or []
+    try:
+        ci = int(mcq.get("correct_index", 0))
+    except (TypeError, ValueError):
+        return False
+    if not (0 <= ci < len(options)):
+        return False
+    chosen = _numbers_in_text(str(options[ci]))
+    return set(stmt_nums) == chosen and len(chosen) == len(stmt_nums)
+
+
+def find_all_statements_combination_bias_flaws(
+    mcq: dict[str, Any],
+    prior_mcqs: list[dict[str, Any]] | None = None,
+) -> list[dict[str, str]]:
+    """Reject a second 'all statements correct' combo on the same page."""
+    if not is_all_statements_correct_combination(mcq):
+        return []
+    priors = prior_mcqs or []
+    prior_all_correct = sum(1 for p in priors if is_all_statements_correct_combination(p))
+    if prior_all_correct >= 1:
+        return [
+            {
+                "code": "all_statements_combination_bias",
+                "message": (
+                    "This page already has an all-statements-correct item — "
+                    "key a different combination (1 only, 2 only, 1 and 3 only, etc.)"
                 ),
             }
         ]
@@ -282,6 +336,9 @@ def run_heuristic_checks(
                     }
                 )
                 break
+
+    for combo_bias in find_all_statements_combination_bias_flaws(mcq, prior_mcqs):
+        flaws.append(combo_bias)
 
     return flaws
 

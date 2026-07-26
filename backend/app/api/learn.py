@@ -109,10 +109,11 @@ def _learn_queue_payload(
     set_serve_budget_mode(db, doc, serve_mode, learner_key=lk)
     db.refresh(doc)
     progress = get_progress(doc, learner_key=lk)
-    if not is_newspaper_document(doc) and is_page_complete(db, doc, progress):
+    if is_page_complete(db, doc, progress):
         page = int(progress.get("current_page") or 1)
-        _, page_to = page_range_bounds(doc)
-        if page < page_to:
+        study_pages = selected_page_list(doc)
+        last_study_page = study_pages[-1] if study_pages else page_range_bounds(doc)[1]
+        if page < last_study_page:
             advance_to_next_page(db, doc)
             db.refresh(doc)
             progress = get_progress(doc, learner_key=lk)

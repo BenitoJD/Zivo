@@ -213,7 +213,7 @@ THE STEM
   - standard: a direct "why / how / which" question ending in "?".
   - scenario / case-based: open with a brief concrete situation (1–3 sentences), then ask a single-best-answer question that requires APPLYING the idea to that situation, not recalling it.
   - assertion–reason: state an Assertion (A) and a Reason (R) as two claims (both phrased POSITIVELY — never put "not", "false", "incorrect", or "never" inside the claims), then make the four options the standard relationship judgments in this order — "Both A and R are true, and R correctly explains A", "Both A and R are true, but R does not explain A", "A is true but R is false", "A is false but R is true" — with correct_index on the judgment that holds. (Ends with a period, not "?".)
-  - statement-based (UPSC style): "Consider the following statements:" then 2–4 numbered claims each on its own line (\n in the JSON string), then "Which of the statements given above is/are correct?". Options are combination codes that ENUMERATE the numbers — "1 only", "2 and 3 only", "1 and 3 only", "1, 2 and 3" — never "All of the above".
+  - statement-based (UPSC style): "Consider the following statements:" then 2–4 numbered claims each on its own line (\n in the JSON string), then "Which of the statements given above is/are correct?". Options are combination codes that ENUMERATE the numbers — "1 only", "2 and 3 only", "1 and 3 only", "1, 2 and 3" — never "All of the above". VARY the correct combination across a set (1 only, 2 only, pairs, etc.); mark every statement correct only when each is independently true in the source — never default to the all-numbers option.
   - true/false combination: like statement-based, but each option spells out a full truth assignment, e.g. "1 and 3 are true; 2 is false".
   - match the following: stem presents List I and List II (each pairing on its own line via \n), asks for the correct matching; options are explicit combination codes like "A-3, B-1, C-2".
   - sequence / ordering: stem lists 3–5 numbered items and asks for the correct order (chronological, procedural, causal); options are orderings like "2, 1, 4, 3".
@@ -285,6 +285,7 @@ Fatal flaws (always fail):
 - meta_page_reference — ANY book/page/chapter/passage/reading/document framing in stem or options (e.g. "on page 12", "in this book", "according to the passage", "what does the text say") instead of asking the concept directly like a formal exam
 - not_self_contained — the stem or options assume the reader saw the source: it references "this figure", "the diagram", "the above", "as shown", "here", "the example", "the aforementioned", or uses an undefined term/pronoun with no visible noun. A reader who never saw the document cannot answer it. Fix by putting the missing fact/name/term directly into the stem.
 - invented_entity — stem or option uses a named exam, scheme, yojana, mission, or program label that the source does not use with that meaning; or remaps an acronym/code from the report into a different domain
+- all_statements_combination_bias — statement-based item keys every numbered statement as correct when another question on this page already did, or when the source does not support all statements (prefer 1 only / pairs / subsets)
 
 Also judge fatal flaws only — do not emit extra metadata fields.
 
@@ -493,6 +494,8 @@ _CONTENT_TYPE_STYLE: dict[str, str] = {
         "\"Which of the statements given above is/are correct?\" with combination "
         "options like \"1 only\", \"1 and 2 only\"). Use standard single-best-answer "
         "MCQs next; assertion–reason sparingly and only when causal logic is clear. "
+        "Across statement-based items, vary the correct combination; do not repeatedly "
+        "key all statements as correct unless every one is independently true in the report. "
         "Difficulty from concept depth (scheme vs constitutional principle vs "
         "mechanism), never from trick wording. Ground every fact in the report; "
         "no celebrity/sports/lifestyle trivia. "

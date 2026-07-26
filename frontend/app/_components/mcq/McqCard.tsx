@@ -18,6 +18,18 @@ import { IconBulb, IconCheck } from "@tabler/icons-react";
  */
 export const MCQ_CONTENT_MAX = 800;
 
+/** Fixed stem size — no vw/clamp so every question reads at the same measure. */
+export const MCQ_STEM_FONT_SIZE = {
+  compact: "1.0625rem",
+  default: "1.125rem",
+} as const;
+
+/** Option body text — paired with stem tokens for consistent MCQ chrome. */
+export const MCQ_OPTION_FONT_SIZE = {
+  compact: "0.9375rem",
+  default: "1.0625rem",
+} as const;
+
 export type GradeState = { correct: boolean; correctIndex: number; correctIndices?: number[] } | null;
 
 export type McqOptionVisualState = {

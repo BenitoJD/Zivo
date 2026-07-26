@@ -13,6 +13,7 @@ from typing import Any
 from app.services.mcq_heuristics import (
     find_invented_entity_flaws,
     has_fatal_heuristic_flaws,
+    is_all_statements_correct_combination,
     run_heuristic_checks,
 )
 from app.services.prompts import DEFAULTS
@@ -173,6 +174,48 @@ def test_grounded_exam_phrase_passes_invented_entity_check() -> None:
         "correct_index": 0,
     }
     assert find_invented_entity_flaws(mcq, page) == []
+
+
+def test_all_statements_correct_detected() -> None:
+    mcq = {
+        "question": (
+            "Consider the following statements:\n"
+            "1. First claim.\n"
+            "2. Second claim.\n"
+            "3. Third claim.\n"
+            "Which of the statements given above is/are correct?"
+        ),
+        "options": ["1 only", "2 only", "1 and 3 only", "1, 2 and 3"],
+        "correct_index": 3,
+    }
+    assert is_all_statements_correct_combination(mcq) is True
+
+
+def test_second_all_statements_correct_on_page_rejected() -> None:
+    prior = {
+        "question": (
+            "Consider the following statements:\n"
+            "1. A.\n"
+            "2. B.\n"
+            "Which of the statements given above is/are correct?"
+        ),
+        "options": ["1 only", "2 only", "1 and 2 only"],
+        "correct_index": 2,
+    }
+    mcq = {
+        "question": (
+            "Consider the following statements:\n"
+            "1. X.\n"
+            "2. Y.\n"
+            "3. Z.\n"
+            "Which of the statements given above is/are correct?"
+        ),
+        "options": ["1 only", "2 and 3 only", "1 and 3 only", "1, 2 and 3"],
+        "correct_index": 3,
+    }
+    flaws = run_heuristic_checks(mcq, prior_mcqs=[prior])
+    assert "all_statements_combination_bias" in {f["code"] for f in flaws}
+    assert has_fatal_heuristic_flaws(flaws) is True
 
 
 def test_writer_prompt_matches_the_gate() -> None:

@@ -150,7 +150,7 @@ def build_learn_chat_context(
     newspaper = is_newspaper_document(doc)
     page_from, page_to = page_range_bounds(doc)
     assertion_id = _active_assertion_id(scope, state)
-    page = _question_source_page(db, assertion_id, int(state["current_page"]))
+    page = int(state["current_page"])
     budget = int(state["question_budget"])
     answered = int(state["questions_answered"])
     generated = int(state["questions_generated"])
@@ -173,14 +173,19 @@ def build_learn_chat_context(
         else:
             lines.append(f"- Newspaper edition: pages {page_from}–{page_to}.")
         lines.append(
-            f"- Serving all pre-cooked questions across the edition ({generated} available)."
+            f"- Studying page {page} now ({generated} questions in this edition; "
+            f"{answered} answered edition-wide so far)."
         )
-        lines.append(
-            f"- Active question {qnum} of {max(generated, 1)}; {answered} answered so far."
-        )
+        page_total = int(state.get("edition_page_question_total") or 0)
+        page_done = int(state.get("edition_page_questions_answered") or 0)
+        if page_total > 0:
+            lines.append(
+                f"- On page {page}: question {page_done + (1 if assertion_id else 0)} "
+                f"of {page_total} for this page."
+            )
         if assertion_id:
             lines.append(
-                f"- This question was cooked from page {page} — ground tutor answers in that page."
+                f"- Ground tutor answers in page {page} of this edition."
             )
     else:
         lines.append(f"- Study range: pages {page_from}–{page_to}; currently on page {page}")
@@ -212,8 +217,13 @@ def build_learn_chat_context(
     if state.get("current_assertion_id") or assertion_id:
         aid = assertion_id or str(state["current_assertion_id"])
         if newspaper:
-            lines.append(f"- Question {qnum} of {max(generated, 1)} in this edition")
-            lines.append(f"- Answered in this edition so far: {answered}")
+            page_total = int(state.get("edition_page_question_total") or 0)
+            page_done = int(state.get("edition_page_questions_answered") or 0)
+            if page_total > 0:
+                lines.append(f"- Question {page_done + 1} of {page_total} on page {page}")
+            else:
+                lines.append(f"- On page {page} of this edition")
+            lines.append(f"- Answered edition-wide so far: {answered}")
             lines.append(f"- Source page for this question: {page}")
         else:
             lines.append(f"- Question {qnum} of {budget} on page {page}")

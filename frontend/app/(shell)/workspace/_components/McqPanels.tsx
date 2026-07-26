@@ -30,7 +30,13 @@ import {
 import { GenerationStages } from "@/app/workspace/_components/GenerationStages";
 import { PetPlayground } from "@/app/_components/pets/PetPlayground";
 import { CAT_ENABLED_KEY } from "@/app/_components/pets/PetPlayground";
-import { MCQ_CONTENT_MAX, mcqOptionChrome, McqFeedbackCard } from "@/app/_components/mcq/McqCard";
+import {
+  MCQ_CONTENT_MAX,
+  MCQ_OPTION_FONT_SIZE,
+  MCQ_STEM_FONT_SIZE,
+  mcqOptionChrome,
+  McqFeedbackCard,
+} from "@/app/_components/mcq/McqCard";
 import { formatMcqStemForDisplay, isStatementStyleStem } from "@/lib/mcqStemFormat";
 import { normalizeMcqOptions, type McqState } from "@/lib/types";
 import { learnHasUnansweredReady, learnWaitStatus } from "@/lib/learnStatus";
@@ -618,12 +624,12 @@ export function McqHeroPanel({
         order={2}
         className="mcq-q"
         fw={500}
-        lh={statementStem ? 1.55 : 1.3}
+        fz={compact ? MCQ_STEM_FONT_SIZE.compact : MCQ_STEM_FONT_SIZE.default}
+        lh={statementStem ? 1.55 : 1.4}
         ta={statementStem ? "left" : "center"}
         c="var(--mantine-color-text)"
         style={{
           fontFamily: "var(--font-serif), Georgia, serif",
-          fontSize: compact ? "clamp(1rem, 4.4vw, 1.3rem)" : "clamp(1.2rem, 2.2vw, 1.9rem)",
           letterSpacing: "-0.01em",
           maxWidth: statementStem ? MCQ_CONTENT_MAX : "100%",
           marginInline: "auto",
@@ -723,15 +729,14 @@ export function McqHeroPanel({
                   )}
                 </Box>
                 <Text
-                  size={compact ? "sm" : "md"}
                   lh={1.45}
                   ta="left"
+                  fz={compact ? MCQ_OPTION_FONT_SIZE.compact : MCQ_OPTION_FONT_SIZE.default}
+                  c="var(--mantine-color-text)"
                   style={{
                     flex: 1,
                     minWidth: 0,
                     overflowWrap: "anywhere",
-                    fontSize: compact ? undefined : "1.0625rem",
-                    color: "var(--mantine-color-text)",
                   }}
                 >
                   {opt}
@@ -996,12 +1001,12 @@ export function McqReviewView({
           <Title
             order={2}
             fw={500}
-            lh={statementStem ? 1.55 : 1.3}
+            fz={compact ? MCQ_STEM_FONT_SIZE.compact : MCQ_STEM_FONT_SIZE.default}
+            lh={statementStem ? 1.55 : 1.4}
             ta={statementStem ? "left" : "center"}
             c="var(--mantine-color-text)"
             style={{
               fontFamily: "var(--font-serif), Georgia, serif",
-              fontSize: compact ? "clamp(1rem, 4.4vw, 1.3rem)" : "clamp(1.2rem, 2.2vw, 1.9rem)",
               letterSpacing: "-0.01em",
               maxWidth: "100%",
               marginInline: "auto",
@@ -1065,15 +1070,14 @@ export function McqReviewView({
                       )}
                     </Box>
                     <Text
-                      size={compact ? "sm" : "md"}
                       lh={1.45}
                       ta="left"
+                      fz={compact ? MCQ_OPTION_FONT_SIZE.compact : MCQ_OPTION_FONT_SIZE.default}
+                      c="var(--mantine-color-text)"
                       style={{
                         flex: 1,
                         minWidth: 0,
                         overflowWrap: "anywhere",
-                        fontSize: compact ? undefined : "1.0625rem",
-                        color: "var(--mantine-color-text)",
                       }}
                     >
                       {opt}

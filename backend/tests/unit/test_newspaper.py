@@ -421,7 +421,7 @@ def test_newspaper_learn_ready_requires_first_mcq() -> None:
         assert newspaper_learn_ready(db, doc) is True
 
 
-def test_newspaper_learn_queue_uses_edition_wide_pool() -> None:
+def test_newspaper_learn_queue_serves_current_page_first() -> None:
     from unittest.mock import MagicMock, patch
     from uuid import uuid4
 
@@ -450,25 +450,28 @@ def test_newspaper_learn_queue_uses_edition_wide_pool() -> None:
         "page_coverage": {"1": {"question_budget": 2}},
     }
     edition_ids = ["q1", "q2", "q3", "q4"]
-    page2_ids = ["q2", "q3"]
+    page1_ids = ["q1", "q2"]
+    page2_ids = ["q3", "q4"]
     db = MagicMock()
 
-    def _page_assertion_ids(_db, _doc_id, pg: int) -> list[str]:
+    def _page_assertion_ids(_db, _doc_id, pg: int, serve_mode=None) -> list[str]:
+        if pg == 1:
+            return page1_ids
         if pg == 2:
             return page2_ids
-        return ["q1"] if pg == 1 else []
+        return []
 
     with (
         patch("app.services.newspaper.is_newspaper_document", return_value=True),
         patch("app.services.question_pool.edition_assertion_ids", return_value=edition_ids),
         patch("app.services.question_pool.page_assertion_ids", side_effect=_page_assertion_ids),
-        patch("app.services.question_pool.select_next_assertion", return_value="q2"),
-        patch("app.services.question_pool.assertion_page_number", return_value=2),
+        patch("app.services.question_pool.select_next_assertion", return_value="q2") as select_next,
         patch("app.services.question_pool.get_page_coverage", return_value={"question_budget": 2}),
         patch("app.services.question_pool.is_coverage_complete", return_value=False),
         patch("app.services.question_pool.page_budgets_for_document", return_value=[]),
         patch("app.services.rag_window.chat_rag_window", return_value=[1, 2, 3]),
         patch("app.services.rag_window.is_rag_window_ready", return_value=True),
+        patch("app.services.question_pool.is_page_complete", return_value=False),
     ):
         state = build_learn_queue_state(db, doc.id, doc, progress)
 
@@ -476,12 +479,14 @@ def test_newspaper_learn_queue_uses_edition_wide_pool() -> None:
     assert state["questions_generated"] == 4
     assert state["questions_answered"] == 1
     assert state["question_number"] == 2
-    assert state["current_page"] == 2
+    assert state["current_page"] == 1
     assert state["page_complete"] is False
     assert state["current_assertion_id"] == "q2"
     assert state["edition_page_question_total"] == 2
-    assert state["edition_page_questions_answered"] == 0
-    assert state["current_page_question_number"] == 1
+    assert state["edition_page_questions_answered"] == 1
+    assert state["current_page_question_number"] == 2
+    select_next.assert_called_once()
+    assert select_next.call_args.kwargs["page_ids"] == page1_ids
 
 
 def test_newspaper_get_progress_merges_learner_overlay() -> None:
@@ -730,7 +735,7 @@ def test_newspaper_learn_complete_enables_test_queue() -> None:
     )
     doc.id = uuid4()
     progress = {
-        "current_page": 1,
+        "current_page": 2,
         "learn_answered_ids": ["q1", "q2"],
         "budget_serve_mode": "learn",
         "generation_pending": False,
@@ -751,6 +756,7 @@ def test_newspaper_learn_complete_enables_test_queue() -> None:
         patch("app.services.question_pool.select_next_assertion", return_value=None),
         patch("app.services.question_pool.get_page_coverage", return_value={"question_budget": 2}),
         patch("app.services.question_pool.is_coverage_complete", return_value=True),
+        patch("app.services.question_pool.is_page_complete", return_value=True),
         patch("app.services.question_pool.page_budgets_for_document", return_value=[2, 0]),
         patch("app.services.rag_window.chat_rag_window", return_value=[1, 2]),
         patch("app.services.rag_window.is_rag_window_ready", return_value=True),

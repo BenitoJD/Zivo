@@ -26,7 +26,9 @@ def test_newspaper_learn_chat_context_pins_source_page() -> None:
         "question_budget": 60,
         "questions_answered": 5,
         "questions_generated": 60,
-        "current_assertion_id": "q-on-page-15",
+        "edition_page_question_total": 4,
+        "edition_page_questions_answered": 2,
+        "current_assertion_id": "q-on-page-3",
         "page_complete": False,
         "document_complete": False,
         "generation_pending": False,
@@ -37,7 +39,6 @@ def test_newspaper_learn_chat_context_pins_source_page() -> None:
         patch("app.services.learn_chat_context.get_progress", return_value={"current_page": 3}),
         patch("app.services.learn_chat_context.build_learn_queue_state", return_value=state),
         patch("app.services.learn_chat_context.page_range_bounds", return_value=(1, 20)),
-        patch("app.services.learn_chat_context.assertion_page_number", return_value=15),
         patch(
             "app.services.learn_chat_context._assertion_mcq",
             return_value={
@@ -51,11 +52,12 @@ def test_newspaper_learn_chat_context_pins_source_page() -> None:
             db,
             doc_id,
             doc,
-            scope={"current_assertion_id": "q-on-page-15"},
+            scope={"current_assertion_id": "q-on-page-3"},
         )
 
     assert block is not None
     assert "The Hindu · 2026-07-26" in block
-    assert "cooked from page 15" in block
-    assert "Source page for this question: 15" in block
+    assert "Studying page 3 now" in block
+    assert "Source page for this question: 3" in block
+    assert "Question 3 of 4 on page 3" in block
     assert "Who is Pat Cummins?" in block

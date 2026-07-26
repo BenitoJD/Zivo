@@ -982,12 +982,17 @@ def build_learn_queue_state(
     answered_ids = [str(x) for x in progress.get("answered_ids") or []]
     answered_set = set(answered_ids)
     pool_mode: Mode | None = serve_mode if newspaper else None
+    selection_ids: list[str]
     if newspaper:
         page_ids = edition_assertion_ids(db, document_id, doc, serve_mode=pool_mode)
         learn_pool_ids = edition_assertion_ids(db, document_id, doc, serve_mode="learn")
         test_pool_ids = edition_assertion_ids(db, document_id, doc, serve_mode="test")
+        # Edition stats stay edition-wide; the loop serves one newspaper page at a time
+        # so Page N in the chrome does not jump when adaptive picks the next card.
+        selection_ids = page_assertion_ids(db, document_id, page, serve_mode=pool_mode)
     else:
         page_ids = page_assertion_ids(db, document_id, page)
+        selection_ids = page_ids
         learn_pool_ids = []
         test_pool_ids = []
     questions_generated = len(page_ids)
@@ -1020,16 +1025,11 @@ def build_learn_queue_state(
     session_items = int(progress.get("session_items_answered") or 0)
     session_break = bool(session.n_session > 0 and session_items >= session.n_session)
     # Loop's choosing step (policy-driven; defaults to sequence order).
-    next_id = select_next_assertion(db, document_id, doc, progress, page_ids=page_ids)
-    if newspaper and next_id:
-        focus_page = assertion_page_number(db, next_id)
-        if focus_page is not None:
-            page = focus_page
+    next_id = select_next_assertion(db, document_id, doc, progress, page_ids=selection_ids)
     if newspaper:
-        page_ids_on_page = page_assertion_ids(db, document_id, page)
-        edition_page_question_total = len(page_ids_on_page)
+        edition_page_question_total = len(selection_ids)
         edition_page_questions_answered = sum(
-            1 for row_id in page_ids_on_page if row_id in answered_set
+            1 for row_id in selection_ids if row_id in answered_set
         )
         current_page_question_number = (
             edition_page_questions_answered + 1
@@ -1037,17 +1037,15 @@ def build_learn_queue_state(
             else edition_page_questions_answered
         )
     coverage_complete = is_coverage_complete(doc, page)
+    last_study_page = study_pages[-1] if study_pages else page_to
+    page_complete = is_page_complete(db, doc, progress, page_ids=selection_ids)
     if newspaper:
-        page_complete = False
-        last_study_page = study_pages[-1] if study_pages else page_to
         document_complete = (
-            next_id is None
-            and questions_generated > 0
+            page_complete
+            and page == last_study_page
             and not bool(progress.get("generation_pending"))
         )
     else:
-        page_complete = is_page_complete(db, doc, progress, page_ids=page_ids)
-        last_study_page = study_pages[-1] if study_pages else page_to
         document_complete = page_complete and page == last_study_page
 
     # Open-world empty state: surface a reason only when the whole study range
@@ -1107,7 +1105,7 @@ def build_learn_queue_state(
         "test_pool_ready": test_pool_ready if newspaper else None,
         "prompt_reselect_pages": bool(progress.get("prompt_reselect_pages")),
         "prompt_reselect_reason": progress.get("prompt_reselect_reason"),
-        "pool_available": sum(1 for row_id in page_ids if row_id not in answered_set),
+        "pool_available": sum(1 for row_id in selection_ids if row_id not in answered_set),
         "generated_on_page": questions_generated,
         "answered_on_page": questions_answered,
         "max_per_page": plan_budget,
