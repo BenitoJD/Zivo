@@ -876,6 +876,9 @@ def build_learn_queue_state(
         page_ids = page_assertion_ids(db, document_id, page)
     questions_generated = len(page_ids)
     questions_answered = sum(1 for row_id in page_ids if row_id in answered_set)
+    edition_page_question_total: int | None = None
+    edition_page_questions_answered: int | None = None
+    current_page_question_number: int | None = None
     cov = get_page_coverage(doc, page)
     if newspaper:
         plan_budget = max(questions_generated, 1)
@@ -897,6 +900,17 @@ def build_learn_queue_state(
         focus_page = assertion_page_number(db, next_id)
         if focus_page is not None:
             page = focus_page
+    if newspaper:
+        page_ids_on_page = page_assertion_ids(db, document_id, page)
+        edition_page_question_total = len(page_ids_on_page)
+        edition_page_questions_answered = sum(
+            1 for row_id in page_ids_on_page if row_id in answered_set
+        )
+        current_page_question_number = (
+            edition_page_questions_answered + 1
+            if next_id and edition_page_question_total > 0
+            else edition_page_questions_answered
+        )
     coverage_complete = is_coverage_complete(doc, page)
     if newspaper:
         page_complete = False
@@ -975,6 +989,9 @@ def build_learn_queue_state(
         "study_mode": get_study_mode(doc, learner_key=learner_key),
         "edition_pool": newspaper,
         "edition_question_total": questions_generated if newspaper else None,
+        "edition_page_question_total": edition_page_question_total,
+        "edition_page_questions_answered": edition_page_questions_answered,
+        "current_page_question_number": current_page_question_number,
     }
 
 

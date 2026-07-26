@@ -450,11 +450,18 @@ def test_newspaper_learn_queue_uses_edition_wide_pool() -> None:
         "page_coverage": {"1": {"question_budget": 2}},
     }
     edition_ids = ["q1", "q2", "q3", "q4"]
+    page2_ids = ["q2", "q3"]
     db = MagicMock()
+
+    def _page_assertion_ids(_db, _doc_id, pg: int) -> list[str]:
+        if pg == 2:
+            return page2_ids
+        return ["q1"] if pg == 1 else []
 
     with (
         patch("app.services.newspaper.is_newspaper_document", return_value=True),
         patch("app.services.question_pool.edition_assertion_ids", return_value=edition_ids),
+        patch("app.services.question_pool.page_assertion_ids", side_effect=_page_assertion_ids),
         patch("app.services.question_pool.select_next_assertion", return_value="q2"),
         patch("app.services.question_pool.assertion_page_number", return_value=2),
         patch("app.services.question_pool.get_page_coverage", return_value={"question_budget": 2}),
@@ -472,6 +479,9 @@ def test_newspaper_learn_queue_uses_edition_wide_pool() -> None:
     assert state["current_page"] == 2
     assert state["page_complete"] is False
     assert state["current_assertion_id"] == "q2"
+    assert state["edition_page_question_total"] == 2
+    assert state["edition_page_questions_answered"] == 0
+    assert state["current_page_question_number"] == 1
 
 
 def test_newspaper_get_progress_merges_learner_overlay() -> None:

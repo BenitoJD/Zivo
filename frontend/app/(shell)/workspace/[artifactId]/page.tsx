@@ -1224,10 +1224,19 @@ export default function WorkspaceArtifactPage({
   const shortFilename = isNewspaper
     ? (paperTitle || artifact.filename?.replace(/\.[^.]+$/, "") || "Newspaper")
     : (artifact.filename?.replace(/\.[^.]+$/, "") ?? "Source");
-  const questionIndex = queue?.question_number ?? (queue?.questions_answered ?? 0) + 1;
+  const questionIndex = isNewspaper
+    ? (queue?.current_page_question_number ??
+      (queue?.edition_page_questions_answered ?? 0) + (queue?.current_assertion_id ? 1 : 0))
+    : (queue?.question_number ?? (queue?.questions_answered ?? 0) + 1);
   const questionTotal = isNewspaper
-    ? (queue?.edition_question_total ?? queue?.questions_generated ?? 0)
+    ? (queue?.edition_page_question_total ?? 0)
     : (queue?.question_budget ?? queue?.max_per_page ?? 0);
+  const editionQuestionIndex = isNewspaper
+    ? (queue?.question_number ?? (queue?.questions_answered ?? 0) + 1)
+    : undefined;
+  const editionQuestionTotal = isNewspaper
+    ? (queue?.edition_question_total ?? queue?.questions_generated ?? 0)
+    : undefined;
   const showPageComplete =
     !isNewspaper &&
     Boolean(queue?.page_complete) &&
@@ -1278,7 +1287,7 @@ export default function WorkspaceArtifactPage({
       <StudyMetaBar
         questionIndex={questionIndex}
         questionTotal={questionTotal}
-        page={isNewspaper ? undefined : queue?.current_page}
+        page={queue?.current_page}
         mode={mode}
         onModeChange={setMode}
         showProgress={(mode === "learn" || mode === "test") && !mcqLoading && Boolean(displayAssertionId) && !showPageComplete && !showDocumentComplete}
@@ -1289,11 +1298,9 @@ export default function WorkspaceArtifactPage({
         align={studyAlign}
         onAlignChange={setStudyAlign}
         contextLabel={newspaperContextLabel}
-        progressHint={
-          isNewspaper
-            ? "Each question in this edition. The total grows as more are prepared."
-            : undefined
-        }
+        isNewspaper={isNewspaper}
+        editionIndex={editionQuestionIndex}
+        editionTotal={editionQuestionTotal}
       />
       <Box
         flex={1}

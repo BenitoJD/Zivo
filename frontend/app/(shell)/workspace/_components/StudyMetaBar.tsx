@@ -94,6 +94,9 @@ export function StudyMetaBar({
   contextLabel,
   /** Override default progress tooltip (e.g. newspaper edition total). */
   progressHint,
+  isNewspaper = false,
+  editionIndex,
+  editionTotal,
 }: {
   questionIndex: number;
   questionTotal: number;
@@ -112,11 +115,19 @@ export function StudyMetaBar({
   onAlignChange?: (align: StudyAlign) => void;
   contextLabel?: string | null;
   progressHint?: string;
+  isNewspaper?: boolean;
+  editionIndex?: number;
+  editionTotal?: number;
 }) {
   const modeSelect = showModeSelect ?? compact;
-  const showBar = showProgress && questionTotal > 0;
-  const pct = showBar ? Math.min(100, Math.round((questionIndex / questionTotal) * 100)) : 0;
-  const segmented = showBar && questionTotal <= 16;
+  const newspaperEditionTotal = editionTotal ?? 0;
+  const newspaperEditionIndex = editionIndex ?? 0;
+  const showBar = showProgress && (isNewspaper ? questionTotal > 0 || newspaperEditionTotal > 0 : questionTotal > 0);
+  const progressDenominator = questionTotal;
+  const pct = showBar && progressDenominator > 0
+    ? Math.min(100, Math.round((questionIndex / progressDenominator) * 100))
+    : 0;
+  const segmented = showBar && !isNewspaper && questionTotal <= 16;
   const isTestMode = mode === "test";
   // Test wears the brand's deep green; Learn keeps lavender - a constant, glanceable
   // signal that the two are different study contexts.
@@ -258,20 +269,25 @@ export function StudyMetaBar({
 
   const progress = !showBar ? null : (
     <Group gap={compact ? 8 : 12} wrap={compact ? "wrap" : "nowrap"} style={{ flex: 1, minWidth: 0 }}>
-      {page && !compact ? (
+      {page && (isNewspaper || !compact) ? (
         <Text
           size="xs"
           c="dimmed"
           fw={600}
           style={{ flexShrink: 0, letterSpacing: "0.01em" }}
         >
-          Page {page}
+          {compact ? `p.${page}` : `Page ${page}`}
         </Text>
       ) : null}
       <Tooltip
         label={
-          progressHint ??
-          `Question ${questionIndex} of ${questionTotal}. The total is sized to this page - roughly one question per distinct idea worth testing.`
+          isNewspaper
+            ? progressHint ??
+              (questionTotal > 0
+                ? `Question ${questionIndex} of ${questionTotal} on page ${page ?? "?"}. ${newspaperEditionTotal} questions in this edition. You're on question ${newspaperEditionIndex} of ${newspaperEditionTotal} overall.`
+                : `${newspaperEditionTotal} questions in this edition. You're on question ${newspaperEditionIndex} of ${newspaperEditionTotal} overall.`)
+            : progressHint ??
+              `Question ${questionIndex} of ${questionTotal}. The total is sized to this page - roughly one question per distinct idea worth testing.`
         }
         position="bottom"
         withArrow
@@ -279,18 +295,37 @@ export function StudyMetaBar({
         w={250}
         openDelay={250}
       >
-        <Text size="xs" c="dimmed" fw={600} ff="monospace" style={{ flexShrink: 0, letterSpacing: "0.02em", cursor: "help" }}>
-          {page && compact ? (
-            <Text component="span" inherit c="dimmed" fw={600} style={{ marginRight: 8, letterSpacing: "0.01em", fontFamily: "var(--font-sans)" }}>
-              p.{page}
+        <Group gap={compact ? 6 : 8} wrap="nowrap" style={{ flexShrink: 0, cursor: "help" }}>
+          {isNewspaper && questionTotal > 0 ? (
+            <Text size="xs" c="dimmed" fw={600} ff="monospace" style={{ letterSpacing: "0.02em" }}>
+              {String(questionIndex).padStart(2, "0")}
+              <Text component="span" inherit style={{ opacity: 0.45 }}>
+                {" / "}
+                {String(questionTotal).padStart(2, "0")}
+              </Text>
+            </Text>
+          ) : !isNewspaper ? (
+            <Text size="xs" c="dimmed" fw={600} ff="monospace" style={{ letterSpacing: "0.02em" }}>
+              {page && compact ? (
+                <Text component="span" inherit c="dimmed" fw={600} style={{ marginRight: 8, letterSpacing: "0.01em", fontFamily: "var(--font-sans)" }}>
+                  p.{page}
+                </Text>
+              ) : null}
+              {String(questionIndex).padStart(2, "0")}
+              <Text component="span" inherit style={{ opacity: 0.45 }}>
+                {" / "}
+                {String(questionTotal).padStart(2, "0")}
+              </Text>
             </Text>
           ) : null}
-          {String(questionIndex).padStart(2, "0")}
-          <Text component="span" inherit style={{ opacity: 0.45 }}>
-            {" / "}
-            {String(questionTotal).padStart(2, "0")}
-          </Text>
-        </Text>
+          {isNewspaper && newspaperEditionTotal > 0 ? (
+            <Text size="xs" c="dimmed" fw={600} style={{ letterSpacing: "0.01em", whiteSpace: "nowrap" }}>
+              {compact
+                ? `${newspaperEditionTotal} ed.`
+                : `${newspaperEditionTotal} in edition`}
+            </Text>
+          ) : null}
+        </Group>
       </Tooltip>
       {segmented ? (
         <Group gap={4} wrap="nowrap" style={{ flex: 1, minWidth: 72, maxWidth: 380 }}>
@@ -307,11 +342,11 @@ export function StudyMetaBar({
             />
           ))}
         </Group>
-      ) : (
+      ) : progressDenominator > 0 ? (
         <Box style={{ flex: 1, minWidth: 72, maxWidth: 380, height: 5, borderRadius: 99, background: "var(--mantine-color-gray-3)", overflow: "hidden" }}>
           <Box style={{ width: `${pct}%`, height: "100%", borderRadius: 99, background: `var(--mantine-color-${barAccent}-6)`, transition: "width 320ms cubic-bezier(0.32,0.72,0,1)" }} />
         </Box>
-      )}
+      ) : null}
     </Group>
   );
 

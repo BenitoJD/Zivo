@@ -839,8 +839,24 @@ export function McqHeroPanel({
           >
             {isTest
               ? compact
-                ? `Test · graded at end${(queue?.question_budget ?? 0) > 0 ? ` · ${queue?.questions_answered ?? 0}/${queue?.question_budget}` : ""}`
-                : `Test · graded at the end${(queue?.question_budget ?? 0) > 0 ? ` · ${queue?.questions_answered ?? 0} of ${queue?.question_budget} answered` : ""}`
+                ? `Test · graded at end${
+                    isNewspaper
+                      ? (queue?.edition_question_total ?? queue?.questions_generated ?? 0) > 0
+                        ? ` · ${queue?.questions_answered ?? 0}/${queue?.edition_question_total ?? queue?.questions_generated ?? 0}`
+                        : ""
+                      : (queue?.question_budget ?? 0) > 0
+                        ? ` · ${queue?.questions_answered ?? 0}/${queue?.question_budget}`
+                        : ""
+                  }`
+                : `Test · graded at the end${
+                    isNewspaper
+                      ? (queue?.edition_question_total ?? queue?.questions_generated ?? 0) > 0
+                        ? ` · ${queue?.questions_answered ?? 0} of ${queue?.edition_question_total ?? queue?.questions_generated ?? 0} answered`
+                        : ""
+                      : (queue?.question_budget ?? 0) > 0
+                        ? ` · ${queue?.questions_answered ?? 0} of ${queue?.question_budget} answered`
+                        : ""
+                  }`
               : compact
                 ? "Learn · feedback after each answer"
                 : "Learn · instant feedback after each answer, retry until it clicks"}

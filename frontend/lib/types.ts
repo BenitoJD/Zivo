@@ -88,6 +88,12 @@ export type McqState = {
   edition_pool?: boolean;
   /** Newspaper: count of MCQs currently available in this edition. */
   edition_question_total?: number;
+  /** Newspaper: MCQs on the current question's source page. */
+  edition_page_question_total?: number;
+  /** Newspaper: answered MCQs on the current source page. */
+  edition_page_questions_answered?: number;
+  /** Newspaper: 1-based index on the current source page. */
+  current_page_question_number?: number;
 };
 
 export type McqGradeResponse = {
