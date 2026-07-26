@@ -17,6 +17,7 @@ from app.api import (
     newspaper,
     practice,
     progress,
+    reference,
     seo_learn,
     sources,
     study,
@@ -48,3 +49,4 @@ api_router.include_router(system_design.router, prefix="/system-design", tags=["
 api_router.include_router(newspaper.router, prefix="/newspaper", tags=["newspaper"])
 api_router.include_router(seo_learn.router, prefix="/learn", tags=["learn-blog"])
 api_router.include_router(progress.router, prefix="/progress", tags=["progress"])
+api_router.include_router(reference.router, prefix="/reference", tags=["reference"])

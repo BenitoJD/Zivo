@@ -26,6 +26,7 @@ import {
   IconNotebook,
   IconPlus,
   IconMinus,
+  IconWorld,
   IconWand,
 } from "@tabler/icons-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
@@ -36,6 +37,7 @@ import {
   renderPdfThumbToCanvas,
 } from "@/lib/pdf";
 import { apiGet } from "@/lib/api/client";
+import { DictionaryBtn } from "@/app/workspace/_components/SelectionQuote";
 
 // Below this width the rail would crowd the page; collapse to reclaim space (mobile).
 const THUMB_RAIL_HIDE_BP = "(max-width: 47.99em)";
@@ -64,6 +66,7 @@ export function PdfReader({
   pageCount,
   onQuote,
   onAsk,
+  onWikipedia,
   onSaveQuote,
 }: {
   artifactId: string;
@@ -72,6 +75,7 @@ export function PdfReader({
   pageCount: number;
   onQuote: (text: string) => void;
   onAsk: (message: string) => void;
+  onWikipedia?: (text: string) => void;
   onSaveQuote: (text: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -419,6 +423,7 @@ export function PdfReader({
           const above = sel.top - popH - 8;
           const below = sel.bottom + 8;
           const top = above >= 12 ? above : below;
+          const popW = onWikipedia ? 520 : 420;
           return (
             <Paper
               data-reader-popover
@@ -428,7 +433,7 @@ export function PdfReader({
               p={4}
               style={{
                 position: "fixed",
-                left: Math.max(12, Math.min(sel.x - 150, window.innerWidth - 312)),
+                left: Math.max(12, Math.min(sel.x - popW / 2, window.innerWidth - popW - 12)),
                 top: Math.min(top, window.innerHeight - popH - 12),
                 zIndex: 400,
                 display: "flex",
@@ -438,6 +443,15 @@ export function PdfReader({
             >
               <PopBtn icon={<IconMessage2 size={16} />} label="Ask" large={isNarrow} onClick={() => act(() => onQuote(sel.text))} />
               <PopBtn icon={<IconBulb size={16} />} label="Explain" large={isNarrow} onClick={() => act(() => onAsk(`Explain this passage in simple terms:\n\n"${sel.text}"`))} />
+              <DictionaryBtn key={sel.text} text={sel.text} />
+              {onWikipedia ? (
+                <PopBtn
+                  icon={<IconWorld size={16} />}
+                  label="Wikipedia"
+                  large={isNarrow}
+                  onClick={() => act(() => onWikipedia(sel.text))}
+                />
+              ) : null}
               <PopBtn icon={<IconWand size={16} />} label="Simplify" large={isNarrow} onClick={() => act(() => onAsk(`Simplify this so it's easy to understand:\n\n"${sel.text}"`))} />
               <PopBtn icon={<IconNotebook size={16} />} label="Save" large={isNarrow} onClick={() => act(() => onSaveQuote(sel.text))} />
             </Paper>

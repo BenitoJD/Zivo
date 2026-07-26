@@ -894,6 +894,29 @@ export default function WorkspaceArtifactPage({
     revealTutor();
     askBuddy(`Explain this in simple terms:\n\n"${text}"\n\n`);
   }
+  type WikipediaLookup = { title: string; extract: string; source_url: string };
+  async function askWikipediaAboutSelection(text: string) {
+    const query = text.trim().split(/\s+/)[0] || text;
+    try {
+      const wiki = await apiGet<WikipediaLookup>(
+        `/api/reference/wikipedia?query=${encodeURIComponent(query)}`,
+      );
+      askBuddy(
+        `I highlighted this while studying:\n\n"${text}"\n\n` +
+          `Use this Wikipedia summary about "${wiki.title}" as your main source (cite it briefly if helpful):\n\n` +
+          `${wiki.extract}\n\n` +
+          `Explain what this means in the context of what I'm learning. Keep it plain and short.`,
+      );
+    } catch {
+      askBuddy(
+        `I highlighted: "${text}"\n\nUse Wikipedia as your source and explain what this means in plain language.`,
+      );
+    }
+  }
+  function wikipediaSelectionInChat(text: string) {
+    revealTutor();
+    void askWikipediaAboutSelection(text);
+  }
 
   function handleMcqSelect(value: string) {
     if (gradeState && !gradeState.correct && mode === "learn") {
@@ -1664,25 +1687,35 @@ export default function WorkspaceArtifactPage({
           // Learn-only pre-question lesson: the learner reads the page's teaching
           // prose, then "Start the questions" dismisses it for this page and the
           // MCQ hero renders on the next pass.
-          <LessonScreen
-            title={queue.page_lesson.title}
-            body={queue.page_lesson.body}
-            status={queue.page_lesson.status}
-            onStart={() =>
-              setLessonDismissed((prev) => {
-                if (prev.has(currentPage)) return prev;
-                const next = new Set(prev);
-                next.add(currentPage);
-                return next;
-              })
+          <SelectionQuote
+            onAsk={quoteSelectionToChat}
+            onExplain={explainSelectionInChat}
+            onWikipedia={wikipediaSelectionInChat}
+            disabled={
+              queue.page_lesson.status === "generating" || !queue.page_lesson.body
             }
-          />
+          >
+            <LessonScreen
+              title={queue.page_lesson.title}
+              body={queue.page_lesson.body}
+              status={queue.page_lesson.status}
+              onStart={() =>
+                setLessonDismissed((prev) => {
+                  if (prev.has(currentPage)) return prev;
+                  const next = new Set(prev);
+                  next.add(currentPage);
+                  return next;
+                })
+              }
+            />
+          </SelectionQuote>
           ) : (
           // Fill the study area: stem, options, and feedback scroll together as one page.
           <Box style={{ height: "100%", minHeight: 0, width: "100%", overflow: "hidden" }}>
           <SelectionQuote
             onAsk={quoteSelectionToChat}
             onExplain={explainSelectionInChat}
+            onWikipedia={wikipediaSelectionInChat}
             disabled={mcqLoading || !displayAssertionId}
           >
           <McqHeroPanel
@@ -1846,6 +1879,10 @@ export default function WorkspaceArtifactPage({
               pageCount={pageCount}
               onQuote={(t) => { quoteToComposer(t); if (stacked) setReaderMobileTab("buddy"); }}
               onAsk={(m) => { askBuddy(m); if (stacked) setReaderMobileTab("buddy"); }}
+              onWikipedia={(t) => {
+                if (stacked) setReaderMobileTab("buddy");
+                void askWikipediaAboutSelection(t);
+              }}
               onSaveQuote={(t) => saveNote(t, t)}
             />
           </Box>
