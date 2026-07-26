@@ -141,3 +141,80 @@ MATERIAL (already PII-scrubbed; do not reveal origin):
         ).strip(),
         "faq_jsonld": faq_clean,
     }
+
+
+_EDITION_SYSTEM = """You write daily edition digests for learners preparing for exams.
+Voice: a careful human editor. Short clear sentences. Concrete nouns. Occasional contractions.
+Write like you read the day's news and picked what matters for someone studying current affairs.
+Never name any newspaper, publication, or journalist. Never quote headlines verbatim.
+Never mention PDFs, uploads, AI, or how this was produced.
+Never use em-dashes. Avoid: delve, landscape, robust, leverage, game-changer,
+it's important to note, in today's fast-paced, tapestry, myriad.
+No bullet-heavy walls. Mix paragraph lengths. Teach what happened and why it matters.
+Return ONLY JSON."""
+
+
+def write_edition_digest(
+    db: Session,
+    *,
+    source_text: str,
+    edition_date: str,
+    title_hint: str = "",
+) -> dict[str, Any] | None:
+    """Rewrite scrubbed edition text into a public digest that prepares MCQ practice."""
+    user = f"""Write a digest for learners who will practice MCQs on this day's edition.
+
+Edition date: {edition_date}
+Working title hint: {title_hint or "(infer a clear title from the themes)"}
+
+Format: explainer digest (600-1200 words in body_md). Markdown with 2-4 short ## headings.
+Cover the main themes only. Skip ads, listings, and filler. No source attribution.
+
+End body_md with one short paragraph inviting practice on Question Better (not salesy).
+
+JSON schema:
+{{
+  "title": "string (specific, not generic 'Daily Digest')",
+  "lede": "one sentence hook",
+  "body_md": "markdown digest including soft practice invite at end",
+  "topic_fingerprint_hint": "3-8 word topic key"
+}}
+
+EDITION MATERIAL (PII-scrubbed; do not reveal origin):
+---
+{source_text[:16000]}
+---
+"""
+
+    try:
+        raw = _complete(
+            db,
+            [
+                {"role": "system", "content": _EDITION_SYSTEM},
+                {"role": "user", "content": user},
+            ],
+        )
+        parsed = extract_json_obj(raw)
+    except Exception:
+        logger.exception("edition digest write failed")
+        return None
+
+    title = str(parsed.get("title") or title_hint or "Edition digest").strip()
+    lede = str(parsed.get("lede") or "").strip()
+    body = str(parsed.get("body_md") or "").strip()
+    if not title or not body:
+        return None
+
+    fields = humanize_fields(title=title, lede=lede, body_md=body)
+    return {
+        "title": fields["title"],
+        "lede": fields["lede"],
+        "body_md": fields["body_md"],
+        "format": "explainer",
+        "stream": "general",
+        "cta_kind": "practice",
+        "topic_fingerprint_hint": str(
+            parsed.get("topic_fingerprint_hint") or fields["title"]
+        ).strip(),
+        "faq_jsonld": [],
+    }

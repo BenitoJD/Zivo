@@ -24,6 +24,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     if (!res.ok) return staticEntries;
     const data = (await res.json()) as {
       items: { slug: string; published_at: string | null; updated_at: string | null }[];
+      newspaper?: {
+        paper_slug: string;
+        edition_date: string;
+        published_at: string | null;
+        updated_at: string | null;
+      }[];
     };
     const learn = (data.items ?? []).map((item) => ({
       url: `${origin}/learn/${item.slug}`,
@@ -35,7 +41,17 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       changeFrequency: "weekly" as const,
       priority: 0.7,
     }));
-    return [...staticEntries, ...learn];
+    const newspaper = (data.newspaper ?? []).map((item) => ({
+      url: `${origin}/learn/newspaper/${item.paper_slug}/${item.edition_date}`,
+      lastModified: item.updated_at
+        ? new Date(item.updated_at)
+        : item.published_at
+          ? new Date(item.published_at)
+          : undefined,
+      changeFrequency: "weekly" as const,
+      priority: 0.7,
+    }));
+    return [...staticEntries, ...learn, ...newspaper];
   } catch {
     return staticEntries;
   }

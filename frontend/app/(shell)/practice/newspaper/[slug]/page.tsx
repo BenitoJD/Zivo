@@ -15,7 +15,7 @@ import {
   Stack,
   Text,
 } from "@mantine/core";
-import { IconArrowRight, IconClipboardList } from "@tabler/icons-react";
+import { IconArrowRight, IconBook2, IconClipboardList } from "@tabler/icons-react";
 import { useRouter } from "next/navigation";
 import { ensureGuestSession } from "@/lib/api/client";
 import { useNewspaperDaysQuery } from "@/lib/api/queries";
@@ -84,6 +84,17 @@ export default function NewspaperPaperPage({
                         </Badge>
                       </Group>
                       <Group gap="xs" wrap="nowrap">
+                        {d.has_blog && d.blog_href ? (
+                          <Button
+                            radius="xl"
+                            variant="subtle"
+                            color="lavender"
+                            leftSection={<IconBook2 size={16} />}
+                            onClick={() => router.push(d.blog_href!)}
+                          >
+                            Read analysis
+                          </Button>
+                        ) : null}
                         <Button
                           radius="xl"
                           variant="subtle"
@@ -105,7 +116,7 @@ export default function NewspaperPaperPage({
                           rightSection={<IconArrowRight size={16} />}
                           onClick={() => {
                             if (!d.document_id) return;
-                            router.push(`/workspace/${d.document_id}`);
+                            router.push(`/practice/newspaper/e/${d.id}`);
                           }}
                         >
                           Learn

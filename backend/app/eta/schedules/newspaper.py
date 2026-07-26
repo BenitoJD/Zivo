@@ -9,7 +9,8 @@ from sqlalchemy import text
 
 from app.db import SessionLocal
 from app.eta.scheduler_registry import eta_scheduler
-from app.services.jobs import enqueue_rag_window
+from app.models import JobWorkload
+from app.services.jobs import enqueue_job, enqueue_rag_window
 from app.services.newspaper import purge_expired_editions
 
 logger = logging.getLogger(__name__)
@@ -81,3 +82,51 @@ def run_newspaper_purge() -> None:
         n = purge_expired_editions(db)
         if n:
             logger.info("newspaper purge removed %s expired editions", n)
+
+
+def _backfill_edition_digests() -> int:
+    """Enqueue digest cook for ready editions that never published a blog."""
+    from app.repositories import seo as seo_repo
+
+    n = 0
+    with SessionLocal() as db:
+        settings = seo_repo.get_settings(db)
+        if not settings.get("cook_enabled"):
+            return 0
+
+        rows = db.execute(
+            text(
+                """
+                SELECT e.id, e.paper_slug, e.edition_date
+                FROM qb.newspaper_edition e
+                WHERE e.status = 'ready'
+                  AND e.blog_status = 'none'
+                  AND e.blog_post_id IS NULL
+                ORDER BY e.edition_date DESC
+                LIMIT 5
+                """
+            )
+        ).mappings().all()
+
+        for row in rows:
+            source_key = f"{row['paper_slug']}:{row['edition_date'].isoformat()}"
+            if seo_repo.attempt_exists(db, "newspaper_edition", source_key):
+                continue
+            enqueue_job(
+                db,
+                name="seo.cook_edition_digest",
+                workload=JobWorkload.io,
+                payload={"edition_id": str(row["id"])},
+            )
+            n += 1
+
+        if n:
+            db.commit()
+    return n
+
+
+@eta_scheduler(every_minutes=60, key="newspaper.backfill_edition_blogs")
+def run_newspaper_backfill_blogs() -> None:
+    n = _backfill_edition_digests()
+    if n:
+        logger.info("newspaper backfill enqueued %s edition digests", n)

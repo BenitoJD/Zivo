@@ -23,9 +23,9 @@ from app.services.seo_gate import (
     evaluate_publish_cap,
     evaluate_usefulness,
 )
-from app.services.seo_mcq import attach_or_generate_mcqs
+from app.services.seo_mcq import attach_edition_mcqs, attach_or_generate_mcqs
 from app.services.seo_pii import scrub_pii
-from app.services.seo_writer import write_article
+from app.services.seo_writer import write_article, write_edition_digest
 
 logger = logging.getLogger(__name__)
 
@@ -316,3 +316,157 @@ def ensure_sd_daily(db: Session) -> dict[str, Any]:
         return cook_one(db, candidate_from_topic(topic))
 
     return {"ok": False, "skipped": "no_sd_candidates"}
+
+
+def _edition_source_key(paper_slug: str, edition_date: date) -> str:
+    return f"{paper_slug}:{edition_date.isoformat()}"
+
+
+def _edition_fingerprint(paper_slug: str, edition_date: date) -> str:
+    return f"newspaper:{paper_slug}:{edition_date.isoformat()}"
+
+
+def cook_edition_digest(db: Session, edition_id: uuid.UUID) -> dict[str, Any]:
+    """Cook one edition digest when the edition is ready."""
+    from app.repositories import newspaper as newspaper_repo
+
+    settings = seo_repo.get_settings(db)
+    if not settings.get("cook_enabled"):
+        return {"skipped": True, "reason": "cook_disabled"}
+
+    ed = newspaper_repo.get_edition(db, edition_id)
+    if not ed:
+        return {"skipped": True, "reason": "edition_not_found"}
+    if ed.get("status") != "ready":
+        return {"skipped": True, "reason": "edition_not_ready"}
+    if ed.get("blog_status") == "published" and ed.get("blog_post_id"):
+        return {"skipped": True, "reason": "already_published"}
+
+    paper_slug = str(ed["paper_slug"])
+    edition_date = ed["edition_date"]
+    source_key = _edition_source_key(paper_slug, edition_date)
+    if seo_repo.attempt_exists(db, "newspaper_edition", source_key):
+        return {"skipped": True, "reason": "already_attempted"}
+
+    doc_id = ed.get("document_id")
+    if not doc_id:
+        return _skip_edition(db, edition_id, source_key, "no_document")
+
+    source_text = seo_repo.aggregate_document_text(db, doc_id)
+    if len(source_text.strip()) < 400:
+        return _skip_edition(db, edition_id, source_key, "insufficient_text")
+
+    scrubbed = scrub_pii(source_text)
+    title_hint = f"{ed.get('paper_title') or paper_slug} · {edition_date.isoformat()}"
+    article = write_edition_digest(
+        db,
+        source_text=scrubbed,
+        edition_date=edition_date.isoformat(),
+        title_hint=title_hint,
+    )
+    if not article:
+        return _skip_edition(db, edition_id, source_key, "write_failed")
+
+    fp = _edition_fingerprint(paper_slug, edition_date)
+    dedupe = evaluate_dedupe(
+        db,
+        fingerprint=fp,
+        title=article["title"],
+        lede=article["lede"],
+    )
+    if not dedupe.ok:
+        return _skip_edition(db, edition_id, source_key, f"dedupe:{dedupe.reason}")
+
+    slug = unique_slug(db, f"{paper_slug}-{edition_date.isoformat()}")
+    embedding = embed_title_lede(article["title"], article["lede"])
+    author = seo_repo.next_author_name(db)
+
+    newspaper_repo.set_edition_blog_status(db, edition_id, status="pending")
+
+    post_id = seo_repo.insert_post(
+        db,
+        slug=slug,
+        title=article["title"],
+        lede=article["lede"],
+        body_md=article["body_md"],
+        format=article["format"],
+        stream=article["stream"],
+        author_name=author,
+        topic_fingerprint=fp,
+        embedding=embedding,
+        source_kind="newspaper_edition",
+        source_ref={
+            "edition_id": str(edition_id),
+            "paper_slug": paper_slug,
+            "edition_date": edition_date.isoformat(),
+        },
+        faq_jsonld=[],
+        cta_kind="practice",
+        status="published",
+    )
+
+    try:
+        attached = attach_edition_mcqs(
+            db,
+            post_id=post_id,
+            document_id=uuid.UUID(str(doc_id)),
+        )
+        if len(attached) < 3:
+            attach_or_generate_mcqs(
+                db,
+                post_id=post_id,
+                slug=slug,
+                body_md=article["body_md"],
+                source_document_id=uuid.UUID(str(doc_id)),
+                target_count=4,
+            )
+    except Exception:
+        logger.exception("edition digest mcq attach failed post=%s", post_id)
+
+    newspaper_repo.link_edition_blog(
+        db,
+        edition_id=edition_id,
+        post_id=post_id,
+        status="published",
+    )
+    seo_repo.record_attempt(
+        db,
+        source_kind="newspaper_edition",
+        source_key=source_key,
+        outcome="published",
+        reason="ok",
+        post_id=post_id,
+    )
+    db.commit()
+    logger.info(
+        "edition digest published edition=%s slug=%s",
+        edition_id,
+        slug,
+    )
+    return {
+        "published": True,
+        "post_id": str(post_id),
+        "slug": slug,
+        "edition_id": str(edition_id),
+    }
+
+
+def _skip_edition(
+    db: Session,
+    edition_id: uuid.UUID,
+    source_key: str,
+    reason: str,
+) -> dict[str, Any]:
+    from app.repositories import newspaper as newspaper_repo
+
+    seo_repo.record_attempt(
+        db,
+        source_kind="newspaper_edition",
+        source_key=source_key,
+        outcome="skipped",
+        reason=reason,
+    )
+    newspaper_repo.set_edition_blog_status(db, edition_id, status="skipped")
+    db.commit()
+    logger.info("edition digest skip %s: %s", source_key, reason)
+    return {"skipped": True, "reason": reason, "source_key": source_key}

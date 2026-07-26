@@ -11,7 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import Document
+from app.models import Document, JobWorkload
 from app.repositories import newspaper as newspaper_repo
 from app.services.document_purge import purge_document, purge_ingest_tmp
 from app.services.parse import count_pdf_pages
@@ -88,6 +88,12 @@ def list_paper_days(db: Session, paper_slug: str) -> dict[str, Any]:
                 "edition_date": d["edition_date"].isoformat(),
                 "status": d["status"],
                 "document_id": str(d["document_id"]) if d.get("document_id") else None,
+                "has_blog": d.get("blog_status") == "published" and bool(d.get("blog_post_id")),
+                "blog_href": (
+                    f"/learn/newspaper/{paper_slug}/{d['edition_date'].isoformat()}"
+                    if d.get("blog_status") == "published" and d.get("blog_post_id")
+                    else None
+                ),
             }
             for d in days
         ],
@@ -407,4 +413,43 @@ def maybe_mark_newspaper_edition_ready(db: Session, doc: Document) -> None:
     if not newspaper_learn_ready(db, doc):
         return
     mark_doc_ready_hook(db, doc)
+    db.flush()
+    _maybe_enqueue_edition_digest(db, doc)
     db.commit()
+
+
+def _maybe_enqueue_edition_digest(db: Session, doc: Document) -> None:
+    """Enqueue edition digest cook when edition becomes ready."""
+    from app.repositories import seo as seo_repo
+    from app.services.jobs import enqueue_job
+
+    settings = seo_repo.get_settings(db)
+    if not settings.get("cook_enabled"):
+        return
+
+    row = db.execute(
+        text(
+            """
+            SELECT id, paper_slug, edition_date, blog_status, blog_post_id
+            FROM qb.newspaper_edition
+            WHERE document_id = :d AND status = 'ready'
+            LIMIT 1
+            """
+        ),
+        {"d": doc.id},
+    ).mappings().first()
+    if not row:
+        return
+    if row.get("blog_status") == "published" and row.get("blog_post_id"):
+        return
+
+    source_key = f"{row['paper_slug']}:{row['edition_date'].isoformat()}"
+    if seo_repo.attempt_exists(db, "newspaper_edition", source_key):
+        return
+
+    enqueue_job(
+        db,
+        name="seo.cook_edition_digest",
+        workload=JobWorkload.io,
+        payload={"edition_id": str(row["id"])},
+    )

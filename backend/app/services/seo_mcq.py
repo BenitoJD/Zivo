@@ -43,6 +43,54 @@ def find_related_assertions(
     return [uuid.UUID(str(r[0])) for r in rows]
 
 
+def find_diverse_edition_assertions(
+    db: Session,
+    *,
+    document_id: uuid.UUID,
+    min_count: int = 4,
+    max_count: int = 6,
+) -> list[uuid.UUID]:
+    """Pick MCQs from the edition pool with distinct primary_concept_key when possible."""
+    rows = db.execute(
+        text(
+            """
+            SELECT a.id,
+                   COALESCE(NULLIF(a.payload->>'primary_concept_key', ''), a.id::text) AS ck
+            FROM intel.assertion a
+            JOIN intel.concept c ON c.id = a.type_concept_id
+            WHERE a.payload->>'artifact_id' = :aid
+              AND a.status = 'active'
+              AND c.uri = '/vocab/assertion/question.mcq'
+            ORDER BY a.recorded_at ASC
+            """
+        ),
+        {"aid": str(document_id)},
+    ).mappings().all()
+    if not rows:
+        return []
+
+    picked: list[uuid.UUID] = []
+    seen_keys: set[str] = set()
+    for row in rows:
+        ck = str(row["ck"] or "")
+        if ck in seen_keys:
+            continue
+        seen_keys.add(ck)
+        picked.append(uuid.UUID(str(row["id"])))
+        if len(picked) >= max_count:
+            break
+
+    if len(picked) < min_count:
+        for row in rows:
+            aid = uuid.UUID(str(row["id"]))
+            if aid in picked:
+                continue
+            picked.append(aid)
+            if len(picked) >= min_count:
+                break
+    return picked[:max_count]
+
+
 def ensure_public_artifact(
     db: Session,
     *,
@@ -189,6 +237,26 @@ def attach_or_generate_mcqs(
             ids.append(aid)
         except Exception:
             logger.exception("seo mcq persist failed")
+    if ids:
+        seo_repo.attach_assertions(db, post_id, ids)
+    return ids
+
+
+def attach_edition_mcqs(
+    db: Session,
+    *,
+    post_id: uuid.UUID,
+    document_id: uuid.UUID,
+    min_count: int = 4,
+    max_count: int = 6,
+) -> list[uuid.UUID]:
+    """Attach concept-diverse MCQs from the edition assertion pool."""
+    ids = find_diverse_edition_assertions(
+        db,
+        document_id=document_id,
+        min_count=min_count,
+        max_count=max_count,
+    )
     if ids:
         seo_repo.attach_assertions(db, post_id, ids)
     return ids

@@ -274,7 +274,8 @@ def list_days_for_paper(db: Session, *, paper_slug: str, since: date) -> list[di
     rows = db.execute(
         text(
             """
-            SELECT id, paper_title, edition_date, status, document_id, location_raw
+            SELECT id, paper_title, edition_date, status, document_id, location_raw,
+                   blog_post_id, blog_status
             FROM qb.newspaper_edition
             WHERE paper_slug = :slug
               AND edition_date >= :since
@@ -285,6 +286,46 @@ def list_days_for_paper(db: Session, *, paper_slug: str, since: date) -> list[di
         {"slug": paper_slug, "since": since},
     ).mappings().all()
     return [dict(r) for r in rows]
+
+
+def set_edition_blog_status(
+    db: Session,
+    edition_id: uuid.UUID,
+    *,
+    status: str,
+) -> None:
+    db.execute(
+        text(
+            """
+            UPDATE qb.newspaper_edition
+            SET blog_status = :st, updated_at = now()
+            WHERE id = :id
+            """
+        ),
+        {"id": edition_id, "st": status},
+    )
+
+
+def link_edition_blog(
+    db: Session,
+    *,
+    edition_id: uuid.UUID,
+    post_id: uuid.UUID,
+    status: str = "published",
+) -> None:
+    db.execute(
+        text(
+            """
+            UPDATE qb.newspaper_edition
+            SET blog_post_id = :pid,
+                blog_status = :st,
+                blog_published_at = CASE WHEN :st = 'published' THEN now() ELSE blog_published_at END,
+                updated_at = now()
+            WHERE id = :id
+            """
+        ),
+        {"id": edition_id, "pid": post_id, "st": status},
+    )
 
 
 def list_expired_ready(db: Session, *, before: date) -> list[dict[str, Any]]:

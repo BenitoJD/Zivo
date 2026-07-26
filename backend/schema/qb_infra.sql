@@ -303,10 +303,15 @@ CREATE TABLE IF NOT EXISTS qb.newspaper_edition (
   telegram_msg_id   BIGINT,
   location_raw      TEXT NOT NULL DEFAULT '',
   status            TEXT NOT NULL DEFAULT 'pending',
+  blog_post_id      UUID REFERENCES qb.seo_post (id) ON DELETE SET NULL,
+  blog_status       TEXT NOT NULL DEFAULT 'none',
+  blog_published_at TIMESTAMPTZ,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT newspaper_edition_status_check
     CHECK (status IN ('pending', 'indexing', 'ready', 'failed', 'purged')),
+  CONSTRAINT newspaper_edition_blog_status_check
+    CHECK (blog_status IN ('none', 'pending', 'published', 'skipped', 'failed')),
   CONSTRAINT newspaper_edition_paper_day_unique
     UNIQUE (paper_slug, edition_date)
 );
@@ -317,6 +322,10 @@ CREATE INDEX IF NOT EXISTS ix_newspaper_edition_ready_date
 
 CREATE INDEX IF NOT EXISTS ix_newspaper_edition_paper
   ON qb.newspaper_edition (paper_slug, edition_date DESC);
+
+CREATE INDEX IF NOT EXISTS ix_newspaper_edition_blog_published
+  ON qb.newspaper_edition (paper_slug, edition_date DESC)
+  WHERE blog_status = 'published';
 
 -- Newspaper brand allowlist (additive; also 029_newspaper_brands)
 ALTER TABLE qb.newspaper_settings
@@ -398,7 +407,9 @@ CREATE TABLE IF NOT EXISTS qb.seo_post (
   CONSTRAINT seo_post_status_check
     CHECK (status IN ('draft', 'published', 'unpublished')),
   CONSTRAINT seo_post_source_kind_check
-    CHECK (source_kind IN ('newspaper', 'upload', 'sd_bank', 'topic_queue'))
+    CHECK (source_kind IN (
+      'newspaper', 'upload', 'sd_bank', 'topic_queue', 'newspaper_edition'
+    ))
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_seo_post_slug ON qb.seo_post (slug);

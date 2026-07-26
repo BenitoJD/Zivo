@@ -7,12 +7,15 @@ Public responses never include source_kind / source_ref.
 from __future__ import annotations
 
 import uuid
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.repositories import newspaper as newspaper_repo
 from app.repositories import seo as seo_repo
 from app.services.auth import require_admin, require_csrf
 
@@ -73,6 +76,7 @@ def post_questions(
 @router.get("/sitemap-slugs")
 def sitemap_slugs(db: Session = Depends(get_db)) -> dict:
     rows = seo_repo.list_sitemap_slugs(db)
+    newspaper_rows = seo_repo.list_newspaper_blog_sitemap(db)
     return {
         "items": [
             {
@@ -81,8 +85,85 @@ def sitemap_slugs(db: Session = Depends(get_db)) -> dict:
                 "updated_at": r["updated_at"].isoformat() if r.get("updated_at") else None,
             }
             for r in rows
-        ]
+        ],
+        "newspaper": [
+            {
+                "paper_slug": r["paper_slug"],
+                "edition_date": r["edition_date"].isoformat(),
+                "published_at": r["blog_published_at"].isoformat()
+                if r.get("blog_published_at")
+                else None,
+                "updated_at": r["updated_at"].isoformat() if r.get("updated_at") else None,
+            }
+            for r in newspaper_rows
+        ],
     }
+
+
+@router.get("/newspaper/{paper_slug}")
+def newspaper_blog_archive(paper_slug: str, db: Session = Depends(get_db)) -> dict:
+    if not newspaper_repo.is_brand_allowed(db, paper_slug):
+        raise HTTPException(status_code=404, detail="Paper not found")
+    items = seo_repo.list_edition_blog_archive(db, paper_slug=paper_slug)
+    row = db.execute(
+        text(
+            """
+            SELECT paper_title FROM qb.newspaper_edition
+            WHERE paper_slug = :slug
+            ORDER BY edition_date DESC
+            LIMIT 1
+            """
+        ),
+        {"slug": paper_slug},
+    ).first()
+    title = str(row[0]) if row and row[0] else paper_slug
+    return {
+        "paper_slug": paper_slug,
+        "paper_title": title,
+        "items": items,
+    }
+
+
+@router.get("/newspaper/{paper_slug}/{edition_date}")
+def get_newspaper_edition_blog(
+    paper_slug: str,
+    edition_date: date,
+    db: Session = Depends(get_db),
+) -> dict:
+    if not newspaper_repo.is_brand_allowed(db, paper_slug):
+        raise HTTPException(status_code=404, detail="Edition not found")
+    post = seo_repo.get_edition_blog_post(
+        db, paper_slug=paper_slug, edition_date=edition_date
+    )
+    if not post:
+        raise HTTPException(status_code=404, detail="Edition not found")
+    post.pop("source_kind", None)
+    post.pop("source_ref", None)
+    post.pop("topic_fingerprint", None)
+    post.pop("artifact_id", None)
+    return post
+
+
+@router.get("/newspaper/{paper_slug}/{edition_date}/questions")
+def newspaper_edition_questions(
+    paper_slug: str,
+    edition_date: date,
+    limit: int = Query(default=20, ge=1, le=40),
+    db: Session = Depends(get_db),
+) -> dict:
+    post = seo_repo.get_edition_blog_post(
+        db, paper_slug=paper_slug, edition_date=edition_date
+    )
+    if not post:
+        raise HTTPException(status_code=404, detail="Edition not found")
+    out = seo_repo.list_post_questions(db, post["slug"], limit=limit)
+    if out["post"] is None:
+        raise HTTPException(status_code=404, detail="Edition not found")
+    for item in out["items"]:
+        item.pop("correct_index", None)
+        item.pop("correct_indices", None)
+        item.pop("explanation", None)
+    return out
 
 
 @router.get("/admin/settings", dependencies=[Depends(require_admin)])

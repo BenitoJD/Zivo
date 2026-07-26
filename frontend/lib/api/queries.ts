@@ -923,6 +923,8 @@ export type NewspaperDay = {
   edition_date: string;
   status: string;
   document_id: string | null;
+  has_blog?: boolean;
+  blog_href?: string | null;
 };
 export type NewspaperDays = {
   paper_slug: string;

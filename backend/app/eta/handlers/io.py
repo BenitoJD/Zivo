@@ -224,3 +224,15 @@ def seo_ensure_sd_daily(payload: dict) -> dict:
 
     with SessionLocal() as db:
         return ensure_sd_daily(db)
+
+
+@eta(name="seo.cook_edition_digest", workload=JobWorkload.io)
+def seo_cook_edition_digest(payload: dict) -> dict:
+    """Cook a newspaper edition digest when the edition is ready."""
+    from uuid import UUID
+
+    from app.services.seo_cook import cook_edition_digest
+
+    edition_id = UUID(payload["edition_id"])
+    with SessionLocal() as db:
+        return cook_edition_digest(db, edition_id)

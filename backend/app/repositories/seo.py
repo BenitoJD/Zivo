@@ -587,6 +587,105 @@ def list_sitemap_slugs(db: Session) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def list_newspaper_blog_sitemap(db: Session) -> list[dict[str, Any]]:
+    rows = db.execute(
+        text(
+            """
+            SELECT e.paper_slug, e.edition_date, e.blog_published_at, p.updated_at
+            FROM qb.newspaper_edition e
+            JOIN qb.seo_post p ON p.id = e.blog_post_id
+            WHERE e.blog_status = 'published'
+              AND p.status = 'published'
+            ORDER BY e.edition_date DESC
+            """
+        )
+    ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def aggregate_document_text(db: Session, document_id: uuid.UUID) -> str:
+    row = db.execute(
+        text(
+            """
+            SELECT string_agg(c.text, E'\\n\\n' ORDER BY c.page_start) AS body
+            FROM qb.document_chunks c
+            WHERE c.document_id = :d
+            """
+        ),
+        {"d": document_id},
+    ).first()
+    return str(row[0] if row and row[0] else "")
+
+
+def get_edition_blog_post(
+    db: Session,
+    *,
+    paper_slug: str,
+    edition_date: date,
+) -> dict[str, Any] | None:
+    row = db.execute(
+        text(
+            """
+            SELECT p.*, e.id AS edition_id, e.paper_title, e.edition_date
+            FROM qb.newspaper_edition e
+            JOIN qb.seo_post p ON p.id = e.blog_post_id
+            WHERE e.paper_slug = :slug
+              AND e.edition_date = :day
+              AND e.blog_status = 'published'
+              AND p.status = 'published'
+            """
+        ),
+        {"slug": paper_slug, "day": edition_date},
+    ).mappings().first()
+    if not row:
+        return None
+    post = _public_post(dict(row), include_internal=False)
+    post["edition_id"] = str(row["edition_id"])
+    post["paper_slug"] = paper_slug
+    post["paper_title"] = row.get("paper_title") or paper_slug
+    post["edition_date"] = row["edition_date"].isoformat()
+    post["practice_href"] = f"/practice/newspaper/e/{row['edition_id']}"
+    return post
+
+
+def list_edition_blog_archive(
+    db: Session,
+    *,
+    paper_slug: str,
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    rows = db.execute(
+        text(
+            """
+            SELECT e.id AS edition_id, e.edition_date, e.blog_published_at,
+                   p.slug, p.title, p.lede
+            FROM qb.newspaper_edition e
+            JOIN qb.seo_post p ON p.id = e.blog_post_id
+            WHERE e.paper_slug = :slug
+              AND e.blog_status = 'published'
+              AND p.status = 'published'
+            ORDER BY e.edition_date DESC
+            LIMIT :lim
+            """
+        ),
+        {"slug": paper_slug, "lim": max(1, min(limit, 60))},
+    ).mappings().all()
+    return [
+        {
+            "edition_id": str(r["edition_id"]),
+            "edition_date": r["edition_date"].isoformat(),
+            "slug": r["slug"],
+            "title": r["title"],
+            "lede": r["lede"],
+            "published_at": r["blog_published_at"].isoformat()
+            if r.get("blog_published_at")
+            else None,
+            "href": f"/learn/newspaper/{paper_slug}/{r['edition_date'].isoformat()}",
+        }
+        for r in rows
+    ]
+
+
 def _public_post(row: dict[str, Any], *, include_internal: bool) -> dict[str, Any]:
     out: dict[str, Any] = {
         "id": str(row["id"]),
