@@ -141,6 +141,16 @@ def _load_shared_progress(doc: Document) -> dict[str, Any]:
     return _apply_progress_defaults(dict(progress), doc)
 
 
+def _learner_progress_defaults() -> dict[str, Any]:
+    return {
+        "answered_ids": [],
+        "answered_on_page": 0,
+        "generated_on_page": 0,
+        "session_items_answered": 0,
+        "empty_page_streak": 0,
+    }
+
+
 def get_progress(doc: Document, *, learner_key: str | None = None) -> dict[str, Any]:
     from app.services.newspaper import is_newspaper_document
 
@@ -149,14 +159,22 @@ def get_progress(doc: Document, *, learner_key: str | None = None) -> dict[str, 
         return progress
 
     session = Session.object_session(doc)
+    learner_defaults = _learner_progress_defaults()
     if learner_key and session is not None:
         overlay = load_learner_progress(session, doc.id, learner_key) or {}
         for key in _LEARNER_PROGRESS_KEYS:
             if key in overlay:
                 progress[key] = overlay[key]
+            elif key in learner_defaults:
+                progress[key] = learner_defaults[key]
+            else:
+                progress.pop(key, None)
     else:
-        progress["answered_ids"] = []
-        progress["answered_on_page"] = 0
+        for key in _LEARNER_PROGRESS_KEYS:
+            if key in learner_defaults:
+                progress[key] = learner_defaults[key]
+            else:
+                progress.pop(key, None)
     return progress
 
 

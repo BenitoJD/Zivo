@@ -510,3 +510,38 @@ def test_newspaper_get_progress_merges_learner_overlay() -> None:
         progress = get_progress(doc, learner_key="user:abc")
 
     assert progress["answered_ids"] == ["learner-only"]
+
+
+def test_newspaper_get_progress_ignores_shared_answered_ids_for_new_learner() -> None:
+    from unittest.mock import MagicMock, patch
+    from uuid import uuid4
+
+    from sqlalchemy.orm import Session
+
+    from app.models import Document
+    from app.services.question_pool import get_progress
+
+    doc = Document(
+        slug="news",
+        filename="paper.pdf",
+        content_type="application/pdf",
+        size_bytes=1,
+        storage_key="k",
+        status="ready",
+        meta={"ingest_kind": "newspaper", "newspaper": True},
+    )
+    doc.id = uuid4()
+    db = MagicMock()
+
+    with (
+        patch.object(Session, "object_session", return_value=db),
+        patch("app.services.newspaper.is_newspaper_document", return_value=True),
+        patch(
+            "app.services.question_pool._load_shared_progress",
+            return_value={"current_page": 1, "answered_ids": ["legacy-shared"]},
+        ),
+        patch("app.services.question_pool.load_learner_progress", return_value=None),
+    ):
+        progress = get_progress(doc, learner_key="guest:new")
+
+    assert progress["answered_ids"] == []
