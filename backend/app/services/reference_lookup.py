@@ -104,9 +104,12 @@ async def lookup_wikipedia_summary(query: str) -> WikipediaSummary:
     # Disambiguation or weak opensearch hit: try Wikidata entity search.
     from app.services import wikidata
 
-    hits = await wikidata.search_concepts(query, limit=1)
-    if hits:
-        article = await wikidata.get_wikipedia_article(hits[0].qid)
+    hits = await wikidata.search_concepts(query, limit=5)
+    for hit in hits:
+        try:
+            article = await wikidata.get_wikipedia_article(hit.qid)
+        except wikidata.WikidataError:
+            continue
         if _summary_is_usable(article.text):
             return WikipediaSummary(
                 title=article.title,

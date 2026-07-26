@@ -31,3 +31,11 @@ async def test_lookup_wikipedia_summary_returns_extract() -> None:
     assert "Photosynthesis" in summary.title or "photosynthesis" in summary.title.lower()
     assert len(summary.extract) > 40
     assert summary.source_url.startswith("http")
+
+
+@pytest.mark.asyncio
+async def test_lookup_wikipedia_summary_siwan_falls_through_name_hit() -> None:
+    summary = await lookup_wikipedia_summary("Siwan")
+    assert summary.title
+    assert len(summary.extract) > 40
+    assert "siwan" in summary.title.lower()
