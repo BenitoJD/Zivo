@@ -7,16 +7,53 @@
  * AI-written lesson that teaches the concepts that page's questions will test.
  * One "Start the questions" CTA dismisses it for that page and reveals the
  * MCQs. Mirrors the Calm Paper reading recipe: serif heading, serif body at a
- * generous line-height, the shared MCQ reading measure, and a single lavender
+ * generous line-height, a wider lesson reading measure, and a single lavender
  * pill CTA. No markdown library — a tiny inline formatter handles the two marks
  * the lesson prompt is allowed to emit (`**bold**` and `- ` bullets).
  */
 
-import { Box, Button, Center, Stack, Text, Title } from "@mantine/core";
+import { useState } from "react";
+
+import { ActionIcon, Box, Button, Center, Group, Stack, Text, Title } from "@mantine/core";
 import { IconArrowRight } from "@tabler/icons-react";
 
-import { MCQ_CONTENT_MAX } from "@/app/_components/mcq/McqCard";
 import { WaitState } from "./WaitState";
+
+/**
+ * Reading measure for the lesson view. Wider than the MCQ question measure
+ * (`MCQ_CONTENT_MAX`): lessons are longer-form prose read start-to-finish, so
+ * they earn a more generous column. Only the lesson uses this; question cards
+ * keep their tighter measure for scanability.
+ */
+const LESSON_CONTENT_MAX = 1080;
+
+/** Base body size (serif) for the lesson, in rem. Scaled by the learner. */
+const LESSON_BODY_REM = 1.0625;
+/** Base title size for the lesson, in rem. Scaled alongside the body. */
+const LESSON_TITLE_REM = 1.625;
+
+/**
+ * Discrete text-size steps for the lesson. The A−/A+ control moves through
+ * them; the chosen index persists in localStorage so a comfortable reading size
+ * sticks across lessons and sessions. Step 2 (scale 1) is the Calm Paper default.
+ */
+const FONT_STEPS = [0.85, 0.92, 1, 1.12, 1.25] as const;
+const DEFAULT_FONT_STEP = 2;
+const FONT_SCALE_KEY = "zivo.lesson.fontScale";
+
+/** Read the persisted font step. SSR-safe; falls back to the default. */
+function readFontStep(): number {
+  if (typeof window === "undefined") return DEFAULT_FONT_STEP;
+  try {
+    const stored = Number(localStorage.getItem(FONT_SCALE_KEY));
+    if (Number.isInteger(stored) && stored >= 0 && stored < FONT_STEPS.length) {
+      return stored;
+    }
+  } catch {
+    // Privacy mode / disabled storage — fall back to the default.
+  }
+  return DEFAULT_FONT_STEP;
+}
 
 /** Render one paragraph's inline `**bold**` spans as <Text><b/></Text> nodes. */
 function renderInline(text: string) {
@@ -43,12 +80,17 @@ function renderInline(text: string) {
  * Lightweight prose renderer for the lesson body. Handles only the two marks
  * the `lesson_page_system` prompt permits: blank-line-separated paragraphs and
  * `- ` bullets. Anything else renders as plain text — no markdown dependency.
+ *
+ * `scale` multiplies the base serif body size so the learner can grow or shrink
+ * the lesson text via the A−/A+ control.
  */
-function LessonProse({ body }: { body: string }) {
+function LessonProse({ body, scale = 1 }: { body: string; scale?: number }) {
   const blocks = body
     .split(/\n{2,}/)
     .map((b) => b.trim())
     .filter(Boolean);
+
+  const bodySize = `${LESSON_BODY_REM * scale}rem`;
 
   return (
     <Stack gap="sm" align="stretch">
@@ -72,7 +114,7 @@ function LessonProse({ body }: { body: string }) {
                   style={{
                     fontFamily: "var(--font-serif), Georgia, serif",
                     lineHeight: 1.7,
-                    fontSize: "1.0625rem",
+                    fontSize: bodySize,
                     paddingLeft: "1.1rem",
                     position: "relative",
                     marginTop: j === 0 ? 0 : 4,
@@ -103,7 +145,7 @@ function LessonProse({ body }: { body: string }) {
             style={{
               fontFamily: "var(--font-serif), Georgia, serif",
               lineHeight: 1.75,
-              fontSize: "1.0625rem",
+              fontSize: bodySize,
             }}
           >
             {renderInline(block)}
@@ -125,6 +167,20 @@ export function LessonScreen({
   status: string;
   onStart: () => void;
 }) {
+  // Persisted text-size step. The learner's chosen scale sticks across lessons
+  // and sessions. Read eagerly in the initializer (client-only); SSR renders at
+  // the default and hydrates to the stored value.
+  const [step, setStep] = useState(readFontStep);
+  const setPersistedStep = (next: number) => {
+    setStep(next);
+    try {
+      localStorage.setItem(FONT_SCALE_KEY, String(next));
+    } catch {
+      // Ignore quota / privacy-mode write failures — scale still applies in-session.
+    }
+  };
+  const scale = FONT_STEPS[step];
+
   // The lesson is still being written. Show the calm preparing state — same pet
   // playground used by NotesView so the wait feels consistent across the app.
   if (status === "generating" || !body) {
@@ -143,7 +199,7 @@ export function LessonScreen({
         @keyframes lesson-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
         @media (prefers-reduced-motion: reduce) { [style*="lesson-in"] { animation: none !important; } }
       `}</style>
-      <Stack align="center" gap="lg" maw={MCQ_CONTENT_MAX} w="100%">
+      <Stack align="center" gap="lg" maw={LESSON_CONTENT_MAX} w="100%">
         <Stack align="center" gap="xs" w="100%">
           {title ? (
             <Title
@@ -154,15 +210,51 @@ export function LessonScreen({
                 letterSpacing: "-0.01em",
                 lineHeight: 1.25,
                 fontFamily: "var(--font-serif), Georgia, serif",
+                fontSize: `${LESSON_TITLE_REM * scale}rem`,
               }}
             >
               {title}
             </Title>
           ) : null}
+          {/* A− / A+ text-size controls. Calm, low-contrast; the default step is neutral. */}
+          <Group gap={4} align="center">
+            <ActionIcon
+              variant="subtle"
+              color="gray"
+              size="sm"
+              radius="xl"
+              disabled={step <= 0}
+              aria-label="Decrease text size"
+              title="Decrease text size"
+              onClick={() => setPersistedStep(Math.max(0, step - 1))}
+            >
+              <span style={{ fontSize: "0.85rem", fontWeight: 600 }}>A</span>
+            </ActionIcon>
+            <Text
+              component="span"
+              size="xs"
+              c="dimmed"
+              style={{ userSelect: "none" }}
+            >
+              −
+            </Text>
+            <ActionIcon
+              variant="subtle"
+              color="gray"
+              size="md"
+              radius="xl"
+              disabled={step >= FONT_STEPS.length - 1}
+              aria-label="Increase text size"
+              title="Increase text size"
+              onClick={() => setPersistedStep(Math.min(FONT_STEPS.length - 1, step + 1))}
+            >
+              <span style={{ fontSize: "1.05rem", fontWeight: 600 }}>A</span>
+            </ActionIcon>
+          </Group>
         </Stack>
 
         <Box w="100%" style={{ textAlign: "left" }}>
-          <LessonProse body={body} />
+          <LessonProse body={body} scale={scale} />
         </Box>
 
         <Button
