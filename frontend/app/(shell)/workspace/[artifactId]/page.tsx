@@ -1224,7 +1224,9 @@ export default function WorkspaceArtifactPage({
     ? (paperTitle || artifact.filename?.replace(/\.[^.]+$/, "") || "Newspaper")
     : (artifact.filename?.replace(/\.[^.]+$/, "") ?? "Source");
   const questionIndex = queue?.question_number ?? (queue?.questions_answered ?? 0) + 1;
-  const questionTotal = queue?.question_budget ?? queue?.max_per_page ?? 0;
+  const questionTotal = isNewspaper
+    ? (queue?.edition_question_total ?? queue?.questions_generated ?? 0)
+    : (queue?.question_budget ?? queue?.max_per_page ?? 0);
   const showPageComplete =
     !isNewspaper &&
     Boolean(queue?.page_complete) &&
@@ -1286,6 +1288,11 @@ export default function WorkspaceArtifactPage({
         align={studyAlign}
         onAlignChange={setStudyAlign}
         contextLabel={newspaperContextLabel}
+        progressHint={
+          isNewspaper
+            ? "Each question in this edition. The total grows as more are prepared."
+            : undefined
+        }
       />
       <Box
         flex={1}

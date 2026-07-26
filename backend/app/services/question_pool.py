@@ -12,6 +12,11 @@ from sqlalchemy.orm import Session
 from app.models import Document
 from app.services.document_learn_state import load_progress as load_learn_state_row
 from app.services.document_learn_state import save_progress_row
+from app.services.document_learner_state import (
+    learner_key_for_user,
+    load_learner_progress,
+    save_learner_progress_row,
+)
 from app.services.mcq_assertion_facets import page_assertion_ids_from_facets
 from app.repositories import workspace as workspace_repo
 from app.services.question_budget import (
@@ -56,6 +61,37 @@ MAX_GENERATE_BATCH_SIZE = REFILL_BATCH_SIZE
 # work and races assertion writes. Workers do not heartbeat locked_at during the handler.
 GENERATE_JOB_STALE_SECONDS = int(os.getenv("ZIVO_GENERATE_JOB_STALE_SECONDS", "1800"))
 
+# Per-learner fields for shared newspaper editions (stored in document_learner_state).
+_LEARNER_PROGRESS_KEYS = frozenset(
+    {
+        "answered_ids",
+        "answered_on_page",
+        "generated_on_page",
+        "last_confirmed_answer",
+        "session_items_answered",
+        "selection_policy",
+        "focus_concept",
+        "mastery_stop",
+        "revisit_due_hours",
+        "concept_revisit_hours",
+        "learner_ability",
+        "learner_ability_se",
+        "revisit_ease",
+        "revisit_repetitions",
+        "concept_revisit_ease",
+        "concept_revisit_repetitions",
+        "concept_ability",
+        "concept_ability_n",
+        "empty_page_streak",
+        "budget_serve_mode",
+    }
+)
+
+
+def learner_key_for(user: Any | None, guest_id: str | None) -> str | None:
+    user_id = getattr(user, "id", None) if user is not None else None
+    return learner_key_for_user(user_id, guest_id)
+
 
 def default_progress(doc: Document) -> dict[str, Any]:
     study_pages = selected_page_list(doc)
@@ -74,7 +110,21 @@ def default_progress(doc: Document) -> dict[str, Any]:
     }
 
 
-def get_progress(doc: Document) -> dict[str, Any]:
+def _apply_progress_defaults(progress: dict[str, Any], doc: Document) -> dict[str, Any]:
+    progress.setdefault("current_page", default_progress(doc)["current_page"])
+    progress.setdefault("answered_ids", [])
+    progress.setdefault("answered_on_page", 0)
+    progress.setdefault("generated_on_page", 0)
+    progress.setdefault("generation_pending", False)
+    progress.setdefault("page_coverage", {})
+    progress.setdefault("transition_prep_done", {})
+    progress.setdefault("empty_page_streak", 0)
+    progress.setdefault("prompt_reselect_pages", False)
+    progress.setdefault("prompt_reselect_reason", None)
+    return progress
+
+
+def _load_shared_progress(doc: Document) -> dict[str, Any]:
     meta = dict(doc.meta or {})
     progress: dict[str, Any] | None = None
     if isinstance(doc, Document):
@@ -88,16 +138,25 @@ def get_progress(doc: Document) -> dict[str, Any]:
         progress = meta.get("question_progress")
     if not isinstance(progress, dict):
         progress = default_progress(doc)
-    progress.setdefault("current_page", default_progress(doc)["current_page"])
-    progress.setdefault("answered_ids", [])
-    progress.setdefault("answered_on_page", 0)
-    progress.setdefault("generated_on_page", 0)
-    progress.setdefault("generation_pending", False)
-    progress.setdefault("page_coverage", {})
-    progress.setdefault("transition_prep_done", {})
-    progress.setdefault("empty_page_streak", 0)
-    progress.setdefault("prompt_reselect_pages", False)
-    progress.setdefault("prompt_reselect_reason", None)
+    return _apply_progress_defaults(dict(progress), doc)
+
+
+def get_progress(doc: Document, *, learner_key: str | None = None) -> dict[str, Any]:
+    from app.services.newspaper import is_newspaper_document
+
+    progress = _load_shared_progress(doc)
+    if not is_newspaper_document(doc):
+        return progress
+
+    session = Session.object_session(doc)
+    if learner_key and session is not None:
+        overlay = load_learner_progress(session, doc.id, learner_key) or {}
+        for key in _LEARNER_PROGRESS_KEYS:
+            if key in overlay:
+                progress[key] = overlay[key]
+    else:
+        progress["answered_ids"] = []
+        progress["answered_on_page"] = 0
     return progress
 
 
@@ -113,10 +172,35 @@ def _merge_progress(existing: dict[str, Any], patch: dict[str, Any]) -> dict[str
     return merged
 
 
-def save_progress(db: Session, doc: Document, progress: dict[str, Any]) -> None:
+def save_progress(
+    db: Session,
+    doc: Document,
+    progress: dict[str, Any],
+    *,
+    learner_key: str | None = None,
+) -> None:
+    from app.services.newspaper import is_newspaper_document
+
     db.flush()
     db.refresh(doc, with_for_update=True)
-    merged = _merge_progress(get_progress(doc), progress)
+    newspaper = is_newspaper_document(doc)
+    if newspaper and learner_key:
+        learner_patch = {k: v for k, v in progress.items() if k in _LEARNER_PROGRESS_KEYS}
+        shared_patch = {k: v for k, v in progress.items() if k not in _LEARNER_PROGRESS_KEYS}
+        if shared_patch:
+            merged_shared = _merge_progress(get_progress(doc), shared_patch)
+            save_progress_row(db, doc.id, merged_shared)
+        if learner_patch:
+            merged_learner = _merge_progress(
+                get_progress(doc, learner_key=learner_key), learner_patch
+            )
+            learner_only = {
+                k: merged_learner[k] for k in _LEARNER_PROGRESS_KEYS if k in merged_learner
+            }
+            save_learner_progress_row(db, doc.id, learner_key, learner_only)
+        return
+
+    merged = _merge_progress(get_progress(doc, learner_key=learner_key), progress)
     save_progress_row(db, doc.id, merged)
     user = doc.account_id
     if user:
@@ -132,23 +216,25 @@ def save_progress(db: Session, doc: Document, progress: dict[str, Any]) -> None:
         )
 
 
-def get_study_mode(doc: Document) -> str:
+def get_study_mode(doc: Document, *, learner_key: str | None = None) -> str:
     """The learner's per-document choice: 'adaptive' (adaptive_v1) or 'classic'
     (sequence). Falls back to the global default policy when unset."""
     from app.config import get_settings
 
     policy = (
-        str(get_progress(doc).get("selection_policy") or "").strip().lower()
+        str(get_progress(doc, learner_key=learner_key).get("selection_policy") or "").strip().lower()
         or (get_settings().selection_policy or "sequence").lower()
     )
     return "classic" if policy == "sequence" else "adaptive"
 
 
-def set_study_mode(db: Session, doc: Document, mode: str) -> str:
+def set_study_mode(
+    db: Session, doc: Document, mode: str, *, learner_key: str | None = None
+) -> str:
     """Persist the learner's Adaptive/Classic choice for this document and return it.
     Both policies run over the same question pool, so no regeneration is needed."""
     policy = "sequence" if str(mode).strip().lower() == "classic" else "adaptive_v1"
-    save_progress(db, doc, {"selection_policy": policy})
+    save_progress(db, doc, {"selection_policy": policy}, learner_key=learner_key)
     return "classic" if policy == "sequence" else "adaptive"
 
 
@@ -319,20 +405,22 @@ def page_budgets_for_document(doc: Document, *, mode: Mode | None = None) -> lis
     return out
 
 
-def serve_budget_mode(doc: Document) -> Mode:
+def serve_budget_mode(doc: Document, *, learner_key: str | None = None) -> Mode:
     """Active Learn/Test budget mode for serve + refill (persisted on progress)."""
-    progress = get_progress(doc)
+    progress = get_progress(doc, learner_key=learner_key)
     return parse_budget_mode(
         progress.get("budget_serve_mode") if isinstance(progress.get("budget_serve_mode"), str) else None
     )
 
 
-def set_serve_budget_mode(db: Session, doc: Document, mode: Mode) -> Mode:
+def set_serve_budget_mode(
+    db: Session, doc: Document, mode: Mode, *, learner_key: str | None = None
+) -> Mode:
     """Remember serve mode so grade/refill paths match learn-queue ?mode=."""
     resolved = parse_budget_mode(mode)
-    if serve_budget_mode(doc) == resolved:
+    if serve_budget_mode(doc, learner_key=learner_key) == resolved:
         return resolved
-    save_progress(db, doc, {"budget_serve_mode": resolved})
+    save_progress(db, doc, {"budget_serve_mode": resolved}, learner_key=learner_key)
     db.commit()
     db.refresh(doc)
     return resolved
@@ -635,9 +723,11 @@ def _candidates_matching_concept_label(
     ]
 
 
-def set_focus_concept(db: Session, doc: Document, concept: str | None) -> None:
+def set_focus_concept(
+    db: Session, doc: Document, concept: str | None, *, learner_key: str | None = None
+) -> None:
     """Persist Progress → Learn concept focus (empty clears)."""
-    save_progress(db, doc, {"focus_concept": (concept or "").strip() or None})
+    save_progress(db, doc, {"focus_concept": (concept or "").strip() or None}, learner_key=learner_key)
 
 
 def _lineage_successors(
@@ -741,11 +831,12 @@ def build_learn_queue_state(
     progress: dict[str, Any],
     *,
     mode: Mode | None = None,
+    learner_key: str | None = None,
 ) -> dict[str, Any]:
     from app.services.newspaper import is_newspaper_document
     from app.services.session_design import SESSION_SOFT_DEFAULT, plan_session
 
-    serve_mode = mode if mode is not None else serve_budget_mode(doc)
+    serve_mode = mode if mode is not None else serve_budget_mode(doc, learner_key=learner_key)
     newspaper = is_newspaper_document(doc)
     page = int(progress.get("current_page") or 1)
     study_pages = selected_page_list(doc)
@@ -854,8 +945,9 @@ def build_learn_queue_state(
         "max_per_page": plan_budget,
         "rag_window_pages": rag_pages,
         "rag_window_ready": rag_ready,
-        "study_mode": get_study_mode(doc),
+        "study_mode": get_study_mode(doc, learner_key=learner_key),
         "edition_pool": newspaper,
+        "edition_question_total": questions_generated if newspaper else None,
     }
 
 

@@ -92,6 +92,8 @@ export function StudyMetaBar({
   onAlignChange,
   /** Optional identity next to Learn/Test (e.g. newspaper "The Hindu · 2026-07-24"). */
   contextLabel,
+  /** Override default progress tooltip (e.g. newspaper edition total). */
+  progressHint,
 }: {
   questionIndex: number;
   questionTotal: number;
@@ -109,6 +111,7 @@ export function StudyMetaBar({
   /** Omit to hide the alignment toggle entirely (e.g. Read, which owns its layout). */
   onAlignChange?: (align: StudyAlign) => void;
   contextLabel?: string | null;
+  progressHint?: string;
 }) {
   const modeSelect = showModeSelect ?? compact;
   const showBar = showProgress && questionTotal > 0;
@@ -266,7 +269,10 @@ export function StudyMetaBar({
         </Text>
       ) : null}
       <Tooltip
-        label={`Question ${questionIndex} of ${questionTotal}. The total is sized to this page - roughly one question per distinct idea worth testing.`}
+        label={
+          progressHint ??
+          `Question ${questionIndex} of ${questionTotal}. The total is sized to this page - roughly one question per distinct idea worth testing.`
+        }
         position="bottom"
         withArrow
         multiline

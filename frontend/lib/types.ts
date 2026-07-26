@@ -84,6 +84,10 @@ export type McqState = {
   rag_window_ready?: boolean;
   /** Per-document selection mode: "adaptive" (difficulty_edge) or "classic" (sequence). */
   study_mode?: "adaptive" | "classic";
+  /** Newspaper: serve all cooked MCQs across the edition (not page-by-page). */
+  edition_pool?: boolean;
+  /** Newspaper: count of MCQs currently available in this edition. */
+  edition_question_total?: number;
 };
 
 export type McqGradeResponse = {

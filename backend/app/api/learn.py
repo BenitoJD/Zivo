@@ -29,6 +29,7 @@ from app.services.question_pool import (
     get_progress,
     get_study_mode,
     is_page_complete,
+    learner_key_for,
     page_range_bounds,
     selected_page_list,
     set_focus_concept,
@@ -93,11 +94,13 @@ def _learn_queue_payload(
     user: Account | None,
     *,
     mode: str | None = None,
+    guest_id: str | None = None,
 ) -> dict:
+    lk = learner_key_for(user, guest_id)
     serve_mode = parse_budget_mode(mode)
-    set_serve_budget_mode(db, doc, serve_mode)
+    set_serve_budget_mode(db, doc, serve_mode, learner_key=lk)
     db.refresh(doc)
-    progress = get_progress(doc)
+    progress = get_progress(doc, learner_key=lk)
     from app.services.newspaper import is_newspaper_document
 
     if not is_newspaper_document(doc) and is_page_complete(db, doc, progress):
@@ -106,12 +109,14 @@ def _learn_queue_payload(
         if page < page_to:
             advance_to_next_page(db, doc)
             db.refresh(doc)
-            progress = get_progress(doc)
+            progress = get_progress(doc, learner_key=lk)
             ensure_question_pool(db, artifact_id)
             db.refresh(doc)
-            progress = get_progress(doc)
+            progress = get_progress(doc, learner_key=lk)
 
-    state = build_learn_queue_state(db, artifact_id, doc, progress, mode=serve_mode)
+    state = build_learn_queue_state(
+        db, artifact_id, doc, progress, mode=serve_mode, learner_key=lk
+    )
     ws = _workspace_state(db, doc, user)
 
     return {
@@ -135,7 +140,7 @@ def _learn_queue_handler(
         if doc.status == "ready":
             ensure_question_pool(db, artifact_id)
             db.refresh(doc)
-        return _learn_queue_payload(db, artifact_id, doc, user, mode=mode)
+        return _learn_queue_payload(db, artifact_id, doc, user, mode=mode, guest_id=guest_id)
 
 
 def _learn_stream_tick(
@@ -151,7 +156,7 @@ def _learn_stream_tick(
         if ensure_pool and doc.status == "ready":
             ensure_question_pool(db, artifact_id)
             db.refresh(doc)
-        return _learn_queue_payload(db, artifact_id, doc, user, mode=mode)
+        return _learn_queue_payload(db, artifact_id, doc, user, mode=mode, guest_id=guest_id)
 
 
 @router.get("/{artifact_id}/learn-queue")
@@ -338,7 +343,8 @@ def set_study_mode_endpoint(
     Both run over the same question pool, so the change takes effect on the next
     question with no regeneration."""
     doc = require_document(db, artifact_id, user, guest_id)
-    mode = set_study_mode(db, doc, body.mode)
+    lk = learner_key_for(user, guest_id)
+    mode = set_study_mode(db, doc, body.mode, learner_key=lk)
     db.commit()
     return {"study_mode": mode}
 
@@ -351,7 +357,8 @@ def get_study_mode_endpoint(
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> dict:
     doc = require_document(db, artifact_id, user, guest_id)
-    return {"study_mode": get_study_mode(doc)}
+    lk = learner_key_for(user, guest_id)
+    return {"study_mode": get_study_mode(doc, learner_key=lk)}
 
 
 class FocusConceptBody(BaseModel):
@@ -368,6 +375,7 @@ def set_focus_concept_endpoint(
 ) -> dict:
     """Progress → Learn: prefer unanswered questions on this concept until cleared."""
     doc = require_document(db, artifact_id, user, guest_id)
-    set_focus_concept(db, doc, body.concept)
+    lk = learner_key_for(user, guest_id)
+    set_focus_concept(db, doc, body.concept, learner_key=lk)
     db.commit()
     return {"focus_concept": (body.concept or "").strip() or None}

@@ -922,6 +922,7 @@ def save_confirmed_answer(
     revisit_hours: float | None = None,
     revisit_ease: float | None = None,
     revisit_repetitions: int | None = None,
+    learner_key: str | None = None,
 ) -> None:
     """Persist the learner's latest confirmed MCQ choice for tutor chat context.
 
@@ -939,7 +940,7 @@ def save_confirmed_answer(
         text("SELECT payload->>'primary_concept_key' FROM intel.assertion WHERE id = :id"),
         {"id": assertion_id},
     ).scalar()
-    progress = get_progress(doc)
+    progress = get_progress(doc, learner_key=learner_key)
     patch: dict[str, Any] = {
         "last_confirmed_answer": {
             "assertion_id": str(assertion_id),
@@ -978,7 +979,7 @@ def save_confirmed_answer(
     if concept_key and item_difficulty is not None:
         from app.services.calibration_engine import DEFAULT_RATING, update_from_outcome
 
-        progress = get_progress(doc)
+        progress = get_progress(doc, learner_key=learner_key)
         concept_ability = dict(progress.get("concept_ability") or {})
         concept_n = dict(progress.get("concept_ability_n") or {})
         prior = float(concept_ability.get(concept_key, DEFAULT_RATING))
@@ -994,15 +995,23 @@ def save_confirmed_answer(
         concept_n[concept_key] = verdict.ability_n
         patch["concept_ability"] = concept_ability
         patch["concept_ability_n"] = concept_n
-    save_progress(db, doc, patch)
+    save_progress(db, doc, patch, learner_key=learner_key)
     db.commit()
 
 
-def record_answer(db: Session, document_id: uuid.UUID, assertion_id: uuid.UUID) -> None:
+def record_answer(
+    db: Session,
+    document_id: uuid.UUID,
+    assertion_id: uuid.UUID,
+    *,
+    learner_key: str | None = None,
+) -> None:
     doc = db.get(Document, document_id)
     if not doc:
         return
-    progress = get_progress(doc)
+    from app.services.newspaper import is_newspaper_document
+
+    progress = get_progress(doc, learner_key=learner_key)
     aid = str(assertion_id)
     answered = [str(x) for x in progress.get("answered_ids") or []]
     if aid in answered:
@@ -1022,7 +1031,7 @@ def record_answer(db: Session, document_id: uuid.UUID, assertion_id: uuid.UUID) 
         ),
         {"id": assertion_id},
     ).mappings().first()
-    if row and row.get("key") and row.get("page"):
+    if row and row.get("key") and row.get("page") and not is_newspaper_document(doc):
         page_num = int(row["page"])
         entry = dict(get_page_coverage(doc, page_num))
         aspects = list(entry.get("aspects") or [])
@@ -1031,7 +1040,7 @@ def record_answer(db: Session, document_id: uuid.UUID, assertion_id: uuid.UUID) 
                 aspect["answered"] = True
         entry["aspects"] = aspects
         patch["page_coverage"] = {_page_key(page_num): entry}
-    save_progress(db, doc, patch)
+    save_progress(db, doc, patch, learner_key=learner_key)
     db.commit()
     maybe_refill_pool(db, document_id)
     maybe_transition_prefetch(db, document_id)

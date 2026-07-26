@@ -23,6 +23,7 @@ from app.api.access import require_document
 from app.services.guest_session import guest_session_for_read
 from app.services.question_pool import (
     get_progress,
+    learner_key_for,
     next_assertion_id,
     record_answer,
     save_confirmed_answer,
@@ -100,6 +101,7 @@ def _record_graded_answer(
     does not double-count; Elo calibration runs only on a genuinely new event.
     """
     subject_entity_id = resolve_subject_entity(db, user, guest_id)
+    lk = learner_key_for(user, guest_id)
     learner_ability: float | None = None
     item_difficulty: float | None = None
     ability_se: float | None = None
@@ -109,7 +111,7 @@ def _record_graded_answer(
     revisit_repetitions: int | None = None
     if subject_entity_id is not None:
         doc = db.get(Document, artifact_id)
-        progress = get_progress(doc) if doc else {}
+        progress = get_progress(doc, learner_key=lk) if doc else {}
         concept_ease = dict(progress.get("concept_revisit_ease") or {})
         concept_reps = dict(progress.get("concept_revisit_repetitions") or {})
         prior_key = db.execute(
@@ -159,8 +161,9 @@ def _record_graded_answer(
         revisit_hours=revisit_hours,
         revisit_ease=revisit_ease,
         revisit_repetitions=revisit_repetitions,
+        learner_key=lk,
     )
-    record_answer(db, artifact_id, body.assertion_id)
+    record_answer(db, artifact_id, body.assertion_id, learner_key=lk)
 
 
 @router.post("/grade", dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)])
@@ -231,7 +234,8 @@ async def grade_stream(
                 doc = stream_db.get(Document, artifact_id)
                 if doc is not None:
                     stream_db.refresh(doc)
-                    progress = get_progress(doc)
+                    lk = learner_key_for(user, guest_id)
+                    progress = get_progress(doc, learner_key=lk)
                     next_id = next_assertion_id(stream_db, artifact_id, progress)
             except Exception:
                 logger.exception("grade answer-record failed")

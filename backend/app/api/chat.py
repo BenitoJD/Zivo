@@ -475,6 +475,8 @@ async def chat_stream(
                             doc.id,
                             doc,
                             request_scope=request_scope,
+                            user=user,
+                            guest_id=guest_id,
                         )
                     )
                 doc_ids = _resolve_document_ids(
@@ -496,6 +498,8 @@ async def chat_stream(
                         doc.id,
                         doc,
                         scope=scope,
+                        user=user,
+                        guest_id=guest_id,
                     )
                 else:
                     yield {"event": "status", "data": json.dumps({"phase": "retrieving"})}
@@ -526,6 +530,8 @@ async def chat_stream(
                                 learn_doc.id,
                                 learn_doc,
                                 scope=scope,
+                                user=user,
+                                guest_id=guest_id,
                             )
 
                     retrieved, learn_context = await asyncio.gather(

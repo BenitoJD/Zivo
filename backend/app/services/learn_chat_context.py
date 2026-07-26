@@ -12,6 +12,7 @@ from app.models import Document
 from app.services.question_pool import (
     build_learn_queue_state,
     get_progress,
+    learner_key_for,
     page_range_bounds,
     selected_page_list,
 )
@@ -101,6 +102,8 @@ def build_learn_chat_context(
     doc: Document,
     *,
     scope: dict[str, Any] | None = None,
+    user: Any | None = None,
+    guest_id: str | None = None,
 ) -> str | None:
     """Return a short authoritative block for the tutor when Learn mode is active."""
     # Read-mode chat is about the document being read, not the Learn loop.
@@ -110,8 +113,9 @@ def build_learn_chat_context(
     if not meta.get("question_pool_initialized"):
         return None
 
-    progress = get_progress(doc)
-    state = build_learn_queue_state(db, document_id, doc, progress)
+    lk = learner_key_for(user, guest_id)
+    progress = get_progress(doc, learner_key=lk)
+    state = build_learn_queue_state(db, document_id, doc, progress, learner_key=lk)
     from app.services.newspaper import is_newspaper_document
 
     newspaper = is_newspaper_document(doc)
@@ -246,13 +250,16 @@ def learn_scope_fields(
     doc: Document,
     *,
     request_scope: dict[str, Any] | None = None,
+    user: Any | None = None,
+    guest_id: str | None = None,
 ) -> dict[str, int | str | bool | None]:
     """Fields to fold into chat scope (e.g. cache key) from live learn state."""
     meta = doc.meta or {}
     if not meta.get("question_pool_initialized"):
         return {}
-    progress = get_progress(doc)
-    state = build_learn_queue_state(db, document_id, doc, progress)
+    lk = learner_key_for(user, guest_id)
+    progress = get_progress(doc, learner_key=lk)
+    state = build_learn_queue_state(db, document_id, doc, progress, learner_key=lk)
     assertion_id = state.get("current_assertion_id")
     fields: dict[str, int | str | bool | None] = {
         "question_number": int(state["question_number"]),
