@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -616,6 +617,35 @@ def test_pipeline_draft_split_overlaps_rest_draft_with_first_gate() -> None:
     assert accepted_order[0] == "k0"
     assert rest_draft_saw_gate.is_set()
     assert 1 in draft_calls and 2 in draft_calls
+
+
+def test_shuffle_mcq_option_order_moves_correct_slot() -> None:
+    from app.services.mcq_parsing import shuffle_mcq_option_order
+
+    mcq = {
+        "question": "Which is correct?",
+        "options": ["wrong a", "wrong b", "right c", "wrong d"],
+        "correct_index": 2,
+        "explanation": "C is right.",
+    }
+    out = shuffle_mcq_option_order(mcq, rng=random.Random(0))
+    assert out["options"][out["correct_index"]] == "right c"
+    assert out["correct_index"] != 2
+
+
+def test_shuffle_mcq_option_order_remaps_multi_select() -> None:
+    from app.services.mcq_parsing import shuffle_mcq_option_order
+
+    mcq = {
+        "question": "Select all noble gases.",
+        "options": ["Helium", "Oxygen", "Argon", "Nitrogen"],
+        "correct_indices": [0, 2],
+        "correct_index": 0,
+    }
+    out = shuffle_mcq_option_order(mcq, rng=random.Random(1))
+    correct_texts = {mcq["options"][i] for i in mcq["correct_indices"]}
+    picked = {out["options"][i] for i in out["correct_indices"]}
+    assert picked == correct_texts
 
 
 def test_generate_questions_handler_is_high_priority() -> None:

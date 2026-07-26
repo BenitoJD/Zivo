@@ -35,6 +35,7 @@ from app.services.mcq_parsing import (
     _parse_critic_json,
     _parse_mcq_blocks,
     _normalize_mcq_payload,
+    shuffle_mcq_option_order,
 )
 from app.services.quality_evaluation import (
     QualitySignals,
@@ -676,7 +677,7 @@ def generate_quality_mcq(
             }
             if target_aspect and target_aspect.get("cognitive_angle"):
                 draft["cognitive_angle"] = target_aspect["cognitive_angle"]
-            return draft
+            return shuffle_mcq_option_order(draft)
 
         critique = critique_mcq(
             db,
@@ -720,7 +721,7 @@ def generate_quality_mcq(
             }
             if target_aspect and target_aspect.get("cognitive_angle"):
                 draft["cognitive_angle"] = target_aspect["cognitive_angle"]
-            return draft
+            return shuffle_mcq_option_order(draft)
 
         last_critique_bundle = merge_critique_for_rewrite(heuristic_flaws, critique)
 
@@ -1204,6 +1205,7 @@ def generate_quality_mcq_batch(
         run_critic: bool,
     ) -> bool:
         """Apply quality metadata, append, and invoke on_accept. True = keep going."""
+        draft = shuffle_mcq_option_order(draft)
         draft["quality"] = {
             "pass": True,
             "flaw_count": len(heuristic_flaws),

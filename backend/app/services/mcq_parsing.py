@@ -9,6 +9,7 @@ generation/critic pipeline in mcq_quality imports from here, not vice versa.
 from __future__ import annotations
 
 import json
+import random
 import re
 from typing import Any
 
@@ -173,6 +174,52 @@ def _normalize_mcq_payload(data: dict[str, Any], target_aspect: dict[str, Any] |
         # persist-time code in generation_graph.py links them to intel.entity rows.
         "tested_concepts": _coerce_tested_concepts(data.get("tested_concepts")),
     }
+
+
+def shuffle_mcq_option_order(
+    mcq: dict[str, Any],
+    rng: random.Random | None = None,
+) -> dict[str, Any]:
+    """Randomize option slots after the quality gate so the keyed answer is not
+    always in the same position (models often default to index 0 or 1)."""
+    options = [str(o) for o in (mcq.get("options") or [])]
+    n = len(options)
+    if n < 2:
+        return mcq
+
+    order = list(range(n))
+    rng = rng or random.Random()
+    rng.shuffle(order)
+
+    old_to_new = {old: new for new, old in enumerate(order)}
+    shuffled_options = [options[i] for i in order]
+
+    try:
+        old_correct = int(mcq.get("correct_index", 0))
+    except (TypeError, ValueError):
+        old_correct = 0
+    if old_correct not in old_to_new:
+        old_correct = 0
+
+    out = dict(mcq)
+    out["options"] = shuffled_options
+    out["correct_index"] = old_to_new[old_correct]
+
+    raw_multi = mcq.get("correct_indices")
+    if isinstance(raw_multi, list) and len(raw_multi) >= 2:
+        new_multi: list[int] = []
+        for raw_i in raw_multi:
+            try:
+                old_i = int(raw_i)
+            except (TypeError, ValueError):
+                continue
+            if old_i in old_to_new:
+                new_multi.append(old_to_new[old_i])
+        if len(new_multi) >= 2:
+            out["correct_indices"] = sorted(set(new_multi))
+            out["correct_index"] = out["correct_indices"][0]
+
+    return out
 
 
 def _coerce_correct_indices(raw: Any, n_options: int) -> list[int] | None:
