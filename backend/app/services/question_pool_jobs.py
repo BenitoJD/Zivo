@@ -18,7 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.models import Document, Job
+from app.models import Document, Job, JobWorkload
 from app.repositories.intel import create_activity
 from app.repositories import workspace as workspace_repo
 from app.services.document_learn_state import save_progress_row
@@ -47,6 +47,116 @@ from app.services.question_pool import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _is_newspaper_doc(doc: Document) -> bool:
+    from app.services.newspaper import is_newspaper_document
+
+    return is_newspaper_document(doc)
+
+
+def _next_newspaper_cook_page(
+    db: Session, document_id: uuid.UUID, doc: Document
+) -> int | None:
+    """First study page that still needs MCQ batches under its cook budget."""
+    for page in selected_page_list(doc):
+        if _has_active_generate_job_for_page(db, document_id, page):
+            continue
+        cov = get_page_coverage(doc, page)
+        if not cov or cov.get("non_content"):
+            continue
+        budget = get_question_budget(doc, page)
+        if budget <= 0:
+            continue
+        generated = count_assertions_on_page(db, document_id, page)
+        if is_coverage_complete(doc, page) or generated >= budget:
+            continue
+        return page
+    return None
+
+
+def _next_newspaper_page_needing_triage(
+    db: Session, document_id: uuid.UUID, doc: Document
+) -> int | None:
+    from app.services.rag_window import pages_ready_for_document
+
+    ready = pages_ready_for_document(db, document_id, doc)
+    for page in selected_page_list(doc):
+        if page not in ready:
+            continue
+        if get_page_coverage(doc, page):
+            continue
+        if _has_active_triage_job_for_page(db, document_id, page):
+            continue
+        return page
+    return None
+
+
+def _maybe_enqueue_newspaper_missing_pages(
+    db: Session, document_id: uuid.UUID, doc: Document
+) -> Job | None:
+    """Queue ingest.page for study pages not yet embedded (full-edition cook)."""
+    from app.services.jobs import batch_enqueue_jobs
+    from app.services.rag_window import pages_ready_for_document
+
+    study = selected_page_list(doc)
+    ready = pages_ready_for_document(db, document_id, doc)
+    missing = [p for p in study if p not in ready]
+    if not missing:
+        return None
+    batch = missing[:8]
+    jobs = batch_enqueue_jobs(
+        db,
+        [
+            {
+                "name": "ingest.page",
+                "workload": JobWorkload.cpu,
+                "payload": {
+                    "document_id": str(document_id),
+                    "page_number": page,
+                },
+            }
+            for page in batch
+        ],
+    )
+    db.commit()
+    return jobs[0] if jobs else None
+
+
+def _enqueue_newspaper_edition_triage(db: Session, doc: Document) -> Job | None:
+    """Precompute triage for the next ingested study page lacking coverage."""
+    page = _next_newspaper_page_needing_triage(db, doc.id, doc)
+    if page is None:
+        return None
+    return enqueue_page_triage(db, doc, page=page, precompute=True)
+
+
+def _maybe_refill_newspaper_edition(
+    db: Session, document_id: uuid.UUID, doc: Document
+) -> Job | None:
+    ingest_job = _maybe_enqueue_newspaper_missing_pages(db, document_id, doc)
+    page = _next_newspaper_cook_page(db, document_id, doc)
+    if page is None:
+        triage_page = _next_newspaper_page_needing_triage(db, document_id, doc)
+        if triage_page is not None:
+            triage_job = enqueue_page_triage(db, doc, page=triage_page, precompute=True)
+            return ingest_job or triage_job
+        return ingest_job
+    generated = count_assertions_on_page(db, document_id, page)
+    budget = get_question_budget(doc, page)
+    remaining = budget - generated
+    batch = min(REFILL_BATCH_SIZE, remaining)
+    if batch <= 0:
+        return ingest_job
+    gen_job = enqueue_page_batch(
+        db,
+        doc,
+        page=page,
+        batch_size=batch,
+        start_sequence=generated,
+    )
+    return gen_job or ingest_job
+
 
 def enqueue_page_triage(db: Session, doc: Document, *, page: int, precompute: bool = False) -> Job:
     # Eager precompute triage for non-current pages must not touch the doc-level
@@ -219,6 +329,19 @@ def on_triage_completed(
     # Precompute triage only populates page coverage ahead of time — it must not
     # touch the current-page generation_pending flag or auto-generate a batch.
     if precompute:
+        if _is_newspaper_doc(doc):
+            budget = get_question_budget(doc, page)
+            if budget > 0 and count_assertions_on_page(db, document_id, page) == 0:
+                job = enqueue_page_batch(
+                    db,
+                    doc,
+                    page=page,
+                    batch_size=min(FIRST_QUESTION_BATCH_SIZE, budget),
+                    start_sequence=0,
+                )
+                _enqueue_newspaper_edition_triage(db, doc)
+                return job
+            _enqueue_newspaper_edition_triage(db, doc)
         return None
     progress = get_progress(doc)
     if int(progress.get("current_page") or 0) != page:
@@ -308,9 +431,13 @@ def enqueue_initial_pool(db: Session, document_id: uuid.UUID) -> Job | None:
         # call from the path the user waits on.
         enqueue_page_triage(db, doc, page=page_from)
         job = _enqueue_first_question_batch(db, doc, page=page_from)
-    # Eagerly triage the next few pages in the background so the document is
-    # understood ahead of the reader and transitions never wait on triage.
-    _enqueue_eager_triage_lookahead(db, doc, from_page=page_from)
+    if _is_newspaper_doc(doc):
+        _enqueue_newspaper_edition_triage(db, doc)
+        _maybe_enqueue_newspaper_missing_pages(db, document_id, doc)
+    else:
+        # Eagerly triage the next few pages in the background so the document is
+        # understood ahead of the reader and transitions never wait on triage.
+        _enqueue_eager_triage_lookahead(db, doc, from_page=page_from)
     return job
 
 
@@ -403,7 +530,9 @@ def on_batch_completed(db: Session, document_id: uuid.UUID, *, page: int, saved:
             # path + lazy warm-back), so this never blocks generation — but warn, don't
             # swallow: a silent debug-level failure here is what hid a stale-worker miss.
             logger.warning("coach enqueue failed for doc=%s page=%s", document_id, page, exc_info=True)
-    if current_page == page:
+    if _is_newspaper_doc(doc):
+        maybe_refill_pool(db, document_id)
+    elif current_page == page:
         _maybe_enqueue_initial_pool_remainder(db, doc, page=page)
         # Chain the next refill immediately when still below low-water. Waiting
         # for the next answer used to leave a drained pool with no job queued
@@ -737,6 +866,16 @@ def kick_generation_sync(db: Session, document_id: uuid.UUID) -> None:
 def _enqueue_pool_work(db: Session, document_id: uuid.UUID, doc: Document) -> Job | None:
     db.refresh(doc)
     meta = dict(doc.meta or {})
+    if meta.get("no_searchable_text"):
+        return None
+
+    if _is_newspaper_doc(doc):
+        if not meta.get("question_pool_initialized"):
+            if _has_active_generate_job(db, document_id):
+                return None
+            return enqueue_initial_pool(db, document_id)
+        return _maybe_refill_newspaper_edition(db, document_id, doc)
+
     progress = get_progress(doc)
     if not meta.get("question_pool_initialized"):
         # Init may enqueue triage + first batch + eager lookahead; only block when
@@ -1050,6 +1189,9 @@ def maybe_refill_pool(db: Session, document_id: uuid.UUID) -> Job | None:
     doc = db.get(Document, document_id)
     if not doc or doc.status != "ready":
         return None
+
+    if _is_newspaper_doc(doc):
+        return _maybe_refill_newspaper_edition(db, document_id, doc)
 
     progress = get_progress(doc)
     page = int(progress.get("current_page") or 1)

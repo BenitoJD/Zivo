@@ -578,3 +578,105 @@ def test_newspaper_save_progress_without_learner_key_skips_learner_fields() -> N
     assert save_row.call_args[0][2]["current_page"] == 2
     assert "answered_ids" not in save_row.call_args[0][2]
     save_learner.assert_not_called()
+
+
+def test_create_edition_uses_full_ingest_not_rag_window() -> None:
+    import inspect
+
+    from app.services import newspaper
+
+    src = inspect.getsource(newspaper.create_edition_from_pdf)
+    assert "enqueue_ingest" in src
+    assert "enqueue_rag_window" not in src
+
+
+def test_maybe_refill_newspaper_cooks_next_page_after_page_one() -> None:
+    from unittest.mock import MagicMock, patch
+    from uuid import uuid4
+
+    from app.models import Document
+    from app.services.question_pool_jobs import maybe_refill_pool
+
+    doc_id = uuid4()
+    doc = Document(
+        slug="news",
+        filename="paper.pdf",
+        content_type="application/pdf",
+        size_bytes=1,
+        storage_key="k",
+        status="ready",
+        meta={
+            "ingest_kind": "newspaper",
+            "newspaper": True,
+            "selected_range": {"from": 1, "to": 3, "pages": [1, 2, 3]},
+            "question_pool_initialized": True,
+            "question_progress": {
+                "current_page": 1,
+                "page_coverage": {
+                    "1": {"question_budget": 5, "aspects": [{"key": "a"}]},
+                    "2": {"question_budget": 8, "aspects": [{"key": "b"}]},
+                },
+            },
+        },
+    )
+    doc.id = doc_id
+    db = MagicMock()
+    db.get.return_value = doc
+
+    with (
+        patch("app.services.question_pool_jobs._is_newspaper_doc", return_value=True),
+        patch(
+            "app.services.question_pool_jobs._maybe_enqueue_newspaper_missing_pages",
+            return_value=None,
+        ),
+        patch("app.services.question_pool_jobs._has_active_generate_job_for_page", return_value=False),
+        patch("app.services.question_pool_jobs.is_coverage_complete", side_effect=lambda _doc, page: page == 1),
+        patch(
+            "app.services.question_pool_jobs.count_assertions_on_page",
+            side_effect=lambda _db, _doc_id, page: 5 if page == 1 else 0,
+        ),
+        patch(
+            "app.services.question_pool_jobs.get_question_budget",
+            side_effect=lambda _doc, page, *_a, **_k: 5 if page == 1 else 8,
+        ),
+        patch("app.services.question_pool_jobs.enqueue_page_batch") as enqueue,
+    ):
+        maybe_refill_pool(db, doc_id)
+
+    enqueue.assert_called_once()
+    assert enqueue.call_args.kwargs["page"] == 2
+    assert enqueue.call_args.kwargs["batch_size"] == 5
+
+
+def test_on_triage_precompute_newspaper_enqueues_first_batch() -> None:
+    from unittest.mock import MagicMock, patch
+    from uuid import uuid4
+
+    from app.models import Document
+    from app.services.question_pool_jobs import on_triage_completed
+
+    doc_id = uuid4()
+    doc = Document(
+        slug="news",
+        filename="paper.pdf",
+        content_type="application/pdf",
+        size_bytes=1,
+        storage_key="k",
+        status="ready",
+        meta={"ingest_kind": "newspaper", "newspaper": True},
+    )
+    doc.id = doc_id
+    db = MagicMock()
+    db.get.return_value = doc
+
+    with (
+        patch("app.services.question_pool_jobs._is_newspaper_doc", return_value=True),
+        patch("app.services.question_pool_jobs.get_question_budget", return_value=6),
+        patch("app.services.question_pool_jobs.count_assertions_on_page", return_value=0),
+        patch("app.services.question_pool_jobs.enqueue_page_batch") as enqueue,
+        patch("app.services.question_pool_jobs._enqueue_newspaper_edition_triage"),
+    ):
+        on_triage_completed(db, doc_id, page=4, precompute=True)
+
+    enqueue.assert_called_once()
+    assert enqueue.call_args.kwargs["page"] == 4

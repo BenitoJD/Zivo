@@ -14,7 +14,6 @@ from app.config import get_settings
 from app.models import Document
 from app.repositories import newspaper as newspaper_repo
 from app.services.document_purge import purge_document, purge_ingest_tmp
-from app.services.jobs import enqueue_rag_window
 from app.services.parse import count_pdf_pages
 from app.services.storage import _internal_client, _safe_storage_filename, ensure_bucket
 
@@ -231,7 +230,11 @@ def create_edition_from_pdf(
 
     reset_for_new_page_range(db, doc, selected)
     newspaper_repo.update_edition_status(db, edition_id, status="indexing", document_id=doc.id)
-    enqueue_rag_window(db, doc.id, current_page=1)
+    # Full-edition ingest (all selected pages). RAG window ingest caps at
+    # MAX_RAG_PAGES and left most edition pages without chunks/triage/MCQs.
+    from app.services.jobs import enqueue_ingest
+
+    enqueue_ingest(db, doc.id)
     db.commit()
     logger.info(
         "newspaper edition created id=%s paper=%s date=%s doc=%s pages=%s",
