@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
+import asyncio
 
 from app.services.reference_lookup import (
     _dictionary_token,
@@ -16,26 +16,23 @@ def test_dictionary_token_uses_first_word() -> None:
     assert _dictionary_token("  hello   world ") == "hello"
 
 
-@pytest.mark.asyncio
-async def test_lookup_dictionary_returns_definition() -> None:
-    entry = await lookup_dictionary("hello")
+def test_lookup_dictionary_returns_definition() -> None:
+    entry = asyncio.run(lookup_dictionary("hello"))
     assert entry.word.lower() == "hello"
     assert entry.definition
     assert entry.part_of_speech
 
 
-@pytest.mark.asyncio
-async def test_lookup_wikipedia_summary_returns_extract() -> None:
-    summary = await lookup_wikipedia_summary("Photosynthesis")
+def test_lookup_wikipedia_summary_returns_extract() -> None:
+    summary = asyncio.run(lookup_wikipedia_summary("Photosynthesis"))
     assert summary.title
     assert "Photosynthesis" in summary.title or "photosynthesis" in summary.title.lower()
     assert len(summary.extract) > 40
     assert summary.source_url.startswith("http")
 
 
-@pytest.mark.asyncio
-async def test_lookup_wikipedia_summary_siwan_falls_through_name_hit() -> None:
-    summary = await lookup_wikipedia_summary("Siwan")
+def test_lookup_wikipedia_summary_siwan_falls_through_name_hit() -> None:
+    summary = asyncio.run(lookup_wikipedia_summary("Siwan"))
     assert summary.title
     assert len(summary.extract) > 40
     assert "siwan" in summary.title.lower()
