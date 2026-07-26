@@ -314,7 +314,7 @@ export function StudyMetaBar({
   ) : null;
 
   const progress = !showBar ? null : (
-    <Group gap={compact ? 8 : 12} wrap={compact ? "wrap" : "nowrap"} style={{ flex: 1, minWidth: 0 }}>
+    <Group gap={compact ? 8 : 12} wrap={compact ? "wrap" : "nowrap"} style={{ flexShrink: 0, minWidth: 0 }}>
       {page && (isNewspaper || !compact) ? (
         <Text
           size="xs"
@@ -459,25 +459,29 @@ export function StudyMetaBar({
   if (!progress && !modeBadge && !studyModeControl && !alignControl && !backControl) return null;
   const barPx = inline ? 0 : { base: "sm", sm: "md", lg: "lg" } as const;
   return (
-    <Group
+    <Box
       px={barPx}
       py={8}
-      justify="space-between"
-      align="center"
-      wrap="nowrap"
-      gap="md"
-      style={{ flexShrink: 0 }}
+      style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
+        alignItems: "center",
+        columnGap: "var(--mantine-spacing-md)",
+        flexShrink: 0,
+      }}
     >
-      <Group gap="md" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
+      <Group gap="md" wrap="nowrap" justify="flex-start" style={{ minWidth: 0 }}>
         {backControl}
         {modeBadge}
+      </Group>
+      <Group gap="md" wrap="nowrap" justify="center" style={{ minWidth: 0 }}>
         {progress}
       </Group>
-      <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
+      <Group gap="xs" wrap="nowrap" justify="flex-end" style={{ minWidth: 0 }}>
         {studyModeControl}
         {alignControl}
       </Group>
-    </Group>
+    </Box>
   );
 }
 
