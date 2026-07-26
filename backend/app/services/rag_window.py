@@ -42,7 +42,7 @@ _MARK_PAGE_INGESTED_SQL = text(
                         COALESCE(d.meta->'ingested_pages', '[]'::jsonb)
                     )::int AS val
                     UNION ALL
-                    SELECT :page::int AS val
+                    SELECT CAST(:page AS integer) AS val
                 ) AS combined
             ) AS distinct_vals
         ),
