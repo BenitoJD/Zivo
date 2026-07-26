@@ -249,7 +249,11 @@ export default function WorkspaceArtifactPage({
     }
   }
 
-  const displayAssertionId = pinnedAssertionId ?? queue?.current_assertion_id ?? null;
+  const displayAssertionId =
+    pinnedAssertionId ??
+    pinnedAssertionIdRef.current ??
+    queue?.current_assertion_id ??
+    null;
   const assertionQuery = useAssertionQuery(displayAssertionId);
   const questionSourcePage = useMemo(() => {
     const pn = assertionQuery.data?.payload?.page_number;
@@ -815,10 +819,9 @@ export default function WorkspaceArtifactPage({
       return;
     }
     if (!assertionQuery.data || assertionQuery.isPlaceholderData) return;
-    // Don't clobber the graded card while pinned — assertion payload is already on screen.
-    if (pinnedAssertionIdRef.current && pinnedAssertionIdRef.current === displayAssertionId) {
-      return;
-    }
+    // While pinned on a graded card, never clobber the on-screen question from SSE
+    // advances or transient null display ids during the grade handshake.
+    if (pinnedAssertionIdRef.current) return;
     const row = assertionQuery.data;
     const p = (row.payload ?? {}) as AssertionPayload;
     setQuestion(formatMcqStemForDisplay(p.question ?? p.stem ?? row.title ?? "Question"));
@@ -961,9 +964,11 @@ export default function WorkspaceArtifactPage({
   async function submitMcq() {
     const hasSelection = isMulti ? multiSelected.length > 0 : selected !== null;
     if (!displayAssertionId || !hasSelection || submitting) return;
-    setSubmitting(true);
-    setFeedback(null);
     const answeredId = displayAssertionId;
+    // Pin before submitting so queue SSE cannot advance the visible card mid-grade.
+    pinnedAssertionIdRef.current = answeredId;
+    setPinnedAssertionId(answeredId);
+    setSubmitting(true);
     const answeredSelection = isMulti ? (multiSelected[0] ?? -1) : Number(selected);
     // Snapshot stem/options/selection at submit time — queue can advance before SSE
     // finishes, and a stale render closure would pair the wrong text with answeredId.
@@ -971,9 +976,7 @@ export default function WorkspaceArtifactPage({
     const optionsSnapshot = [...options];
     const conceptSnapshot = currentConcept;
     const multiSnapshot = isMulti ? [...multiSelected] : undefined;
-    // Pin immediately so learn-queue SSE cannot wipe the card mid-grade.
-    pinnedAssertionIdRef.current = answeredId;
-    setPinnedAssertionId(answeredId);
+    setFeedback(null);
     // Verdict-first stream: the outcome (index compare + stored explanation) lands
     // in ~200ms and reveals immediately; the LLM coaching follows as a second event.
     let gotVerdict = false;

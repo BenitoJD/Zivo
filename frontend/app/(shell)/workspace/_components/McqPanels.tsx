@@ -851,21 +851,26 @@ export function McqHeroPanel({
           </Text>
         </Group>
       ) : null}
+      {checking ? (
+        <Group justify="center" gap={10} py={compact ? "xs" : "sm"} style={{ flexShrink: 0 }}>
+          <Loader size="sm" color="lavender" type="oval" />
+          <Text size="sm" c="dimmed" fw={500}>
+            Checking your answer
+            <Text component="span" inherit className="mcq-check-dot">…</Text>
+          </Text>
+        </Group>
+      ) : null}
       </Box>
 
-      {/* One cat roams the whole empty area below the question, wandering in 2D
-          (not one straight line). It stays MOUNTED across the answer→next cycle
-          (the gate no longer depends on `graded`), so the same cat persists and
-          keeps roaming from where it was instead of respawning every turn.
-          Desktop Learn only - that's where the free space is. */}
-      {catEnabled && !isTest && !compact && !graded ? (
+      {/* Roaming cat only while idle — never during grade/check (empty void). */}
+      {catEnabled && !isTest && !compact && !graded && !checking ? (
         <Box style={{ flex: 1, minHeight: 150, width: "100%" }}>
           <PetPlayground count={1} species="cat" wander height="100%" style={{ width: "100%" }} />
         </Box>
       ) : null}
 
-      {/* Mode strip sits in the footer stack on desktop — StudyMetaBar already shows Learn/Test. */}
-      {!compact && !graded ? (
+      {/* Mode strip when idle — hide during check/grade so the question stays the hero. */}
+      {!compact && !graded && !checking ? (
       <Center style={{ marginTop: "auto", paddingTop: compact ? 14 : 22, flexShrink: 0 }}>
         <Box
           style={{
@@ -938,7 +943,7 @@ export function McqHeroPanel({
             w="100%"
             onClick={onSubmit}
             loading={checking}
-            disabled={!hasSelection}
+            disabled={!hasSelection || checking}
           >
             {checking ? "Checking…" : isTest ? "Submit answer" : "Check answer"}
           </Button>
@@ -948,12 +953,7 @@ export function McqHeroPanel({
             Next page
           </Button>
         )}
-        {checking ? (
-          <Text size="xs" c="dimmed" ta="center" style={{ opacity: 0.9 }}>
-            Checking your answer
-            <Text component="span" inherit className="mcq-check-dot">…</Text>
-          </Text>
-        ) : canReview && onReviewPrevious ? (
+        {canReview && onReviewPrevious ? (
           <Button
             variant="subtle"
             color="gray"
