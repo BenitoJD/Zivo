@@ -42,7 +42,7 @@ export default function NewspaperPaperPage({
     <Shell>
       <Container size="md" py={{ base: 32, md: 56 }}>
         <Stack gap="lg">
-          <Group gap="md" align="flex-start" wrap="nowrap">
+          <Group gap="md" align="flex-start" wrap="wrap">
             <NewspaperBrandMark slug={slug} title={title} size={56} />
             <LearnerPageHeader
               align="left"
@@ -83,12 +83,14 @@ export default function NewspaperPaperPage({
                               : d.status}
                         </Badge>
                       </Group>
-                      <Group gap="xs" wrap="nowrap">
+                      <Group gap="xs" wrap="wrap">
                         {d.has_blog && d.blog_href ? (
                           <Button
                             radius="xl"
                             variant="subtle"
                             color="lavender"
+                            fullWidth
+                            maw={{ base: "100%", xs: 180 }}
                             leftSection={<IconBook2 size={16} />}
                             onClick={() => router.push(d.blog_href!)}
                           >
@@ -100,6 +102,8 @@ export default function NewspaperPaperPage({
                           variant="subtle"
                           color="gray"
                           disabled={!canOpen}
+                          fullWidth
+                          maw={{ base: "100%", xs: 180 }}
                           leftSection={<IconClipboardList size={16} />}
                           onClick={() => {
                             if (!d.document_id) return;
@@ -113,6 +117,8 @@ export default function NewspaperPaperPage({
                           variant="light"
                           color="lavender"
                           disabled={!canOpen}
+                          fullWidth
+                          maw={{ base: "100%", xs: 180 }}
                           rightSection={<IconArrowRight size={16} />}
                           onClick={() => {
                             if (!d.document_id) return;

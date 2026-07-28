@@ -3,8 +3,10 @@
 import { useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { Button, Group, Modal, Stack, Text } from "@mantine/core";
+import { useMediaQuery } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
 import { apiDelete, ensureGuestSession } from "@/lib/api/client";
+import { MOBILE_MAX_MQ } from "@/lib/responsive";
 import type { SourceDocument } from "@/lib/types";
 
 const MODAL_OVERLAY_PROPS = { backgroundOpacity: 0.45, blur: 8 } as const;
@@ -28,6 +30,7 @@ export function DeleteSourceModal({
 }) {
   const router = useRouter();
   const pathname = usePathname();
+  const isMobile = useMediaQuery(MOBILE_MAX_MQ, false, { getInitialValueInEffect: true });
   const [deleteBusy, setDeleteBusy] = useState(false);
   // Freeze display while deleteBusy so parent can clear `target` without blanking
   // the dialog mid-request / mid-close.
@@ -77,6 +80,9 @@ export function DeleteSourceModal({
       }}
       title="Delete source?"
       centered
+      fullScreen={Boolean(isMobile)}
+      radius={isMobile ? 0 : "xl"}
+      size={isMobile ? undefined : "md"}
       overlayProps={MODAL_OVERLAY_PROPS}
       closeOnClickOutside={!deleteBusy}
       closeOnEscape={!deleteBusy}

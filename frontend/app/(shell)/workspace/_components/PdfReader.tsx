@@ -423,7 +423,7 @@ export function PdfReader({
           const above = sel.top - popH - 8;
           const below = sel.bottom + 8;
           const top = above >= 12 ? above : below;
-          const popW = onWikipedia ? 520 : 420;
+          const popW = isNarrow ? Math.min(window.innerWidth - 24, 360) : onWikipedia ? 520 : 420;
           return (
             <Paper
               data-reader-popover
@@ -437,6 +437,9 @@ export function PdfReader({
                 top: Math.min(top, window.innerHeight - popH - 12),
                 zIndex: 400,
                 display: "flex",
+                flexWrap: "wrap",
+                justifyContent: "center",
+                maxWidth: "calc(100vw - 24px)",
                 gap: 2,
                 background: "var(--mantine-color-body)",
               }}
