@@ -9,6 +9,7 @@ from sqlalchemy import text
 
 from app.db import SessionLocal
 from app.eta.scheduler_registry import eta_scheduler
+from app.eta.stale_jobs import stale_running_cutoff
 from app.models import JobWorkload
 from app.services.jobs import enqueue_job, enqueue_rag_window
 from app.services.newspaper import purge_expired_editions
@@ -43,19 +44,33 @@ def _recover_stuck_editions() -> int:
                   AND NOT EXISTS (
                     SELECT 1 FROM qb.jobs j
                     WHERE j.payload->>'document_id' = e.document_id::text
-                      AND j.status IN ('queued', 'running')
+                      AND (
+                        j.status = 'queued'
+                        OR (
+                          j.status = 'running'
+                          AND j.locked_at IS NOT NULL
+                          AND j.locked_at >= :stale_cutoff
+                        )
+                      )
                   )
                 ORDER BY e.edition_date DESC
                 """
             ),
-            {"cutoff": cutoff},
+            {"cutoff": cutoff, "stale_cutoff": stale_running_cutoff()},
         ).mappings().all()
 
         for row in stuck:
             try:
-                enqueue_rag_window(
-                    db, row["document_id"], current_page=1
-                )
+                from app.models import Document
+                from app.services.rag_window import maybe_recover_stuck_indexing
+
+                doc = db.get(Document, row["document_id"])
+                if doc:
+                    maybe_recover_stuck_indexing(db, doc)
+                else:
+                    enqueue_rag_window(
+                        db, row["document_id"], current_page=1
+                    )
                 recovered += 1
                 logger.info(
                     "newspaper recovery enqueued rag_window for %s %s",

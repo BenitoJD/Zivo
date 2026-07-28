@@ -17,6 +17,7 @@ import {
 import { notifications } from "@mantine/notifications";
 import { IconCpu } from "@tabler/icons-react";
 import { apiGet, apiPatch, isApiAccessDenied } from "@/lib/api/client";
+import { ScrollViewport } from "@/app/_components/ScrollViewport";
 import { useSessionQuery } from "@/lib/api/queries";
 
 type AdminModel = {
@@ -127,7 +128,8 @@ export default function WorkspaceModelsPage() {
   }
 
   return (
-    <Box p={{ base: "md", md: "lg" }} maw={720} mx="auto" w="100%">
+    <ScrollViewport>
+      <Box p={{ base: "md", md: "lg" }} maw={720} mx="auto" w="100%">
       <Stack gap="lg">
         <Stack gap={4}>
           <Group gap="sm" align="center">
@@ -201,6 +203,7 @@ export default function WorkspaceModelsPage() {
           })}
         </Stack>
       </Stack>
-    </Box>
+      </Box>
+    </ScrollViewport>
   );
 }

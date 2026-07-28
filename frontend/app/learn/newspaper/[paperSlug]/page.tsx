@@ -7,6 +7,7 @@ import {
 } from "@mantine/core";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { ScrollViewport } from "@/app/_components/ScrollViewport";
 import { LinkAnchor, LinkBox } from "@/app/learn/_components/AppLink";
 import { serverApiBase } from "@/lib/serverApi";
 
@@ -65,7 +66,7 @@ export default async function NewspaperArchivePage({
   const items = data.items ?? [];
 
   return (
-    <Box bg="var(--mantine-color-body)" mih="100dvh">
+    <ScrollViewport variant="viewport">
       <Container size="md" py="xl" px="md">
         <Stack gap="xl">
           <Stack gap="xs">
@@ -122,6 +123,6 @@ export default async function NewspaperArchivePage({
           )}
         </Stack>
       </Container>
-    </Box>
+    </ScrollViewport>
   );
 }

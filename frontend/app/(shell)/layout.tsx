@@ -263,7 +263,20 @@ export default function LearnerShellLayout({ children }: { children: React.React
           />
         </AppShell.Navbar>
 
-        <AppShell.Main>{children}</AppShell.Main>
+        <AppShell.Main>
+          <Box
+            component="div"
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              flex: 1,
+              minHeight: 0,
+              minWidth: 0,
+            }}
+          >
+            {children}
+          </Box>
+        </AppShell.Main>
       </AppShell>
       {isMobile && mobileOpened ? (
         <Box

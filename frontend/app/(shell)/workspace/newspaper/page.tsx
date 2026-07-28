@@ -20,6 +20,7 @@ import {
   Title,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
+import { ScrollViewport } from "@/app/_components/ScrollViewport";
 import { apiPatch, isApiAccessDenied } from "@/lib/api/client";
 import {
   queryKeys,
@@ -155,19 +156,8 @@ export default function NewspaperAdminPage() {
     );
   }
 
-  // AppShell main is overflow:hidden + flex column — page must own scroll
-  // (same pattern as /workspace and /workspace/progress).
   return (
-    <Box
-      flex={1}
-      mih={0}
-      style={{
-        overflowY: "auto",
-        overflowX: "hidden",
-        WebkitOverflowScrolling: "touch",
-        background: "var(--mantine-color-body)",
-      }}
-    >
+    <ScrollViewport>
       <Box p={{ base: "md", md: "xl" }} maw={640} mx="auto" w="100%">
         <Stack gap="xl">
           <Stack gap={4}>
@@ -280,6 +270,6 @@ export default function NewspaperAdminPage() {
           </Paper>
         </Stack>
       </Box>
-    </Box>
+    </ScrollViewport>
   );
 }

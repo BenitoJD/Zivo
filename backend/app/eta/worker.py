@@ -1,5 +1,7 @@
 import logging
 import os
+import threading
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -10,6 +12,7 @@ from sqlalchemy.orm import Session, aliased
 
 from app.db import SessionLocal
 from app.eta import context as eta_context
+from app.eta.stale_jobs import STALE_REAPER_INTERVAL_SECONDS, STALE_RUNNING_TIMEOUT_SECONDS
 from app.eta.execution_state import cancel_descendants_sync, update_execution_state_sync
 from app.eta.handlers import cpu as _cpu_handlers  # noqa: F401
 from app.eta.priority import priority_sort_key
@@ -46,11 +49,6 @@ def _parse_workloads(value: str) -> Sequence[JobWorkload]:
 
 WORKLOADS = _parse_workloads(os.getenv("ETA_WORKER_WORKLOADS", "cpu"))
 
-# Jobs left in 'running' longer than this are considered orphaned (worker crash)
-# and reclaimed back to 'queued' on startup. Configurable; 10 min default.
-STALE_RUNNING_TIMEOUT_SECONDS = float(os.getenv("ETA_STALE_RUNNING_TIMEOUT", "600"))
-
-
 def _reclaim_stale_jobs(db: Session) -> int:
     """Reset orphaned 'running' jobs (from a crashed worker) back to 'queued'.
 
@@ -58,15 +56,35 @@ def _reclaim_stale_jobs(db: Session) -> int:
     IO and CPU workers don't compete for the same orphan. Without this, a job
     flipped to 'running' then abandoned by a SIGKILL/OOM is silently lost
     forever (the reservation loop only ever selects 'queued').
+
+    Jobs that already exhausted max_attempts are marked failed instead of
+    re-queued, so they cannot spin forever as zombie 'running' rows.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=STALE_RUNNING_TIMEOUT_SECONDS)
     workload_filter = [w.value for w in WORKLOADS]
-    result = db.execute(
+    failed = db.execute(
         update(Job)
         .where(Job.status == JobStatus.running)
         .where(Job.workload.in_(workload_filter))
         .where(Job.locked_at.is_not(None))
         .where(Job.locked_at < cutoff)
+        .where(Job.attempts >= Job.max_attempts)
+        .values(
+            status=JobStatus.failed,
+            error="Orphaned after worker exit (attempts exhausted)",
+            locked_by=None,
+            locked_at=None,
+            finished_at=func.now(),
+            updated_at=func.now(),
+        )
+    )
+    requeued = db.execute(
+        update(Job)
+        .where(Job.status == JobStatus.running)
+        .where(Job.workload.in_(workload_filter))
+        .where(Job.locked_at.is_not(None))
+        .where(Job.locked_at < cutoff)
+        .where(Job.attempts < Job.max_attempts)
         .values(
             status=JobStatus.queued,
             locked_by=None,
@@ -75,7 +93,19 @@ def _reclaim_stale_jobs(db: Session) -> int:
             updated_at=func.now(),
         )
     )
-    return result.rowcount or 0
+    return (failed.rowcount or 0) + (requeued.rowcount or 0)
+
+
+def _periodic_stale_reaper(stop_requested: Callable[[], bool]) -> None:
+    while not stop_requested():
+        time.sleep(STALE_REAPER_INTERVAL_SECONDS)
+        try:
+            with SessionLocal.begin() as db:
+                reclaimed = _reclaim_stale_jobs(db)
+            if reclaimed:
+                logger.info("Reclaimed stale running job(s)", extra={"count": reclaimed})
+        except Exception:
+            logger.exception("Periodic stale job reaper failed")
 
 
 def _reserve_next_job(db: Session) -> tuple[object, object] | None:
@@ -278,6 +308,14 @@ def run_eta_worker(should_stop: Callable[[], bool] | None = None) -> None:
             logger.info("Reclaimed stale running job(s) on startup", extra={"count": reclaimed})
     except Exception:
         logger.exception("Failed to reclaim stale jobs on startup")
+    reaper_stop = threading.Event()
+    reaper = threading.Thread(
+        target=_periodic_stale_reaper,
+        args=(reaper_stop.is_set,),
+        name="eta-cpu-stale-reaper",
+        daemon=True,
+    )
+    reaper.start()
     with ThreadPoolExecutor(
         max_workers=MAX_CONCURRENCY, thread_name_prefix="eta-cpu-worker"
     ) as executor:
@@ -301,6 +339,7 @@ def run_eta_worker(should_stop: Callable[[], bool] | None = None) -> None:
                     logger.exception("Failed to reclaim stale generate jobs")
 
             if stop_requested() and not running_jobs:
+                reaper_stop.set()
                 break
 
             if len(running_jobs) >= MAX_CONCURRENCY:

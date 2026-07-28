@@ -20,6 +20,7 @@ import {
   Title,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
+import { ScrollViewport } from "@/app/_components/ScrollViewport";
 import { apiPatch, isApiAccessDenied } from "@/lib/api/client";
 import {
   queryKeys,
@@ -107,7 +108,8 @@ export default function SeoLearnAdminPage() {
   }
 
   return (
-    <Box p="xl" maw={720} mx="auto">
+    <ScrollViewport>
+      <Box p={{ base: "md", md: "xl" }} maw={720} mx="auto" w="100%">
       <Stack gap="xl">
         <Stack gap="xs">
           <Title order={2} ff="var(--font-serif)" fw={500}>
@@ -205,6 +207,7 @@ export default function SeoLearnAdminPage() {
           )}
         </Stack>
       </Stack>
-    </Box>
+      </Box>
+    </ScrollViewport>
   );
 }

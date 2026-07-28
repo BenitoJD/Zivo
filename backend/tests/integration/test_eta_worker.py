@@ -347,6 +347,35 @@ def test_reclaim_does_not_touch_recent_running_job(db) -> None:
     assert fresh.locked_by == "live-worker-uuid"
 
 
+def test_reclaim_marks_exhausted_orphans_failed(db) -> None:
+    """A stale running job that already hit max_attempts must fail, not re-queue."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.eta.worker import STALE_RUNNING_TIMEOUT_SECONDS, _reclaim_stale_jobs
+
+    orphan = Job(
+        name="test.worker.exhausted_orphan",
+        workload=JobWorkload.cpu,
+        status=JobStatus.running,
+        locked_by="dead-worker-uuid",
+        locked_at=datetime.now(timezone.utc) - timedelta(seconds=STALE_RUNNING_TIMEOUT_SECONDS + 60),
+        attempts=3,
+        max_attempts=3,
+        payload={},
+    )
+    db.add(orphan)
+    db.commit()
+
+    reclaimed = _reclaim_stale_jobs(db)
+    db.commit()
+    assert reclaimed >= 1
+
+    db.refresh(orphan)
+    assert orphan.status == JobStatus.failed
+    assert orphan.locked_by is None
+    assert orphan.locked_at is None
+
+
 def test_reclaim_only_affects_own_workload(db) -> None:
     """The CPU worker's reclaim must not touch IO jobs (and vice-versa)."""
     from datetime import datetime, timedelta, timezone

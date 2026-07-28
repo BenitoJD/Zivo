@@ -595,14 +595,15 @@ def test_newspaper_save_progress_without_learner_key_skips_learner_fields() -> N
     save_learner.assert_not_called()
 
 
-def test_create_edition_uses_full_ingest_not_rag_window() -> None:
+def test_create_edition_uses_page_ingest_not_rag_window() -> None:
     import inspect
 
     from app.services import newspaper
 
     src = inspect.getsource(newspaper.create_edition_from_pdf)
-    assert "enqueue_ingest" in src
+    assert "ingest.page" in src
     assert "enqueue_rag_window" not in src
+    assert "enqueue_ingest" not in src
 
 
 def test_maybe_refill_newspaper_cooks_next_page_after_page_one() -> None:

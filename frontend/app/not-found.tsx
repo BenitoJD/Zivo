@@ -4,10 +4,11 @@ import Link from "next/link";
 import { Box, Button, Center, Container, Group, Paper, Stack, Text, Title } from "@mantine/core";
 import { IconArrowLeft } from "@tabler/icons-react";
 import { BrandMark } from "@/app/_components/BrandMark";
+import { ScrollViewport } from "@/app/_components/ScrollViewport";
 
 export default function NotFound() {
   return (
-    <Box bg="var(--mantine-color-body)" style={{ minHeight: "100dvh" }}>
+    <ScrollViewport variant="viewport">
       <Container size="lg" px={{ base: "md", md: "lg" }}>
         <Group justify="space-between" h={72} wrap="nowrap">
           <BrandMark height={28} />
@@ -74,6 +75,6 @@ export default function NotFound() {
           </Stack>
         </Paper>
       </Center>
-    </Box>
+    </ScrollViewport>
   );
 }

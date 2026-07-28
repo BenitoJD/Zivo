@@ -236,11 +236,25 @@ def create_edition_from_pdf(
 
     reset_for_new_page_range(db, doc, selected)
     newspaper_repo.update_edition_status(db, edition_id, status="indexing", document_id=doc.id)
-    # Full-edition ingest (all selected pages). RAG window ingest caps at
-    # MAX_RAG_PAGES and left most edition pages without chunks/triage/MCQs.
-    from app.services.jobs import enqueue_ingest
+    # Page-by-page ingest for every selected page (not rag_window — capped at
+    # MAX_RAG_PAGES — and not ingest.document — loads the whole PDF + embed pass
+    # in one job and OOMs CPU workers on ~20-page editions).
+    doc.status = "indexing"
+    doc.index_progress = 10
+    from app.models import JobWorkload
+    from app.services.jobs import batch_enqueue_jobs
 
-    enqueue_ingest(db, doc.id)
+    batch_enqueue_jobs(
+        db,
+        [
+            {
+                "name": "ingest.page",
+                "workload": JobWorkload.cpu,
+                "payload": {"document_id": str(doc.id), "page_number": page_num},
+            }
+            for page_num in range(1, page_count + 1)
+        ],
+    )
     db.commit()
     logger.info(
         "newspaper edition created id=%s paper=%s date=%s doc=%s pages=%s",

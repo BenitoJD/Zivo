@@ -83,7 +83,7 @@ export default function NewspaperPaperPage({
                   <Paper key={d.id} radius="xl" p={{ base: "md", sm: "lg" }} withBorder bg="gray.0" shadow="paper">
                     <Stack gap="sm">
                       {/* Meta row: date + status. Identical on every card so rows align. */}
-                      <Group justify="space-between" align="center" gap="sm" wrap="nowrap">
+                      <Group justify="space-between" align="center" gap="sm" wrap="wrap">
                         <Text fw={600} ff="var(--font-serif)" style={{ minWidth: 0 }} truncate="end">
                           {d.edition_date}
                         </Text>

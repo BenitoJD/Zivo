@@ -4,6 +4,7 @@ import { useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Box, Paper, SimpleGrid, Stack, Text, ThemeIcon, Title } from "@mantine/core";
 import { IconBulb, IconMessageCircle, IconUpload } from "@tabler/icons-react";
+import { ScrollViewport } from "@/app/_components/ScrollViewport";
 import { SourceImportDeck } from "@/app/workspace/_components/SourceImportDeck";
 
 const STEPS = [
@@ -56,23 +57,20 @@ export default function WorkspaceIndexPage() {
   }, []);
 
   return (
-    <Box
-      flex={1}
-      px={{ base: "md", sm: "lg" }}
-      py={{ base: "md", sm: "xl" }}
-      onMouseMove={handleMouseMove}
-      style={{
-        position: "relative",
-        overflowY: "auto",
-        overflowX: "hidden",
-        background: "var(--mantine-color-body)",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "safe center",
-        WebkitOverflowScrolling: "touch",
-      }}
-    >
+    <ScrollViewport>
+      <Box
+        px={{ base: "md", sm: "lg" }}
+        py={{ base: "md", sm: "xl" }}
+        onMouseMove={handleMouseMove}
+        style={{
+          position: "relative",
+          minHeight: "100%",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "safe center",
+        }}
+      >
       {/* Ambient interactive light glow - position fed via --zx/--zy CSS vars. */}
       <Box
         ref={glowRef}
@@ -172,6 +170,7 @@ export default function WorkspaceIndexPage() {
           box-shadow: var(--mantine-shadow-paper-lg) !important;
         }
       `}</style>
-    </Box>
+      </Box>
+    </ScrollViewport>
   );
 }

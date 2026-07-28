@@ -1,6 +1,7 @@
 "use client";
 
 import { Box } from "@mantine/core";
+import { ScrollViewport } from "@/app/_components/ScrollViewport";
 import { LandingNav } from "@/app/_components/landing/LandingNav";
 import { Hero } from "@/app/_components/landing/Hero";
 import { SourceOrbit } from "@/app/_components/landing/SourceOrbit";
@@ -24,15 +25,7 @@ import { Footer } from "@/app/_components/landing/Footer";
  */
 export default function LandingPage() {
   return (
-    <Box
-      bg="var(--mantine-color-body)"
-      style={{
-        height: "100dvh",
-        overflowY: "auto",
-        overflowX: "hidden",
-        scrollBehavior: "smooth",
-      }}
-    >
+    <ScrollViewport variant="viewport" style={{ scrollBehavior: "smooth" }}>
       <LandingNav />
       <main>
         <Hero />
@@ -55,6 +48,6 @@ export default function LandingPage() {
         <FinalCta />
       </main>
       <Footer />
-    </Box>
+    </ScrollViewport>
   );
 }

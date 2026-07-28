@@ -9,6 +9,7 @@ import {
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { AssistantMarkdown } from "@/lib/chatMarkdown";
+import { ScrollViewport } from "@/app/_components/ScrollViewport";
 import { LearnMcqSection } from "@/app/learn/_components/LearnMcqSection";
 import { LinkAnchor, LinkButton } from "@/app/learn/_components/AppLink";
 import { MCQ_CONTENT_MAX } from "@/app/_components/mcq/McqCard";
@@ -111,7 +112,7 @@ export default async function LearnPostPage({
       : null;
 
   return (
-    <Box bg="var(--mantine-color-body)" mih="100dvh">
+    <ScrollViewport variant="viewport">
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: jsonLdScript(articleLd) }}
@@ -200,6 +201,6 @@ export default async function LearnPostPage({
           </Box>
         </Stack>
       </Container>
-    </Box>
+    </ScrollViewport>
   );
 }

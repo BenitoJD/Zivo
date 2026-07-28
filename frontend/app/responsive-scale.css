@@ -31,10 +31,14 @@
 html {
   max-width: 100%;
   overflow-x: clip;
+  height: 100%;
+  height: 100dvh;
 }
 body {
   max-width: 100%;
   overflow-x: clip;
+  /* Let nested scroll regions handle vertical scroll on iOS. */
+  overscroll-behavior-y: none;
 }
 img,
 svg,

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.models import Document, JobWorkload
+from app.eta.stale_jobs import stale_running_cutoff
 from app.services.chunks import indexed_pages_for_document
 from app.services.question_pool import get_progress, selected_page_list
 from app.services.tutor_retrieval import MAX_RAG_PAGES, plan_rag_window
@@ -59,7 +60,14 @@ _HAS_ACTIVE_INGEST_JOBS_SQL = text(
     FROM qb.jobs j
     WHERE j.payload->>'document_id' = :document_id
       AND j.name = ANY(CAST(:names AS text[]))
-      AND j.status IN ('queued', 'running')
+      AND (
+        j.status = 'queued'
+        OR (
+          j.status = 'running'
+          AND j.locked_at IS NOT NULL
+          AND j.locked_at >= :stale_cutoff
+        )
+      )
     LIMIT 1
     """
 )
@@ -75,7 +83,11 @@ def ingested_pages_for_document(doc: Document) -> set[int]:
 def has_active_ingest_jobs(db: Session, document_id: uuid.UUID) -> bool:
     row = db.execute(
         _HAS_ACTIVE_INGEST_JOBS_SQL,
-        {"document_id": str(document_id), "names": list(_INGEST_JOB_NAMES)},
+        {
+            "document_id": str(document_id),
+            "names": list(_INGEST_JOB_NAMES),
+            "stale_cutoff": stale_running_cutoff(),
+        },
     ).first()
     return row is not None
 

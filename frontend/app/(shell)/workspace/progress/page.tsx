@@ -1,6 +1,6 @@
 "use client";
 
-import { Box } from "@mantine/core";
+import { ScrollViewport } from "@/app/_components/ScrollViewport";
 import { ProgressView } from "@/app/workspace/_components/ProgressView";
 import { useWorkspaceShell } from "@/app/workspace/layout";
 
@@ -8,16 +8,8 @@ import { useWorkspaceShell } from "@/app/workspace/layout";
 export default function WorkspaceProgressPage() {
   const { openAddSource } = useWorkspaceShell();
   return (
-    <Box
-      flex={1}
-      style={{
-        overflowY: "auto",
-        overflowX: "hidden",
-        WebkitOverflowScrolling: "touch",
-        background: "var(--mantine-color-body)",
-      }}
-    >
+    <ScrollViewport>
       <ProgressView onAddSource={openAddSource} />
-    </Box>
+    </ScrollViewport>
   );
 }

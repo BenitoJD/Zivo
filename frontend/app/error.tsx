@@ -2,6 +2,7 @@
 
 import { Box, Button, Center, Paper, Stack, Text, Title } from "@mantine/core";
 import { IconRefresh } from "@tabler/icons-react";
+import { ScrollViewport } from "@/app/_components/ScrollViewport";
 
 export default function Error({
   error,
@@ -11,8 +12,9 @@ export default function Error({
   reset: () => void;
 }) {
   return (
-    <Center mih="100dvh" p="md" bg="var(--mantine-color-body)">
-      <Paper
+    <ScrollViewport variant="viewport">
+      <Center mih="100%" p="md">
+        <Paper
         radius="xl"
         p={{ base: "xl", md: 48 }}
         shadow="paper"
@@ -57,6 +59,7 @@ export default function Error({
           </Button>
         </Stack>
       </Paper>
-    </Center>
+      </Center>
+    </ScrollViewport>
   );
 }
