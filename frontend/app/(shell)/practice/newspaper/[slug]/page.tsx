@@ -18,10 +18,19 @@ import {
 import { IconArrowRight, IconBook2, IconClipboardList } from "@tabler/icons-react";
 import { useRouter } from "next/navigation";
 import { ensureGuestSession } from "@/lib/api/client";
-import { useNewspaperDaysQuery } from "@/lib/api/queries";
+import { useNewspaperCatalogQuery, useNewspaperDaysQuery } from "@/lib/api/queries";
 import { Shell } from "@/app/practice/_components/Shell";
 import { LearnerPageHeader } from "@/app/_components/study/LearnerPageHeader";
 import { NewspaperBrandMark } from "@/app/_components/newspaper/NewspaperBrandMark";
+
+/** Human-readable title for a paper slug, used as a fallback while the days
+ *  query is still loading so the header never shows a raw slug like "the-hindu". */
+function humanizeSlug(slug: string): string {
+  return slug
+    .split("-")
+    .map((w) => (w.length > 0 ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
+}
 
 export default function NewspaperPaperPage({
   params,
@@ -31,12 +40,18 @@ export default function NewspaperPaperPage({
   const { slug } = use(params);
   const router = useRouter();
   const daysQ = useNewspaperDaysQuery(slug);
+  // The catalog is tiny and cached; it carries the proper paper title so the
+  // header renders "The Hindu" instead of the raw slug while days are loading.
+  const catalogQ = useNewspaperCatalogQuery();
 
   useEffect(() => {
     void ensureGuestSession();
   }, []);
 
-  const title = daysQ.data?.paper_title || slug;
+  const title =
+    daysQ.data?.paper_title ??
+    catalogQ.data?.papers.find((p) => p.slug === slug)?.title ??
+    humanizeSlug(slug);
 
   return (
     <Shell>
@@ -65,16 +80,18 @@ export default function NewspaperPaperPage({
                 const ready = d.status === "ready";
                 const canOpen = Boolean(d.document_id) && ready;
                 return (
-                  <Paper key={d.id} radius="xl" p="lg" withBorder bg="gray.0" shadow="paper">
-                    <Group justify="space-between" align="center" wrap="wrap" gap="sm">
-                      <Group gap="sm">
-                        <Text fw={600} ff="var(--font-serif)">
+                  <Paper key={d.id} radius="xl" p={{ base: "md", sm: "lg" }} withBorder bg="gray.0" shadow="paper">
+                    <Stack gap="sm">
+                      {/* Meta row: date + status. Identical on every card so rows align. */}
+                      <Group justify="space-between" align="center" gap="sm" wrap="nowrap">
+                        <Text fw={600} ff="var(--font-serif)" style={{ minWidth: 0 }} truncate="end">
                           {d.edition_date}
                         </Text>
                         <Badge
                           variant="light"
                           color={ready ? "sage" : d.status === "failed" ? "terracotta" : "lavender"}
                           radius="xl"
+                          style={{ flexShrink: 0 }}
                         >
                           {ready
                             ? "Ready"
@@ -83,14 +100,15 @@ export default function NewspaperPaperPage({
                               : d.status}
                         </Badge>
                       </Group>
-                      <Group gap="xs" wrap="wrap">
+                      {/* Actions row: wraps on narrow screens; right-aligned cluster on wider ones.
+                          Every card has the same meta+actions structure, so rows align regardless
+                          of whether a blog "Read analysis" button is present. */}
+                      <Group gap="xs" wrap="wrap" justify="flex-end">
                         {d.has_blog && d.blog_href ? (
                           <Button
                             radius="xl"
                             variant="subtle"
                             color="lavender"
-                            fullWidth
-                            maw={{ base: "100%", xs: 180 }}
                             leftSection={<IconBook2 size={16} />}
                             onClick={() => router.push(d.blog_href!)}
                           >
@@ -102,8 +120,6 @@ export default function NewspaperPaperPage({
                           variant="subtle"
                           color="gray"
                           disabled={!canOpen}
-                          fullWidth
-                          maw={{ base: "100%", xs: 180 }}
                           leftSection={<IconClipboardList size={16} />}
                           onClick={() => {
                             if (!d.document_id) return;
@@ -117,8 +133,6 @@ export default function NewspaperPaperPage({
                           variant="light"
                           color="lavender"
                           disabled={!canOpen}
-                          fullWidth
-                          maw={{ base: "100%", xs: 180 }}
                           rightSection={<IconArrowRight size={16} />}
                           onClick={() => {
                             if (!d.document_id) return;
@@ -128,7 +142,7 @@ export default function NewspaperPaperPage({
                           Learn
                         </Button>
                       </Group>
-                    </Group>
+                    </Stack>
                   </Paper>
                 );
               })}
