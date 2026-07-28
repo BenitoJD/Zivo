@@ -1,4 +1,4 @@
-replicaCount: 2
+replicaCount: 1
 namespace: zivo
 image:
   repository: ghcr.io/benitojd/zivo-web
@@ -26,10 +26,14 @@ resources:
   requests:
     cpu: 50m
     memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
 autoscaling:
   enabled: true
-  minReplicas: 2
-  maxReplicas: 4
+  # Single 12GB VPS: cap web replicas so Traefik stays healthy under load.
+  minReplicas: 1
+  maxReplicas: 2
   targetCPUUtilizationPercentage: 80
 podDisruptionBudget:
   enabled: true

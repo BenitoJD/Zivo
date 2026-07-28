@@ -33,6 +33,16 @@ if ! command -v docker >/dev/null; then
   systemctl enable --now docker
 fi
 
+# 4G swap prevents Traefik/k3s OOM when HPA briefly scales up on the 12GB VPS.
+if ! swapon --show | grep -q '/swapfile'; then
+  log "Enabling 4G swap..."
+  fallocate -l 4G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=4096 status=progress
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
 if ! command -v k3s >/dev/null; then
   log "Installing K3s..."
   curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--write-kubeconfig-mode 644" sh -

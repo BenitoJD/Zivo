@@ -12,7 +12,7 @@ imagePullSecrets: []
 workloads:
   io:
     enabled: true
-    replicaCount: 3
+    replicaCount: 2
     command: ["python", "run_eta_worker_async.py"]
     env:
       ETA_WORKER_WORKLOADS: io
@@ -37,8 +37,9 @@ resources:
     memory: 2Gi
 autoscaling:
   enabled: true
-  minReplicas: 2
-  maxReplicas: 4
+  # CPU workers use ~1.2Gi each; keep headroom for Traefik, Postgres, and k3s.
+  minReplicas: 1
+  maxReplicas: 2
   targetCPUUtilizationPercentage: 80
 podDisruptionBudget:
   enabled: true
