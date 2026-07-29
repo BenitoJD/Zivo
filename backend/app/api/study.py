@@ -239,7 +239,13 @@ def get_interview(
     doc = require_ready_document(db, artifact_id, user, guest_id)
     if doc is None:
         return {"status": "indexing", "categories": interview_service.CATEGORY_META}
-    return interview_service.load_interview(db, artifact_id)
+    return interview_service.load_interview(
+        db,
+        artifact_id,
+        learner_key=interview_service.resolve_interview_learner_key(
+            user.id if user else None, guest_id
+        ),
+    )
 
 
 @router.post("/{artifact_id}/interview/start", dependencies=[Depends(require_csrf_or_guest)])
@@ -252,7 +258,12 @@ async def start_interview(
 ) -> dict:
     """Begin a mock interview for the chosen company category (asks the first question)."""
     require_ready_document(db, artifact_id, user, guest_id)
-    return await interview_service.start_interview(db, artifact_id, body.category)
+    learner_key = interview_service.resolve_interview_learner_key(
+        user.id if user else None, guest_id
+    )
+    return await interview_service.start_interview(
+        db, artifact_id, body.category, learner_key=learner_key
+    )
 
 
 @router.post("/{artifact_id}/interview/answer", dependencies=[Depends(require_csrf_or_guest)])
@@ -265,8 +276,13 @@ async def answer_interview(
 ) -> dict:
     """Evaluate the answer to the current question and advance to the next one."""
     require_document(db, artifact_id, user, guest_id)
+    learner_key = interview_service.resolve_interview_learner_key(
+        user.id if user else None, guest_id
+    )
     try:
-        return await interview_service.submit_answer(db, artifact_id, body.answer)
+        return await interview_service.submit_answer(
+            db, artifact_id, body.answer, learner_key=learner_key
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
@@ -280,7 +296,10 @@ def reset_interview(
 ) -> dict:
     """Discard the current interview so a new category can be picked."""
     require_document(db, artifact_id, user, guest_id)
-    return interview_service.reset_interview(db, artifact_id)
+    learner_key = interview_service.resolve_interview_learner_key(
+        user.id if user else None, guest_id
+    )
+    return interview_service.reset_interview(db, artifact_id, learner_key=learner_key)
 
 
 # --------------------------------------------------- mains mode (descriptive answer grading)

@@ -251,6 +251,32 @@ def _claim_guest_notes(db: Session, *, guest_id: str, account_id: uuid.UUID) -> 
     return int(notes) + int(ideas)
 
 
+def _claim_guest_interviews(db: Session, *, guest_key: str, user_key: str) -> int:
+    db.execute(
+        text(
+            """
+            DELETE FROM qb.document_interview
+            WHERE learner_key = :user_key
+              AND document_id IN (
+                SELECT document_id FROM qb.document_interview WHERE learner_key = :guest_key
+              )
+            """
+        ),
+        {"guest_key": guest_key, "user_key": user_key},
+    )
+    result = db.execute(
+        text(
+            """
+            UPDATE qb.document_interview
+            SET learner_key = :user_key, updated_at = now()
+            WHERE learner_key = :guest_key
+            """
+        ),
+        {"guest_key": guest_key, "user_key": user_key},
+    )
+    return int(result.rowcount or 0)
+
+
 def claim_guest_progress(
     db: Session,
     account_id: uuid.UUID,
@@ -264,6 +290,7 @@ def claim_guest_progress(
             "measurements_moved": 0,
             "sd_sessions_moved": 0,
             "notes_claimed": 0,
+            "interviews_claimed": 0,
         }
 
     from app.repositories.intel import get_or_create_account_entity, get_or_create_concept_entity
@@ -284,6 +311,7 @@ def claim_guest_progress(
     )
     sd_sessions_moved = _claim_guest_sd_sessions(db, account_id=account_id, guest_id=guest_id)
     notes_claimed = _claim_guest_notes(db, guest_id=guest_id, account_id=account_id)
+    interviews_claimed = _claim_guest_interviews(db, guest_key=guest_key, user_key=user_key)
 
     db.commit()
     return {
@@ -291,6 +319,7 @@ def claim_guest_progress(
         "measurements_moved": measurements_moved,
         "sd_sessions_moved": sd_sessions_moved,
         "notes_claimed": notes_claimed,
+        "interviews_claimed": interviews_claimed,
     }
 
 

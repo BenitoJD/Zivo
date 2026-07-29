@@ -24,6 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.models import Document, DocumentChunk
+from app.services.document_learner_state import learner_key_for_user
 from app.services.llm_json import extract_json_obj
 from app.services.llm_router import complete_chat
 from app.services.open_response import (
@@ -107,14 +108,22 @@ _EVAL_SYSTEM = (
 
 
 # ---------------------------------------------------------------- persistence
-def load_interview(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
+def resolve_interview_learner_key(
+    user_id: uuid.UUID | None, guest_id: str | None
+) -> str:
+    return learner_key_for_user(user_id, guest_id) or "anonymous"
+
+
+def load_interview(
+    db: Session, document_id: uuid.UUID, *, learner_key: str
+) -> dict[str, Any]:
     """Return the interview state for the client (answers stripped from the pending question)."""
     row = db.execute(
         text(
             "SELECT category, config, state, transcript, status, error "
-            "FROM qb.document_interview WHERE document_id = :id"
+            "FROM qb.document_interview WHERE document_id = :id AND learner_key = :key"
         ),
-        {"id": document_id},
+        {"id": document_id, "key": learner_key},
     ).mappings().first()
     if not row:
         return {"status": "missing", "categories": CATEGORY_META, **_empty()}
@@ -146,43 +155,67 @@ def _empty() -> dict[str, Any]:
     }
 
 
-def _save(db: Session, document_id: uuid.UUID, *, category: str, config: list,
-          state: dict, transcript: list, status: str, error: str | None = None) -> None:
+def _save(
+    db: Session,
+    document_id: uuid.UUID,
+    *,
+    learner_key: str,
+    category: str,
+    config: list,
+    state: dict,
+    transcript: list,
+    status: str,
+    error: str | None = None,
+) -> None:
     db.execute(
         text(
             """
             INSERT INTO qb.document_interview
-                (document_id, category, config, state, transcript, status, error, updated_at)
-            VALUES (:id, :category, CAST(:config AS jsonb), CAST(:state AS jsonb),
+                (document_id, learner_key, category, config, state, transcript, status, error, updated_at)
+            VALUES (:id, :key, :category, CAST(:config AS jsonb), CAST(:state AS jsonb),
                     CAST(:transcript AS jsonb), :status, :error, now())
-            ON CONFLICT (document_id) DO UPDATE SET
+            ON CONFLICT (document_id, learner_key) DO UPDATE SET
                 category = EXCLUDED.category, config = EXCLUDED.config, state = EXCLUDED.state,
                 transcript = EXCLUDED.transcript, status = EXCLUDED.status,
                 error = EXCLUDED.error, updated_at = now()
             """
         ),
         {
-            "id": document_id, "category": category,
-            "config": json.dumps(config), "state": json.dumps(state),
-            "transcript": json.dumps(transcript), "status": status, "error": error,
+            "id": document_id,
+            "key": learner_key,
+            "category": category,
+            "config": json.dumps(config),
+            "state": json.dumps(state),
+            "transcript": json.dumps(transcript),
+            "status": status,
+            "error": error,
         },
     )
     db.commit()
 
 
-def reset_interview(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
-    db.execute(text("DELETE FROM qb.document_interview WHERE document_id = :id"), {"id": document_id})
+def reset_interview(
+    db: Session, document_id: uuid.UUID, *, learner_key: str
+) -> dict[str, Any]:
+    db.execute(
+        text(
+            "DELETE FROM qb.document_interview WHERE document_id = :id AND learner_key = :key"
+        ),
+        {"id": document_id, "key": learner_key},
+    )
     db.commit()
-    return load_interview(db, document_id)
+    return load_interview(db, document_id, learner_key=learner_key)
 
 
 # ---------------------------------------------------------------- orchestration
-async def start_interview(db: Session, document_id: uuid.UUID, category: str) -> dict[str, Any]:
+async def start_interview(
+    db: Session, document_id: uuid.UUID, category: str, *, learner_key: str
+) -> dict[str, Any]:
     """Begin (or resume) an interview for the chosen company category."""
     planned = plan_interview_rounds(category)
     category = planned.category
 
-    existing = load_interview(db, document_id)
+    existing = load_interview(db, document_id, learner_key=learner_key)
     if existing["status"] == "in_progress" and existing["category"] == category:
         return existing  # idempotent — don't nuke progress on a repeat start
 
@@ -190,16 +223,29 @@ async def start_interview(db: Session, document_id: uuid.UUID, category: str) ->
     resume = _resume_text(db, document_id)
     first = await _generate_question(db, category, config[0], resume, asked=[])
     state = {"round_index": 0, "q_in_round": 0, "current": first}
-    _save(db, document_id, category=category, config=config, state=state,
-          transcript=[], status="in_progress")
-    return load_interview(db, document_id)
+    _save(
+        db,
+        document_id,
+        learner_key=learner_key,
+        category=category,
+        config=config,
+        state=state,
+        transcript=[],
+        status="in_progress",
+    )
+    return load_interview(db, document_id, learner_key=learner_key)
 
 
-async def submit_answer(db: Session, document_id: uuid.UUID, answer: Any) -> dict[str, Any]:
+async def submit_answer(
+    db: Session, document_id: uuid.UUID, answer: Any, *, learner_key: str
+) -> dict[str, Any]:
     """Evaluate the answer to the current question, then advance to the next one."""
     row = db.execute(
-        text("SELECT category, config, state, transcript, status FROM qb.document_interview WHERE document_id = :id"),
-        {"id": document_id},
+        text(
+            "SELECT category, config, state, transcript, status "
+            "FROM qb.document_interview WHERE document_id = :id AND learner_key = :key"
+        ),
+        {"id": document_id, "key": learner_key},
     ).mappings().first()
     if not row or row["status"] != "in_progress":
         raise ValueError("no interview in progress")
@@ -219,18 +265,32 @@ async def submit_answer(db: Session, document_id: uuid.UUID, answer: Any) -> dic
     if qi >= int(config[ri]["questions"]):
         ri, qi = ri + 1, 0
     if ri >= len(config):
-        _save(db, document_id, category=category, config=config,
-              state={"round_index": len(config), "q_in_round": 0, "current": None},
-              transcript=transcript, status="complete")
-        return load_interview(db, document_id)
+        _save(
+            db,
+            document_id,
+            learner_key=learner_key,
+            category=category,
+            config=config,
+            state={"round_index": len(config), "q_in_round": 0, "current": None},
+            transcript=transcript,
+            status="complete",
+        )
+        return load_interview(db, document_id, learner_key=learner_key)
 
     resume = _resume_text(db, document_id)
     asked = [t["question"] for t in transcript]
     nxt = await _generate_question(db, category, config[ri], resume, asked=asked)
-    _save(db, document_id, category=category, config=config,
-          state={"round_index": ri, "q_in_round": qi, "current": nxt},
-          transcript=transcript, status="in_progress")
-    return load_interview(db, document_id)
+    _save(
+        db,
+        document_id,
+        learner_key=learner_key,
+        category=category,
+        config=config,
+        state={"round_index": ri, "q_in_round": qi, "current": nxt},
+        transcript=transcript,
+        status="in_progress",
+    )
+    return load_interview(db, document_id, learner_key=learner_key)
 
 
 # ---------------------------------------------------------------- LLM: generate
