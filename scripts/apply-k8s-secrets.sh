@@ -30,6 +30,7 @@ kubectl -n zivo create secret generic zivo-secrets \
   --from-literal=ZAI_API_BASE="${ZAI_API_BASE:-}" \
   --from-literal=STEPFUN_API_KEY="${STEPFUN_API_KEY:-}" \
   --from-literal=STEPFUN_API_BASE="${STEPFUN_API_BASE:-}" \
+  --from-literal=STEPFUN_ENABLED="${STEPFUN_ENABLED:-false}" \
   --from-literal=OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" \
   --from-literal=OPENROUTER_API_BASE="${OPENROUTER_API_BASE:-}" \
   --from-literal=OPENAI_API_KEY="${OPENAI_API_KEY:-}" \

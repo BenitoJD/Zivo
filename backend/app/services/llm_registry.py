@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import Settings, get_settings
@@ -31,6 +31,16 @@ _PREFIX_ENV_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
         ("api_base_url", "AZURE_API_BASE"),
     ),
 }
+
+# Stable advisory-lock key for registry mutations. Two pods can boot at once
+# (rolling update) and both run ensure_registry_providers + sync_default_*_model:
+# each clears the existing default then sets a new one within one transaction, so
+# without serialization the two flushes together emit two is_default=True rows and
+# trip uq_llm_models_default_per_kind, aborting the whole bootstrap. The
+# transaction-scoped lock (pg_advisory_xact_lock) makes one pod's clear+set+commit
+# atomic relative to the other's; it auto-releases on commit/rollback. Fixed key so
+# every concurrent boot contends on the same lock.
+_REGISTRY_LOCK_KEY = 0x5A1C0  # registry default-mutation advisory-lock key
 
 
 @dataclass(frozen=True)
@@ -224,6 +234,9 @@ def set_chat_model_enabled(db: Session, model_id: uuid.UUID, *, enabled: bool) -
 
     model.is_enabled = enabled
     if not enabled and model.is_default:
+        # Serializing admin default-reassignment against concurrent boots/toggles
+        # keeps the single-default invariant inside the clear+set+commit below.
+        _acquire_registry_lock(db)
         model.is_default = False
         replacement = (
             _enabled_chat_query(db)
@@ -373,6 +386,17 @@ def _disable_stepfun(db: Session, stepfun: LlmProvider) -> bool:
                 model.is_default = False
             dirty = True
     return dirty
+
+
+def _acquire_registry_lock(db: Session) -> None:
+    """Block until this transaction holds the registry-mutation advisory lock.
+
+    Transaction-scoped (pg_advisory_xact_lock), so it releases automatically on
+    commit/rollback — no manual unlock. Serializes concurrent boots (rolling
+    updates) so the clear-default → set-default → commit sequence runs in full
+    before another pod can observe/flip the same rows. See ``_REGISTRY_LOCK_KEY``.
+    """
+    db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _REGISTRY_LOCK_KEY})
 
 
 def _clear_defaults_for_kind(db: Session, kind: LlmModelKind) -> None:
@@ -661,6 +685,11 @@ def refresh_llm_registry_from_env(
     settings = settings or get_settings()
     dirty = False
 
+    # Serialize against concurrent boots: the default-flip below (clear + set +
+    # commit) must be atomic relative to another pod doing the same, or both
+    # pods flush two is_default=True rows and trip uq_llm_models_default_per_kind.
+    _acquire_registry_lock(db)
+
     if ensure_registry_providers(db, settings):
         dirty = True
 
@@ -831,6 +860,10 @@ def bootstrap_llm_registry_from_env(db: Session, settings: Settings | None = Non
     settings = settings or get_settings()
 
     if db.query(LlmProvider).count() == 0:
+        # Empty DB: seed everything in one transaction. Two pods can both observe
+        # an empty DB during a fresh deploy and both seed defaults — serialize so
+        # the partial-unique constraint on is_default can't be tripped.
+        _acquire_registry_lock(db)
         local = _upsert_provider(
             db,
             slug="local",
