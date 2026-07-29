@@ -529,24 +529,40 @@ def pick_unused_sd_problem(db: Session) -> dict[str, Any] | None:
 
 
 def list_newspaper_cook_candidates(db: Session, *, limit: int = 8) -> list[dict[str, Any]]:
-    """Unused cook-worthy newspaper page chunks from ready editions."""
+    """Unused cook-worthy newspaper PAGES from ready editions.
+
+    A page is split across many token-window chunk rows (one page can have dozens
+    of overlapping chunks), so we must collapse to one row per (document, page) by
+    concatenating its chunk text in order. Returning raw chunk rows fanned out the
+    candidate list: 8 slots could hold only 2 distinct pages, each a 900-char
+    fragment lacking the full page's keywords, so the worthiness gate rejected
+    pages on incomplete text and burned attempt slots on duplicates.
+    """
     rows = db.execute(
         text(
             """
-            SELECT c.id AS chunk_id, c.document_id, c.page_start, c.text,
+            WITH page_text AS (
+                SELECT
+                    c.document_id,
+                    c.page_start,
+                    string_agg(c.text, ' ' ORDER BY c.id) AS text
+                FROM qb.document_chunks c
+                GROUP BY c.document_id, c.page_start
+            )
+            SELECT pt.document_id, pt.page_start, pt.text,
                    e.id AS edition_id, e.paper_slug, e.edition_date
-            FROM qb.document_chunks c
-            JOIN qb.newspaper_edition e ON e.document_id = c.document_id
-            JOIN qb.documents d ON d.id = c.document_id
+            FROM page_text pt
+            JOIN qb.newspaper_edition e ON e.document_id = pt.document_id
+            JOIN qb.documents d ON d.id = pt.document_id
             WHERE e.status = 'ready'
               AND COALESCE(d.meta->>'newspaper', 'false') IN ('true', 'True')
-              AND length(trim(c.text)) > 400
+              AND length(trim(pt.text)) > 400
               AND NOT EXISTS (
                 SELECT 1 FROM qb.seo_cook_attempt a
                 WHERE a.source_kind = 'newspaper'
-                  AND a.source_key = (c.document_id::text || ':' || c.page_start::text)
+                  AND a.source_key = (pt.document_id::text || ':' || pt.page_start::text)
               )
-            ORDER BY e.edition_date DESC, c.page_start ASC
+            ORDER BY e.edition_date DESC, pt.page_start ASC
             LIMIT :lim
             """
         ),
