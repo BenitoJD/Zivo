@@ -66,3 +66,30 @@ def save_learner_progress_row(
         )
     except Exception:
         logger.debug("learner-state pg_notify failed", exc_info=True)
+
+
+def load_learner_progress_batch(
+    db: Session, document_ids: list[uuid.UUID], learner_key: str
+) -> dict[uuid.UUID, dict[str, Any]]:
+    """Load per-document learner progress for many shared documents at once."""
+    if not document_ids:
+        return {}
+    rows = db.execute(
+        text(
+            """
+            SELECT document_id, progress
+            FROM qb.document_learner_state
+            WHERE learner_key = :key
+              AND document_id = ANY(:docs)
+            """
+        ),
+        {"key": learner_key, "docs": document_ids},
+    ).mappings().all()
+    out: dict[uuid.UUID, dict[str, Any]] = {}
+    for row in rows:
+        progress = row["progress"]
+        if isinstance(progress, str):
+            progress = json.loads(progress)
+        if isinstance(progress, dict):
+            out[row["document_id"]] = progress
+    return out

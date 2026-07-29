@@ -2,7 +2,7 @@
 
 No-auth: every read endpoint is open. On-demand generation requires a guest
 session (httponly cookie) + CSRF-or-guest + rate limiting, to throttle abuse of
-the LLM-backed generator. Anonymous answers are recorded against a cohort entity
+the LLM-backed generator. Anonymous answers are recorded per guest cookie or signed-in account
 (see mcq.py grade) to feed calibration.
 """
 
@@ -24,6 +24,7 @@ from app.repositories.intel import (
 )
 from app.services import wikidata
 from app.services.auth import get_optional_user, require_csrf_or_guest
+from app.services.answer_signal import answered_assertion_ids, resolve_subject_entity
 from app.services.guest_session import guest_session_for_read
 from app.services.practice_generation import (
     DEFAULT_MIN_QUESTIONS,
@@ -190,6 +191,8 @@ class QuestionsOut(BaseModel):
     qid: str
     question_count: int
     items: list[QuestionItem]
+    answered_ids: list[str] = []
+    resume_index: int = 0
 
 
 @router.get("/concepts/{qid}/questions", response_model=QuestionsOut)
@@ -197,6 +200,7 @@ def list_questions(
     qid: str,
     db: Session = Depends(get_db),
     user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
     limit: int = Query(20, ge=1, le=50),
     offset: int = Query(0, ge=0),
 ) -> QuestionsOut:
@@ -220,19 +224,38 @@ def list_questions(
         db, entity_id, limit=limit, offset=offset, public_only=True, owner_account_id=owner_id
     )
     items: list[QuestionItem] = []
+    item_ids: list[str] = []
     for row in rows:
         payload = _sanitize_payload(row.get("payload") if isinstance(row.get("payload"), dict) else {})
         raw_ci = payload.get("correct_indices")
         is_multi = isinstance(raw_ci, list) and len(raw_ci) >= 2
+        item_id = str(row["id"])
+        item_ids.append(item_id)
         items.append(
             QuestionItem(
-                id=str(row["id"]),
+                id=item_id,
                 question=payload.get("question") or row.get("title") or "",
                 options=list(payload.get("options") or []),
                 is_multi=is_multi,
             )
         )
-    return QuestionsOut(qid=qid, question_count=total, items=items)
+
+    answered_ids: list[str] = []
+    resume_index = 0
+    subject_entity_id = resolve_subject_entity(db, user, guest_id)
+    if subject_entity_id and item_ids:
+        answered_set = answered_assertion_ids(db, subject_entity_id, item_ids)
+        answered_ids = [item_id for item_id in item_ids if item_id in answered_set]
+        while resume_index < len(items) and items[resume_index].id in answered_set:
+            resume_index += 1
+
+    return QuestionsOut(
+        qid=qid,
+        question_count=total,
+        items=items,
+        answered_ids=answered_ids,
+        resume_index=resume_index,
+    )
 
 
 class GenerateOut(BaseModel):

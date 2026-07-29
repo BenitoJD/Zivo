@@ -37,7 +37,7 @@ from app.services.google_oauth import (
     read_pending_token,
     require_google_oauth,
 )
-from app.services.guest import claim_guest_documents
+from app.services.guest import claim_guest_documents, claim_guest_progress
 from app.services.guest_session import publish_guest_id, read_guest_id_from_cookie
 from app.services.rate_limit import rate_limit_dependency
 from app.services.usage import DEMO_COOKIE, ensure_demo_cookie
@@ -132,7 +132,9 @@ def signup(
         db.rollback()
         raise HTTPException(status_code=409, detail="Username taken") from None
 
-    claim_guest_documents(db, user.id, read_guest_id_from_cookie(zivo_demo_id))
+    guest_id = read_guest_id_from_cookie(zivo_demo_id)
+    claim_guest_documents(db, user.id, guest_id)
+    claim_guest_progress(db, user.id, user.username, guest_id)
 
     token, csrf = create_session_token(
         user.id, int(getattr(user, "session_version", 0) or 0), remember=True
@@ -152,7 +154,9 @@ def login(
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    claim_guest_documents(db, user.id, read_guest_id_from_cookie(zivo_demo_id))
+    guest_id = read_guest_id_from_cookie(zivo_demo_id)
+    claim_guest_documents(db, user.id, guest_id)
+    claim_guest_progress(db, user.id, user.username, guest_id)
 
     token, csrf = create_session_token(
         user.id, int(getattr(user, "session_version", 0) or 0), remember=body.remember_me
@@ -207,7 +211,9 @@ def google_callback(
 
     existing = db.query(User).filter(User.google_sub == google_sub).first()
     if existing:
-        claim_guest_documents(db, existing.id, read_guest_id_from_cookie(zivo_demo_id))
+        guest_id = read_guest_id_from_cookie(zivo_demo_id)
+        claim_guest_documents(db, existing.id, guest_id)
+        claim_guest_progress(db, existing.id, existing.username, guest_id)
         token, _csrf = create_session_token(
             existing.id,
             int(getattr(existing, "session_version", 0) or 0),
@@ -291,7 +297,9 @@ def google_complete(
         db.rollback()
         raise HTTPException(status_code=409, detail="Username or email taken") from None
 
-    claim_guest_documents(db, user.id, read_guest_id_from_cookie(zivo_demo_id))
+    guest_id = read_guest_id_from_cookie(zivo_demo_id)
+    claim_guest_documents(db, user.id, guest_id)
+    claim_guest_progress(db, user.id, user.username, guest_id)
 
     token, csrf = create_session_token(
         user.id, int(getattr(user, "session_version", 0) or 0), remember=True

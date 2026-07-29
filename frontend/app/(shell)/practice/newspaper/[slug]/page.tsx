@@ -5,7 +5,7 @@
  * Explicit secondary CTA opens Test (docs/QUESTION_BUDGET_ENGINE.md §0).
  */
 
-import { useEffect, use } from "react";
+import { useEffect, use, useState } from "react";
 import {
   Badge,
   Button,
@@ -39,13 +39,14 @@ export default function NewspaperPaperPage({
 }) {
   const { slug } = use(params);
   const router = useRouter();
-  const daysQ = useNewspaperDaysQuery(slug);
+  const [guestReady, setGuestReady] = useState(false);
+  const daysQ = useNewspaperDaysQuery(slug, guestReady);
   // The catalog is tiny and cached; it carries the proper paper title so the
   // header renders "The Hindu" instead of the raw slug while days are loading.
   const catalogQ = useNewspaperCatalogQuery();
 
   useEffect(() => {
-    void ensureGuestSession();
+    void ensureGuestSession().then(() => setGuestReady(true));
   }, []);
 
   const title =
@@ -99,6 +100,17 @@ export default function NewspaperPaperPage({
                               ? "Preparing"
                               : d.status}
                         </Badge>
+                        {d.learner?.learn_complete ? (
+                          <Badge variant="light" color="sage" radius="xl" style={{ flexShrink: 0 }}>
+                            Complete
+                          </Badge>
+                        ) : d.learner?.in_progress ? (
+                          <Badge variant="light" color="lavender" radius="xl" style={{ flexShrink: 0 }}>
+                            {d.learner.questions_total > 0
+                              ? `${d.learner.questions_answered}/${d.learner.questions_total}`
+                              : `${d.learner.questions_answered} answered`}
+                          </Badge>
+                        ) : null}
                       </Group>
                       {/* Actions row: wraps on narrow screens; right-aligned cluster on wider ones.
                           Every card has the same meta+actions structure, so rows align regardless
@@ -139,7 +151,7 @@ export default function NewspaperPaperPage({
                             router.push(`/practice/newspaper/e/${d.id}`);
                           }}
                         >
-                          Learn
+                          {d.learner?.in_progress ? "Continue" : "Learn"}
                         </Button>
                       </Group>
                     </Stack>

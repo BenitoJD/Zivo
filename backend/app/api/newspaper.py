@@ -9,8 +9,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models import Account
 from app.services import newspaper as newspaper_svc
-from app.services.auth import require_admin, require_csrf
+from app.services.auth import get_optional_user, require_admin, require_csrf
+from app.services.document_learner_state import learner_key_for_user
+from app.services.guest_session import guest_session_for_read
 
 router = APIRouter()
 
@@ -34,8 +37,14 @@ def catalog(db: Session = Depends(get_db)) -> dict:
 
 
 @router.get("/papers/{paper_slug}/days")
-def paper_days(paper_slug: str, db: Session = Depends(get_db)) -> dict:
-    return newspaper_svc.list_paper_days(db, paper_slug)
+def paper_days(
+    paper_slug: str,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    learner_key = learner_key_for_user(user.id if user else None, guest_id)
+    return newspaper_svc.list_paper_days(db, paper_slug, learner_key=learner_key)
 
 
 @router.get("/editions/{edition_id}")

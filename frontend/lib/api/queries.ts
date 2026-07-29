@@ -918,6 +918,12 @@ export type NewspaperCatalog = {
   since: string;
   papers: NewspaperPaper[];
 };
+export type NewspaperDayLearner = {
+  questions_answered: number;
+  questions_total: number;
+  learn_complete: boolean;
+  in_progress: boolean;
+};
 export type NewspaperDay = {
   id: string;
   edition_date: string;
@@ -925,6 +931,7 @@ export type NewspaperDay = {
   document_id: string | null;
   has_blog?: boolean;
   blog_href?: string | null;
+  learner?: NewspaperDayLearner;
 };
 export type NewspaperDays = {
   paper_slug: string;

@@ -67,7 +67,12 @@ def list_catalog(db: Session) -> dict[str, Any]:
     }
 
 
-def list_paper_days(db: Session, paper_slug: str) -> dict[str, Any]:
+def list_paper_days(
+    db: Session,
+    paper_slug: str,
+    *,
+    learner_key: str | None = None,
+) -> dict[str, Any]:
     if not newspaper_repo.is_brand_allowed(db, paper_slug):
         return {
             "paper_slug": paper_slug,
@@ -78,25 +83,65 @@ def list_paper_days(db: Session, paper_slug: str) -> dict[str, Any]:
     since = window_start()
     days = newspaper_repo.list_days_for_paper(db, paper_slug=paper_slug, since=since)
     title = days[0]["paper_title"] if days else paper_slug
+
+    doc_ids = [d["document_id"] for d in days if d.get("document_id")]
+    learner_progress: dict[uuid.UUID, dict[str, Any]] = {}
+    question_totals: dict[str, int] = {}
+    if learner_key and doc_ids:
+        from app.services.document_learner_state import load_learner_progress_batch
+
+        learner_progress = load_learner_progress_batch(db, doc_ids, learner_key)
+        totals_rows = db.execute(
+            text(
+                """
+                SELECT payload->>'artifact_id' AS document_id, COUNT(*)::int AS n
+                FROM intel.assertion
+                WHERE payload->>'artifact_id' = ANY(:doc_ids)
+                  AND status = 'active'
+                  AND COALESCE(payload->>'serve_mode', 'learn') = 'learn'
+                GROUP BY 1
+                """
+            ),
+            {"doc_ids": [str(doc_id) for doc_id in doc_ids]},
+        ).mappings().all()
+        question_totals = {str(row["document_id"]): int(row["n"]) for row in totals_rows}
+
+    day_items: list[dict[str, Any]] = []
+    for d in days:
+        item: dict[str, Any] = {
+            "id": str(d["id"]),
+            "edition_date": d["edition_date"].isoformat(),
+            "status": d["status"],
+            "document_id": str(d["document_id"]) if d.get("document_id") else None,
+            "has_blog": bool(d.get("blog_live")),
+            "blog_href": (
+                f"/learn/newspaper/{paper_slug}/{d['edition_date'].isoformat()}"
+                if d.get("blog_live")
+                else None
+            ),
+        }
+        document_id = d.get("document_id")
+        if learner_key and document_id:
+            progress = learner_progress.get(document_id) or {}
+            answered = progress.get("learn_answered_ids") or progress.get("answered_ids") or []
+            answered_count = len(answered) if isinstance(answered, list) else 0
+            total = question_totals.get(str(document_id), 0)
+            learn_complete = bool(progress.get("learn_complete"))
+            if not learn_complete and total > 0 and answered_count >= total:
+                learn_complete = True
+            item["learner"] = {
+                "questions_answered": answered_count,
+                "questions_total": total,
+                "learn_complete": learn_complete,
+                "in_progress": answered_count > 0 and not learn_complete,
+            }
+        day_items.append(item)
+
     return {
         "paper_slug": paper_slug,
         "paper_title": title,
         "since": since.isoformat(),
-        "days": [
-            {
-                "id": str(d["id"]),
-                "edition_date": d["edition_date"].isoformat(),
-                "status": d["status"],
-                "document_id": str(d["document_id"]) if d.get("document_id") else None,
-                "has_blog": bool(d.get("blog_live")),
-                "blog_href": (
-                    f"/learn/newspaper/{paper_slug}/{d['edition_date'].isoformat()}"
-                    if d.get("blog_live")
-                    else None
-                ),
-            }
-            for d in days
-        ],
+        "days": day_items,
     }
 
 

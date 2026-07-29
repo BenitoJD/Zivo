@@ -47,6 +47,36 @@ def resolve_subject_entity(
 
     return get_or_create_concept_entity(db, f"guest:{guest_id}", f"Guest {guest_id[:8]}")
 
+
+def answered_assertion_ids(
+    db: Session,
+    subject_entity_id: uuid.UUID,
+    assertion_ids: list[str] | None = None,
+) -> set[str]:
+    """Assertion ids this learner has already answered (first-attempt signal)."""
+    params: dict[str, object] = {
+        "entity_id": subject_entity_id,
+        "metric_id": concept_id(db, ANSWER_CORRECT_METRIC_URI),
+    }
+    filter_sql = ""
+    if assertion_ids:
+        params["assertion_ids"] = assertion_ids
+        filter_sql = "AND source_assertion_id::text = ANY(:assertion_ids)"
+    rows = db.execute(
+        text(
+            f"""
+            SELECT source_assertion_id::text AS id
+            FROM intel.measurement
+            WHERE subject_entity_id = :entity_id
+              AND metric_concept_id = :metric_id
+              {filter_sql}
+            """
+        ),
+        params,
+    ).scalars().all()
+    return {str(row) for row in rows}
+
+
 # One row per answer carries the verdict (value_numeric) plus choice/latency/confidence
 # in value_json, under this metric.
 ANSWER_CORRECT_METRIC_URI = "/vocab/metric/answer.correct"

@@ -35,7 +35,13 @@ type QuestionItem = {
   /** True for select-all-that-apply; answers come from the grade endpoint. */
   is_multi?: boolean;
 };
-type QuestionsResponse = { qid: string; question_count: number; items: QuestionItem[] };
+type QuestionsResponse = {
+  qid: string;
+  question_count: number;
+  items: QuestionItem[];
+  answered_ids?: string[];
+  resume_index?: number;
+};
 
 export default function PracticeRunPage({ params }: { params: Promise<{ qid: string }> }) {
   const router = useRouter();
@@ -52,6 +58,7 @@ export default function PracticeRunPage({ params }: { params: Promise<{ qid: str
   const [error, setError] = useState<string | null>(null);
   const [score, setScore] = useState({ correct: 0, answered: 0 });
   const [finished, setFinished] = useState(false);
+  const [alreadyComplete, setAlreadyComplete] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -73,6 +80,14 @@ export default function PracticeRunPage({ params }: { params: Promise<{ qid: str
       }
       setItems(data.items);
       setTotal(data.question_count);
+      const resumeAt = data.resume_index ?? 0;
+      if (resumeAt > 0 && resumeAt < data.items.length) {
+        setIndex(resumeAt);
+      } else if (resumeAt >= data.items.length && data.items.length > 0) {
+        setAlreadyComplete(true);
+        setFinished(true);
+        setScore({ correct: 0, answered: data.answered_ids?.length ?? data.items.length });
+      }
     } catch {
       setError("Could not load questions. Please try again.");
     } finally {
@@ -139,6 +154,7 @@ export default function PracticeRunPage({ params }: { params: Promise<{ qid: str
     setFeedback(null);
     setScore({ correct: 0, answered: 0 });
     setFinished(false);
+    setAlreadyComplete(false);
   }, []);
 
   const pct = useMemo(
@@ -184,9 +200,13 @@ export default function PracticeRunPage({ params }: { params: Promise<{ qid: str
           <Stack align="center" gap="lg" ta="center">
             <LearnerPageHeader
               eyebrow="Session complete"
-              title="You scored"
-              titleAccent={`${score.correct} / ${score.answered}`}
-              subtitle={`That's ${pctScore}% correct on this concept.`}
+              title={alreadyComplete ? "You're caught up" : "You scored"}
+              titleAccent={alreadyComplete ? undefined : `${score.correct} / ${score.answered}`}
+              subtitle={
+                alreadyComplete
+                  ? `You already answered ${score.answered} question${score.answered === 1 ? "" : "s"} on this concept.`
+                  : `That's ${pctScore}% correct on this concept.`
+              }
             />
             <Group gap="sm" mt="md">
               <Button radius="xl" color="sage" onClick={restart}>

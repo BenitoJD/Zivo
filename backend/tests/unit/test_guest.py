@@ -5,7 +5,12 @@ from __future__ import annotations
 import uuid
 
 from app.models import Document, User
-from app.services.guest import can_access_document, claim_guest_documents, document_owned_by_guest
+from app.services.guest import (
+    can_access_document,
+    claim_guest_documents,
+    claim_guest_progress,
+    document_owned_by_guest,
+)
 
 
 def _doc(**kwargs) -> Document:
@@ -100,3 +105,28 @@ def test_claim_guest_documents_skips_without_cookie() -> None:
     claimed = claim_guest_documents(db, account_id, read_guest_id_from_cookie(None))
     assert claimed == []
     db.commit.assert_not_called()
+
+
+def test_claim_guest_progress_skips_without_cookie() -> None:
+    from unittest.mock import MagicMock
+
+    db = MagicMock()
+    result = claim_guest_progress(db, uuid.uuid4(), "user", None)
+    assert result == {
+        "learner_state_rows": 0,
+        "measurements_moved": 0,
+        "sd_sessions_moved": 0,
+    }
+    db.commit.assert_not_called()
+
+
+def test_merge_learner_progress_rows_unions_answered_ids() -> None:
+    from app.services.guest import _merge_learner_progress_rows
+
+    merged = _merge_learner_progress_rows(
+        {"learn_answered_ids": ["a", "b"], "session_items_answered": 2, "mastery_stop": True},
+        {"learn_answered_ids": ["b", "c"], "session_items_answered": 1, "mastery_stop": False},
+    )
+    assert merged["learn_answered_ids"] == ["b", "c", "a"]
+    assert merged["session_items_answered"] == 2
+    assert merged["mastery_stop"] is True
