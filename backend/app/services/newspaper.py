@@ -88,10 +88,10 @@ def list_paper_days(db: Session, paper_slug: str) -> dict[str, Any]:
                 "edition_date": d["edition_date"].isoformat(),
                 "status": d["status"],
                 "document_id": str(d["document_id"]) if d.get("document_id") else None,
-                "has_blog": d.get("blog_status") == "published" and bool(d.get("blog_post_id")),
+                "has_blog": bool(d.get("blog_live")),
                 "blog_href": (
                     f"/learn/newspaper/{paper_slug}/{d['edition_date'].isoformat()}"
-                    if d.get("blog_status") == "published" and d.get("blog_post_id")
+                    if d.get("blog_live")
                     else None
                 ),
             }
@@ -455,6 +455,9 @@ def _maybe_enqueue_edition_digest(db: Session, doc: Document) -> None:
     if not row:
         return
     if row.get("blog_status") == "published" and row.get("blog_post_id"):
+        return
+
+    if row.get("blog_post_id"):
         return
 
     source_key = f"{row['paper_slug']}:{row['edition_date'].isoformat()}"

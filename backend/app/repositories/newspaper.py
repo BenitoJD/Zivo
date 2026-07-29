@@ -198,6 +198,30 @@ def list_existing_paper_days(db: Session) -> set[tuple[str, date]]:
     return {(str(slug), ed_date) for slug, ed_date in rows}
 
 
+def repair_edition_blog_links(db: Session) -> int:
+    """Promote editions whose linked seo_post is published but blog_status drifted."""
+    result = db.execute(
+        text(
+            """
+            UPDATE qb.newspaper_edition e
+            SET blog_status = 'published',
+                blog_published_at = COALESCE(
+                  e.blog_published_at, p.published_at, p.created_at, now()
+                ),
+                updated_at = now()
+            FROM qb.seo_post p
+            WHERE e.blog_post_id = p.id
+              AND p.status = 'published'
+              AND e.blog_status <> 'published'
+            """
+        )
+    )
+    n = int(result.rowcount or 0)
+    if n:
+        db.commit()
+    return n
+
+
 def get_edition_by_paper_day(
     db: Session, *, paper_slug: str, edition_date: date
 ) -> dict[str, Any] | None:
@@ -288,13 +312,16 @@ def list_days_for_paper(db: Session, *, paper_slug: str, since: date) -> list[di
     rows = db.execute(
         text(
             """
-            SELECT id, paper_title, edition_date, status, document_id, location_raw,
-                   blog_post_id, blog_status
-            FROM qb.newspaper_edition
-            WHERE paper_slug = :slug
-              AND edition_date >= :since
-              AND status IN ('ready', 'indexing', 'pending')
-            ORDER BY edition_date DESC
+            SELECT e.id, e.paper_title, e.edition_date, e.status, e.document_id, e.location_raw,
+                   e.blog_post_id, e.blog_status,
+                   (p.id IS NOT NULL AND p.status = 'published') AS blog_live
+            FROM qb.newspaper_edition e
+            LEFT JOIN qb.seo_post p
+              ON p.id = e.blog_post_id AND p.status = 'published'
+            WHERE e.paper_slug = :slug
+              AND e.edition_date >= :since
+              AND e.status IN ('ready', 'indexing', 'pending')
+            ORDER BY e.edition_date DESC
             """
         ),
         {"slug": paper_slug, "since": since},

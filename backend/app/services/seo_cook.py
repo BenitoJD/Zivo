@@ -345,6 +345,12 @@ def cook_edition_digest(db: Session, edition_id: uuid.UUID) -> dict[str, Any]:
     paper_slug = str(ed["paper_slug"])
     edition_date = ed["edition_date"]
     source_key = _edition_source_key(paper_slug, edition_date)
+    fp = _edition_fingerprint(paper_slug, edition_date)
+
+    linked = _sync_edition_blog_link(db, edition_id=edition_id, fingerprint=fp)
+    if linked:
+        return linked
+
     if seo_repo.attempt_exists(db, "newspaper_edition", source_key):
         return {"skipped": True, "reason": "already_attempted"}
 
@@ -375,6 +381,15 @@ def cook_edition_digest(db: Session, edition_id: uuid.UUID) -> dict[str, Any]:
         lede=article["lede"],
     )
     if not dedupe.ok:
+        if dedupe.reason == "fingerprint_taken":
+            linked = _link_existing_edition_post(
+                db,
+                edition_id=edition_id,
+                fingerprint=fp,
+                source_key=source_key,
+            )
+            if linked:
+                return linked
         return _skip_edition(db, edition_id, source_key, f"dedupe:{dedupe.reason}")
 
     slug = unique_slug(db, f"{paper_slug}-{edition_date.isoformat()}")
@@ -451,6 +466,86 @@ def cook_edition_digest(db: Session, edition_id: uuid.UUID) -> dict[str, Any]:
     }
 
 
+def _link_existing_edition_post(
+    db: Session,
+    *,
+    edition_id: uuid.UUID,
+    fingerprint: str,
+    source_key: str,
+) -> dict[str, Any] | None:
+    """Attach edition to an already-published digest for this fingerprint."""
+    from app.repositories import newspaper as newspaper_repo
+
+    existing = seo_repo.get_published_post_by_fingerprint(db, fingerprint)
+    if not existing:
+        return None
+    post_id = uuid.UUID(str(existing["id"]))
+    newspaper_repo.link_edition_blog(
+        db,
+        edition_id=edition_id,
+        post_id=post_id,
+        status="published",
+    )
+    seo_repo.record_attempt(
+        db,
+        source_kind="newspaper_edition",
+        source_key=source_key,
+        outcome="published",
+        reason="linked_existing",
+        post_id=post_id,
+    )
+    db.commit()
+    logger.info(
+        "edition digest linked existing edition=%s post=%s",
+        edition_id,
+        post_id,
+    )
+    return {
+        "published": True,
+        "linked_existing": True,
+        "post_id": str(post_id),
+        "edition_id": str(edition_id),
+    }
+
+
+def _sync_edition_blog_link(
+    db: Session,
+    *,
+    edition_id: uuid.UUID,
+    fingerprint: str,
+) -> dict[str, Any] | None:
+    """Repair or short-circuit when a published post is already linked."""
+    from app.repositories import newspaper as newspaper_repo
+
+    ed = newspaper_repo.get_edition(db, edition_id)
+    if not ed:
+        return None
+    post_id = ed.get("blog_post_id")
+    if post_id:
+        post = seo_repo.get_post_by_id(db, uuid.UUID(str(post_id)), include_internal=True)
+        if post and post.get("status") == "published":
+            if ed.get("blog_status") != "published":
+                newspaper_repo.link_edition_blog(
+                    db,
+                    edition_id=edition_id,
+                    post_id=uuid.UUID(str(post_id)),
+                    status="published",
+                )
+                db.commit()
+            return {"skipped": True, "reason": "already_linked"}
+
+    existing = seo_repo.get_published_post_by_fingerprint(db, fingerprint)
+    if not existing:
+        return None
+    source_key = _edition_source_key(str(ed["paper_slug"]), ed["edition_date"])
+    return _link_existing_edition_post(
+        db,
+        edition_id=edition_id,
+        fingerprint=fingerprint,
+        source_key=source_key,
+    )
+
+
 def _skip_edition(
     db: Session,
     edition_id: uuid.UUID,
@@ -458,6 +553,39 @@ def _skip_edition(
     reason: str,
 ) -> dict[str, Any]:
     from app.repositories import newspaper as newspaper_repo
+
+    ed = newspaper_repo.get_edition(db, edition_id)
+    if ed and ed.get("blog_post_id"):
+        post = seo_repo.get_post_by_id(
+            db, uuid.UUID(str(ed["blog_post_id"])), include_internal=True
+        )
+        if post and post.get("status") == "published":
+            newspaper_repo.link_edition_blog(
+                db,
+                edition_id=edition_id,
+                post_id=uuid.UUID(str(ed["blog_post_id"])),
+                status="published",
+            )
+            seo_repo.record_attempt(
+                db,
+                source_kind="newspaper_edition",
+                source_key=source_key,
+                outcome="published",
+                reason="linked_existing",
+                post_id=uuid.UUID(str(ed["blog_post_id"])),
+            )
+            db.commit()
+            logger.info(
+                "edition digest kept published link %s (skip reason=%s)",
+                source_key,
+                reason,
+            )
+            return {
+                "published": True,
+                "linked_existing": True,
+                "reason": reason,
+                "source_key": source_key,
+            }
 
     seo_repo.record_attempt(
         db,

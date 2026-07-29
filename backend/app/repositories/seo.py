@@ -162,6 +162,24 @@ def fingerprint_taken(db: Session, fingerprint: str) -> bool:
     return row is not None
 
 
+def get_published_post_by_fingerprint(
+    db: Session, fingerprint: str
+) -> dict[str, Any] | None:
+    row = db.execute(
+        text(
+            """
+            SELECT id, slug, status, topic_fingerprint
+            FROM qb.seo_post
+            WHERE topic_fingerprint = :fp AND status = 'published'
+            ORDER BY published_at DESC NULLS LAST, created_at DESC
+            LIMIT 1
+            """
+        ),
+        {"fp": fingerprint},
+    ).mappings().first()
+    return dict(row) if row else None
+
+
 def slug_taken(db: Session, slug: str) -> bool:
     row = db.execute(
         text("SELECT 1 FROM qb.seo_post WHERE slug = :s LIMIT 1"),
@@ -632,7 +650,7 @@ def get_edition_blog_post(
             JOIN qb.seo_post p ON p.id = e.blog_post_id
             WHERE e.paper_slug = :slug
               AND e.edition_date = :day
-              AND e.blog_status = 'published'
+              AND e.blog_post_id IS NOT NULL
               AND p.status = 'published'
             """
         ),

@@ -142,6 +142,13 @@ def _backfill_edition_digests() -> int:
 
 @eta_scheduler(every_minutes=60, key="newspaper.backfill_edition_blogs")
 def run_newspaper_backfill_blogs() -> None:
+    from app.repositories import newspaper as newspaper_repo
+
+    repaired = 0
+    with SessionLocal() as db:
+        repaired = newspaper_repo.repair_edition_blog_links(db)
+    if repaired:
+        logger.info("newspaper repaired %s edition blog links", repaired)
     n = _backfill_edition_digests()
     if n:
         logger.info("newspaper backfill enqueued %s edition digests", n)
