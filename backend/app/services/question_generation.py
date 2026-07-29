@@ -15,6 +15,10 @@ def enqueue_generate_if_needed(db: Session, document_id: uuid.UUID) -> Job | Non
     doc = db.get(Document, document_id)
     if not doc or doc.status != "ready":
         return None
+    from app.services.background_prep import is_background_prep
+
+    if is_background_prep(doc):
+        return None
     return enqueue_initial_pool(db, document_id)
 
 

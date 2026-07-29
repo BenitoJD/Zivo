@@ -63,14 +63,16 @@ export function PageSelectionScreen({
   pageTextsLoading,
   thumbCanvasRefs,
   confirming,
+  confirmingMode,
   setupError,
-  confirmLabel,
   isCompact,
   onRangeChange,
   onPageToggle,
   onSelectAll,
   onClearAll,
-  onConfirm,
+  onConfirmNow,
+  onPrepInBackground,
+  showBackgroundPrep = true,
 }: {
   subtitle: string;
   pageCount: number;
@@ -88,14 +90,16 @@ export function PageSelectionScreen({
   pageTextsLoading?: boolean;
   thumbCanvasRefs: React.MutableRefObject<Record<number, HTMLCanvasElement | null>>;
   confirming: boolean;
+  confirmingMode: "now" | "background" | null;
   setupError: string | null;
-  confirmLabel: string;
   isCompact: boolean;
   onRangeChange: (from: number, to: number) => void;
   onPageToggle: (page: number, shiftKey: boolean) => void;
   onSelectAll: () => void;
   onClearAll: () => void;
-  onConfirm: () => void;
+  onConfirmNow: () => void;
+  onPrepInBackground: () => void;
+  showBackgroundPrep?: boolean;
 }) {
   const bleed = shellBleedPx(isCompact);
   const padX = isCompact ? SELECTION_PAD_X_COMPACT : SELECTION_PAD_X;
@@ -158,13 +162,15 @@ export function PageSelectionScreen({
           pageTextsLoading={pageTextsLoading}
           thumbCanvasRefs={thumbCanvasRefs}
           confirming={confirming}
+          confirmingMode={confirmingMode}
           setupError={setupError}
-          confirmLabel={confirmLabel}
           onRangeChange={onRangeChange}
           onPageToggle={onPageToggle}
           onSelectAll={onSelectAll}
           onClearAll={onClearAll}
-          onConfirm={onConfirm}
+          onConfirmNow={onConfirmNow}
+          onPrepInBackground={onPrepInBackground}
+          showBackgroundPrep={showBackgroundPrep}
         />
       </Box>
     </Box>
@@ -226,13 +232,15 @@ export function PageSelectionBody({
   pageTextsLoading,
   thumbCanvasRefs,
   confirming,
+  confirmingMode,
   setupError,
-  confirmLabel,
   onRangeChange,
   onPageToggle,
   onSelectAll,
   onClearAll,
-  onConfirm,
+  onConfirmNow,
+  onPrepInBackground,
+  showBackgroundPrep = true,
 }: {
   padX: number;
   pageCount: number;
@@ -247,13 +255,15 @@ export function PageSelectionBody({
   pageTextsLoading?: boolean;
   thumbCanvasRefs: React.MutableRefObject<Record<number, HTMLCanvasElement | null>>;
   confirming: boolean;
+  confirmingMode: "now" | "background" | null;
   setupError: string | null;
-  confirmLabel: string;
   onRangeChange: (from: number, to: number) => void;
   onPageToggle: (page: number, shiftKey: boolean) => void;
   onSelectAll: () => void;
   onClearAll: () => void;
-  onConfirm: () => void;
+  onConfirmNow: () => void;
+  onPrepInBackground: () => void;
+  showBackgroundPrep?: boolean;
 }) {
   const isCompact = useMediaQuery(STUDY_COMPACT_BP);
 
@@ -303,12 +313,14 @@ export function PageSelectionBody({
         sliderMarks={sliderMarks}
         selectedPages={selectedPages}
         isDark={isDark}
-        confirming={confirming}
-        setupError={setupError}
-        confirmLabel={confirmLabel}
-        onRangeChange={onRangeChange}
-        onConfirm={onConfirm}
-      />
+          confirming={confirming}
+          confirmingMode={confirmingMode}
+          setupError={setupError}
+          onRangeChange={onRangeChange}
+          onConfirmNow={onConfirmNow}
+          onPrepInBackground={onPrepInBackground}
+          showBackgroundPrep={showBackgroundPrep}
+        />
     </Box>
   );
 }
@@ -376,10 +388,12 @@ function SelectionActionBar({
   selectedPages,
   isDark,
   confirming,
+  confirmingMode,
   setupError,
-  confirmLabel,
   onRangeChange,
-  onConfirm,
+  onConfirmNow,
+  onPrepInBackground,
+  showBackgroundPrep = true,
 }: {
   padX: number;
   isCompact: boolean;
@@ -390,10 +404,12 @@ function SelectionActionBar({
   selectedPages: number[];
   isDark: boolean;
   confirming: boolean;
+  confirmingMode: "now" | "background" | null;
   setupError: string | null;
-  confirmLabel: string;
   onRangeChange: (from: number, to: number) => void;
-  onConfirm: () => void;
+  onConfirmNow: () => void;
+  onPrepInBackground: () => void;
+  showBackgroundPrep?: boolean;
 }) {
   const hasSelection = selectedPages.length > 0;
   const summary = formatSelectionSummary(selectedPages, pageCount);
@@ -516,6 +532,27 @@ function SelectionActionBar({
           >
             {summary}
           </Text>
+        <Group
+          gap="sm"
+          wrap="wrap"
+          justify={isCompact ? "stretch" : "flex-end"}
+          align="center"
+          style={{ flex: isCompact ? "1 1 100%" : "0 0 auto" }}
+        >
+          <Button
+            size={isCompact ? "sm" : "md"}
+            radius="xl"
+            variant="default"
+            px={isCompact ? "md" : "lg"}
+            fw={600}
+            fullWidth={isCompact}
+            onClick={onPrepInBackground}
+            loading={confirming && confirmingMode === "background"}
+            disabled={!hasSelection || (confirming && confirmingMode === "now")}
+            style={{ whiteSpace: "nowrap", display: showBackgroundPrep ? undefined : "none" }}
+          >
+            Prep in background
+          </Button>
           <Button
             size={isCompact ? "sm" : "md"}
             radius="xl"
@@ -525,13 +562,14 @@ function SelectionActionBar({
             fw={600}
             fullWidth={isCompact}
             rightSection={<IconArrowRight size={isCompact ? 15 : 18} stroke={2.25} />}
-            onClick={onConfirm}
-            loading={confirming}
-            disabled={!hasSelection}
-            style={{ flex: isCompact ? "1 1 100%" : "0 0 auto", whiteSpace: "nowrap" }}
+            onClick={onConfirmNow}
+            loading={confirming && confirmingMode === "now"}
+            disabled={!hasSelection || (confirming && confirmingMode === "background")}
+            style={{ whiteSpace: "nowrap" }}
           >
-            {confirmLabel}
+            Start learning now
           </Button>
+        </Group>
         </Group>
 
         {setupError && (

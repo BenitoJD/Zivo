@@ -1130,7 +1130,14 @@ export function useSourcesQuery(enabled = true) {
     queryFn: () => apiGet<SourceDocument[]>("/api/sources"),
     enabled: enabled && identity !== "pending",
     refetchInterval: (query) =>
-      query.state.data?.some((d) => d.status === "indexing") ? 4000 : false,
+      query.state.data?.some(
+        (d) =>
+          d.status === "indexing" ||
+          d.status === "prepping" ||
+          (d.meta?.prep_mode === "background" && !d.meta?.prep_complete),
+      )
+        ? 4000
+        : false,
   });
 }
 

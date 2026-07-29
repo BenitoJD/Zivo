@@ -218,10 +218,15 @@ def ingest_page_job(payload: dict) -> dict:
 
         mark_page_ingested(db, doc, page_number)
         db.commit()
-        refresh_rag_window_status(db, document_id)
-        from app.services.question_pool import maybe_enqueue_early_page_triage
+        from app.services.background_prep import is_background_prep, on_page_ingested_for_prep
 
-        maybe_enqueue_early_page_triage(db, document_id, page_number=page_number)
+        if is_background_prep(doc):
+            on_page_ingested_for_prep(db, document_id)
+        else:
+            refresh_rag_window_status(db, document_id)
+            from app.services.question_pool import maybe_enqueue_early_page_triage
+
+            maybe_enqueue_early_page_triage(db, document_id, page_number=page_number)
     return {"document_id": str(document_id), "page_number": page_number, "chunks": len(chunks)}
 
 
@@ -271,6 +276,26 @@ def ingest_rag_window_job(payload: dict) -> dict:
         "document_id": str(document_id),
         "pages": target,
         "ingest_queued": pages_to_ingest,
+    }
+
+
+@eta(name="ingest.full_range", workload=JobWorkload.cpu, priority=JobPriority.LOW)
+def ingest_full_range_job(payload: dict) -> dict:
+    from app.services.background_prep import is_background_prep, start_full_range_ingest
+
+    document_id = UUID(payload["document_id"])
+    with SessionLocal() as db:
+        doc = db.get(Document, document_id)
+        if not doc:
+            return {"skipped": True}
+        if not is_background_prep(doc):
+            return {"skipped": True, "reason": "not_background_prep"}
+        progress = get_progress(doc)
+        current = int(payload.get("current_page") or progress.get("current_page") or 1)
+        missing = start_full_range_ingest(db, doc, current_page=current)
+    return {
+        "document_id": str(document_id),
+        "ingest_queued": missing,
     }
 
 

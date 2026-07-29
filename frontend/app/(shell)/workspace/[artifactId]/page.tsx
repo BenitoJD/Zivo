@@ -78,6 +78,12 @@ import {
 } from "@/app/workspace/_components/studyLayout";
 import { PetPlayground } from "@/app/_components/pets/PetPlayground";
 import { indexingStage } from "@/lib/constants";
+import {
+  isBackgroundPrepActive,
+  prepProgressPercent,
+  prepScreenStatus,
+  type PrepProgress,
+} from "@/lib/prepStatus";
 import { getCachedPdfDocument, loadPdfForArtifact } from "@/lib/pdf";
 import { budgetModeQuery, defaultWorkspaceMode } from "@/lib/studyPreferences";
 import { formatMcqStemForDisplay } from "@/lib/mcqStemFormat";
@@ -155,6 +161,7 @@ export default function WorkspaceArtifactPage({
   const [pages, setPages] = useState<PagesInfo | null>(null);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [confirmingMode, setConfirmingMode] = useState<"now" | "background" | null>(null);
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
   const [lastClickedPage, setLastClickedPage] = useState<number | null>(null);
   const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
@@ -486,7 +493,11 @@ export default function WorkspaceArtifactPage({
   // until a manual refresh. Own the poll here so it always runs while indexing
   // and stops the instant the document is ready.
   useEffect(() => {
-    if (invalidArtifactId || artifact?.status !== "indexing") return;
+    const prepping =
+      artifact?.status === "indexing" ||
+      artifact?.status === "prepping" ||
+      isBackgroundPrepActive(artifact?.meta);
+    if (invalidArtifactId || !prepping) return;
     let cancelled = false;
     const poll = async () => {
       try {
@@ -503,7 +514,7 @@ export default function WorkspaceArtifactPage({
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [invalidArtifactId, artifactId, artifact?.status, queryClient]);
+  }, [invalidArtifactId, artifactId, artifact?.status, artifact?.meta?.prep_mode, artifact?.meta?.prep_complete, queryClient]);
 
   useEffect(() => {
     void ensureGuestSession();
@@ -1080,12 +1091,13 @@ export default function WorkspaceArtifactPage({
     }
   }
 
-  async function confirmRange() {
+  async function confirmRange(prepMode: "now" | "background" = "now") {
     if (sortedSelection.length === 0) {
       setSetupError("Select at least one page to study.");
       return;
     }
     setConfirming(true);
+    setConfirmingMode(prepMode);
     setSetupError(null);
     try {
       const from = sortedSelection[0];
@@ -1094,25 +1106,29 @@ export default function WorkspaceArtifactPage({
         from,
         to,
         pages: sortedSelection,
+        prep_mode: prepMode,
       });
       const updated = await apiGet<ArtifactMeta>(`/api/artifacts/${artifactId}`);
       queryClient.setQueryData(queryKeys.artifact(artifactId), updated);
       setArtifact(updated);
       void queryClient.invalidateQueries({ queryKey: queryKeys.artifactPages(artifactId) });
       setReselectOpen(false);
-      setQueue(null);
-      setMcqLoading(true);
-      setQuestion("Loading questions…");
-      setOptions([]);
-      setSelected(null);
-      setGradeState(null);
-      setFeedback(null);
-      setAnsweredHistory([]);
-      setReviewIndex(null);
+      if (prepMode === "now") {
+        setQueue(null);
+        setMcqLoading(true);
+        setQuestion("Loading questions…");
+        setOptions([]);
+        setSelected(null);
+        setGradeState(null);
+        setFeedback(null);
+        setAnsweredHistory([]);
+        setReviewIndex(null);
+      }
     } catch (e) {
       setSetupError(e instanceof Error ? e.message : "Could not start indexing");
     } finally {
       setConfirming(false);
+      setConfirmingMode(null);
     }
   }
 
@@ -1252,8 +1268,8 @@ export default function WorkspaceArtifactPage({
         pageTextsLoading={pageTextsLoading}
         thumbCanvasRefs={thumbCanvasRefs}
         confirming={confirming}
+        confirmingMode={confirmingMode}
         setupError={setupError}
-        confirmLabel="Start studying"
         isCompact={isNarrow}
         onRangeChange={handleRangeChange}
         onPageToggle={handlePageToggle}
@@ -1265,7 +1281,8 @@ export default function WorkspaceArtifactPage({
           setSelectedPages([]);
           setLastClickedPage(null);
         }}
-        onConfirm={() => void confirmRange()}
+        onConfirmNow={() => void confirmRange("now")}
+        onPrepInBackground={() => void confirmRange("background")}
       />
     );
   }
@@ -1291,9 +1308,21 @@ export default function WorkspaceArtifactPage({
     );
   }
 
-  if (artifact.status === "indexing") {
-    const progress = artifact.index_progress ?? 0;
-    const stage = indexingStage(progress);
+  if (
+    artifact.status === "indexing" ||
+    artifact.status === "prepping" ||
+    isBackgroundPrepActive(artifact.meta)
+  ) {
+    const prepProgress = artifact.meta?.prep_progress as PrepProgress | undefined;
+    const backgroundPrep = isBackgroundPrepActive(artifact.meta);
+    const progress = prepProgressPercent(artifact.status, prepProgress, artifact.index_progress ?? 0);
+    const prepStage = backgroundPrep
+      ? prepScreenStatus(prepProgress, Math.floor(Date.now() / 4000))
+      : null;
+    const indexStage = backgroundPrep ? null : indexingStage(artifact.index_progress ?? 0);
+    const title = prepStage?.title ?? indexStage?.title ?? "Preparing";
+    const detail = prepStage?.detail ?? indexStage?.detail ?? "Getting your source ready";
+    const phaseLabel = prepStage?.phaseLabel ?? "Progress";
 
     return (
       <Center flex={1} px="sm">
@@ -1302,11 +1331,16 @@ export default function WorkspaceArtifactPage({
             <Stack gap="xs" align="center">
               <PetPlayground height={130} count={1} wander style={{ width: 400, maxWidth: "100%" }} />
               <Text size="lg" fw={500} ta="center" style={{ letterSpacing: "-0.02em", fontFamily: "var(--font-serif), Georgia, serif" }}>
-                {stage.title}
+                {title}
               </Text>
               <Text c="dimmed" ta="center" size="sm">
-                {stage.detail}
+                {detail}
               </Text>
+              {backgroundPrep ? (
+                <Text size="xs" c="dimmed" ta="center" lh={1.5} maw={360}>
+                  We are indexing and cooking questions for your whole selection. Come back when you are ready to study.
+                </Text>
+              ) : null}
               {artifact.filename ? (
                 <Text size="xs" c="dimmed" ta="center" opacity={0.7}>
                   {artifact.filename}
@@ -1316,7 +1350,7 @@ export default function WorkspaceArtifactPage({
             <Stack gap="xs">
               <Group justify="space-between">
                 <Text size="sm" fw={500}>
-                  Progress
+                  {backgroundPrep ? phaseLabel : "Progress"}
                 </Text>
                 <Text size="sm" c="dimmed">
                   {progress}%
@@ -2113,6 +2147,7 @@ export default function WorkspaceArtifactPage({
           pageTextsLoading={pageTextsLoading}
           thumbCanvasRefs={thumbCanvasRefs}
           confirming={confirming}
+          confirmingMode={confirmingMode}
           setupError={setupError}
           bookFinished={nextRangeSuggestion?.bookFinished ?? false}
           onRangeChange={handleRangeChange}
@@ -2126,7 +2161,7 @@ export default function WorkspaceArtifactPage({
             setLastClickedPage(null);
           }}
           onClose={() => setReselectOpen(false)}
-          onConfirm={() => void confirmRange()}
+          onConfirmNow={() => void confirmRange("now")}
         />
       )}
       </Box>

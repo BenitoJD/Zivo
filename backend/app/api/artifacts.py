@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -16,7 +17,15 @@ from app.repositories import workspace as workspace_repo
 from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.api.access import require_document, require_document_source
 from app.services.guest_session import optional_guest_session
-from app.services.jobs import enqueue_rag_window
+from app.services.background_prep import (
+    PREP_MODE_BACKGROUND,
+    PREP_MODE_NOW,
+    apply_prep_meta,
+    compute_prep_progress,
+    is_background_prep,
+    maybe_recover_stuck_background_prep,
+)
+from app.services.jobs import enqueue_full_range_ingest, enqueue_rag_window
 from app.services.parse import refresh_document_page_count
 from app.services.question_pool import reset_for_new_page_range
 from app.services.rag_window import maybe_recover_stuck_indexing
@@ -32,6 +41,7 @@ class PageRangeIn(BaseModel):
     from_page: int = Field(alias="from", ge=1)
     to_page: int = Field(alias="to", ge=1)
     pages: list[int] | None = None
+    prep_mode: Literal["now", "background"] = PREP_MODE_NOW
 
     model_config = {"populate_by_name": True}
 
@@ -60,7 +70,13 @@ def get_artifact(
     # whether to show the page picker.
     refresh_document_page_count(db, doc)
     maybe_recover_stuck_indexing(db, doc)
+    maybe_recover_stuck_background_prep(db, doc)
     db.refresh(doc)
+    meta = dict(doc.meta or {})
+    if is_background_prep(doc):
+        progress = compute_prep_progress(db, doc)
+        meta["prep_progress"] = progress
+        doc.index_progress = int(progress["overall_pct"])
     return ArtifactOut(
         id=doc.id,
         artifact_captured_at=doc.artifact_captured_at,
@@ -118,6 +134,7 @@ def confirm_page_range(
             raise HTTPException(status_code=400, detail="Page range exceeds document")
         selected = {"from": body.from_page, "to": body.to_page}
     reset_for_new_page_range(db, doc, selected)
+    apply_prep_meta(db, doc, prep_mode=body.prep_mode)
     # Drop legacy Settings override so triage/heuristic owns the page budget.
     if "preferred_question_budget" in (doc.meta or {}):
         meta = dict(doc.meta or {})
@@ -130,25 +147,38 @@ def confirm_page_range(
         range(int(selected["from"]), int(selected["to"]) + 1)
     )
     page_from = int(study_pages[0]) if study_pages else int(selected["from"])
-    doc.status = "indexing"
     captured = doc.artifact_captured_at or doc.created_at
+    workspace_status = "prepping" if body.prep_mode == PREP_MODE_BACKGROUND else "indexing"
     workspace_repo.upsert_workspace(
         db,
         account_id=user.id if user else None,
         artifact_id=doc.id,
         artifact_captured_at=captured,
-        status="indexing",
+        status=workspace_status,
         page_count=page_count,
         selected_range=selected,
     )
-    job = enqueue_rag_window(
-        db,
-        document_id=doc.id,
-        account_id=user.id if user else None,
-        current_page=page_from,
-    )
+    if body.prep_mode == PREP_MODE_BACKGROUND:
+        job = enqueue_full_range_ingest(
+            db,
+            document_id=doc.id,
+            account_id=user.id if user else None,
+            current_page=page_from,
+        )
+    else:
+        doc.status = "indexing"
+        job = enqueue_rag_window(
+            db,
+            document_id=doc.id,
+            account_id=user.id if user else None,
+            current_page=page_from,
+        )
     db.commit()
-    return {"activity_id": str(job.payload.get("activity_id", job.id)), "job_id": str(job.id)}
+    return {
+        "activity_id": str(job.payload.get("activity_id", job.id)),
+        "job_id": str(job.id),
+        "prep_mode": body.prep_mode,
+    }
 
 
 @router.get("/{artifact_id}/segments")

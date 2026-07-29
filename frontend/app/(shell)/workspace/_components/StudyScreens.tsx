@@ -450,6 +450,7 @@ export function StudyRangeReselectOverlay({
   pageTextsLoading,
   thumbCanvasRefs,
   confirming,
+  confirmingMode,
   setupError,
   bookFinished,
   onRangeChange,
@@ -457,7 +458,7 @@ export function StudyRangeReselectOverlay({
   onSelectAll,
   onClearAll,
   onClose,
-  onConfirm,
+  onConfirmNow,
 }: {
   filename: string;
   pageCount: number;
@@ -474,6 +475,7 @@ export function StudyRangeReselectOverlay({
   pageTextsLoading?: boolean;
   thumbCanvasRefs: React.MutableRefObject<Record<number, HTMLCanvasElement | null>>;
   confirming: boolean;
+  confirmingMode: "now" | "background" | null;
   setupError: string | null;
   bookFinished: boolean;
   onRangeChange: (from: number, to: number) => void;
@@ -481,7 +483,7 @@ export function StudyRangeReselectOverlay({
   onSelectAll: () => void;
   onClearAll: () => void;
   onClose: () => void;
-  onConfirm: () => void;
+  onConfirmNow: () => void;
 }) {
   const completedLabel =
     completedRange && completedRange.from === completedRange.to
@@ -560,13 +562,15 @@ export function StudyRangeReselectOverlay({
             pageTextsLoading={pageTextsLoading}
             thumbCanvasRefs={thumbCanvasRefs}
             confirming={confirming}
+            confirmingMode={confirmingMode}
             setupError={setupError}
-            confirmLabel="Start studying"
+            showBackgroundPrep={false}
             onRangeChange={onRangeChange}
             onPageToggle={onPageToggle}
             onSelectAll={onSelectAll}
             onClearAll={onClearAll}
-            onConfirm={onConfirm}
+            onConfirmNow={onConfirmNow}
+            onPrepInBackground={onConfirmNow}
           />
         </Box>
       </Paper>

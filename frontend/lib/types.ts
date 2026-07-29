@@ -5,7 +5,7 @@ export type SourceDocument = {
   status: string;
   index_progress: number;
   size_bytes: number;
-  meta?: { source_type?: string; guest_id?: string };
+  meta?: { source_type?: string; guest_id?: string; prep_mode?: string; prep_complete?: boolean };
 };
 
 export type ArtifactMeta = {
@@ -20,6 +20,15 @@ export type ArtifactMeta = {
     page_count?: number;
     newspaper?: boolean;
     hide_source?: boolean;
+    prep_mode?: "now" | "background";
+    prep_phase?: "indexing" | "cooking" | "complete";
+    prep_complete?: boolean;
+    prep_progress?: {
+      phase?: "indexing" | "cooking" | "complete";
+      index_pct?: number;
+      cook_pct?: number;
+      overall_pct?: number;
+    };
     paper_slug?: string;
     paper_title?: string;
     edition_date?: string;

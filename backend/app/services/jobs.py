@@ -155,6 +155,25 @@ def enqueue_rag_window(
     )
 
 
+def enqueue_full_range_ingest(
+    db: Session,
+    document_id: uuid.UUID,
+    *,
+    account_id: uuid.UUID | None = None,
+    current_page: int | None = None,
+) -> Job:
+    payload: dict = {"document_id": str(document_id)}
+    if current_page is not None:
+        payload["current_page"] = int(current_page)
+    return enqueue_job(
+        db,
+        name="ingest.full_range",
+        workload=JobWorkload.cpu,
+        payload=payload,
+        account_id=account_id,
+    )
+
+
 def enqueue_transition_prep(
     db: Session,
     document_id: uuid.UUID,

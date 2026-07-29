@@ -256,7 +256,16 @@ export function sourceLabel(filename: string) {
  * Status only while there is something to say - a ready source stays quiet.
  * (A list where every row shouts "Ready" is a list saying nothing.)
  */
-function sourceStatusMeta(status: SourceDocument["status"], progress: number) {
+function sourceStatusMeta(
+  status: SourceDocument["status"],
+  progress: number,
+  meta?: SourceDocument["meta"],
+) {
+  if (meta?.prep_mode === "background" && !meta?.prep_complete) {
+    return { dot: "var(--mantine-color-lavender-5)", label: `Prepping ${progress}%`, pulse: true };
+  }
+  if (status === "prepping")
+    return { dot: "var(--mantine-color-lavender-5)", label: `Prepping ${progress}%`, pulse: true };
   if (status === "indexing")
     return { dot: "var(--mantine-color-lavender-5)", label: `Indexing ${progress}%`, pulse: true };
   if (status === "pending")
@@ -282,7 +291,7 @@ function SourceRow({
   onDelete: () => void;
 }) {
   const label = sourceLabel(doc.filename);
-  const meta = sourceStatusMeta(doc.status, doc.index_progress);
+  const meta = sourceStatusMeta(doc.status, doc.index_progress, doc.meta);
   return (
     <UnstyledButton
       className="zivo-source-row"
@@ -313,7 +322,7 @@ function SourceRow({
             {meta.label}
           </Text>
         )}
-        {doc.status === "indexing" && (
+        {(doc.status === "indexing" || doc.status === "prepping" || (doc.meta?.prep_mode === "background" && !doc.meta?.prep_complete)) && (
           <span className="zivo-source-track" aria-hidden>
             <span
               className="zivo-source-fill"

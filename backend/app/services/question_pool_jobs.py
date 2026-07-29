@@ -376,6 +376,11 @@ def on_triage_completed(
                 _enqueue_newspaper_edition_triage(db, doc)
                 return job
             _enqueue_newspaper_edition_triage(db, doc)
+            return None
+        from app.services.background_prep import is_background_prep, on_background_triage_completed
+
+        if is_background_prep(doc):
+            return on_background_triage_completed(db, document_id, page=page)
         return None
     progress = get_progress(doc)
     if int(progress.get("current_page") or 0) != page:
@@ -496,6 +501,30 @@ def enqueue_initial_pool(db: Session, document_id: uuid.UUID) -> Job | None:
     return job
 
 
+def enqueue_initial_pool_for_background_prep(db: Session, document_id: uuid.UUID) -> Job | None:
+    """Initialize learn state for background prep without blocking the learner UI."""
+    doc = db.get(Document, document_id)
+    if not doc:
+        return None
+
+    meta = dict(doc.meta or {})
+    if meta.get("no_searchable_text"):
+        return None
+    if meta.get("question_pool_initialized"):
+        return None
+
+    page_from, _ = page_range_bounds(doc)
+    progress = default_progress(doc)
+    progress["current_page"] = page_from
+    progress["generation_pending"] = False
+    meta["question_pool_initialized"] = True
+    meta["question_progress"] = progress
+    doc.meta = meta
+    flag_modified(doc, "meta")
+    db.commit()
+    return None
+
+
 def reset_for_new_page_range(db: Session, doc: Document, selected: dict[str, Any]) -> None:
     """Clear study progress so a new page-range selection starts fresh."""
     pages_raw = selected.get("pages")
@@ -515,6 +544,9 @@ def reset_for_new_page_range(db: Session, doc: Document, selected: dict[str, Any
     meta.pop("question_pool_initialized", None)
     meta.pop("rag_window", None)
     meta.pop("rag_window_ready", None)
+    from app.services.background_prep import clear_prep_meta
+
+    meta = clear_prep_meta(meta)
     save_progress_row(db, doc.id, progress)
     doc.meta = meta
     flag_modified(doc, "meta")
@@ -587,12 +619,18 @@ def on_batch_completed(db: Session, document_id: uuid.UUID, *, page: int, saved:
             logger.warning("coach enqueue failed for doc=%s page=%s", document_id, page, exc_info=True)
     if _is_newspaper_doc(doc):
         maybe_refill_pool(db, document_id)
-    elif current_page == page:
-        _maybe_enqueue_initial_pool_remainder(db, doc, page=page)
-        # Chain the next refill immediately when still below low-water. Waiting
-        # for the next answer used to leave a drained pool with no job queued
-        # after a batch finished — the classic empty-spinner cliff.
-        maybe_refill_pool(db, document_id)
+    else:
+        from app.services.background_prep import is_background_prep, maybe_complete_prep, tick_background_cook
+
+        if is_background_prep(doc):
+            tick_background_cook(db, document_id)
+            maybe_complete_prep(db, doc)
+        elif current_page == page:
+            _maybe_enqueue_initial_pool_remainder(db, doc, page=page)
+            # Chain the next refill immediately when still below low-water. Waiting
+            # for the next answer used to leave a drained pool with no job queued
+            # after a batch finished — the classic empty-spinner cliff.
+            maybe_refill_pool(db, document_id)
     from app.services.newspaper import maybe_mark_newspaper_edition_ready
 
     maybe_mark_newspaper_edition_ready(db, doc)

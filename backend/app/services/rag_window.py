@@ -295,9 +295,11 @@ def refresh_rag_window_status(db: Session, document_id: uuid.UUID) -> bool:
     flag_modified(doc, "meta")
     db.commit()
     if ready:
+        from app.services.background_prep import is_background_prep
         from app.services.question_generation import enqueue_generate_if_needed
 
-        # Newspaper catalog "ready" waits for the first cooked MCQ (see
-        # maybe_mark_newspaper_edition_ready) — not merely RAG index complete.
-        enqueue_generate_if_needed(db, document_id)
+        if not is_background_prep(doc):
+            # Newspaper catalog "ready" waits for the first cooked MCQ (see
+            # maybe_mark_newspaper_edition_ready) — not merely RAG index complete.
+            enqueue_generate_if_needed(db, document_id)
     return ready
