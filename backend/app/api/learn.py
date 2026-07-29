@@ -114,7 +114,7 @@ def _learn_queue_payload(
         study_pages = selected_page_list(doc)
         last_study_page = study_pages[-1] if study_pages else page_range_bounds(doc)[1]
         if page < last_study_page:
-            advance_to_next_page(db, doc)
+            advance_to_next_page(db, doc, learner_key=lk)
             db.refresh(doc)
             progress = get_progress(doc, learner_key=lk)
             ensure_question_pool(db, artifact_id)
@@ -326,10 +326,11 @@ def advance_page(
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> dict:
     doc = require_document(db, artifact_id, user, guest_id)
-    progress = get_progress(doc)
+    lk = learner_key_for(user, guest_id)
+    progress = get_progress(doc, learner_key=lk)
     advanced = False
     if int(progress.get("current_page") or 0) == page and is_page_complete(db, doc, progress):
-        advance_to_next_page(db, doc)
+        advance_to_next_page(db, doc, learner_key=lk)
         ensure_question_pool(db, artifact_id)
         advanced = True
     if user and advanced:

@@ -116,6 +116,7 @@ def test_claim_guest_progress_skips_without_cookie() -> None:
         "learner_state_rows": 0,
         "measurements_moved": 0,
         "sd_sessions_moved": 0,
+        "notes_claimed": 0,
     }
     db.commit.assert_not_called()
 

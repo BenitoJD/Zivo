@@ -560,16 +560,14 @@ def test_newspaper_save_progress_without_learner_key_skips_learner_fields() -> N
     db = MagicMock()
 
     with (
-        patch("app.services.newspaper.is_newspaper_document", return_value=True),
+        patch("app.services.question_pool.document_uses_learner_overlay", return_value=True),
         patch("app.services.question_pool.get_progress", return_value={"current_page": 1}),
         patch("app.services.question_pool.save_progress_row") as save_row,
         patch("app.services.question_pool.save_learner_progress_row") as save_learner,
     ):
         save_progress(db, doc, {"answered_ids": ["q1"], "current_page": 2})
 
-    save_row.assert_called_once()
-    assert save_row.call_args[0][2]["current_page"] == 2
-    assert "answered_ids" not in save_row.call_args[0][2]
+    save_row.assert_not_called()
     save_learner.assert_not_called()
 
 

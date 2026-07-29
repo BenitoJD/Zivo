@@ -18,21 +18,26 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.services.owner_scope import note_owner_scope, owner_scope_sql
+
 _MAX_NOTES = 500
 
 
 def list_notes(
-    db: Session, document_id: uuid.UUID, *, account_id: uuid.UUID | None
+    db: Session,
+    document_id: uuid.UUID,
+    *,
+    account_id: uuid.UUID | None,
+    guest_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    # Owner scope: a caller sees their own notes plus legacy NULL rows. They
-    # never see another user's notes on a shared document.
+    uid, gid = note_owner_scope(account_id, guest_id)
     rows = db.execute(
         text(
-            "SELECT id, content, quote, created_at FROM qb.document_saved_notes "
-            "WHERE document_id = :d AND (account_id IS NULL OR account_id IS NOT DISTINCT FROM :uid) "
+            f"SELECT id, content, quote, created_at FROM qb.document_saved_notes "
+            f"WHERE {owner_scope_sql()} "
             "ORDER BY created_at DESC LIMIT :lim"
         ),
-        {"d": document_id, "uid": account_id, "lim": _MAX_NOTES},
+        {"d": document_id, "uid": uid, "gid": gid, "lim": _MAX_NOTES},
     ).mappings().all()
     return [
         {
@@ -52,17 +57,19 @@ def add_note(
     content: str,
     quote: str | None = None,
     account_id: uuid.UUID | None,
+    guest_id: str | None = None,
 ) -> dict[str, Any]:
+    uid, gid = note_owner_scope(account_id, guest_id)
     note_id = uuid.uuid4()
     row = db.execute(
         text(
             """
-            INSERT INTO qb.document_saved_notes (id, document_id, account_id, content, quote)
-            VALUES (:id, :d, :uid, :content, :quote)
+            INSERT INTO qb.document_saved_notes (id, document_id, account_id, guest_id, content, quote)
+            VALUES (:id, :d, :uid, :gid, :content, :quote)
             RETURNING id, content, quote, created_at
             """
         ),
-        {"id": note_id, "d": document_id, "uid": account_id, "content": content, "quote": quote},
+        {"id": note_id, "d": document_id, "uid": uid, "gid": gid, "content": content, "quote": quote},
     ).mappings().first()
     db.commit()
     return {
@@ -74,17 +81,20 @@ def add_note(
 
 
 def delete_note(
-    db: Session, document_id: uuid.UUID, note_id: uuid.UUID, *, account_id: uuid.UUID | None
+    db: Session,
+    document_id: uuid.UUID,
+    note_id: uuid.UUID,
+    *,
+    account_id: uuid.UUID | None,
+    guest_id: str | None = None,
 ) -> bool:
-    # A caller may only delete notes they authored (``account_id`` matches) or
-    # legacy NULL-owned notes — never another user's notes on a shared document.
+    uid, gid = note_owner_scope(account_id, guest_id)
     res = db.execute(
         text(
-            "DELETE FROM qb.document_saved_notes "
-            "WHERE id = :id AND document_id = :d "
-            "AND (account_id IS NULL OR account_id IS NOT DISTINCT FROM :uid)"
+            f"DELETE FROM qb.document_saved_notes "
+            f"WHERE id = :id AND {owner_scope_sql()}"
         ),
-        {"id": note_id, "d": document_id, "uid": account_id},
+        {"id": note_id, "d": document_id, "uid": uid, "gid": gid},
     )
     db.commit()
     return res.rowcount > 0

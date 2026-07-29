@@ -113,7 +113,7 @@ def test_advance_to_next_page_enqueues_triage_for_new_page() -> None:
     db.get.return_value = doc
     saved: dict = {}
 
-    def _capture_save(_db, _doc, patch):
+    def _capture_save(_db, _doc, patch, **kwargs):
         saved.update(patch)
 
     with (

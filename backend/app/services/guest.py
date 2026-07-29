@@ -227,6 +227,30 @@ def _claim_guest_sd_sessions(db: Session, *, account_id: uuid.UUID, guest_id: st
     )
 
 
+def _claim_guest_notes(db: Session, *, guest_id: str, account_id: uuid.UUID) -> int:
+    notes = db.execute(
+        text(
+            """
+            UPDATE qb.document_saved_notes
+            SET account_id = :uid, guest_id = NULL
+            WHERE guest_id = :gid
+            """
+        ),
+        {"uid": account_id, "gid": guest_id},
+    ).rowcount or 0
+    ideas = db.execute(
+        text(
+            """
+            UPDATE qb.document_brainstorm_ideas
+            SET account_id = :uid, guest_id = NULL
+            WHERE guest_id = :gid
+            """
+        ),
+        {"uid": account_id, "gid": guest_id},
+    ).rowcount or 0
+    return int(notes) + int(ideas)
+
+
 def claim_guest_progress(
     db: Session,
     account_id: uuid.UUID,
@@ -239,6 +263,7 @@ def claim_guest_progress(
             "learner_state_rows": 0,
             "measurements_moved": 0,
             "sd_sessions_moved": 0,
+            "notes_claimed": 0,
         }
 
     from app.repositories.intel import get_or_create_account_entity, get_or_create_concept_entity
@@ -258,12 +283,14 @@ def claim_guest_progress(
         account_entity_id=account_entity_id,
     )
     sd_sessions_moved = _claim_guest_sd_sessions(db, account_id=account_id, guest_id=guest_id)
+    notes_claimed = _claim_guest_notes(db, guest_id=guest_id, account_id=account_id)
 
     db.commit()
     return {
         "learner_state_rows": learner_state_rows,
         "measurements_moved": measurements_moved,
         "sd_sessions_moved": sd_sessions_moved,
+        "notes_claimed": notes_claimed,
     }
 
 

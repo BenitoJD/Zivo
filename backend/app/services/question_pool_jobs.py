@@ -1000,8 +1000,10 @@ def clear_stale_generation_pending(db: Session, doc: Document) -> None:
     release_stuck_generation(db, doc.id)
 
 
-def advance_to_next_page(db: Session, doc: Document) -> Job | None:
-    progress = get_progress(doc)
+def advance_to_next_page(
+    db: Session, doc: Document, *, learner_key: str | None = None
+) -> Job | None:
+    progress = get_progress(doc, learner_key=learner_key)
     study_pages = selected_page_list(doc)
     page = int(progress.get("current_page") or (study_pages[0] if study_pages else 1))
     try:
@@ -1021,6 +1023,7 @@ def advance_to_next_page(db: Session, doc: Document) -> Job | None:
             "generated_on_page": 0,
             "generation_pending": False,
         },
+        learner_key=learner_key,
     )
     db.commit()
 
@@ -1285,7 +1288,9 @@ def record_answer(
         ),
         {"id": assertion_id},
     ).mappings().first()
-    if row and row.get("key") and row.get("page") and not is_newspaper_document(doc):
+    from app.services.document_learner_state import document_uses_learner_overlay
+
+    if row and row.get("key") and row.get("page") and not document_uses_learner_overlay(doc):
         page_num = int(row["page"])
         entry = dict(get_page_coverage(doc, page_num))
         aspects = list(entry.get("aspects") or [])

@@ -13,6 +13,7 @@ from app.models import Document
 from app.services.document_learn_state import load_progress as load_learn_state_row
 from app.services.document_learn_state import save_progress_row
 from app.services.document_learner_state import (
+    document_uses_learner_overlay,
     learner_key_for_user,
     load_learner_progress,
     save_learner_progress_row,
@@ -61,9 +62,10 @@ MAX_GENERATE_BATCH_SIZE = REFILL_BATCH_SIZE
 # work and races assertion writes. Workers do not heartbeat locked_at during the handler.
 GENERATE_JOB_STALE_SECONDS = int(os.getenv("ZIVO_GENERATE_JOB_STALE_SECONDS", "1800"))
 
-# Per-learner fields for shared newspaper editions (stored in document_learner_state).
+# Per-learner fields for shared documents (stored in document_learner_state).
 _LEARNER_PROGRESS_KEYS = frozenset(
     {
+        "current_page",
         "answered_ids",
         "learn_answered_ids",
         "test_answered_ids",
@@ -87,6 +89,9 @@ _LEARNER_PROGRESS_KEYS = frozenset(
         "concept_ability_n",
         "empty_page_streak",
         "budget_serve_mode",
+        "prompt_reselect_pages",
+        "prompt_reselect_reason",
+        "transition_prep_done",
     }
 )
 
@@ -182,10 +187,8 @@ def _learner_progress_defaults() -> dict[str, Any]:
 
 
 def get_progress(doc: Document, *, learner_key: str | None = None) -> dict[str, Any]:
-    from app.services.newspaper import is_newspaper_document
-
     progress = _load_shared_progress(doc)
-    if not is_newspaper_document(doc):
+    if not document_uses_learner_overlay(doc):
         return progress
 
     session = Session.object_session(doc)
@@ -195,24 +198,26 @@ def get_progress(doc: Document, *, learner_key: str | None = None) -> dict[str, 
         for key in _LEARNER_PROGRESS_KEYS:
             if key in overlay:
                 progress[key] = overlay[key]
+            elif key == "current_page":
+                progress[key] = default_progress(doc)["current_page"]
             elif key in learner_defaults:
                 progress[key] = learner_defaults[key]
             else:
                 progress.pop(key, None)
     else:
         for key in _LEARNER_PROGRESS_KEYS:
-            if key in learner_defaults:
+            if key == "current_page":
+                progress[key] = default_progress(doc)["current_page"]
+            elif key in learner_defaults:
                 progress[key] = learner_defaults[key]
             else:
                 progress.pop(key, None)
-    if is_newspaper_document(doc):
-        serve_mode = parse_budget_mode(
-            progress.get("budget_serve_mode")
-            if isinstance(progress.get("budget_serve_mode"), str)
-            else None
-        )
-        return overlay_mode_answered_ids(progress, serve_mode)
-    return progress
+    serve_mode = parse_budget_mode(
+        progress.get("budget_serve_mode")
+        if isinstance(progress.get("budget_serve_mode"), str)
+        else None
+    )
+    return overlay_mode_answered_ids(progress, serve_mode)
 
 
 def _merge_progress(existing: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
@@ -234,12 +239,10 @@ def save_progress(
     *,
     learner_key: str | None = None,
 ) -> None:
-    from app.services.newspaper import is_newspaper_document
-
     db.flush()
     db.refresh(doc, with_for_update=True)
-    newspaper = is_newspaper_document(doc)
-    if newspaper and learner_key:
+    shared_doc = document_uses_learner_overlay(doc)
+    if shared_doc and learner_key:
         learner_patch = {k: v for k, v in progress.items() if k in _LEARNER_PROGRESS_KEYS}
         shared_patch = {k: v for k, v in progress.items() if k not in _LEARNER_PROGRESS_KEYS}
         if shared_patch:
@@ -254,7 +257,7 @@ def save_progress(
             }
             save_learner_progress_row(db, doc.id, learner_key, learner_only)
         return
-    if newspaper:
+    if shared_doc:
         shared_patch = {k: v for k, v in progress.items() if k not in _LEARNER_PROGRESS_KEYS}
         if not shared_patch:
             return

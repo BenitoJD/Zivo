@@ -24,6 +24,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.services.owner_scope import note_owner_scope, owner_scope_sql
+
 _MAX_IDEAS = 500
 # ponytail: depth cap exists so a cycle or a runaway branch can't hang the renderer.
 # Raise it if real mind maps ever get deeper than this; nothing else depends on it.
@@ -41,17 +43,20 @@ def _row(r: Any) -> dict[str, Any]:
 
 
 def list_ideas(
-    db: Session, document_id: uuid.UUID, *, account_id: uuid.UUID | None
+    db: Session,
+    document_id: uuid.UUID,
+    *,
+    account_id: uuid.UUID | None,
+    guest_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Every kept idea this caller owns for this source, newest first (the board
-    ordering). Legacy NULL-owned ideas are included; another user's ideas never are."""
+    uid, gid = note_owner_scope(account_id, guest_id)
     rows = db.execute(
         text(
-            "SELECT id, parent_id, text, angle, created_at FROM qb.document_brainstorm_ideas "
-            "WHERE document_id = :d AND (account_id IS NULL OR account_id IS NOT DISTINCT FROM :uid) "
+            f"SELECT id, parent_id, text, angle, created_at FROM qb.document_brainstorm_ideas "
+            f"WHERE {owner_scope_sql()} "
             "ORDER BY created_at DESC LIMIT :lim"
         ),
-        {"d": document_id, "uid": account_id, "lim": _MAX_IDEAS},
+        {"d": document_id, "uid": uid, "gid": gid, "lim": _MAX_IDEAS},
     ).mappings().all()
     return [_row(r) for r in rows]
 
@@ -64,37 +69,32 @@ def add_idea(
     angle: str = "",
     parent_id: uuid.UUID | None = None,
     account_id: uuid.UUID | None,
+    guest_id: str | None = None,
 ) -> dict[str, Any]:
-    """Keep one idea. ``parent_id`` branches it off an existing idea (mind-map edge).
-
-    A parent from another document is rejected rather than silently orphaned — the
-    FK alone would accept it, since it only constrains the ideas table.
-    """
+    uid, gid = note_owner_scope(account_id, guest_id)
     if parent_id is not None:
-        # Parent must both belong to this document AND be visible to this caller
-        # (own or legacy) — otherwise an attacker on a shared document could attach
-        # a child under another user's private idea and the tree would surface it.
         parent = db.execute(
             text(
-                "SELECT document_id FROM qb.document_brainstorm_ideas "
-                "WHERE id = :p AND (account_id IS NULL OR account_id IS NOT DISTINCT FROM :uid)"
+                f"SELECT document_id FROM qb.document_brainstorm_ideas "
+                f"WHERE id = :p AND {owner_scope_sql()}"
             ),
-            {"p": parent_id, "uid": account_id},
+            {"p": parent_id, "d": document_id, "uid": uid, "gid": gid},
         ).scalar()
         if parent != document_id:
             raise ValueError("parent idea does not belong to this document")
     row = db.execute(
         text(
             """
-            INSERT INTO qb.document_brainstorm_ideas (id, document_id, account_id, parent_id, text, angle)
-            VALUES (:id, :d, :uid, :parent, :text, :angle)
+            INSERT INTO qb.document_brainstorm_ideas (id, document_id, account_id, guest_id, parent_id, text, angle)
+            VALUES (:id, :d, :uid, :gid, :parent, :text, :angle)
             RETURNING id, parent_id, text, angle, created_at
             """
         ),
         {
             "id": uuid.uuid4(),
             "d": document_id,
-            "uid": account_id,
+            "uid": uid,
+            "gid": gid,
             "parent": parent_id,
             "text": idea_text,
             "angle": angle,
@@ -105,19 +105,20 @@ def add_idea(
 
 
 def delete_idea(
-    db: Session, document_id: uuid.UUID, idea_id: uuid.UUID, *, account_id: uuid.UUID | None
+    db: Session,
+    document_id: uuid.UUID,
+    idea_id: uuid.UUID,
+    *,
+    account_id: uuid.UUID | None,
+    guest_id: str | None = None,
 ) -> bool:
-    """Delete an idea and (via ON DELETE CASCADE) everything branched off it.
-
-    A caller may only delete ideas they authored (or legacy NULL-owned ones) —
-    never another user's ideas on a shared document."""
+    uid, gid = note_owner_scope(account_id, guest_id)
     res = db.execute(
         text(
-            "DELETE FROM qb.document_brainstorm_ideas "
-            "WHERE id = :id AND document_id = :d "
-            "AND (account_id IS NULL OR account_id IS NOT DISTINCT FROM :uid)"
+            f"DELETE FROM qb.document_brainstorm_ideas "
+            f"WHERE id = :id AND {owner_scope_sql()}"
         ),
-        {"id": idea_id, "d": document_id, "uid": account_id},
+        {"id": idea_id, "d": document_id, "uid": uid, "gid": gid},
     )
     db.commit()
     return res.rowcount > 0

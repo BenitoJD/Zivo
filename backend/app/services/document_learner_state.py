@@ -21,6 +21,17 @@ def learner_key_for_user(user_id: uuid.UUID | None, guest_id: str | None) -> str
     return None
 
 
+def document_uses_learner_overlay(doc: Any) -> bool:
+    """True when multiple learners can study the same document independently."""
+    meta = getattr(doc, "meta", None) or {}
+    account_id = getattr(doc, "account_id", None)
+    if meta.get("newspaper") or meta.get("hide_source") or meta.get("ingest_kind") == "newspaper":
+        return True
+    if account_id is None and (meta.get("is_demo") or meta.get("is_public")):
+        return True
+    return False
+
+
 def load_learner_progress(
     db: Session, document_id: uuid.UUID, learner_key: str
 ) -> dict[str, Any] | None:
