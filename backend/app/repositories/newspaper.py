@@ -184,6 +184,20 @@ def get_edition(db: Session, edition_id: uuid.UUID) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def list_existing_paper_days(db: Session) -> set[tuple[str, date]]:
+    """(paper_slug, edition_date) pairs already in DB (non-purged)."""
+    rows = db.execute(
+        text(
+            """
+            SELECT paper_slug, edition_date
+            FROM qb.newspaper_edition
+            WHERE status <> 'purged'
+            """
+        )
+    ).all()
+    return {(str(slug), ed_date) for slug, ed_date in rows}
+
+
 def get_edition_by_paper_day(
     db: Session, *, paper_slug: str, edition_date: date
 ) -> dict[str, Any] | None:

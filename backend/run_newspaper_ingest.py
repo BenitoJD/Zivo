@@ -17,6 +17,9 @@ logger = logging.getLogger("newspaper_ingest")
 
 # Wide enough to see recent filename dates; hard cap avoids unbounded history walks.
 _RECONCILE_SAFETY_MAX = 500
+_RECONCILE_INTERVAL_SEC = 900
+_RECONCILE_TIMEOUT_SEC = 600
+_WATCHDOG_INTERVAL_SEC = 300
 
 
 def _env(name: str, default: str = "") -> str:
@@ -65,23 +68,59 @@ def plan_gap_fill(
     return sorted(winners.values())
 
 
-async def _process_message(client, db, message) -> None:
-    from app.services.newspaper import create_edition_from_pdf, ensure_brand_and_allowed
-    from app.services.newspaper_naming import parse_edition_meta_async
+def _message_filename(message) -> str:  # noqa: ANN001
+    fname = ""
+    if message and message.document:
+        for attr in message.document.attributes or []:
+            fname = getattr(attr, "file_name", None) or fname
+        if not fname and message.file:
+            fname = getattr(message.file, "name", "") or ""
+    return fname or ""
+
+
+def _scan_pdf_for_gap(db, message) -> tuple[int, str, date] | None:
+    """Cheap (paper_slug, edition_date) for reconcile gap-fill — no LLM."""
+    from app.services.newspaper_naming import cheap_paper_slug_hint, resolve_edition_date
+
+    if not _is_pdf_message(message):
+        return None
+    fname = _message_filename(message)
+    caption = message.message or ""
+    msg_date = message.date or datetime.now(timezone.utc)
+    paper_slug = cheap_paper_slug_hint(db, filename=fname, caption=caption)
+    if not paper_slug:
+        return None
+    edition_date = resolve_edition_date(
+        filename=fname, caption=caption, message_date=msg_date
+    )
+    return int(message.id), paper_slug, edition_date
+
+
+async def _process_message(client, db, message, *, client_lock: asyncio.Lock) -> None:
     from app.repositories import newspaper as newspaper_repo
+    from app.services.newspaper import create_edition_from_pdf, ensure_brand_and_allowed
+    from app.services.newspaper_naming import cheap_paper_slug_hint, parse_edition_meta_async
 
     if not message or not message.document:
         return
     mime = (message.document.mime_type or "").lower()
-    fname = ""
-    for attr in message.document.attributes or []:
-        fname = getattr(attr, "file_name", None) or fname
-    if not fname and message.file:
-        fname = getattr(message.file, "name", "") or ""
-    if "pdf" not in mime and not (fname or "").lower().endswith(".pdf"):
+    fname = _message_filename(message)
+    if "pdf" not in mime and not fname.lower().endswith(".pdf"):
         return
 
     caption = message.message or ""
+
+    # Gate before LLM: skip known non-allowlisted brands cheaply.
+    hint = cheap_paper_slug_hint(db, filename=fname, caption=caption)
+    if hint and not newspaper_repo.is_brand_allowed(db, hint):
+        logger.info(
+            "skip paper %s (%s) — not on allowlist msg=%s",
+            hint,
+            fname,
+            message.id,
+        )
+        return
+
     msg_date = message.date or datetime.now(timezone.utc)
     parsed = await parse_edition_meta_async(
         db, filename=fname or "edition.pdf", caption=caption, message_date=msg_date
@@ -114,7 +153,8 @@ async def _process_message(client, db, message) -> None:
     from io import BytesIO
 
     buf = BytesIO()
-    await client.download_media(message, file=buf)
+    async with client_lock:
+        await client.download_media(message, file=buf)
     data = buf.getvalue()
     if not data:
         logger.warning("empty download msg=%s", message.id)
@@ -144,12 +184,8 @@ def _is_pdf_message(message) -> bool:  # noqa: ANN001
     if not message or not message.document:
         return False
     mime = (message.document.mime_type or "").lower()
-    fname = ""
-    for attr in message.document.attributes or []:
-        fname = getattr(attr, "file_name", None) or fname
-    if not fname and message.file:
-        fname = getattr(message.file, "name", "") or ""
-    return "pdf" in mime or (fname or "").lower().endswith(".pdf")
+    fname = _message_filename(message)
+    return "pdf" in mime or fname.lower().endswith(".pdf")
 
 
 async def _reconcile(
@@ -157,32 +193,53 @@ async def _reconcile(
     entity,
     db,
     *,
+    client_lock: asyncio.Lock,
     safety_max: int = _RECONCILE_SAFETY_MAX,
 ) -> None:
     """Gap-fill: cook Telegram PDFs whose (paper, edition_date) is missing in DB.
 
-    Scan recent channel history (safety cap). Filename date primary via parse.
-    DB (status <> purged) = already done → skip inside _process_message.
+    Scan recent channel history (safety cap). Cheap filename hints drive
+    plan_gap_fill so we only full-parse / download true holes.
     Oldest msg_id first → first city wins. sync_cursor = tip watermark only.
     """
     from app.repositories import newspaper as newspaper_repo
 
     tip_id: int | None = None
     pdfs: list = []
-    async for message in client.iter_messages(entity, limit=safety_max):
-        if tip_id is None:
-            tip_id = int(message.id)
-        if _is_pdf_message(message):
-            pdfs.append(message)
+    async with client_lock:
+        async for message in client.iter_messages(entity, limit=safety_max):
+            if tip_id is None:
+                tip_id = int(message.id)
+            if _is_pdf_message(message):
+                pdfs.append(message)
 
-    # Newest-first from Telegram → ascending so lowest msg_id claims (paper, day).
-    pdfs.sort(key=lambda m: int(m.id))
-    logger.info("reconcile gap-fill pdfs=%s tip=%s", len(pdfs), tip_id)
+    existing = newspaper_repo.list_existing_paper_days(db)
+    seen: list[tuple[int, str, date]] = []
+    by_id: dict[int, object] = {}
     for message in pdfs:
+        scanned = _scan_pdf_for_gap(db, message)
+        if scanned is None:
+            continue
+        msg_id, paper_slug, edition_date = scanned
+        seen.append((msg_id, paper_slug, edition_date))
+        by_id[msg_id] = message
+
+    winners = plan_gap_fill(seen, existing)
+    logger.info(
+        "reconcile gap-fill pdfs=%s candidates=%s cook=%s tip=%s",
+        len(pdfs),
+        len(seen),
+        len(winners),
+        tip_id,
+    )
+    for msg_id in winners:
+        message = by_id.get(msg_id)
+        if message is None:
+            continue
         try:
-            await _process_message(client, db, message)
+            await _process_message(client, db, message, client_lock=client_lock)
         except Exception:
-            logger.exception("reconcile failed msg=%s", getattr(message, "id", None))
+            logger.exception("reconcile failed msg=%s", msg_id)
     if tip_id is not None:
         newspaper_repo.set_sync_cursor(db, tip_id)
 
@@ -241,6 +298,14 @@ def _dialog_title_matches(dialog_name: str, *, label: str, ref: str) -> str | No
     return None
 
 
+def _log_task_result(task: asyncio.Task) -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("background task %s failed", task.get_name(), exc_info=exc)
+
+
 async def run() -> None:
     try:
         from telethon import TelegramClient, events
@@ -264,6 +329,9 @@ async def run() -> None:
     client = TelegramClient(session, api_id, api_hash)
     await client.start()
     logger.info("telegram client started")
+
+    client_lock = asyncio.Lock()
+    reconcile_lock = asyncio.Lock()
 
     # Cache resolved entity — avoid re-iterating dialogs (flood) on every event.
     _cache: dict = {"entity": None, "ref": None, "label": None}
@@ -395,23 +463,63 @@ async def run() -> None:
             return
         with SessionLocal() as db:
             try:
-                await _process_message(client, db, event.message)
+                await _process_message(
+                    client, db, event.message, client_lock=client_lock
+                )
             except Exception:
                 logger.exception("live ingest failed")
+
+    async def _run_reconcile_once() -> None:
+        if reconcile_lock.locked():
+            logger.warning("reconcile already running — skip overlapping cycle")
+            return
+        async with reconcile_lock:
+            entity = await resolve_entity()
+            if entity is None:
+                return
+            with SessionLocal() as db:
+                await asyncio.wait_for(
+                    _reconcile(client, entity, db, client_lock=client_lock),
+                    timeout=_RECONCILE_TIMEOUT_SEC,
+                )
 
     # Startup + periodic reconcile
     async def reconcile_loop() -> None:
         while True:
             try:
-                entity = await resolve_entity()
-                if entity is not None:
-                    with SessionLocal() as db:
-                        await _reconcile(client, entity, db)
+                await _run_reconcile_once()
+            except TimeoutError:
+                logger.error(
+                    "reconcile timed out after %ss — will retry next cycle",
+                    _RECONCILE_TIMEOUT_SEC,
+                )
             except Exception:
                 logger.exception("reconcile loop error")
-            await asyncio.sleep(900)
+            await asyncio.sleep(_RECONCILE_INTERVAL_SEC)
 
-    asyncio.create_task(reconcile_loop())
+    async def connection_watchdog() -> None:
+        while True:
+            await asyncio.sleep(_WATCHDOG_INTERVAL_SEC)
+            try:
+                if client.is_connected():
+                    continue
+                logger.warning("telegram client disconnected — reconnecting")
+                await client.connect()
+                if not await client.is_user_authorized():
+                    logger.error("telegram session no longer authorized")
+                    continue
+                logger.info("telegram client reconnected")
+                await _run_reconcile_once()
+            except Exception:
+                logger.exception("connection watchdog error")
+
+    for coro, name in (
+        (reconcile_loop(), "newspaper-reconcile"),
+        (connection_watchdog(), "newspaper-watchdog"),
+    ):
+        task = asyncio.create_task(coro, name=name)
+        task.add_done_callback(_log_task_result)
+
     logger.info("newspaper ingest running")
     await client.run_until_disconnected()
 

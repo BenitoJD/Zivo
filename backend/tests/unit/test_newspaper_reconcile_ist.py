@@ -1,9 +1,10 @@
 """Unit tests for newspaper reconcile gap-fill (DB holes drive work)."""
 
 from datetime import date, datetime, timezone
+from unittest.mock import MagicMock
 
-from app.services.newspaper_naming import resolve_edition_date
-from run_newspaper_ingest import plan_gap_fill
+from app.services.newspaper_naming import cheap_paper_slug_hint, resolve_edition_date
+from run_newspaper_ingest import _scan_pdf_for_gap, plan_gap_fill
 
 
 def test_db_has_date_skips() -> None:
@@ -81,3 +82,31 @@ def test_create_edition_imports_reset_via_question_pool_facade() -> None:
     assert callable(question_pool_jobs._cancel_queued_generate_jobs)
     assert newspaper.create_edition_from_pdf
     assert reset_for_new_page_range is question_pool_jobs.reset_for_new_page_range
+
+
+def test_cheap_paper_slug_hint_th_without_llm(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.services.newspaper_naming.newspaper_repo.resolve_alias",
+        lambda db, raw: None,
+    )
+    slug = cheap_paper_slug_hint(
+        object(),
+        filename="TH -Bangalore -29-07-2026.pdf",
+    )
+    assert slug == "the-hindu"
+
+
+def test_scan_pdf_for_gap_builds_seen_tuple(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.services.newspaper_naming.newspaper_repo.resolve_alias",
+        lambda db, raw: None,
+    )
+    message = MagicMock()
+    message.id = 8520
+    message.message = ""
+    message.date = datetime(2026, 7, 29, 2, 18, tzinfo=timezone.utc)
+    message.document.mime_type = "application/pdf"
+    message.document.attributes = []
+    message.file.name = "TH -Delhi -29-07-2026 Tr.pdf"
+    scanned = _scan_pdf_for_gap(object(), message)
+    assert scanned == (8520, "the-hindu", date(2026, 7, 29))

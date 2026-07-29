@@ -164,6 +164,28 @@ def _parse_date(blob: str) -> date | None:
     return None
 
 
+def cheap_paper_slug_hint(
+    db: Session,
+    *,
+    filename: str,
+    caption: str = "",
+) -> str | None:
+    """Alias / filename-token brand hint without LLM (reconcile + allowlist gate)."""
+    blob, tokens, _, _, _, guessed_title = _date_and_tokens(
+        filename=filename,
+        caption=caption,
+        message_date=datetime.now(timezone.utc),
+    )
+    for raw in _alias_lookup_keys(guessed_title=guessed_title, blob=blob, tokens=tokens):
+        hit = newspaper_repo.resolve_alias(db, raw)
+        if hit:
+            return hit[0]
+    brands = _filename_brand_slugs(tokens, blob=blob)
+    if len(brands) == 1:
+        return next(iter(brands))
+    return None
+
+
 def resolve_edition_date(
     *,
     filename: str,
