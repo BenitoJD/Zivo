@@ -214,9 +214,18 @@ export default function WorkspaceArtifactPage({
   const [studyRowWidth, setStudyRowWidth] = useState(0);
   const [reselectOpen, setReselectOpen] = useState(false);
   // Learn lessons the learner has dismissed with "Start the questions" (one per
-  // page). A page not in this set shows its lesson before the MCQs; the meta-bar
-  // "Lesson" pill removes it so the lesson can be re-read mid-question.
-  const [lessonDismissed, setLessonDismissed] = useState<Set<number>>(new Set());
+  // page, persisted per document). Returning mid-MCQ must not replay the lesson —
+  // that is inferred from queue progress on the current page.
+  const [lessonDismissedPages, setLessonDismissedPages] = useLocalStorage<number[]>({
+    key: `zv-lesson-dismissed:${artifactId}`,
+    defaultValue: [],
+    getInitialValueInEffect: false,
+  });
+  const lessonDismissed = useMemo(
+    () => new Set(lessonDismissedPages),
+    [lessonDismissedPages],
+  );
+  const [lessonForcedOpenPage, setLessonForcedOpenPage] = useState<number | null>(null);
   // Bumped when the learner quotes selected MCQ text into chat, so the mobile
   // shell can jump to the tutor tab (desktop just opens the floating panel).
   const [mobileTutorFocus, setMobileTutorFocus] = useState(0);
@@ -333,6 +342,7 @@ export default function WorkspaceArtifactPage({
     setMcqLoading(true);
     setAnsweredHistory([]);
     setReviewIndex(null);
+    setLessonForcedOpenPage(null);
     // Non-newspaper: Settings Relaxed/Exam. Newspaper default Learn unless ?mode=test
     // (docs/QUESTION_BUDGET_ENGINE.md §0 — no Learn/Test modal on open).
     setMode(urlMode === "test" ? "test" : defaultWorkspaceMode());
@@ -1405,16 +1415,24 @@ export default function WorkspaceArtifactPage({
   const testCorrect = answeredHistory.filter((c) => c.gradeState.correct).length;
   const showTestResults = mode === "test" && showDocumentComplete && answeredHistory.length > 0;
   const currentPage = queue?.current_page ?? 0;
+  const answeredOnCurrentPage = isNewspaper
+    ? (queue?.edition_page_questions_answered ?? 0)
+    : (queue?.answered_on_page ?? 0);
+  const hasAnsweredOnCurrentPage = answeredOnCurrentPage > 0;
+  const lessonDismissedForPage = lessonDismissed.has(currentPage);
+  const lessonForcedOpen = lessonForcedOpenPage === currentPage;
   // Learn-only: show the page's pre-question lesson once per page, before the
   // MCQ hero. Suppressed in Test mode (you can't pre-teach a test), when the
-  // page/document is complete, and once the learner has dismissed it for this
-  // page. Deliberately NOT gated on !isNewspaper — newspaper Learn shows lessons
-  // too (unlike showPageComplete above). Anything but a ready lesson falls through.
+  // page/document is complete, once the learner has dismissed it for this page,
+  // and when they already have MCQ progress on this page (resume). Deliberately
+  // NOT gated on !isNewspaper — newspaper Learn shows lessons too (unlike
+  // showPageComplete above). Anything but a ready lesson falls through.
   const showLesson =
     mode === "learn" &&
     queue?.page_lesson?.status === "ready" &&
     Boolean(queue?.page_lesson?.body) &&
-    !lessonDismissed.has(currentPage) &&
+    (lessonForcedOpen ||
+      (!lessonDismissedForPage && !hasAnsweredOnCurrentPage)) &&
     !showPageComplete &&
     !showDocumentComplete &&
     !showTestResults;
@@ -1425,18 +1443,21 @@ export default function WorkspaceArtifactPage({
     mode === "learn" &&
       queue?.page_lesson?.status === "ready" &&
       Boolean(queue?.page_lesson?.body) &&
-      lessonDismissed.has(currentPage) &&
+      (lessonDismissedForPage || hasAnsweredOnCurrentPage) &&
       !showPageComplete &&
       !showDocumentComplete &&
       !showTestResults
   );
-  const reopenLesson = () =>
-    setLessonDismissed((prev) => {
-      if (!prev.has(currentPage)) return prev;
-      const next = new Set(prev);
-      next.delete(currentPage);
-      return next;
-    });
+  const dismissLessonForPage = (page: number) => {
+    setLessonForcedOpenPage(null);
+    setLessonDismissedPages((prev) =>
+      prev.includes(page) ? prev : [...prev, page].sort((a, b) => a - b),
+    );
+  };
+  const reopenLesson = () => {
+    setLessonForcedOpenPage(currentPage);
+    setLessonDismissedPages((prev) => prev.filter((p) => p !== currentPage));
+  };
   const completedRange = selectedRange;
   const nextRangeSuggestion = completedRange
     ? suggestNextPageRange(completedRange, pageCount)
@@ -1720,14 +1741,7 @@ export default function WorkspaceArtifactPage({
               title={queue.page_lesson.title}
               body={queue.page_lesson.body}
               status={queue.page_lesson.status}
-              onStart={() =>
-                setLessonDismissed((prev) => {
-                  if (prev.has(currentPage)) return prev;
-                  const next = new Set(prev);
-                  next.add(currentPage);
-                  return next;
-                })
-              }
+              onStart={() => dismissLessonForPage(currentPage)}
             />
           </SelectionQuote>
           ) : (
