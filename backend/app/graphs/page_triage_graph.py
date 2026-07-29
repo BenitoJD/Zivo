@@ -173,7 +173,7 @@ def run_page_triage(
     if is_newspaper:
         from app.services.content_worthiness import evaluate_worthiness
 
-        worth = evaluate_worthiness(page_text=page_text, newspaper=True)
+        worth = evaluate_worthiness(page_text=page_text, newspaper=True, db=db)
         if not worth.worthy:
             # Newspaper cook plans Learn by default (docs/QUESTION_BUDGET_ENGINE.md §0).
             result = _non_content_result(

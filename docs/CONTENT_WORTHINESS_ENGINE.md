@@ -1,6 +1,6 @@
 # Content Worthiness Gate Engine
 
-**Status:** wired (v1). Deterministic gate from triage signals + text heuristics.
+**Status:** wired (v1 deterministic ad/junk; v2 LLM exam-relevance). Deterministic gate from triage signals + text heuristics for ads/junk/empty; exam relevance is an LLM meaning-judgment (cached).
 **Owns the question:** is this page/unit worth generating questions for (vs non-content / ads / empty)?
 **Product home:** Question Better / Zivo Learn + Test cook/serve/grade loops.
 

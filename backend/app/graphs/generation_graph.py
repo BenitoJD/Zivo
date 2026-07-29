@@ -407,7 +407,7 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
     if (doc.meta or {}).get("newspaper"):
         from app.services.content_worthiness import evaluate_worthiness
 
-        worth = evaluate_worthiness(page_text=page_text, newspaper=True)
+        worth = evaluate_worthiness(page_text=page_text, newspaper=True, db=db)
         if not worth.worthy:
             save_page_coverage(
                 db,

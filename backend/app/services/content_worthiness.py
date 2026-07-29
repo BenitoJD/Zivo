@@ -12,7 +12,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 WORTH_VERSION = "qb.worth.v1"
 DEFAULT_WORTH_POLICY = "worth_v1"
@@ -85,8 +88,15 @@ def evaluate_worthiness(
     newspaper: bool = False,
     check_junk: bool = False,
     policy: str | None = None,
+    db: Session | None = None,
 ) -> WorthinessVerdict:
-    """Sole worthiness seam. Orchestration must not invent parallel skip ladders."""
+    """Sole worthiness seam. Orchestration must not invent parallel skip ladders.
+
+    ``db`` flows to the newspaper LLM exam-relevance judge. When None (e.g. a
+    quick heuristic check or a unit test), relevance is skipped permissively —
+    only the deterministic ad / length gates apply, and a newspaper page that
+    clears them is treated as worthy.
+    """
     pol = normalize_policy(policy)
     if non_content:
         return WorthinessVerdict(False, "non_content", policy=pol)
@@ -100,7 +110,7 @@ def evaluate_worthiness(
     if newspaper:
         from app.services.newspaper_ad_filter import newspaper_page_verdict
 
-        verdict, rationale = newspaper_page_verdict(text)
+        verdict, rationale = newspaper_page_verdict(db, text)
         if verdict != "cook":
             reason_map = {
                 "ad": "newspaper_ad",

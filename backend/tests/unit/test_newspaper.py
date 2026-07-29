@@ -1,10 +1,15 @@
-"""Newspaper ad filter + exam relevance + naming heuristics + LLM paper-id learning."""
+"""Newspaper ad filter (deterministic) + relevance (LLM) + naming + paper-id.
+
+The ad/junk/masthead gate is deterministic and tested directly here. Exam
+relevance is now an LLM judgment (newspaper_relevance.py) — those assertions live
+in tests/integration and skip without a DB/LLM. Here we only assert the
+deterministic parts and the db=None permissive contract.
+"""
 
 import re
 from datetime import datetime, timezone
 
 from app.services.newspaper_ad_filter import (
-    classify_exam_relevance,
     classify_page_text,
     is_editorial,
     newspaper_page_verdict,
@@ -21,8 +26,9 @@ def test_ad_page_detected() -> None:
     label, _ = classify_page_text(text)
     assert label == "ad"
     assert not is_editorial(text)
-    assert newspaper_page_verdict(text)[0] == "ad"
-    assert not should_cook_newspaper_page(text)
+    # db=None: ad verdict is deterministic, returned before relevance is consulted.
+    assert newspaper_page_verdict(None, text)[0] == "ad"
+    assert not should_cook_newspaper_page(None, text)
 
 
 def test_property_classified_detected() -> None:
@@ -32,10 +38,10 @@ def test_property_classified_detected() -> None:
     )
     label, _ = classify_page_text(text)
     assert label == "ad"
-    assert newspaper_page_verdict(text)[0] == "ad"
+    assert newspaper_page_verdict(None, text)[0] == "ad"
 
 
-def test_editorial_page_ok() -> None:
+def test_editorial_classifies_as_editorial() -> None:
     text = (
         "The central bank raised rates by 25 basis points yesterday, "
         "citing persistent inflation in food and fuel. Markets reacted "
@@ -45,54 +51,26 @@ def test_editorial_page_ok() -> None:
     label, _ = classify_page_text(text)
     assert label == "editorial"
     assert is_editorial(text)
-    ok, theme, _ = classify_exam_relevance(text)
-    assert ok
-    assert theme == "economy"
-    assert should_cook_newspaper_page(text)
 
 
 def test_low_signal_short() -> None:
     label, _ = classify_page_text("hi")
     assert label == "low_signal"
-    assert newspaper_page_verdict("hi")[0] == "low_signal"
+    assert newspaper_page_verdict(None, "hi")[0] == "low_signal"
 
 
-def test_sports_gossip_off_syllabus() -> None:
-    text = (
-        "Bollywood celebrity gossip dominated the red carpet at fashion week. "
-        "The IPL match scorecard showed a high run rate after 16 overs and "
-        "four quick wickets. Fans celebrated the box office weekend elsewhere."
-    )
-    ok, _, _ = classify_exam_relevance(text)
-    assert not ok
-    assert newspaper_page_verdict(text)[0] in {"off_syllabus", "ad"}
-    assert not should_cook_newspaper_page(text)
-
-
-def test_polity_page_relevant() -> None:
+def test_editorial_without_db_is_cook_permissively() -> None:
+    """db=None skips the LLM relevance judgment: an editorial page is allowed
+    (cook) so an unavailable judge never blocks cooking. Relevance correctness
+    itself is covered by the integration test."""
     text = (
         "The Supreme Court examined whether the ordinance issued by the Union "
         "Cabinet complies with the Constitution and fundamental rights doctrine. "
-        "Parliament is expected to debate the bill when the Lok Sabha resumes. "
-        "Legal scholars said the judgment could reshape federalism debates."
+        "Parliament is expected to debate the bill when the Lok Sabha resumes."
     )
     assert is_editorial(text)
-    ok, theme, _ = classify_exam_relevance(text)
-    assert ok
-    assert theme == "polity"
-    assert newspaper_page_verdict(text)[0] == "cook"
-
-
-def test_lifestyle_without_gs_rejected() -> None:
-    text = (
-        "A new lifestyle column recommends weekend recipe ideas and cooking tips "
-        "for busy professionals who want lighter dinners. Readers shared photos "
-        "of their favourite desserts and asked for more fashion week coverage "
-        "from the previous season's runway looks in the metro edition."
-    )
-    ok, _, _ = classify_exam_relevance(text)
-    assert not ok
-    assert not should_cook_newspaper_page(text)
+    assert newspaper_page_verdict(None, text)[0] == "cook"
+    assert should_cook_newspaper_page(None, text)
 
 
 def test_parse_edition_uses_message_date_when_no_date(monkeypatch) -> None:

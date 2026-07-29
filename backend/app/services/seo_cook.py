@@ -69,7 +69,7 @@ def collect_candidates(db: Session, *, batch_size: int = 5) -> list[Candidate]:
 
     for row in seo_repo.list_newspaper_cook_candidates(db, limit=batch_size):
         page_text = (row.get("text") or "").strip()
-        if not evaluate_worthiness(page_text=page_text, newspaper=True).worthy:
+        if not evaluate_worthiness(page_text=page_text, newspaper=True, db=db).worthy:
             # Mark so we don't keep re-checking ads
             key = f"{row['document_id']}:{row['page_start']}"
             seo_repo.record_attempt(
