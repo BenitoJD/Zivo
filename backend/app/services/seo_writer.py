@@ -169,7 +169,7 @@ def write_edition_digest(
 Edition date: {edition_date}
 Working title hint: {title_hint or "(infer a clear title from the themes)"}
 
-Format: explainer digest (600-1200 words in body_md). Markdown with 2-4 short ## headings.
+Format: explainer digest (400-900 words in body_md). Markdown with 2-4 short ## headings.
 Cover only substantive current-affairs themes from the material below.
 The material is already pre-filtered for exam relevance; still omit any stray filler.
 No source attribution. Do not mention personal notices, weather, ads, or publication metadata.

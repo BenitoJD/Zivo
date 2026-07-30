@@ -129,6 +129,8 @@ LOG_TAG_MAX_TOKENS: dict[str, int] = {
     "coach_mcq": int(os.getenv("ZIVO_COACH_MAX_TOKENS", "1200")),
     # Per-page Learn lesson (~150-250 words of teaching prose + title, fenced as
     # JSON). Generated before the MCQ loop, so it is never on the answer path.
+    # SEO articles and edition digests are long-form JSON (title + lede + body_md).
+    "seo_write": int(os.getenv("ZIVO_SEO_WRITE_MAX_TOKENS", "6144")),
     "lesson_page": int(os.getenv("ZIVO_LESSON_MAX_TOKENS", "900")),
     "chat": CHAT_DEFAULT_MAX_TOKENS,
     "complete": CHAT_DEFAULT_MAX_TOKENS,

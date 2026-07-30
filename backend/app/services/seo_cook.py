@@ -353,9 +353,11 @@ def cook_edition_digest(
         uuid.UUID(str(ed["blog_post_id"])) if ed.get("blog_post_id") else None
     )
 
-    linked = _sync_edition_blog_link(db, edition_id=edition_id, fingerprint=fp)
-    if linked and not force:
-        return linked
+    linked = None
+    if not force:
+        linked = _sync_edition_blog_link(db, edition_id=edition_id, fingerprint=fp)
+        if linked:
+            return linked
 
     if not force and not seo_repo.edition_digest_may_enqueue(
         db, "newspaper_edition", source_key
