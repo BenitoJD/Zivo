@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   ActionIcon,
   Box,
@@ -30,6 +30,7 @@ import {
   IconCards,
   IconClipboardList,
   IconCpu,
+  IconDownload,
   IconFileText,
   IconLayoutSidebarLeftCollapse,
   IconNews,
@@ -48,7 +49,10 @@ import {
   IconWriting,
   IconBrain,
 } from "@tabler/icons-react";
+import { notifications } from "@mantine/notifications";
 import { BrandMark } from "@/app/_components/BrandMark";
+import { apiFetchBytes, ensureGuestSession } from "@/lib/api/client";
+import { triggerDownload } from "@/lib/export";
 import type { SourceDocument } from "@/lib/types";
 import { useStudyNav, type StudyMode } from "@/app/workspace/_components/studyNav";
 
@@ -290,8 +294,31 @@ function SourceRow({
   onNavigate: () => void;
   onDelete: () => void;
 }) {
+  const [downloading, setDownloading] = useState(false);
   const label = sourceLabel(doc.filename);
   const meta = sourceStatusMeta(doc.status, doc.index_progress, doc.meta);
+
+  async function handleDownload() {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      await ensureGuestSession();
+      const bytes = await apiFetchBytes(`/api/sources/${doc.id}/file`);
+      const blob = new Blob([bytes], {
+        type: doc.content_type || "application/octet-stream",
+      });
+      triggerDownload(blob, doc.filename);
+    } catch (err) {
+      notifications.show({
+        title: "Download failed",
+        message: err instanceof Error ? err.message : "Could not download this source.",
+        color: "terracotta",
+      });
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   return (
     <UnstyledButton
       className="zivo-source-row"
@@ -331,21 +358,40 @@ function SourceRow({
           </span>
         )}
       </span>
-      <Tooltip label="Delete source" position="right" withArrow openDelay={300}>
-        <span
-          role="button"
-          tabIndex={-1}
-          aria-label={`Delete ${label}`}
-          className="zivo-source-del"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            onDelete();
-          }}
-        >
-          <IconTrash size={15} stroke={1.7} />
-        </span>
-      </Tooltip>
+      <span className="zivo-source-actions" aria-hidden={false}>
+        <Tooltip label="Download source" position="right" withArrow openDelay={300}>
+          <span
+            role="button"
+            tabIndex={-1}
+            aria-label={`Download ${label}`}
+            aria-busy={downloading}
+            className="zivo-source-action"
+            data-loading={downloading || undefined}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              void handleDownload();
+            }}
+          >
+            <IconDownload size={15} stroke={1.7} />
+          </span>
+        </Tooltip>
+        <Tooltip label="Delete source" position="right" withArrow openDelay={300}>
+          <span
+            role="button"
+            tabIndex={-1}
+            aria-label={`Delete ${label}`}
+            className="zivo-source-action zivo-source-action-del"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onDelete();
+            }}
+          >
+            <IconTrash size={15} stroke={1.7} />
+          </span>
+        </Tooltip>
+      </span>
     </UnstyledButton>
   );
 }
@@ -490,7 +536,7 @@ export function Sidebar({
           flex-direction: column;
           gap: 2px;
           text-align: left;
-          padding-right: 30px;
+          padding-right: 62px;
         }
         .zivo-source-row[data-active] .zivo-source-title { color: var(--mantine-color-lavender-8); }
         [data-mantine-color-scheme="dark"] .zivo-source-row[data-active] .zivo-source-title {
@@ -511,11 +557,20 @@ export function Sidebar({
           background: var(--mantine-color-lavender-5);
           transition: width 400ms ease;
         }
-        .zivo-source-del {
+        .zivo-source-actions {
           position: absolute;
           right: 8px;
           top: 50%;
           transform: translateY(-50%);
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          opacity: 0;
+          visibility: hidden;
+          pointer-events: none;
+          transition: opacity 120ms ease, visibility 120ms ease;
+        }
+        .zivo-source-action {
           width: 28px;
           height: 28px;
           border-radius: 8px;
@@ -524,26 +579,28 @@ export function Sidebar({
           justify-content: center;
           color: var(--mantine-color-dimmed);
           background: var(--mantine-color-gray-2);
-          opacity: 0;
-          visibility: hidden;
-          pointer-events: none;
-          transition: opacity 120ms ease, visibility 120ms ease, background 140ms ease, color 140ms ease;
+          transition: background 140ms ease, color 140ms ease, opacity 140ms ease;
           cursor: pointer;
         }
-        .zivo-source-row:hover .zivo-source-del,
-        .zivo-source-row:focus-visible .zivo-source-del {
+        .zivo-source-action[data-loading] {
+          opacity: 0.55;
+          pointer-events: none;
+        }
+        .zivo-source-row:hover .zivo-source-actions,
+        .zivo-source-row:focus-visible .zivo-source-actions {
           opacity: 1;
           visibility: visible;
           pointer-events: auto;
         }
         @media (hover: none) {
-          .zivo-source-del {
+          .zivo-source-actions {
             opacity: 1;
             visibility: visible;
             pointer-events: auto;
           }
         }
-        .zivo-source-del:hover { background: var(--mantine-color-terracotta-0); color: var(--mantine-color-terracotta-6); }
+        .zivo-source-action:hover { background: var(--mantine-color-lavender-1); color: var(--mantine-color-lavender-7); }
+        .zivo-source-action-del:hover { background: var(--mantine-color-terracotta-0); color: var(--mantine-color-terracotta-6); }
 
         /* Section header count - a soft pill beside the label, not a stray number. */
         .zivo-count-pill {
@@ -616,8 +673,8 @@ export function Sidebar({
           text-transform: uppercase;
         }
         @media (prefers-reduced-motion: reduce) {
-          .zivo-add-source, .zivo-source-row, .zivo-source-chip, .zivo-source-del,
-          .zivo-source-fill, .zivo-account { transition: none !important; }
+          .zivo-add-source, .zivo-source-row, .zivo-source-chip, .zivo-source-actions,
+          .zivo-source-action, .zivo-source-fill, .zivo-account { transition: none !important; }
           .zivo-chip-dot-pulse { animation: none !important; }
         }
       `}</style>
