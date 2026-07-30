@@ -14,7 +14,7 @@ import {
 } from "@mantine/core";
 import { IconBookUpload, IconSparkles } from "@tabler/icons-react";
 import { notifications } from "@mantine/notifications";
-import { apiUploadFile, apiPost, ensureGuestSession, isArtifactId } from "@/lib/api/client";
+import { apiUploadFiles, apiPost, ensureGuestSession, isArtifactId } from "@/lib/api/client";
 import { useInvalidateSources } from "@/lib/api/queries";
 
 const FORMATS = ["PDF", "Word", "PowerPoint", "URL", "Paste", "GitHub"] as const;
@@ -61,32 +61,41 @@ export function SourceImportDeck({ onImported }: { onImported: (id: string) => v
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-    const file = e.dataTransfer.files[0];
-    if (file) await handleFileUpload(file);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) await handleFileUpload(files);
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) await handleFileUpload(file);
+    const files = Array.from(e.target.files ?? []);
+    if (files.length > 0) await handleFileUpload(files);
   };
 
-  const handleFileUpload = async (file: File) => {
+  const handleFileUpload = async (files: File[]) => {
     uploadAbortRef.current?.abort();
     const abort = new AbortController();
     uploadAbortRef.current = abort;
     setIsBusy(true);
     setUploadProgress(0);
 
+    const label =
+      files.length === 1
+        ? files[0].name
+        : `${files[0].name} (+${files.length - 1} more)`;
+
     try {
       await ensureGuestSession();
-      const data = await apiUploadFile<{ id: string }>(file, {
+      const data = await apiUploadFiles<{ id: string }>(files, {
         signal: abort.signal,
         onProgress: (loaded, total) => {
           if (total > 0) setUploadProgress(Math.round((loaded / total) * 100));
         },
       });
 
-      notifications.show({ title: "Uploaded source", message: file.name, color: "sage" });
+      notifications.show({
+        title: files.length > 1 ? "Combined source uploaded" : "Uploaded source",
+        message: label,
+        color: "sage",
+      });
       void invalidateSources();
       if (isArtifactId(data?.id)) onImported(data.id);
     } catch (e) {
@@ -215,6 +224,7 @@ export function SourceImportDeck({ onImported }: { onImported: (id: string) => v
             <input
               ref={fileInputRef}
               type="file"
+              multiple
               style={{ display: "none" }}
               accept=".pdf,.doc,.docx,.ppt,.pptx,.txt,.md"
               onChange={handleFileChange}
@@ -240,10 +250,12 @@ export function SourceImportDeck({ onImported }: { onImported: (id: string) => v
               ) : (
                 <Stack gap={2}>
                   <Text size="sm" fw={600}>
-                    {isDragOver ? "Drop file to upload" : "Drop textbook pages or click to select"}
+                    {isDragOver
+                      ? "Drop files to upload"
+                      : "Drop files or click to select (combine multiple into one source)"}
                   </Text>
                   <Text size="xs" c="gray.5">
-                    PDF, Word, PowerPoint, or text (max 100MB)
+                    PDF, Word, PowerPoint, or text. Select multiple files to merge (max 100MB total)
                   </Text>
                 </Stack>
               )}

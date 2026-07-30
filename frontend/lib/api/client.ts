@@ -503,6 +503,29 @@ export async function apiUploadFile<T extends { id: string }>(
   return apiPostForm<T>("/api/sources", form, options);
 }
 
+export async function apiUploadFiles<T extends { id: string }>(
+  files: File[],
+  options?: ApiPostFormOptions,
+): Promise<T> {
+  if (files.length === 0) {
+    throw new Error("No files selected");
+  }
+  if (files.length === 1) {
+    return apiUploadFile<T>(files[0], options);
+  }
+  const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+  if (totalSize >= CHUNKED_UPLOAD_THRESHOLD) {
+    throw new Error(
+      "Combined upload is too large for multi-file combine. Upload files one at a time or use smaller files.",
+    );
+  }
+  const form = new FormData();
+  for (const file of files) {
+    form.append("files", file);
+  }
+  return apiPostForm<T>("/api/sources/upload-bundle", form, options);
+}
+
 export async function apiDelete(path: string): Promise<void> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "DELETE",

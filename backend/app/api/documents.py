@@ -12,6 +12,7 @@ from app.api.access import require_document, require_document_source
 from app.db import get_db
 from app.models import Account, Document, DocumentChunk, User
 from app.services.auth import get_current_user, get_optional_user, require_csrf, require_csrf_or_guest
+from app.services.document_bundle import build_document_bundle
 from app.services.document_create import (
     assert_upload_content_type_allowed,
     create_document_record,
@@ -220,6 +221,32 @@ async def _read_upload_capped(request: Request, file: UploadFile) -> bytes:
     return b"".join(chunks)
 
 
+async def _read_files_capped(files: list[UploadFile]) -> list[tuple[str, str, bytes]]:
+    max_bytes = settings.max_upload_bytes
+    payloads: list[tuple[str, str, bytes]] = []
+    total = 0
+    for upload in files:
+        chunks: list[bytes] = []
+        file_total = 0
+        while True:
+            chunk = await upload.read(_READ_CHUNK_BYTES)
+            if not chunk:
+                break
+            file_total += len(chunk)
+            total += len(chunk)
+            if total > max_bytes:
+                raise HTTPException(status_code=413, detail="File too large")
+            chunks.append(chunk)
+        payloads.append(
+            (
+                upload.filename or "document",
+                upload.content_type or "",
+                b"".join(chunks),
+            )
+        )
+    return payloads
+
+
 @router.post("", response_model=DocumentOut, dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)])
 async def upload_document(
     request: Request,
@@ -243,6 +270,31 @@ async def upload_document(
         filename=file.filename or "document",
         content_type=ct,
         data=data,
+    )
+
+
+@router.post(
+    "/upload-bundle",
+    response_model=DocumentOut,
+    dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)],
+)
+async def upload_document_bundle(
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(optional_guest_session),
+) -> Document:
+    raw_files = await _read_files_capped(files)
+    data, content_type, filename, meta = await asyncio.to_thread(build_document_bundle, raw_files)
+    return await asyncio.to_thread(
+        create_document_record,
+        db,
+        user=user,
+        guest_id=guest_id,
+        filename=filename,
+        content_type=content_type,
+        data=data,
+        meta=meta,
     )
 
 
