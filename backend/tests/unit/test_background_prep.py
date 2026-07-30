@@ -5,7 +5,6 @@ from __future__ import annotations
 import uuid
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from app.models import Document
 from app.services.background_prep import (

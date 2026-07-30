@@ -25,8 +25,73 @@ ALLOWED_TYPES = {
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/json",
     "text/plain",
 }
+# Safe text-like extensions (stored as text/plain; never inline-renderable).
+_TEXT_EXTENSIONS = frozenset(
+    {
+        ".txt",
+        ".md",
+        ".markdown",
+        ".csv",
+        ".tsv",
+        ".log",
+        ".rst",
+        ".jsonl",
+        ".ndjson",
+        ".xml",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".ini",
+        ".cfg",
+        ".conf",
+        ".sql",
+        ".tex",
+        ".rtf",
+        ".org",
+        ".adoc",
+        ".asciidoc",
+        ".htm",
+        ".html",
+        ".css",
+        ".py",
+        ".rb",
+        ".go",
+        ".rs",
+        ".java",
+        ".c",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".cs",
+        ".swift",
+        ".kt",
+        ".scala",
+        ".php",
+        ".pl",
+        ".r",
+        ".lua",
+        ".vim",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".fish",
+        ".ps1",
+        ".bat",
+        ".env",
+        ".properties",
+        ".gradle",
+        ".dockerfile",
+        ".vue",
+        ".svelte",
+        ".tsx",
+        ".ts",
+        ".jsx",
+        ".js",
+    }
+)
 # Image study uploads are rejected until OCR ingest is production-ready.
 ALLOWED_IMAGE_PREFIX = "image/"
 _DOCX_CT = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -64,7 +129,13 @@ def normalize_upload_content_type(filename: str, content_type: str, data: bytes)
             status_code=415,
             detail="Legacy .doc isn’t supported — save as .docx or PDF and upload again.",
         )
-    if name.endswith((".txt", ".md")) or ct.startswith("text/"):
+    if ct in ("application/xhtml+xml",):
+        return "text/plain"
+    if name.endswith(".json") or ct == "application/json":
+        return "application/json"
+    if name.endswith(".xml") or ct in ("application/xml", "text/xml"):
+        return "text/plain"
+    if any(name.endswith(ext) for ext in _TEXT_EXTENSIONS) or ct.startswith("text/"):
         return "text/plain"
     return ct
 
@@ -74,7 +145,7 @@ def assert_upload_content_type_allowed(resolved_ct: str) -> None:
     if resolved_ct.startswith(ALLOWED_IMAGE_PREFIX):
         raise HTTPException(
             status_code=422,
-            detail="Image study isn’t available yet — upload a PDF, Word, PowerPoint, or paste text.",
+            detail="Image study isn’t available yet — upload a PDF, Word, PowerPoint, text file, or paste text.",
         )
     if resolved_ct not in ALLOWED_TYPES:
         raise HTTPException(status_code=415, detail="Unsupported file type")

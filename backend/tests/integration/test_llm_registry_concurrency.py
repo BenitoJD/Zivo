@@ -20,7 +20,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.models.llm import LlmModel, LlmModelKind

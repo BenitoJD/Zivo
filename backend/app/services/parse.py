@@ -42,7 +42,11 @@ def parse_document(content_type: str, data: bytes) -> list[dict]:
         return _parse_docx(data)
     if "presentationml" in ct or ct == _PPTX_CT:
         return _parse_pptx(data)
-    if ct.startswith("text/") or ct in ("application/json",):
+    if ct == "application/json":
+        return _parse_text(data)
+    if _looks_like_xml(data):
+        return _parse_xml(data)
+    if ct.startswith("text/"):
         return _parse_text(data)
     # images / unknown — single page placeholder for vision path later
     return [{"page": 1, "text": ""}]
@@ -351,6 +355,39 @@ def _parse_pptx(data: bytes) -> list[dict]:
     return study_pages_from_native_units(units or [""], has_native=True)
 
 
+def _looks_like_xml(data: bytes) -> bool:
+    head = data.lstrip()[:200]
+    return head.startswith(b"<?xml") or (head.startswith(b"<") and b">" in head[:80])
+
+
+def _xml_element_text(node: ET.Element) -> str:
+    parts: list[str] = []
+    if node.text and node.text.strip():
+        parts.append(node.text.strip())
+    for child in node:
+        child_text = _xml_element_text(child)
+        if child_text:
+            parts.append(child_text)
+        if child.tail and child.tail.strip():
+            parts.append(child.tail.strip())
+    return " ".join(parts)
+
+
+def _parse_xml(data: bytes) -> list[dict]:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        text = data.decode("latin-1", errors="replace")
+    try:
+        root = ET.fromstring(text)
+        body = _xml_element_text(root).strip()
+        if body:
+            return paginate_reader_text(body)
+    except ET.ParseError:
+        pass
+    return paginate_reader_text(text.strip())
+
+
 def _parse_text(data: bytes) -> list[dict]:
     try:
         text = data.decode("utf-8")
@@ -371,7 +408,12 @@ def _parse_text(data: bytes) -> list[dict]:
                 units = [u for u in units if u]
                 if units:
                     return study_pages_from_native_units(units, has_native=True)
+            # Arbitrary JSON file — pretty-print for study.
+            pretty = json.dumps(payload, indent=2, ensure_ascii=False)
+            return paginate_reader_text(pretty)
         except (json.JSONDecodeError, TypeError, ValueError):
             pass
+    if _looks_like_xml(data):
+        return _parse_xml(data)
     # Plain text / markdown — no native pages → soft fallback.
     return paginate_reader_text(text.strip())

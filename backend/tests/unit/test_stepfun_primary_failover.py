@@ -23,7 +23,6 @@ from app.models.llm import LlmModel, LlmModelKind, LlmProvider
 from app.services.llm_pool import (
     iter_chat_model_attempts,
     iter_failover_attempts,
-    list_pool_chat_models,
 )
 from app.services.llm_registry import ResolvedLlmModel
 

@@ -17,13 +17,58 @@ import { notifications } from "@mantine/notifications";
 import { apiUploadFiles, apiPost, ensureGuestSession, isArtifactId } from "@/lib/api/client";
 import { useInvalidateSources } from "@/lib/api/queries";
 
-const FORMATS = ["PDF", "Word", "PowerPoint", "URL", "Paste", "GitHub"] as const;
+const FORMATS = ["PDF", "Word", "PowerPoint", "Text", "URL", "Paste", "GitHub"] as const;
+
+/** Extensions accepted by the file picker (backend sniffs bytes; list is advisory). */
+const UPLOAD_ACCEPT = [
+  ".pdf",
+  ".doc",
+  ".docx",
+  ".ppt",
+  ".pptx",
+  ".txt",
+  ".md",
+  ".markdown",
+  ".json",
+  ".jsonl",
+  ".xml",
+  ".yaml",
+  ".yml",
+  ".csv",
+  ".tsv",
+  ".log",
+  ".rst",
+  ".sql",
+  ".tex",
+  ".html",
+  ".htm",
+  ".css",
+  ".py",
+  ".js",
+  ".ts",
+  ".jsx",
+  ".tsx",
+  ".go",
+  ".rs",
+  ".java",
+  ".c",
+  ".cpp",
+  ".h",
+  ".rb",
+  ".php",
+  ".sh",
+  ".toml",
+  ".ini",
+  ".cfg",
+  ".conf",
+].join(",");
 
 type DeckTab = "file" | "paste" | "link" | "github";
 const TAG_TO_TAB: Record<(typeof FORMATS)[number], DeckTab> = {
   PDF: "file",
   Word: "file",
   PowerPoint: "file",
+  Text: "file",
   URL: "link",
   Paste: "paste",
   GitHub: "github",
@@ -226,7 +271,7 @@ export function SourceImportDeck({ onImported }: { onImported: (id: string) => v
               type="file"
               multiple
               style={{ display: "none" }}
-              accept=".pdf,.doc,.docx,.ppt,.pptx,.txt,.md"
+              accept={UPLOAD_ACCEPT}
               onChange={handleFileChange}
               disabled={isBusy}
             />
@@ -255,7 +300,7 @@ export function SourceImportDeck({ onImported }: { onImported: (id: string) => v
                       : "Drop files or click to select (combine multiple into one source)"}
                   </Text>
                   <Text size="xs" c="gray.5">
-                    PDF, Word, PowerPoint, or text. Select multiple files to merge (max 100MB total)
+                    PDF, Word, PowerPoint, JSON, XML, code, or plain text. Select multiple files to merge (max 100MB total)
                   </Text>
                 </Stack>
               )}

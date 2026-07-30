@@ -4,9 +4,10 @@ init endpoint; without sniffing + allowlist the bytes would later be served
 inline via the presigned URL on GET /sources/{id}/file).
 
 The security contract: the only content types that reach storage are pdf, docx,
-pptx, or text/plain. None of those execute inline script when served, so even
-before the presigned-URL attachment forcing (Fix 6, defense-in-depth), an
-attacker cannot land an inline-renderable type in object storage.
+pptx, application/json (internal article pages), or text/plain. None of those
+execute inline script when served, so even before the presigned-URL attachment
+forcing (Fix 6, defense-in-depth), an attacker cannot land an inline-renderable
+type in object storage. XML and HTML uploads are normalized to text/plain.
 """
 
 from __future__ import annotations
@@ -62,8 +63,14 @@ def test_svg_is_blocked():
 
 def test_javascript_is_blocked():
     with pytest.raises(HTTPException) as exc_info:
-        _gate("x.js", "application/javascript", b"alert(1)")
+        _gate("script", "application/javascript", b"alert(1)")
     assert exc_info.value.status_code == 415
+
+
+def test_js_file_with_script_extension_allowed_as_text():
+    resolved = _gate("notes.js", "application/javascript", b"const x = 1;\nexport { x };")
+    assert resolved == "text/plain"
+    assert resolved in ALLOWED_TYPES
 
 
 def test_png_image_is_blocked_as_unsupported_feature():
@@ -121,6 +128,28 @@ def test_pptx_mislabelled_as_zip_is_corrected():
 
 def test_text_plain_allowed():
     assert _gate("notes.txt", "text/plain", b"hello world") == "text/plain"
+
+
+def test_json_file_allowed():
+    body = b'{"title": "hello", "items": [1, 2]}'
+    assert _gate("data.json", "application/json", body) == "application/json"
+
+
+def test_xml_file_normalized_to_text_plain():
+    assert _gate("feed.xml", "application/xml", b"<root><item>one</item></root>") == "text/plain"
+
+
+def test_csv_file_allowed():
+    assert _gate("data.csv", "text/csv", b"name,score\nalice,10") == "text/plain"
+
+
+def test_python_source_allowed():
+    assert _gate("main.py", "text/x-python", b"def main():\n    pass") == "text/plain"
+
+
+def test_internal_article_json_allowed():
+    body = b'{"pages": [{"page": 1, "text": "hello"}]}'
+    assert _gate("notes.article", "application/json", body) == "application/json"
 
 
 def test_legacy_doc_rejected_with_helpful_message():

@@ -21,9 +21,10 @@ trustworthy and gives each cleanup a definition of done.
    (`I`), and bugbear (`B`) — each lands with its fixes in its own slice.
 2. **No Python type checking.** Target: add `mypy` (start lenient, tighten), then CI.
    Current: none.
-3. **Frontend `lint` not gated.** CI runs `npm run build` only
-   ([.github/workflows/ci.yml](../../.github/workflows/ci.yml)); `npm run lint` reports
-   pre-existing errors. Target: fix them, add `npm run lint` to CI.
+3. **Frontend `lint` not gated.** RESOLVED (2026-07): CI runs `npm run lint` before
+   `npm run build` ([.github/workflows/ci.yml](../../.github/workflows/ci.yml));
+   local parity via `./scripts/ship-gates.sh` ([agents/ship-gates.md](../../agents/ship-gates.md)).
+   Still open: promote ESLint warnings to errors where appropriate.
 4. **Broad excepts on the core path.** ~54 `except Exception` blocks in `backend/app`;
    some are legitimate best-effort (the pattern in
    `app/services/document_learn_state.py:39`), some swallow core-path errors. Target:

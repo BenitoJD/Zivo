@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 
 from docx import Document as DocxDocument
 from docx.enum.text import WD_BREAK
@@ -108,6 +109,23 @@ def test_parse_plain_text_soft_paginates() -> None:
     text = "\n\n".join(f"Para {i}. " + ("word " * 100) for i in range(10))
     pages = parse_document("text/plain", text.encode("utf-8"))
     assert len(pages) > 1
+
+
+def test_parse_json_file_pretty_prints() -> None:
+    data = json.dumps({"title": "Notes", "items": ["a", "b"]}).encode()
+    pages = parse_document("application/json", data)
+    assert len(pages) >= 1
+    joined = "\n".join(p["text"] for p in pages)
+    assert '"title"' in joined
+    assert "Notes" in joined
+
+
+def test_parse_xml_extracts_text() -> None:
+    xml = b"<book><chapter><title>Intro</title><p>Hello world</p></chapter></book>"
+    pages = parse_document("text/plain", xml)
+    joined = " ".join(p["text"] for p in pages)
+    assert "Intro" in joined
+    assert "Hello world" in joined
 
 
 def test_avidpay_like_docx_is_multi_page() -> None:

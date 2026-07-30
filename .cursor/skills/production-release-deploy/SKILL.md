@@ -16,6 +16,17 @@ orchestration step.
 
 This is production work. Follow `agents/prod-safety.md`.
 
+## Ship gates (required before deploy)
+
+Run CI-parity checks locally before dispatching deploy. See `agents/ship-gates.md`.
+
+```bash
+./scripts/ship-gates.sh
+```
+
+Or confirm the target SHA already has a **green** CI run on `main`. Do not deploy
+from a commit that failed lint, tests, or frontend build.
+
 Before any prod command or production deployment trigger:
 
 - Ask for explicit in-thread approval.

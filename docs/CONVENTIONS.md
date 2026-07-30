@@ -155,7 +155,7 @@ truth for UI; this file does not restate it.
 |-----------|-------------------|-----|
 | Import health, migrations, unit tests | CI (`ci.yml`) | — |
 | Dead code, unused imports, undefined names | **`ruff check` (E9, F) in CI** ([backend/ruff.toml](../backend/ruff.toml)) | ruleset is conservative |
-| Frontend build | CI (`npm run build`) | `npm run lint` is **not** in CI |
+| Frontend build + lint | CI (`npm run build`, `npm run lint`) | warnings only in eslint today |
 | Python format + broader lint (`I`/`B`) | none | `ruff format`, import sorting not on yet |
 | Python types | none | no `mypy` config yet |
 | Module size, broad excepts | none | manual review |

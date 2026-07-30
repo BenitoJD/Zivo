@@ -8,6 +8,8 @@ Same deployment model as [zivo](https://github.com/BenitoJD/zivo): **K3s + Helm 
 
 **How we build (read before shipping):** coding rules → [docs/CONVENTIONS.md](docs/CONVENTIONS.md) · design decisions → [docs/adr/](docs/adr/0000-index.md) · UI → [Frontend UI](#frontend-ui) below. These three are the single source of truth; anything under `.cursor/skills/` that contradicts them is stale.
 
+**Ship gates (reach gold):** before commit, push, or deploy, run `./scripts/ship-gates.sh` — see [agents/ship-gates.md](agents/ship-gates.md). Agents must not hand off work or trigger deploy until gates pass.
+
 ## Holy grail (engines)
 
 **Code is the enemy.**
@@ -90,6 +92,7 @@ Python 3.12+, Node.js 22+, Docker (for Postgres + MinIO).
 ./scripts/dev.sh doctor
 ./scripts/dev.sh stop
 
+./scripts/ship-gates.sh           # lint + tests + build (before commit/deploy)
 cd frontend && npm run build && npm run lint
 ```
 

@@ -18,7 +18,6 @@ from app.services.question_pool import (
     get_progress,
     get_question_budget,
     is_coverage_complete,
-    page_range_bounds,
     selected_page_list,
 )
 from app.services.rag_window import (

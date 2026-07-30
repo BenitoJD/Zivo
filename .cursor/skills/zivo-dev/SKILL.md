@@ -78,5 +78,6 @@ API, workers, and Next.js run **on the host** via `dev.sh start` (not in compose
 - `debug-fastapi` — API debugging
 - `fastapi` — route/service patterns
 - `postgres` / `postgres-patterns` — intel schema work
+- Ship gates before commit/deploy: [agents/ship-gates.md](../../agents/ship-gates.md) · `./scripts/ship-gates.sh`
 - `production-release-deploy` — K3s deploy flow
 - `debug-kubernetes` — cluster issues
