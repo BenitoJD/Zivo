@@ -115,8 +115,8 @@ def _backfill_edition_digests() -> int:
                 SELECT e.id, e.paper_slug, e.edition_date
                 FROM qb.newspaper_edition e
                 WHERE e.status = 'ready'
-                  AND e.blog_status = 'none'
                   AND e.blog_post_id IS NULL
+                  AND e.blog_status IN ('none', 'skipped', 'failed')
                 ORDER BY e.edition_date DESC
                 LIMIT 5
                 """
@@ -125,8 +125,13 @@ def _backfill_edition_digests() -> int:
 
         for row in rows:
             source_key = f"{row['paper_slug']}:{row['edition_date'].isoformat()}"
-            if seo_repo.attempt_exists(db, "newspaper_edition", source_key):
+            if not seo_repo.edition_digest_may_enqueue(
+                db, "newspaper_edition", source_key
+            ):
                 continue
+            from app.repositories import newspaper as newspaper_repo
+
+            newspaper_repo.reset_edition_blog_for_retry(db, row["id"])
             enqueue_job(
                 db,
                 name="seo.cook_edition_digest",

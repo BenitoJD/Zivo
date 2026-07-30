@@ -351,8 +351,10 @@ def cook_edition_digest(db: Session, edition_id: uuid.UUID) -> dict[str, Any]:
     if linked:
         return linked
 
-    if seo_repo.attempt_exists(db, "newspaper_edition", source_key):
+    if not seo_repo.edition_digest_may_enqueue(db, "newspaper_edition", source_key):
         return {"skipped": True, "reason": "already_attempted"}
+
+    newspaper_repo.reset_edition_blog_for_retry(db, edition_id)
 
     doc_id = ed.get("document_id")
     if not doc_id:
@@ -594,7 +596,12 @@ def _skip_edition(
         outcome="skipped",
         reason=reason,
     )
-    newspaper_repo.set_edition_blog_status(db, edition_id, status="skipped")
+    blog_status = (
+        "failed"
+        if reason in seo_repo.RETRYABLE_EDITION_DIGEST_REASONS
+        else "skipped"
+    )
+    newspaper_repo.set_edition_blog_status(db, edition_id, status=blog_status)
     db.commit()
     logger.info("edition digest skip %s: %s", source_key, reason)
     return {"skipped": True, "reason": reason, "source_key": source_key}

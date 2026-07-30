@@ -99,6 +99,40 @@ def attempt_exists(db: Session, source_kind: str, source_key: str) -> bool:
     return row is not None
 
 
+# Transient digest failures (LLM timeout, bad JSON) should be retried by backfill.
+RETRYABLE_EDITION_DIGEST_REASONS = frozenset({"write_failed"})
+
+
+def latest_attempt(
+    db: Session, source_kind: str, source_key: str
+) -> dict[str, Any] | None:
+    row = db.execute(
+        text(
+            """
+            SELECT outcome, reason
+            FROM qb.seo_cook_attempt
+            WHERE source_kind = :k AND source_key = :s
+            LIMIT 1
+            """
+        ),
+        {"k": source_kind, "s": source_key},
+    ).mappings().first()
+    return dict(row) if row else None
+
+
+def edition_digest_may_enqueue(
+    db: Session, source_kind: str, source_key: str
+) -> bool:
+    """True when no cook ran yet, or the last attempt failed transiently."""
+    attempt = latest_attempt(db, source_kind, source_key)
+    if not attempt:
+        return True
+    if attempt.get("outcome") == "published":
+        return False
+    reason = str(attempt.get("reason") or "")
+    return reason in RETRYABLE_EDITION_DIGEST_REASONS
+
+
 def record_attempt(
     db: Session,
     *,

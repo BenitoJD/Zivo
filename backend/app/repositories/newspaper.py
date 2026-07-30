@@ -329,6 +329,22 @@ def list_days_for_paper(db: Session, *, paper_slug: str, since: date) -> list[di
     return [dict(r) for r in rows]
 
 
+def reset_edition_blog_for_retry(db: Session, edition_id: uuid.UUID) -> None:
+    """Clear a skipped/failed blog slot so digest cook can run again."""
+    db.execute(
+        text(
+            """
+            UPDATE qb.newspaper_edition
+            SET blog_status = 'none', updated_at = now()
+            WHERE id = :id
+              AND blog_post_id IS NULL
+              AND blog_status IN ('skipped', 'failed')
+            """
+        ),
+        {"id": edition_id},
+    )
+
+
 def set_edition_blog_status(
     db: Session,
     edition_id: uuid.UUID,

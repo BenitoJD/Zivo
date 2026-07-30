@@ -506,9 +506,12 @@ def _maybe_enqueue_edition_digest(db: Session, doc: Document) -> None:
         return
 
     source_key = f"{row['paper_slug']}:{row['edition_date'].isoformat()}"
-    if seo_repo.attempt_exists(db, "newspaper_edition", source_key):
+    if not seo_repo.edition_digest_may_enqueue(db, "newspaper_edition", source_key):
         return
 
+    from app.repositories import newspaper as newspaper_repo
+
+    newspaper_repo.reset_edition_blog_for_retry(db, row["id"])
     enqueue_job(
         db,
         name="seo.cook_edition_digest",

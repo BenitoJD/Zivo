@@ -203,6 +203,11 @@ EDITION MATERIAL (PII-scrubbed; do not reveal origin):
     lede = str(parsed.get("lede") or "").strip()
     body = str(parsed.get("body_md") or "").strip()
     if not title or not body:
+        logger.warning(
+            "edition digest write returned empty fields title=%r body_len=%s",
+            title,
+            len(body),
+        )
         return None
 
     fields = humanize_fields(title=title, lede=lede, body_md=body)

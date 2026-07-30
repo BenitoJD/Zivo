@@ -62,6 +62,30 @@ def test_strip_em_dashes_handles_unicode_variants() -> None:
     assert re.search(r"\s-\s", strip_em_dashes("a — b"))
 
 
+def test_edition_digest_may_enqueue_retries_write_failed(monkeypatch) -> None:
+    from app.repositories import seo as seo_repo
+    from app.repositories.seo import edition_digest_may_enqueue
+
+    class _FakeDb:
+        pass
+
+    db = _FakeDb()
+    monkeypatch.setattr(
+        seo_repo,
+        "latest_attempt",
+        lambda _db, _k, _s: {"outcome": "skipped", "reason": "write_failed"},
+    )
+    assert edition_digest_may_enqueue(db, "newspaper_edition", "the-hindu:2026-07-30")
+    monkeypatch.setattr(
+        seo_repo,
+        "latest_attempt",
+        lambda _db, _k, _s: {"outcome": "skipped", "reason": "dedupe:fingerprint_taken"},
+    )
+    assert not edition_digest_may_enqueue(db, "newspaper_edition", "the-hindu:2026-07-30")
+    monkeypatch.setattr(seo_repo, "latest_attempt", lambda _db, _k, _s: None)
+    assert edition_digest_may_enqueue(db, "newspaper_edition", "the-hindu:2026-07-30")
+
+
 def test_skip_edition_keeps_published_link(monkeypatch) -> None:
     import uuid
     from datetime import date
@@ -102,4 +126,34 @@ def test_skip_edition_keeps_published_link(monkeypatch) -> None:
     out = _skip_edition(_FakeDb(), edition_id, "the-hindu:2026-07-27", "dedupe:fingerprint_taken")
     assert out.get("published") is True
     assert linked == ["published"]
+
+
+def test_skip_edition_marks_write_failed_as_failed(monkeypatch) -> None:
+    import uuid
+
+    from app.services.seo_cook import _skip_edition
+
+    edition_id = uuid.uuid4()
+    statuses: list[str] = []
+
+    monkeypatch.setattr(
+        "app.repositories.newspaper.get_edition",
+        lambda db, eid: None,
+    )
+    monkeypatch.setattr(
+        "app.repositories.newspaper.set_edition_blog_status",
+        lambda db, eid, *, status: statuses.append(status),
+    )
+    monkeypatch.setattr(
+        "app.services.seo_cook.seo_repo.record_attempt",
+        lambda db, **kwargs: None,
+    )
+
+    class _FakeDb:
+        def commit(self) -> None:
+            return None
+
+    out = _skip_edition(_FakeDb(), edition_id, "the-hindu:2026-07-30", "write_failed")
+    assert out.get("skipped") is True
+    assert statuses == ["failed"]
 
