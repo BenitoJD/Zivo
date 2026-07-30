@@ -143,14 +143,16 @@ MATERIAL (already PII-scrubbed; do not reveal origin):
     }
 
 
-_EDITION_SYSTEM = """You write daily edition digests for learners preparing for exams.
+_EDITION_SYSTEM = """You write daily edition digests for learners preparing for Indian competitive exams.
 Voice: a careful human editor. Short clear sentences. Concrete nouns. Occasional contractions.
-Write like you read the day's news and picked what matters for someone studying current affairs.
+Write like a study editor who read the day's paper and kept only substantive current-affairs themes.
+Cover policy, courts, economy, diplomacy, science, governance, and major national/international events.
 Never name any newspaper, publication, or journalist. Never quote headlines verbatim.
 Never mention PDFs, uploads, AI, or how this was produced.
+Never describe the source material, page layout, masthead, or what you left out.
 Never use em-dashes. Avoid: delve, landscape, robust, leverage, game-changer,
 it's important to note, in today's fast-paced, tapestry, myriad.
-No bullet-heavy walls. Mix paragraph lengths. Teach what happened and why it matters.
+No bullet-heavy walls. Mix paragraph lengths. Teach what happened and why it matters for exams.
 Return ONLY JSON."""
 
 
@@ -168,7 +170,9 @@ Edition date: {edition_date}
 Working title hint: {title_hint or "(infer a clear title from the themes)"}
 
 Format: explainer digest (600-1200 words in body_md). Markdown with 2-4 short ## headings.
-Cover the main themes only. Skip ads, listings, and filler. No source attribution.
+Cover only substantive current-affairs themes from the material below.
+The material is already pre-filtered for exam relevance; still omit any stray filler.
+No source attribution. Do not mention personal notices, weather, ads, or publication metadata.
 
 End body_md with one short paragraph inviting practice on Question Better (not salesy).
 

@@ -86,6 +86,45 @@ def test_edition_digest_may_enqueue_retries_write_failed(monkeypatch) -> None:
     assert edition_digest_may_enqueue(db, "newspaper_edition", "the-hindu:2026-07-30")
 
 
+def test_aggregate_worthy_newspaper_text_filters_pages(monkeypatch) -> None:
+    import uuid
+
+    from app.services.content_worthiness import WorthinessVerdict
+    from app.services.newspaper import aggregate_worthy_newspaper_text
+
+    doc_id = uuid.uuid4()
+    editorial = (
+        "The Supreme Court examined whether the ordinance issued by the Union "
+        "Cabinet complies with the Constitution and fundamental rights doctrine."
+    )
+    notice = "S VASANTHA changed her name to VASANTHA SRIDHAR via affidavit."
+
+    monkeypatch.setattr(
+        "app.repositories.seo.list_document_page_texts",
+        lambda db, d: [
+            {"page_start": 1, "text": editorial},
+            {"page_start": 2, "text": notice},
+        ],
+    )
+
+    def _worth(*, page_text, newspaper=False, db=None, **kwargs):
+        if "Supreme Court" in page_text:
+            return WorthinessVerdict(True, "ok")
+        return WorthinessVerdict(False, "newspaper_off_syllabus")
+
+    monkeypatch.setattr(
+        "app.services.content_worthiness.evaluate_worthiness",
+        _worth,
+    )
+
+    class _FakeDb:
+        pass
+
+    out = aggregate_worthy_newspaper_text(_FakeDb(), doc_id)
+    assert editorial in out
+    assert notice not in out
+
+
 def test_skip_edition_keeps_published_link(monkeypatch) -> None:
     import uuid
     from datetime import date

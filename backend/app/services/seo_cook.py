@@ -326,9 +326,12 @@ def _edition_fingerprint(paper_slug: str, edition_date: date) -> str:
     return f"newspaper:{paper_slug}:{edition_date.isoformat()}"
 
 
-def cook_edition_digest(db: Session, edition_id: uuid.UUID) -> dict[str, Any]:
+def cook_edition_digest(
+    db: Session, edition_id: uuid.UUID, *, force: bool = False
+) -> dict[str, Any]:
     """Cook one edition digest when the edition is ready."""
     from app.repositories import newspaper as newspaper_repo
+    from app.services.newspaper import aggregate_worthy_newspaper_text
 
     settings = seo_repo.get_settings(db)
     if not settings.get("cook_enabled"):
@@ -339,28 +342,34 @@ def cook_edition_digest(db: Session, edition_id: uuid.UUID) -> dict[str, Any]:
         return {"skipped": True, "reason": "edition_not_found"}
     if ed.get("status") != "ready":
         return {"skipped": True, "reason": "edition_not_ready"}
-    if ed.get("blog_status") == "published" and ed.get("blog_post_id"):
+    if ed.get("blog_status") == "published" and ed.get("blog_post_id") and not force:
         return {"skipped": True, "reason": "already_published"}
 
     paper_slug = str(ed["paper_slug"])
     edition_date = ed["edition_date"]
     source_key = _edition_source_key(paper_slug, edition_date)
     fp = _edition_fingerprint(paper_slug, edition_date)
+    existing_post_id = (
+        uuid.UUID(str(ed["blog_post_id"])) if ed.get("blog_post_id") else None
+    )
 
     linked = _sync_edition_blog_link(db, edition_id=edition_id, fingerprint=fp)
-    if linked:
+    if linked and not force:
         return linked
 
-    if not seo_repo.edition_digest_may_enqueue(db, "newspaper_edition", source_key):
+    if not force and not seo_repo.edition_digest_may_enqueue(
+        db, "newspaper_edition", source_key
+    ):
         return {"skipped": True, "reason": "already_attempted"}
 
-    newspaper_repo.reset_edition_blog_for_retry(db, edition_id)
+    if not force:
+        newspaper_repo.reset_edition_blog_for_retry(db, edition_id)
 
     doc_id = ed.get("document_id")
     if not doc_id:
         return _skip_edition(db, edition_id, source_key, "no_document")
 
-    source_text = seo_repo.aggregate_document_text(db, doc_id)
+    source_text = aggregate_worthy_newspaper_text(db, uuid.UUID(str(doc_id)))
     if len(source_text.strip()) < 400:
         return _skip_edition(db, edition_id, source_key, "insufficient_text")
 
@@ -382,7 +391,7 @@ def cook_edition_digest(db: Session, edition_id: uuid.UUID) -> dict[str, Any]:
         title=article["title"],
         lede=article["lede"],
     )
-    if not dedupe.ok:
+    if not dedupe.ok and not (force and existing_post_id):
         if dedupe.reason == "fingerprint_taken":
             linked = _link_existing_edition_post(
                 db,
@@ -394,33 +403,45 @@ def cook_edition_digest(db: Session, edition_id: uuid.UUID) -> dict[str, Any]:
                 return linked
         return _skip_edition(db, edition_id, source_key, f"dedupe:{dedupe.reason}")
 
-    slug = unique_slug(db, f"{paper_slug}-{edition_date.isoformat()}")
     embedding = embed_title_lede(article["title"], article["lede"])
-    author = seo_repo.next_author_name(db)
 
-    newspaper_repo.set_edition_blog_status(db, edition_id, status="pending")
-
-    post_id = seo_repo.insert_post(
-        db,
-        slug=slug,
-        title=article["title"],
-        lede=article["lede"],
-        body_md=article["body_md"],
-        format=article["format"],
-        stream=article["stream"],
-        author_name=author,
-        topic_fingerprint=fp,
-        embedding=embedding,
-        source_kind="newspaper_edition",
-        source_ref={
-            "edition_id": str(edition_id),
-            "paper_slug": paper_slug,
-            "edition_date": edition_date.isoformat(),
-        },
-        faq_jsonld=[],
-        cta_kind="practice",
-        status="published",
-    )
+    if force and existing_post_id:
+        post_id = existing_post_id
+        existing = seo_repo.get_post_by_id(db, post_id, include_internal=True) or {}
+        slug = str(existing.get("slug") or f"{paper_slug}-{edition_date.isoformat()}")
+        seo_repo.update_post_content(
+            db,
+            post_id,
+            title=article["title"],
+            lede=article["lede"],
+            body_md=article["body_md"],
+            embedding=embedding,
+        )
+    else:
+        slug = unique_slug(db, f"{paper_slug}-{edition_date.isoformat()}")
+        author = seo_repo.next_author_name(db)
+        newspaper_repo.set_edition_blog_status(db, edition_id, status="pending")
+        post_id = seo_repo.insert_post(
+            db,
+            slug=slug,
+            title=article["title"],
+            lede=article["lede"],
+            body_md=article["body_md"],
+            format=article["format"],
+            stream=article["stream"],
+            author_name=author,
+            topic_fingerprint=fp,
+            embedding=embedding,
+            source_kind="newspaper_edition",
+            source_ref={
+                "edition_id": str(edition_id),
+                "paper_slug": paper_slug,
+                "edition_date": edition_date.isoformat(),
+            },
+            faq_jsonld=[],
+            cta_kind="practice",
+            status="published",
+        )
 
     try:
         attached = attach_edition_mcqs(
@@ -451,17 +472,19 @@ def cook_edition_digest(db: Session, edition_id: uuid.UUID) -> dict[str, Any]:
         source_kind="newspaper_edition",
         source_key=source_key,
         outcome="published",
-        reason="ok",
+        reason="recooked" if force else "ok",
         post_id=post_id,
     )
     db.commit()
     logger.info(
-        "edition digest published edition=%s slug=%s",
+        "edition digest %s edition=%s slug=%s",
+        "recooked" if force else "published",
         edition_id,
         slug,
     )
     return {
         "published": True,
+        "recooked": force,
         "post_id": str(post_id),
         "slug": slug,
         "edition_id": str(edition_id),

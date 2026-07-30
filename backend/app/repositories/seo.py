@@ -303,6 +303,39 @@ def insert_post(
     return post_id
 
 
+def update_post_content(
+    db: Session,
+    post_id: uuid.UUID,
+    *,
+    title: str,
+    lede: str,
+    body_md: str,
+    embedding: list[float] | None,
+) -> None:
+    emb = pgvector_literal(embedding) if embedding else None
+    embedding_sql = "embedding = CAST(:emb AS vector)," if emb else ""
+    db.execute(
+        text(
+            f"""
+            UPDATE qb.seo_post
+            SET title = :title,
+                lede = :lede,
+                body_md = :body,
+                {embedding_sql}
+                updated_at = now()
+            WHERE id = :id
+            """
+        ),
+        {
+            "id": post_id,
+            "title": title,
+            "lede": lede,
+            "body": body_md,
+            **({"emb": emb} if emb else {}),
+        },
+    )
+
+
 def attach_assertions(
     db: Session,
     post_id: uuid.UUID,
@@ -684,6 +717,27 @@ def aggregate_document_text(db: Session, document_id: uuid.UUID) -> str:
         {"d": document_id},
     ).first()
     return str(row[0] if row and row[0] else "")
+
+
+def list_document_page_texts(
+    db: Session, document_id: uuid.UUID
+) -> list[dict[str, Any]]:
+    """One row per page with chunk text collapsed in reading order."""
+    rows = db.execute(
+        text(
+            """
+            SELECT
+                c.page_start,
+                string_agg(c.text, ' ' ORDER BY c.id) AS text
+            FROM qb.document_chunks c
+            WHERE c.document_id = :d
+            GROUP BY c.page_start
+            ORDER BY c.page_start
+            """
+        ),
+        {"d": document_id},
+    ).mappings().all()
+    return [dict(r) for r in rows]
 
 
 def get_edition_blog_post(

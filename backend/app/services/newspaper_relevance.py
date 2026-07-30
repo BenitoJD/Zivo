@@ -15,7 +15,6 @@ never re-bill, pinned to the default text model, and degrades permissively
 from __future__ import annotations
 
 import logging
-import uuid
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -35,9 +34,12 @@ _NEWS_RELEVANCE_SYSTEM = (
     "policy, social sector & welfare, governance, and disaster management. Judge by "
     "MEANING and subject — a page about governance, rights, policy, courts, protests, "
     "federalism, fiscal or monetary matters, treaties, or public institutions is "
-    "relevant even if it never names a textbook keyword. Pure entertainment, sports, "
-    "celebrity gossip, lifestyle, recipes, fashion, horoscopes, or event announcements "
-    "with fees/dates are NOT relevant. Return JSON only."
+    "relevant even if it never names a textbook keyword. Personal legal notices, "
+    "gazette-style name or address changes, routine local weather, crime blotter items "
+    "with no policy angle, and publication masthead or registration boilerplate are "
+    "NOT relevant. Pure entertainment, sports, celebrity gossip, lifestyle, recipes, "
+    "fashion, horoscopes, or event announcements with fees/dates are NOT relevant. "
+    "Return JSON only."
 )
 
 _NEWS_RELEVANCE_FORMAT = (

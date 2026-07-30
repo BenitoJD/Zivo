@@ -430,6 +430,28 @@ def is_newspaper_document(doc: Document) -> bool:
     return bool(meta.get("newspaper") or meta.get("hide_source") or meta.get("ingest_kind") == "newspaper")
 
 
+def aggregate_worthy_newspaper_text(db: Session, document_id: uuid.UUID) -> str:
+    """Edition digest source: only pages that pass the worthiness engine.
+
+    MCQ cooking already filters ads, mastheads, and off-syllabus pages via
+    ``evaluate_worthiness(newspaper=True)``. Edition digests must use the same
+    gate so analysis posts do not parrot classifieds, personal notices, or
+    publication boilerplate from the raw PDF extract.
+    """
+    from app.repositories import seo as seo_repo
+    from app.services.content_worthiness import evaluate_worthiness
+
+    parts: list[str] = []
+    for row in seo_repo.list_document_page_texts(db, document_id):
+        page_text = (row.get("text") or "").strip()
+        if not page_text:
+            continue
+        worth = evaluate_worthiness(page_text=page_text, newspaper=True, db=db)
+        if worth.worthy:
+            parts.append(page_text)
+    return "\n\n".join(parts)
+
+
 def newspaper_learn_ready(db: Session, doc: Document) -> bool:
     """True when Learn can open instantly (triage done + at least one MCQ on page 1).
 

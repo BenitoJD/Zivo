@@ -234,5 +234,6 @@ def seo_cook_edition_digest(payload: dict) -> dict:
     from app.services.seo_cook import cook_edition_digest
 
     edition_id = UUID(payload["edition_id"])
+    force = bool(payload.get("force"))
     with SessionLocal() as db:
-        return cook_edition_digest(db, edition_id)
+        return cook_edition_digest(db, edition_id, force=force)
