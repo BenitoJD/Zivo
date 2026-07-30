@@ -431,24 +431,55 @@ def is_newspaper_document(doc: Document) -> bool:
 
 
 def aggregate_worthy_newspaper_text(db: Session, document_id: uuid.UUID) -> str:
-    """Edition digest source: only pages that pass the worthiness engine.
+    """Edition digest source: pages the edition already cooks MCQs from.
 
-    MCQ cooking already filters ads, mastheads, and off-syllabus pages via
-    ``evaluate_worthiness(newspaper=True)``. Edition digests must use the same
-    gate so analysis posts do not parrot classifieds, personal notices, or
-    publication boilerplate from the raw PDF extract.
+    Learn MCQs only land on pages that cleared triage and the newspaper
+    worthiness engine, so they are the edition's curated study set. Using raw
+    PDF text let personal notices, local blotter, and masthead junk leak into
+    Read analysis. Falls back to worthiness-filtered pages only when no MCQs
+    exist yet (first digest enqueue right after page 1 cooks).
     """
     from app.repositories import seo as seo_repo
     from app.services.content_worthiness import evaluate_worthiness
+    from app.services.question_pool import count_assertions_on_page
 
-    parts: list[str] = []
-    for row in seo_repo.list_document_page_texts(db, document_id):
+    max_chars = 12_000
+    page_rows = seo_repo.list_document_page_texts(db, document_id)
+    cooked: list[tuple[int, int, str]] = []
+    fallback: list[tuple[int, str]] = []
+
+    for row in page_rows:
+        page = int(row["page_start"])
         page_text = (row.get("text") or "").strip()
         if not page_text:
             continue
+        mcq_count = count_assertions_on_page(
+            db, document_id, page, serve_mode="learn"
+        )
+        if mcq_count > 0:
+            cooked.append((mcq_count, page, page_text))
+            continue
         worth = evaluate_worthiness(page_text=page_text, newspaper=True, db=db)
         if worth.worthy:
-            parts.append(page_text)
+            fallback.append((page, page_text))
+
+    ranked: list[str]
+    if cooked:
+        cooked.sort(key=lambda item: (-item[0], item[1]))
+        ranked = [text for _, _, text in cooked]
+    else:
+        fallback.sort(key=lambda item: item[0])
+        ranked = [text for _, text in fallback]
+
+    parts: list[str] = []
+    total = 0
+    for page_text in ranked:
+        if total >= max_chars:
+            break
+        room = max_chars - total
+        chunk = page_text if len(page_text) <= room else page_text[:room]
+        parts.append(chunk)
+        total += len(chunk) + 2
     return "\n\n".join(parts)
 
 

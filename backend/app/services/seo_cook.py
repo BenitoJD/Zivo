@@ -624,7 +624,8 @@ def _skip_edition(
         if reason in seo_repo.RETRYABLE_EDITION_DIGEST_REASONS
         else "skipped"
     )
-    newspaper_repo.set_edition_blog_status(db, edition_id, status=blog_status)
+    if not (ed and ed.get("blog_post_id")):
+        newspaper_repo.set_edition_blog_status(db, edition_id, status=blog_status)
     db.commit()
     logger.info("edition digest skip %s: %s", source_key, reason)
     return {"skipped": True, "reason": reason, "source_key": source_key}

@@ -86,7 +86,7 @@ def test_edition_digest_may_enqueue_retries_write_failed(monkeypatch) -> None:
     assert edition_digest_may_enqueue(db, "newspaper_edition", "the-hindu:2026-07-30")
 
 
-def test_aggregate_worthy_newspaper_text_filters_pages(monkeypatch) -> None:
+def test_aggregate_worthy_newspaper_text_prefers_cooked_pages(monkeypatch) -> None:
     import uuid
 
     from app.services.content_worthiness import WorthinessVerdict
@@ -102,19 +102,17 @@ def test_aggregate_worthy_newspaper_text_filters_pages(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.repositories.seo.list_document_page_texts",
         lambda db, d: [
-            {"page_start": 1, "text": editorial},
-            {"page_start": 2, "text": notice},
+            {"page_start": 1, "text": notice},
+            {"page_start": 5, "text": editorial},
         ],
     )
-
-    def _worth(*, page_text, newspaper=False, db=None, **kwargs):
-        if "Supreme Court" in page_text:
-            return WorthinessVerdict(True, "ok")
-        return WorthinessVerdict(False, "newspaper_off_syllabus")
-
+    monkeypatch.setattr(
+        "app.services.question_pool.count_assertions_on_page",
+        lambda db, doc, page, serve_mode="learn": 3 if page == 5 else 0,
+    )
     monkeypatch.setattr(
         "app.services.content_worthiness.evaluate_worthiness",
-        _worth,
+        lambda **kwargs: WorthinessVerdict(True, "ok"),
     )
 
     class _FakeDb:
