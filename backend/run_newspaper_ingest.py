@@ -80,6 +80,7 @@ def _message_filename(message) -> str:  # noqa: ANN001
 
 def _scan_pdf_for_gap(db, message) -> tuple[int, str, date] | None:
     """Cheap (paper_slug, edition_date) for reconcile gap-fill — no LLM."""
+    from app.repositories import newspaper as newspaper_repo
     from app.services.newspaper_naming import cheap_paper_slug_hint, resolve_edition_date
 
     if not _is_pdf_message(message):
@@ -90,13 +91,19 @@ def _scan_pdf_for_gap(db, message) -> tuple[int, str, date] | None:
     paper_slug = cheap_paper_slug_hint(db, filename=fname, caption=caption)
     if not paper_slug:
         return None
+    if not newspaper_repo.is_brand_allowed(db, paper_slug):
+        return None
     edition_date = resolve_edition_date(
         filename=fname, caption=caption, message_date=msg_date
     )
     return int(message.id), paper_slug, edition_date
 
 
-async def _process_message(client, db, message, *, client_lock: asyncio.Lock) -> None:
+async def _process_message(client, message, *, client_lock: asyncio.Lock) -> None:
+    """Ingest one channel PDF. DB sessions are short — never held across await."""
+    from io import BytesIO
+
+    from app.db import SessionLocal
     from app.repositories import newspaper as newspaper_repo
     from app.services.newspaper import create_edition_from_pdf, ensure_brand_and_allowed
     from app.services.newspaper_naming import cheap_paper_slug_hint, parse_edition_meta_async
@@ -111,46 +118,47 @@ async def _process_message(client, db, message, *, client_lock: asyncio.Lock) ->
     caption = message.message or ""
 
     # Gate before LLM: skip known non-allowlisted brands cheaply.
-    hint = cheap_paper_slug_hint(db, filename=fname, caption=caption)
-    if hint and not newspaper_repo.is_brand_allowed(db, hint):
-        logger.info(
-            "skip paper %s (%s) — not on allowlist msg=%s",
-            hint,
-            fname,
-            message.id,
-        )
-        return
+    with SessionLocal() as db:
+        hint = cheap_paper_slug_hint(db, filename=fname, caption=caption)
+        if hint and not newspaper_repo.is_brand_allowed(db, hint):
+            logger.info(
+                "skip paper %s (%s) — not on allowlist msg=%s",
+                hint,
+                fname,
+                message.id,
+            )
+            return
 
     msg_date = message.date or datetime.now(timezone.utc)
-    parsed = await parse_edition_meta_async(
-        db, filename=fname or "edition.pdf", caption=caption, message_date=msg_date
-    )
+    with SessionLocal() as db:
+        parsed = await parse_edition_meta_async(
+            db, filename=fname or "edition.pdf", caption=caption, message_date=msg_date
+        )
 
     # Gate before multi‑MB download: allowlist + one edition per paper/day.
-    if not ensure_brand_and_allowed(
-        db, paper_slug=parsed.paper_slug, paper_title=parsed.paper_title
-    ):
-        logger.info(
-            "skip paper %s (%s) — not on allowlist msg=%s",
-            parsed.paper_slug,
-            fname,
-            message.id,
+    with SessionLocal() as db:
+        if not ensure_brand_and_allowed(
+            db, paper_slug=parsed.paper_slug, paper_title=parsed.paper_title
+        ):
+            logger.info(
+                "skip paper %s (%s) — not on allowlist msg=%s",
+                parsed.paper_slug,
+                fname,
+                message.id,
+            )
+            return
+        existing = newspaper_repo.get_edition_by_paper_day(
+            db, paper_slug=parsed.paper_slug, edition_date=parsed.edition_date
         )
-        return
-    existing = newspaper_repo.get_edition_by_paper_day(
-        db, paper_slug=parsed.paper_slug, edition_date=parsed.edition_date
-    )
-    if existing:
-        logger.info(
-            "skip duplicate %s %s (already %s) msg=%s",
-            parsed.paper_slug,
-            parsed.edition_date,
-            existing.get("status"),
-            message.id,
-        )
-        return
-
-    from io import BytesIO
+        if existing:
+            logger.info(
+                "skip duplicate %s %s (already %s) msg=%s",
+                parsed.paper_slug,
+                parsed.edition_date,
+                existing.get("status"),
+                message.id,
+            )
+            return
 
     buf = BytesIO()
     async with client_lock:
@@ -160,16 +168,17 @@ async def _process_message(client, db, message, *, client_lock: asyncio.Lock) ->
         logger.warning("empty download msg=%s", message.id)
         return
 
-    edition_id = create_edition_from_pdf(
-        db,
-        filename=fname or f"{parsed.paper_slug}.pdf",
-        data=data,
-        paper_slug=parsed.paper_slug,
-        paper_title=parsed.paper_title,
-        edition_date=parsed.edition_date,
-        telegram_msg_id=int(message.id),
-        location_raw=parsed.location_raw,
-    )
+    with SessionLocal() as db:
+        edition_id = create_edition_from_pdf(
+            db,
+            filename=fname or f"{parsed.paper_slug}.pdf",
+            data=data,
+            paper_slug=parsed.paper_slug,
+            paper_title=parsed.paper_title,
+            edition_date=parsed.edition_date,
+            telegram_msg_id=int(message.id),
+            location_raw=parsed.location_raw,
+        )
     if edition_id:
         logger.info(
             "ingested %s %s via %s → %s",
@@ -191,7 +200,6 @@ def _is_pdf_message(message) -> bool:  # noqa: ANN001
 async def _reconcile(
     client,
     entity,
-    db,
     *,
     client_lock: asyncio.Lock,
     safety_max: int = _RECONCILE_SAFETY_MAX,
@@ -202,6 +210,7 @@ async def _reconcile(
     plan_gap_fill so we only full-parse / download true holes.
     Oldest msg_id first → first city wins. sync_cursor = tip watermark only.
     """
+    from app.db import SessionLocal
     from app.repositories import newspaper as newspaper_repo
 
     tip_id: int | None = None
@@ -213,11 +222,13 @@ async def _reconcile(
             if _is_pdf_message(message):
                 pdfs.append(message)
 
-    existing = newspaper_repo.list_existing_paper_days(db)
+    with SessionLocal() as db:
+        existing = newspaper_repo.list_existing_paper_days(db)
     seen: list[tuple[int, str, date]] = []
     by_id: dict[int, object] = {}
     for message in pdfs:
-        scanned = _scan_pdf_for_gap(db, message)
+        with SessionLocal() as db:
+            scanned = _scan_pdf_for_gap(db, message)
         if scanned is None:
             continue
         msg_id, paper_slug, edition_date = scanned
@@ -237,11 +248,12 @@ async def _reconcile(
         if message is None:
             continue
         try:
-            await _process_message(client, db, message, client_lock=client_lock)
+            await _process_message(client, message, client_lock=client_lock)
         except Exception:
             logger.exception("reconcile failed msg=%s", msg_id)
     if tip_id is not None:
-        newspaper_repo.set_sync_cursor(db, tip_id)
+        with SessionLocal() as db:
+            newspaper_repo.set_sync_cursor(db, tip_id)
 
 
 # Private-channel title substring used when channel_label exact match misses.
@@ -332,19 +344,32 @@ async def run() -> None:
 
     client_lock = asyncio.Lock()
     reconcile_lock = asyncio.Lock()
+    ingest_lock = asyncio.Lock()
 
-    # Cache resolved entity — avoid re-iterating dialogs (flood) on every event.
-    _cache: dict = {"entity": None, "ref": None, "label": None}
+    # Cache channel settings + resolved entity — avoid DB/Telegram on every event.
+    _cache: dict = {
+        "entity": None,
+        "ref": None,
+        "label": None,
+        "settings_loaded": False,
+    }
 
-    def _channel_settings() -> tuple[str, str]:
+    def _load_channel_settings() -> tuple[str, str]:
         with SessionLocal() as db:
             from app.repositories import newspaper as newspaper_repo
 
             s = newspaper_repo.get_settings(db)
-            return (
-                (s.get("channel_ref") or "").strip(),
-                (s.get("channel_label") or "").strip(),
-            )
+            ref = (s.get("channel_ref") or "").strip()
+            label = (s.get("channel_label") or "").strip()
+        _cache["ref"] = ref
+        _cache["label"] = label
+        _cache["settings_loaded"] = True
+        return ref, label
+
+    def _channel_settings() -> tuple[str, str]:
+        if _cache.get("settings_loaded"):
+            return (_cache.get("ref") or ""), (_cache.get("label") or "")
+        return _load_channel_settings()
 
     def _maybe_persist_peer_id(ref: str, label: str, entity) -> None:
         """If dialogs revealed a stable marked peer id, store it without wiping cursor."""
@@ -445,26 +470,34 @@ async def run() -> None:
 
         raise ValueError(f"Cannot resolve newspaper channel ref={ref!r} label={label!r}")
 
-    # Live handler — filter in-process against current channel id.
+    # Live handler — PDFs from the newspaper channel only; no DB until we match.
     @client.on(events.NewMessage)
     async def on_new(event):  # noqa: ANN001
-        ref, _label = _channel_settings()
-        if not ref and not _label:
+        if not _is_pdf_message(event.message):
             return
-        try:
-            entity = await resolve_entity()
-        except Exception:
-            logger.exception("resolve channel failed")
+        ref, label = _channel_settings()
+        if not ref and not label:
             return
-        if entity is None:
-            return
-        chat = await event.get_chat()
-        if getattr(chat, "id", None) != getattr(entity, "id", None):
-            return
-        with SessionLocal() as db:
+        cached_entity = _cache.get("entity")
+        if cached_entity is not None:
+            chat = await event.get_chat()
+            if getattr(chat, "id", None) != getattr(cached_entity, "id", None):
+                return
+        else:
+            try:
+                entity = await resolve_entity()
+            except Exception:
+                logger.exception("resolve channel failed")
+                return
+            if entity is None:
+                return
+            chat = await event.get_chat()
+            if getattr(chat, "id", None) != getattr(entity, "id", None):
+                return
+        async with ingest_lock:
             try:
                 await _process_message(
-                    client, db, event.message, client_lock=client_lock
+                    client, event.message, client_lock=client_lock
                 )
             except Exception:
                 logger.exception("live ingest failed")
@@ -477,9 +510,9 @@ async def run() -> None:
             entity = await resolve_entity()
             if entity is None:
                 return
-            with SessionLocal() as db:
+            async with ingest_lock:
                 await asyncio.wait_for(
-                    _reconcile(client, entity, db, client_lock=client_lock),
+                    _reconcile(client, entity, client_lock=client_lock),
                     timeout=_RECONCILE_TIMEOUT_SEC,
                 )
 
@@ -512,6 +545,12 @@ async def run() -> None:
                 await _run_reconcile_once()
             except Exception:
                 logger.exception("connection watchdog error")
+
+    _load_channel_settings()
+    try:
+        await resolve_entity()
+    except Exception:
+        logger.exception("initial channel resolve failed")
 
     for coro, name in (
         (reconcile_loop(), "newspaper-reconcile"),

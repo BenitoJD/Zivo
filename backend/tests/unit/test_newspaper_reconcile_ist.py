@@ -78,10 +78,13 @@ def test_create_edition_imports_reset_via_question_pool_facade() -> None:
     src = inspect.getsource(newspaper.create_edition_from_pdf)
     assert "from app.services.question_pool_jobs import" not in src
     assert "from app.services.question_pool import reset_for_new_page_range" in src
-    # Import order that used to fail mid-init: jobs must fully export cancel helpers.
+  # Import order that used to fail mid-init: jobs must fully export cancel helpers.
     assert callable(question_pool_jobs._cancel_queued_generate_jobs)
     assert newspaper.create_edition_from_pdf
     assert reset_for_new_page_range is question_pool_jobs.reset_for_new_page_range
+
+    jobs_src = inspect.getsource(question_pool_jobs.reset_for_new_page_range)
+    assert "background_prep" not in jobs_src
 
 
 def test_cheap_paper_slug_hint_th_without_llm(monkeypatch) -> None:
@@ -101,6 +104,10 @@ def test_scan_pdf_for_gap_builds_seen_tuple(monkeypatch) -> None:
         "app.services.newspaper_naming.newspaper_repo.resolve_alias",
         lambda db, raw: None,
     )
+    monkeypatch.setattr(
+        "app.repositories.newspaper.is_brand_allowed",
+        lambda db, slug: True,
+    )
     message = MagicMock()
     message.id = 8520
     message.message = ""
@@ -110,3 +117,22 @@ def test_scan_pdf_for_gap_builds_seen_tuple(monkeypatch) -> None:
     message.file.name = "TH -Delhi -29-07-2026 Tr.pdf"
     scanned = _scan_pdf_for_gap(object(), message)
     assert scanned == (8520, "the-hindu", date(2026, 7, 29))
+
+
+def test_scan_pdf_for_gap_skips_non_allowlisted(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.services.newspaper_naming.newspaper_repo.resolve_alias",
+        lambda db, raw: None,
+    )
+    monkeypatch.setattr(
+        "app.repositories.newspaper.is_brand_allowed",
+        lambda db, slug: slug == "the-hindu",
+    )
+    message = MagicMock()
+    message.id = 8546
+    message.message = ""
+    message.date = datetime(2026, 7, 29, 2, 18, tzinfo=timezone.utc)
+    message.document.mime_type = "application/pdf"
+    message.document.attributes = []
+    message.file.name = "TOI  Bangalore  29‹07‹2026.pdf"
+    assert _scan_pdf_for_gap(object(), message) is None

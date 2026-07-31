@@ -544,9 +544,9 @@ def reset_for_new_page_range(db: Session, doc: Document, selected: dict[str, Any
     meta.pop("question_pool_initialized", None)
     meta.pop("rag_window", None)
     meta.pop("rag_window_ready", None)
-    from app.services.background_prep import clear_prep_meta
-
-    meta = clear_prep_meta(meta)
+    meta.pop("prep_mode", None)
+    meta.pop("prep_phase", None)
+    meta.pop("prep_complete", None)
     save_progress_row(db, doc.id, progress)
     doc.meta = meta
     flag_modified(doc, "meta")
