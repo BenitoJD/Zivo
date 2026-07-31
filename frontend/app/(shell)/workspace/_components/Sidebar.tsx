@@ -55,6 +55,7 @@ import { apiFetchBytes, ensureGuestSession } from "@/lib/api/client";
 import { triggerDownload } from "@/lib/export";
 import type { SourceDocument } from "@/lib/types";
 import { useStudyNav, type StudyMode } from "@/app/workspace/_components/studyNav";
+import { SourceCoverChip, SourceCoverHover } from "@/app/workspace/_components/SourceCoverPreview";
 
 /**
  * Mode navigator below sources when an artifact is open.
@@ -320,21 +321,22 @@ function SourceRow({
   }
 
   return (
-    <UnstyledButton
-      className="zivo-source-row"
-      data-active={active || undefined}
-      onClick={onNavigate}
-      aria-label={label}
-    >
-      <span className="zivo-source-chip" aria-hidden>
-        <IconFileText size={16} stroke={1.7} />
-        {meta && (
-          <span
-            className={meta.pulse ? "zivo-chip-dot zivo-chip-dot-pulse" : "zivo-chip-dot"}
-            style={{ background: meta.dot }}
-          />
-        )}
-      </span>
+    <SourceCoverHover doc={doc}>
+      <UnstyledButton
+        className="zivo-source-row"
+        data-active={active || undefined}
+        onClick={onNavigate}
+        aria-label={label}
+      >
+        <span className="zivo-source-chip" aria-hidden>
+          <SourceCoverChip />
+          {meta && (
+            <span
+              className={meta.pulse ? "zivo-chip-dot zivo-chip-dot-pulse" : "zivo-chip-dot"}
+              style={{ background: meta.dot }}
+            />
+          )}
+        </span>
       <span className="zivo-source-body">
         <Text
           size="sm"
@@ -392,7 +394,8 @@ function SourceRow({
           </span>
         </Tooltip>
       </span>
-    </UnstyledButton>
+      </UnstyledButton>
+    </SourceCoverHover>
   );
 }
 
@@ -510,12 +513,18 @@ export function Sidebar({
           justify-content: center;
           background: var(--mantine-color-default-hover);
           color: var(--mantine-color-dimmed);
-          transition: background 140ms ease, color 140ms ease;
+          overflow: hidden;
+          transition: background 140ms ease, color 140ms ease, transform 200ms cubic-bezier(0.32, 0.72, 0, 1), box-shadow 200ms ease;
         }
-        .zivo-source-row:hover .zivo-source-chip { background: var(--mantine-color-gray-2); }
+        .zivo-source-row:hover .zivo-source-chip {
+          background: var(--mantine-color-gray-2);
+          transform: scale(1.06);
+          box-shadow: 0 2px 8px rgba(35, 34, 32, 0.1);
+        }
         .zivo-source-row[data-active] .zivo-source-chip {
           background: var(--mantine-color-lavender-1);
           color: var(--mantine-color-lavender-7);
+          box-shadow: 0 0 0 1px var(--mantine-color-lavender-2);
         }
         /* Busy signal lives on the chip's corner, ringed by the page so it reads as a badge. */
         .zivo-chip-dot {
@@ -722,14 +731,15 @@ export function Sidebar({
                 documents.map((d) => {
                   const lbl = sourceLabel(d.filename);
                   return (
-                    <MiniRailButton
-                      key={d.id}
-                      label={lbl}
-                      active={artifactId === d.id}
-                      onClick={() => onNavigateSource(d.id)}
-                    >
-                      <IconFileText size={18} stroke={1.5} />
-                    </MiniRailButton>
+                    <SourceCoverHover key={d.id} doc={d}>
+                      <MiniRailButton
+                        label={lbl}
+                        active={artifactId === d.id}
+                        onClick={() => onNavigateSource(d.id)}
+                      >
+                        <IconFileText size={18} stroke={1.5} />
+                      </MiniRailButton>
+                    </SourceCoverHover>
                   );
                 })
               )}
