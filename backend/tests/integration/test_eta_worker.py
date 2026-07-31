@@ -7,6 +7,8 @@ Skipped when the DB is unreachable.
 from __future__ import annotations
 
 
+import uuid
+
 import pytest
 from sqlalchemy import select
 
@@ -21,6 +23,7 @@ from app.eta.registry import eta
 from app.eta.spec import EtaDagEdge, EtaDagNode, EtaDagSpec
 from app.eta.worker import _process_job, _reserve_next_job
 from app.models import (
+    Document,
     EtaExecution,
     EtaExecutionStatus,
     Job,
@@ -62,6 +65,19 @@ def db():
         session.commit()
     # Also clean any standalone smoke jobs
     session.execute(Job.__table__.delete().where(Job.name.like("test.worker.%")))
+    # Clean liveness/reclaim test jobs + their documents (slug-prefixed).
+    test_doc_ids = (
+        session.execute(
+            select(Document.id).where(Document.slug.like("liveness-test%"))
+        ).scalars().all()
+    )
+    if test_doc_ids:
+        session.execute(
+            Job.__table__.delete().where(
+                Job.payload.op("->>")("document_id").in_([str(d) for d in test_doc_ids])
+            )
+        )
+        session.execute(Document.__table__.delete().where(Document.id.in_(test_doc_ids)))
     session.commit()
     session.close()
 
@@ -294,25 +310,26 @@ def test_process_job_raises_for_unknown_handler(db) -> None:
 # --------------------------------------------------------------------------- #
 
 def test_reclaim_stale_jobs_resets_orphaned_running(db) -> None:
-    """An orphaned 'running' job (simulating a crashed worker) must be reclaimed
-    back to 'queued' so it isn't silently lost forever."""
+    """An orphaned 'running' job (lease expired) must be reclaimed to 'queued'."""
     from datetime import datetime, timedelta, timezone
 
-    from app.eta.worker import STALE_RUNNING_TIMEOUT_SECONDS, _reclaim_stale_jobs
+    from app.eta.stale_jobs import STALE_RUNNING_TIMEOUT_SECONDS, reclaim_stale_jobs_sync
 
-    # Create a job that's 'running' but with a locked_at far in the past (orphaned)
+    # Lease expired in the past → orphaned.
     orphan = Job(
         name="test.worker.reclaim_target",
         workload=JobWorkload.cpu,
         status=JobStatus.running,
         locked_by="dead-worker-uuid",
         locked_at=datetime.now(timezone.utc) - timedelta(seconds=STALE_RUNNING_TIMEOUT_SECONDS + 60),
+        lease_deadline=datetime.now(timezone.utc) - timedelta(seconds=60),
+        heartbeat_at=datetime.now(timezone.utc) - timedelta(seconds=120),
         payload={},
     )
     db.add(orphan)
     db.commit()
 
-    reclaimed = _reclaim_stale_jobs(db)
+    reclaimed = reclaim_stale_jobs_sync(db, workloads=[JobWorkload.cpu.value])
     db.commit()
     assert reclaimed >= 1
 
@@ -320,13 +337,44 @@ def test_reclaim_stale_jobs_resets_orphaned_running(db) -> None:
     assert orphan.status == JobStatus.queued
     assert orphan.locked_by is None
     assert orphan.locked_at is None
+    assert orphan.lease_deadline is None
+
+
+def test_reclaim_does_not_touch_live_heartbeat_job(db) -> None:
+    """A job with a fresh heartbeat (lease far in the future) must NOT be
+    reclaimed, even if its locked_at is very old — the heartbeat is the truth."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.eta.lease import lease_deadline_from
+    from app.eta.stale_jobs import reclaim_stale_jobs_sync
+
+    live = Job(
+        name="test.worker.heartbeat_live",
+        workload=JobWorkload.cpu,
+        status=JobStatus.running,
+        locked_by="live-worker-uuid",
+        # locked_at is ancient (old slow job) — but the lease is fresh:
+        locked_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        heartbeat_at=datetime.now(timezone.utc),
+        lease_deadline=lease_deadline_from(),  # now + LEASE_DURATION
+        payload={},
+    )
+    db.add(live)
+    db.commit()
+
+    reclaim_stale_jobs_sync(db, workloads=[JobWorkload.cpu.value])
+    db.commit()
+    db.refresh(live)
+
+    assert live.status == JobStatus.running  # untouched — heartbeat is live
+    assert live.locked_by == "live-worker-uuid"
 
 
 def test_reclaim_does_not_touch_recent_running_job(db) -> None:
-    """A job that was reserved just moments ago must NOT be reclaimed."""
+    """A job that was reserved just moments ago (no lease yet) must NOT be reclaimed."""
     from datetime import datetime, timezone
 
-    from app.eta.worker import _reclaim_stale_jobs
+    from app.eta.stale_jobs import reclaim_stale_jobs_sync
 
     fresh = Job(
         name="test.worker.fresh_running",
@@ -339,7 +387,7 @@ def test_reclaim_does_not_touch_recent_running_job(db) -> None:
     db.add(fresh)
     db.commit()
 
-    _reclaim_stale_jobs(db)
+    reclaim_stale_jobs_sync(db, workloads=[JobWorkload.cpu.value])
     db.commit()
     db.refresh(fresh)
 
@@ -351,14 +399,15 @@ def test_reclaim_marks_exhausted_orphans_failed(db) -> None:
     """A stale running job that already hit max_attempts must fail, not re-queue."""
     from datetime import datetime, timedelta, timezone
 
-    from app.eta.worker import STALE_RUNNING_TIMEOUT_SECONDS, _reclaim_stale_jobs
+    from app.eta.stale_jobs import reclaim_stale_jobs_sync
 
     orphan = Job(
         name="test.worker.exhausted_orphan",
         workload=JobWorkload.cpu,
         status=JobStatus.running,
         locked_by="dead-worker-uuid",
-        locked_at=datetime.now(timezone.utc) - timedelta(seconds=STALE_RUNNING_TIMEOUT_SECONDS + 60),
+        locked_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        lease_deadline=datetime.now(timezone.utc) - timedelta(seconds=60),
         attempts=3,
         max_attempts=3,
         payload={},
@@ -366,7 +415,7 @@ def test_reclaim_marks_exhausted_orphans_failed(db) -> None:
     db.add(orphan)
     db.commit()
 
-    reclaimed = _reclaim_stale_jobs(db)
+    reclaimed = reclaim_stale_jobs_sync(db, workloads=[JobWorkload.cpu.value])
     db.commit()
     assert reclaimed >= 1
 
@@ -376,11 +425,68 @@ def test_reclaim_marks_exhausted_orphans_failed(db) -> None:
     assert orphan.locked_at is None
 
 
+def test_reclaim_marks_exhausted_orphans_failed_for_io_too(db) -> None:
+    """Parity: an exhausted orphan in the IO workload is also failed (the old
+    IO reaper requeued forever — this is the fix for that asymmetry)."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.eta.stale_jobs import reclaim_stale_jobs_sync
+
+    orphan = Job(
+        name="test.worker.exhausted_io_orphan",
+        workload=JobWorkload.io,
+        status=JobStatus.running,
+        locked_by="dead-io-worker",
+        locked_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        lease_deadline=datetime.now(timezone.utc) - timedelta(seconds=60),
+        attempts=3,
+        max_attempts=3,
+        payload={},
+    )
+    db.add(orphan)
+    db.commit()
+
+    reclaim_stale_jobs_sync(db, workloads=[JobWorkload.io.value])
+    db.commit()
+    db.refresh(orphan)
+
+    assert orphan.status == JobStatus.failed  # NOT requeued forever
+
+
+def test_reclaim_does_not_increment_attempts(db) -> None:
+    """Reclaim must NOT cost an attempt — only a real handler exception does.
+    A job orphaned by deploys is not auto-failed for that."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.eta.stale_jobs import reclaim_stale_jobs_sync
+
+    orphan = Job(
+        name="test.worker.no_attempt_bump",
+        workload=JobWorkload.cpu,
+        status=JobStatus.running,
+        locked_by="dead-worker-uuid",
+        locked_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        lease_deadline=datetime.now(timezone.utc) - timedelta(seconds=60),
+        attempts=1,
+        max_attempts=3,
+        payload={},
+    )
+    db.add(orphan)
+    db.commit()
+
+    reclaim_stale_jobs_sync(db, workloads=[JobWorkload.cpu.value])
+    db.commit()
+    db.refresh(orphan)
+
+    assert orphan.status == JobStatus.queued
+    assert orphan.attempts == 1  # unchanged — reclaim is free
+
+
 def test_reclaim_only_affects_own_workload(db) -> None:
     """The CPU worker's reclaim must not touch IO jobs (and vice-versa)."""
     from datetime import datetime, timedelta, timezone
 
-    from app.eta.worker import STALE_RUNNING_TIMEOUT_SECONDS, _reclaim_stale_jobs
+    from app.eta.stale_jobs import reclaim_stale_jobs_sync
 
     # Stale IO job — should NOT be reclaimed by the CPU worker
     stale_io = Job(
@@ -388,15 +494,232 @@ def test_reclaim_only_affects_own_workload(db) -> None:
         workload=JobWorkload.io,
         status=JobStatus.running,
         locked_by="dead-io-worker",
-        locked_at=datetime.now(timezone.utc) - timedelta(seconds=STALE_RUNNING_TIMEOUT_SECONDS + 60),
+        locked_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        lease_deadline=datetime.now(timezone.utc) - timedelta(seconds=60),
         payload={},
     )
     db.add(stale_io)
     db.commit()
 
-    _reclaim_stale_jobs(db)  # CPU worker's reclaim (WORKLOADS defaults to cpu)
+    reclaim_stale_jobs_sync(db, workloads=[JobWorkload.cpu.value])
     db.commit()
     db.refresh(stale_io)
 
     assert stale_io.status == JobStatus.running  # IO job untouched by CPU reclaim
+
+
+def test_reclaim_across_all_workloads_recovers_both(db) -> None:
+    """The scheduler-driven reclaim passes BOTH workloads and recovers orphans
+    in each — closes the 'all workers down' gap."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.eta.schedules.jobs_reclaim import run_jobs_reclaim
+
+    orphan_io = Job(
+        name="test.worker.orphan_io",
+        workload=JobWorkload.io,
+        status=JobStatus.running,
+        locked_by="dead-io",
+        locked_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        lease_deadline=datetime.now(timezone.utc) - timedelta(seconds=60),
+        payload={},
+    )
+    orphan_cpu = Job(
+        name="test.worker.orphan_cpu",
+        workload=JobWorkload.cpu,
+        status=JobStatus.running,
+        locked_by="dead-cpu",
+        locked_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        lease_deadline=datetime.now(timezone.utc) - timedelta(seconds=60),
+        payload={},
+    )
+    db.add_all([orphan_io, orphan_cpu])
+    db.commit()
+
+    run_jobs_reclaim()  # runs against all workloads, no worker pod needed
+    db.refresh(orphan_io)
+    db.refresh(orphan_cpu)
+
+    assert orphan_io.status == JobStatus.queued
+    assert orphan_cpu.status == JobStatus.queued
+
+
+# --------------------------------------------------------------------------- #
+# Lease heartbeat renewal
+# --------------------------------------------------------------------------- #
+
+def test_renew_lease_extends_deadline_and_sets_heartbeat(db) -> None:
+    """A heartbeat renew must push lease_deadline out and stamp heartbeat_at."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.eta.lease import LEASE_DURATION_SECONDS, renew_lease_sync
+
+    job = Job(
+        name="test.worker.heartbeat_renew",
+        workload=JobWorkload.cpu,
+        status=JobStatus.running,
+        locked_by="live-worker",
+        locked_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        heartbeat_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        lease_deadline=datetime.now(timezone.utc) - timedelta(minutes=1),  # about to expire
+        payload={},
+    )
+    db.add(job)
+    db.commit()
+
+    before = datetime.now(timezone.utc)
+    renewed = renew_lease_sync(db, job.id)
+    db.commit()
+    assert renewed is True
+    db.refresh(job)
+
+    assert job.heartbeat_at is not None
+    assert job.heartbeat_at >= before
+    assert job.lease_deadline is not None
+    # Deadline pushed out by ~LEASE_DURATION from now.
+    assert job.lease_deadline >= before + timedelta(seconds=LEASE_DURATION_SECONDS - 5)
+
+
+def test_renew_lease_noops_on_terminal_job(db) -> None:
+    """A heartbeat renew on a job that already finished must be a safe no-op."""
+    from app.eta.lease import renew_lease_sync
+
+    job = Job(
+        name="test.worker.heartbeat_noop",
+        workload=JobWorkload.cpu,
+        status=JobStatus.succeeded,  # already done
+        payload={},
+    )
+    db.add(job)
+    db.commit()
+
+    renewed = renew_lease_sync(db, job.id)
+    db.commit()
+    assert renewed is False
+
+
+# --------------------------------------------------------------------------- #
+# Lease-aware generate.questions reclaim + liveness SQL
+# --------------------------------------------------------------------------- #
+
+def _make_test_doc(db) -> Document:
+    """A throwaway document whose slug matches the ``db`` fixture cleanup."""
+    doc = Document(
+        slug=f"liveness-test-{uuid.uuid4().hex[:8]}",
+        filename="t.pdf",
+        content_type="application/pdf",
+        size_bytes=1,
+        storage_key="x",
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    return doc
+
+
+def test_reclaim_generate_jobs_skips_valid_lease(db) -> None:
+    """A generate.questions job with an unexpired lease must NOT be reclaimed,
+    even if its locked_at is ancient — the lease is the truth (no split-brain)."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.eta.lease import lease_deadline_from
+    from app.services.question_pool import _reclaim_stale_generate_jobs
+
+    doc = _make_test_doc(db)
+    live = Job(
+        name="generate.questions",
+        workload=JobWorkload.cpu,
+        status=JobStatus.running,
+        locked_by="live-worker",
+        locked_at=datetime.now(timezone.utc) - timedelta(hours=1),  # ancient
+        heartbeat_at=datetime.now(timezone.utc),  # fresh heartbeat
+        lease_deadline=lease_deadline_from(),  # valid lease — now + LEASE_DURATION
+        payload={"document_id": str(doc.id)},
+    )
+    db.add(live)
+    db.commit()
+
+    reclaimed = _reclaim_stale_generate_jobs(db)
+    db.commit()
+    db.refresh(live)
+
+    assert reclaimed == 0
+    assert live.status == JobStatus.running  # untouched
+    assert live.locked_by == "live-worker"
+
+
+def test_reclaim_generate_jobs_requeues_expired_lease_and_clears_fields(db) -> None:
+    """An orphaned generate.questions job (lease expired) is requeued and its
+    lease/lock fields cleared — while result/checkpoint is preserved."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.services.question_pool import _reclaim_stale_generate_jobs
+
+    doc = _make_test_doc(db)
+    orphan = Job(
+        name="generate.questions",
+        workload=JobWorkload.cpu,
+        status=JobStatus.running,
+        locked_by="dead-worker",
+        locked_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        heartbeat_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        lease_deadline=datetime.now(timezone.utc) - timedelta(seconds=60),  # expired
+        result={"checkpoint": "saved-sequence"},  # must survive the reclaim
+        payload={"document_id": str(doc.id)},
+    )
+    db.add(orphan)
+    db.commit()
+
+    reclaimed = _reclaim_stale_generate_jobs(db)
+    db.commit()
+    db.refresh(orphan)
+
+    assert reclaimed >= 1
+    assert orphan.status == JobStatus.queued
+    assert orphan.locked_by is None
+    assert orphan.locked_at is None
+    assert orphan.heartbeat_at is None
+    assert orphan.lease_deadline is None
+    assert orphan.result == {"checkpoint": "saved-sequence"}  # preserved
+
+
+def test_has_active_ingest_jobs_sees_valid_lease_job_as_active(db) -> None:
+    """A long ingest job with a valid lease counts as active — so the recovery
+    schedules don't mistake it for dead and enqueue duplicate rag_window work."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.eta.lease import lease_deadline_from
+    from app.services.rag_window import has_active_ingest_jobs
+
+    doc = _make_test_doc(db)
+    live_ingest = Job(
+        name="ingest.rag_window",
+        workload=JobWorkload.cpu,
+        status=JobStatus.running,
+        locked_by="live-worker",
+        locked_at=datetime.now(timezone.utc) - timedelta(hours=1),  # past stale window
+        heartbeat_at=datetime.now(timezone.utc),  # but heartbeat is fresh
+        lease_deadline=lease_deadline_from(),  # and lease is valid
+        payload={"document_id": str(doc.id)},
+    )
+    db.add(live_ingest)
+    db.commit()
+
+    assert has_active_ingest_jobs(db, doc.id) is True
+
+
+# --------------------------------------------------------------------------- #
+# Scheduler registration (no DB needed)
+# --------------------------------------------------------------------------- #
+
+def test_jobs_reclaim_schedule_registered() -> None:
+    """The scheduler-driven reclaim must be registered so it runs even when no
+    worker pod is alive (closes the 'all workers down' recovery gap)."""
+    from app.eta.scheduler_registry import list_scheduler_definitions
+
+    import app.eta.schedules  # noqa: F401 — triggers registration
+
+    defs = list_scheduler_definitions()
+    assert "jobs.reclaim_stale" in defs
+    assert defs["jobs.reclaim_stale"].every_minutes == 2
 

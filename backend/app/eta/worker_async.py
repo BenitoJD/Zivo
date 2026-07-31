@@ -2,8 +2,9 @@ import asyncio
 import inspect
 import logging
 import os
+import signal
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, or_, select, update
@@ -19,9 +20,13 @@ from app.db_search_path import (
 from app.eta import context as eta_context
 from app.eta.execution_state import cancel_descendants_async, update_execution_state_async
 from app.eta.handlers import io as _io_handlers  # noqa: F401
+from app.eta.lease import HEARTBEAT_INTERVAL_SECONDS, lease_deadline_from, renew_lease_async
 from app.eta.llm_concurrency import LLM_MAX_CONCURRENT
 from app.eta.priority import priority_sort_key
 from app.eta.registry import get_handler, normalize_result
+from app.eta.stale_jobs import (
+    reclaim_stale_jobs_async,
+)
 from app.models import EtaJobDependency, Job, JobStatus, JobWorkload
 
 logging.basicConfig(level=logging.INFO)
@@ -60,33 +65,15 @@ def _parse_workloads(value: str) -> Sequence[JobWorkload]:
 WORKLOADS = _parse_workloads(os.getenv("ETA_WORKER_WORKLOADS", "io"))
 CONCURRENCY = int(os.getenv("ETA_IO_CONCURRENCY", "16"))
 
-# Jobs left in 'running' longer than this are considered orphaned (worker crash)
-# and reclaimed back to 'queued' on startup. Configurable; 10 min default.
-STALE_RUNNING_TIMEOUT_SECONDS = float(os.getenv("ETA_STALE_RUNNING_TIMEOUT", "600"))
-
 
 async def _reclaim_stale_jobs(session: AsyncSession) -> int:
-    """Reset orphaned 'running' jobs (from a crashed worker) back to 'queued'.
+    """Reclaim orphaned 'running' jobs for this worker's workloads.
 
-    Only reclaims jobs whose workload matches this worker's WORKLOADS.
+    Thin wrapper over the shared, heartbeat-keyed reaper (see
+    :mod:`app.eta.stale_jobs`). Workload-scoped so the IO and CPU workers don't
+    compete for the same orphan.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=STALE_RUNNING_TIMEOUT_SECONDS)
-    workload_filter = [w.value for w in WORKLOADS]
-    result = await session.execute(
-        update(Job)
-        .where(Job.status == JobStatus.running)
-        .where(Job.workload.in_(workload_filter))
-        .where(Job.locked_at.is_not(None))
-        .where(Job.locked_at < cutoff)
-        .values(
-            status=JobStatus.queued,
-            locked_by=None,
-            locked_at=None,
-            error=None,
-            updated_at=func.now(),
-        )
-    )
-    return result.rowcount or 0
+    return await reclaim_stale_jobs_async(session, workloads=[w.value for w in WORKLOADS])
 
 
 def _async_url() -> str:
@@ -122,6 +109,7 @@ async def _reserve_next_job(session: AsyncSession) -> tuple[object, object] | No
         )
     )
     workload_filter = [w.value for w in WORKLOADS]
+    deadline = lease_deadline_from()
     subquery = (
         select(Job.id, Job.execution_id)
         .where(Job.status == JobStatus.queued)
@@ -140,6 +128,8 @@ async def _reserve_next_job(session: AsyncSession) -> tuple[object, object] | No
             status=JobStatus.running,
             locked_by=WORKER_ID,
             locked_at=func.now(),
+            heartbeat_at=func.now(),
+            lease_deadline=deadline,
             attempts=Job.attempts + 1,
             updated_at=func.now(),
         )
@@ -170,6 +160,8 @@ async def _mark_succeeded(
             error=None,
             locked_by=None,
             locked_at=None,
+            heartbeat_at=None,
+            lease_deadline=None,
             finished_at=func.now(),
             updated_at=func.now(),
         )
@@ -204,6 +196,8 @@ async def _mark_failed(
             run_after=run_after,
             locked_by=None,
             locked_at=None,
+            heartbeat_at=None,
+            lease_deadline=None,
             finished_at=func.now() if status == JobStatus.failed else None,
             updated_at=func.now(),
         )
@@ -240,6 +234,25 @@ async def _process_job(job_id: object, job_name: str, payload: dict) -> dict:
         eta_context.reset_current_job_id(token)
 
 
+async def _heartbeat_loop(job_id: object, stop: asyncio.Event) -> None:
+    """Renew this job's lease while it runs, so a long handler is never
+    false-reclaimed by the stale reaper. Stops when ``stop`` is set (handler
+    done) or the worker is draining.
+    """
+    interval = max(1.0, HEARTBEAT_INTERVAL_SECONDS)
+    while not stop.is_set():
+        try:
+            async with AsyncSessionLocal() as session:
+                await renew_lease_async(session, job_id)
+                await session.commit()
+        except Exception:
+            logger.debug("heartbeat renew failed", extra={"job_id": str(job_id)}, exc_info=True)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except TimeoutError:
+            pass
+
+
 async def _handle_job(job_id: object, execution_id: object, semaphore: asyncio.Semaphore) -> None:
     try:
         async with AsyncSessionLocal() as session:
@@ -251,6 +264,10 @@ async def _handle_job(job_id: object, execution_id: object, semaphore: asyncio.S
             "ETA async job started",
             extra={"job_id": str(job_id), "job_name": job_name, "attempt": attempts, "max_attempts": max_attempts},
         )
+        # Renew the lease for as long as the handler runs. If this pod dies, the
+        # lease expires and the reaper requeues the job — no false reclaim while live.
+        heartbeat_stop = asyncio.Event()
+        heartbeat_task = _spawn(_heartbeat_loop(job_id, heartbeat_stop))
         try:
             result = await _process_job(job_id, job_name, payload)
             async with AsyncSessionLocal() as session, session.begin():
@@ -260,6 +277,13 @@ async def _handle_job(job_id: object, execution_id: object, semaphore: asyncio.S
             async with AsyncSessionLocal() as session, session.begin():
                 await _mark_failed(session, job_id, attempts, max_attempts, str(exc), execution_id)
             logger.exception("ETA async job failed", extra={"job_id": str(job_id)})
+        finally:
+            heartbeat_stop.set()
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except (asyncio.CancelledError, Exception):
+                pass
     finally:
         semaphore.release()
 
@@ -319,8 +343,10 @@ async def _periodic_stale_reaper() -> None:
             logger.exception("Periodic stale job reaper failed")
 
 
-async def run_eta_worker_async() -> None:
+async def run_eta_worker_async(should_stop: Callable[[], bool] | None = None) -> None:
+    stop_requested = should_stop or (lambda: False)
     semaphore = asyncio.Semaphore(CONCURRENCY)
+    in_flight: set[asyncio.Task] = set()  # job handler tasks only (drain set)
     _spawn(_listen_for_job_notifications())
     _spawn(_periodic_stale_reaper())
     try:
@@ -339,6 +365,15 @@ async def run_eta_worker_async() -> None:
         },
     )
     while True:
+        # Graceful drain: stop reserving new jobs; once in-flight handlers finish,
+        # exit cleanly so a SIGTERM during deploy/eviction doesn't orphan work.
+        if stop_requested():
+            if not in_flight:
+                logger.info("IO ETA worker drained — exiting")
+                break
+            await asyncio.sleep(POLL_INTERVAL)
+            continue
+
         await semaphore.acquire()
         try:
             async with AsyncSessionLocal() as session, session.begin():
@@ -364,8 +399,27 @@ async def run_eta_worker_async() -> None:
                 await update_execution_state_async(session, execution_id)
 
         logger.info("ETA async job reserved", extra={"job_id": str(job_id)})
-        _spawn(_handle_job(job_id, execution_id, semaphore))
+        task = asyncio.create_task(_handle_job(job_id, execution_id, semaphore))
+        in_flight.add(task)
+        task.add_done_callback(in_flight.discard)
 
 
 def run_eta_worker_async_entrypoint() -> None:
-    asyncio.run(run_eta_worker_async())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    stop_flag = asyncio.Event()
+
+    def _request_stop(*_args) -> None:
+        logger.info("IO ETA worker received shutdown signal — draining")
+        # Set the flag on the loop thread so should_stop() sees it.
+        loop.call_soon_threadsafe(stop_flag.set)
+
+    # loop.add_signal_handler only works on Unix; in K8s (Linux) this is the path.
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, _request_stop)
+        except (NotImplementedError, RuntimeError):
+            signal.signal(sig, lambda *_: stop_flag.set())
+
+    loop.run_until_complete(run_eta_worker_async(should_stop=stop_flag.is_set))

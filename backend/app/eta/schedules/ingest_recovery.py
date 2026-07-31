@@ -9,7 +9,7 @@ from sqlalchemy import text
 
 from app.db import SessionLocal
 from app.eta.scheduler_registry import eta_scheduler
-from app.eta.stale_jobs import stale_running_cutoff
+from app.eta.stale_jobs import ACTIVE_JOB_LIVENESS_SQL, stale_running_cutoff
 from app.models import Document
 from app.services.rag_window import maybe_recover_stuck_indexing
 
@@ -24,7 +24,7 @@ def _recover_stuck_indexing_documents() -> int:
     with SessionLocal() as db:
         doc_ids = db.execute(
             text(
-                """
+                f"""
                 SELECT d.id
                 FROM qb.documents d
                 WHERE d.status = 'indexing'
@@ -32,14 +32,7 @@ def _recover_stuck_indexing_documents() -> int:
                   AND NOT EXISTS (
                     SELECT 1 FROM qb.jobs j
                     WHERE j.payload->>'document_id' = d.id::text
-                      AND (
-                        j.status = 'queued'
-                        OR (
-                          j.status = 'running'
-                          AND j.locked_at IS NOT NULL
-                          AND j.locked_at >= :stale_cutoff
-                        )
-                      )
+                      AND {ACTIVE_JOB_LIVENESS_SQL}
                   )
                 ORDER BY d.created_at ASC
                 LIMIT 50

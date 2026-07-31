@@ -750,6 +750,11 @@ def _reclaim_stale_generate_jobs(db: Session, document_id: uuid.UUID | None = No
 
     Preserves ``result`` (incl. generation checkpoint) so a resumed run can
     continue from the last saved sequence instead of redoing LLM work.
+
+    Lease-aware: a job with a still-valid ``lease_deadline`` is never reclaimed,
+    so a long, actively-heartbeating generation is not requeued while it runs
+    (which would split-brain into double execution). Only jobs whose lease has
+    expired — or legacy rows past the ``locked_at`` cutoff — are touched.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=GENERATE_JOB_STALE_SECONDS)
     doc_filter = ""
@@ -764,12 +769,16 @@ def _reclaim_stale_generate_jobs(db: Session, document_id: uuid.UUID | None = No
             SET status = 'queued',
                 locked_by = NULL,
                 locked_at = NULL,
+                heartbeat_at = NULL,
+                lease_deadline = NULL,
                 error = NULL,
                 updated_at = NOW()
             WHERE name = 'generate.questions'
               AND status = 'running'
-              AND locked_at IS NOT NULL
-              AND locked_at < :cutoff
+              AND (
+                lease_deadline IS NOT NULL AND lease_deadline < NOW()
+                OR (lease_deadline IS NULL AND locked_at IS NOT NULL AND locked_at < :cutoff)
+              )
               {doc_filter}
             """
         ),

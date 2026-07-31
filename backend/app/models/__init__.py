@@ -254,6 +254,12 @@ class Job(Base):
     max_attempts: Mapped[int] = mapped_column(Integer, default=3)
     locked_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Lease/heartbeat crash recovery (see app/eta/lease.py). While a worker runs
+    # a job it renews heartbeat_at + lease_deadline every HEARTBEAT_INTERVAL; the
+    # reaper treats a job as orphaned once lease_deadline has passed. Replaces the
+    # old fixed 600s locked_at guess, which false-reclaimed long jobs mid-flight.
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     run_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

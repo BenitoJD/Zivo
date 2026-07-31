@@ -9,7 +9,7 @@ from sqlalchemy import text
 
 from app.db import SessionLocal
 from app.eta.scheduler_registry import eta_scheduler
-from app.eta.stale_jobs import stale_running_cutoff
+from app.eta.stale_jobs import ACTIVE_JOB_LIVENESS_SQL, stale_running_cutoff
 from app.models import JobWorkload
 from app.services.jobs import enqueue_job, enqueue_rag_window
 from app.services.newspaper import purge_expired_editions
@@ -34,7 +34,7 @@ def _recover_stuck_editions() -> int:
         )
         stuck = db.execute(
             text(
-                """
+                f"""
                 SELECT e.id, e.document_id, e.paper_slug, e.edition_date
                 FROM qb.newspaper_edition e
                 JOIN qb.documents d ON d.id = e.document_id
@@ -44,14 +44,7 @@ def _recover_stuck_editions() -> int:
                   AND NOT EXISTS (
                     SELECT 1 FROM qb.jobs j
                     WHERE j.payload->>'document_id' = e.document_id::text
-                      AND (
-                        j.status = 'queued'
-                        OR (
-                          j.status = 'running'
-                          AND j.locked_at IS NOT NULL
-                          AND j.locked_at >= :stale_cutoff
-                        )
-                      )
+                      AND {ACTIVE_JOB_LIVENESS_SQL}
                   )
                 ORDER BY e.edition_date DESC
                 """

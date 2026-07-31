@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.models import Document, JobWorkload
-from app.eta.stale_jobs import stale_running_cutoff
+from app.eta.stale_jobs import ACTIVE_JOB_LIVENESS_SQL, stale_running_cutoff
 from app.services.chunks import indexed_pages_for_document
 from app.services.question_pool import get_progress, selected_page_list
 from app.services.tutor_retrieval import MAX_RAG_PAGES, plan_rag_window
@@ -55,19 +55,12 @@ _MARK_PAGE_INGESTED_SQL = text(
 )
 
 _HAS_ACTIVE_INGEST_JOBS_SQL = text(
-    """
+    f"""
     SELECT 1
     FROM qb.jobs j
     WHERE j.payload->>'document_id' = :document_id
       AND j.name = ANY(CAST(:names AS text[]))
-      AND (
-        j.status = 'queued'
-        OR (
-          j.status = 'running'
-          AND j.locked_at IS NOT NULL
-          AND j.locked_at >= :stale_cutoff
-        )
-      )
+      AND {ACTIVE_JOB_LIVENESS_SQL}
     LIMIT 1
     """
 )

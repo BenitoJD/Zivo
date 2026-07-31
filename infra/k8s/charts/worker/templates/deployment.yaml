@@ -30,6 +30,12 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      # Give in-flight jobs up to 120s to finish on SIGTERM (rolling deploy /
+      # HPA scale-down / eviction) before K8s sends SIGKILL. The worker's
+      # graceful-drain stops reserving new work and waits for handlers to exit;
+      # anything still running after this becomes reclaimable once its lease
+      # expires (~ETA_STALE_THRESHOLD_SECONDS, default 90s).
+      terminationGracePeriodSeconds: 120
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:

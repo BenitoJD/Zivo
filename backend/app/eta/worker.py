@@ -12,11 +12,15 @@ from sqlalchemy.orm import Session, aliased
 
 from app.db import SessionLocal
 from app.eta import context as eta_context
-from app.eta.stale_jobs import STALE_REAPER_INTERVAL_SECONDS, STALE_RUNNING_TIMEOUT_SECONDS
 from app.eta.execution_state import cancel_descendants_sync, update_execution_state_sync
 from app.eta.handlers import cpu as _cpu_handlers  # noqa: F401
+from app.eta.lease import HEARTBEAT_INTERVAL_SECONDS, lease_deadline_from, renew_lease_sync
 from app.eta.priority import priority_sort_key
 from app.eta.registry import get_handler, normalize_result
+from app.eta.stale_jobs import (
+    STALE_REAPER_INTERVAL_SECONDS,
+    reclaim_stale_jobs_sync,
+)
 from app.models import EtaJobDependency, Job, JobStatus, JobWorkload
 
 logging.basicConfig(level=logging.INFO)
@@ -50,50 +54,13 @@ def _parse_workloads(value: str) -> Sequence[JobWorkload]:
 WORKLOADS = _parse_workloads(os.getenv("ETA_WORKER_WORKLOADS", "cpu"))
 
 def _reclaim_stale_jobs(db: Session) -> int:
-    """Reset orphaned 'running' jobs (from a crashed worker) back to 'queued'.
+    """Reclaim orphaned 'running' jobs for this worker's workloads.
 
-    Only reclaims jobs whose workload matches this worker's WORKLOADS, so the
-    IO and CPU workers don't compete for the same orphan. Without this, a job
-    flipped to 'running' then abandoned by a SIGKILL/OOM is silently lost
-    forever (the reservation loop only ever selects 'queued').
-
-    Jobs that already exhausted max_attempts are marked failed instead of
-    re-queued, so they cannot spin forever as zombie 'running' rows.
+    Thin wrapper over the shared, heartbeat-keyed reaper (see
+    :mod:`app.eta.stale_jobs`). Workload-scoped so the IO and CPU workers don't
+    compete for the same orphan.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=STALE_RUNNING_TIMEOUT_SECONDS)
-    workload_filter = [w.value for w in WORKLOADS]
-    failed = db.execute(
-        update(Job)
-        .where(Job.status == JobStatus.running)
-        .where(Job.workload.in_(workload_filter))
-        .where(Job.locked_at.is_not(None))
-        .where(Job.locked_at < cutoff)
-        .where(Job.attempts >= Job.max_attempts)
-        .values(
-            status=JobStatus.failed,
-            error="Orphaned after worker exit (attempts exhausted)",
-            locked_by=None,
-            locked_at=None,
-            finished_at=func.now(),
-            updated_at=func.now(),
-        )
-    )
-    requeued = db.execute(
-        update(Job)
-        .where(Job.status == JobStatus.running)
-        .where(Job.workload.in_(workload_filter))
-        .where(Job.locked_at.is_not(None))
-        .where(Job.locked_at < cutoff)
-        .where(Job.attempts < Job.max_attempts)
-        .values(
-            status=JobStatus.queued,
-            locked_by=None,
-            locked_at=None,
-            error=None,
-            updated_at=func.now(),
-        )
-    )
-    return (failed.rowcount or 0) + (requeued.rowcount or 0)
+    return reclaim_stale_jobs_sync(db, workloads=[w.value for w in WORKLOADS])
 
 
 def _periodic_stale_reaper(stop_requested: Callable[[], bool]) -> None:
@@ -119,6 +86,7 @@ def _reserve_next_job(db: Session) -> tuple[object, object] | None:
         )
     )
     workload_filter = [w.value for w in WORKLOADS]
+    deadline = lease_deadline_from()
     subquery = (
         select(Job.id, Job.execution_id)
         .where(Job.status == JobStatus.queued)
@@ -137,6 +105,8 @@ def _reserve_next_job(db: Session) -> tuple[object, object] | None:
             status=JobStatus.running,
             locked_by=WORKER_ID,
             locked_at=func.now(),
+            heartbeat_at=func.now(),
+            lease_deadline=deadline,
             attempts=Job.attempts + 1,
             updated_at=func.now(),
         )
@@ -163,6 +133,8 @@ def _mark_succeeded(db: Session, job_id: str, result: dict, execution_id: object
             error=None,
             locked_by=None,
             locked_at=None,
+            heartbeat_at=None,
+            lease_deadline=None,
             finished_at=func.now(),
             updated_at=func.now(),
         )
@@ -197,6 +169,8 @@ def _mark_failed(
             run_after=run_after,
             locked_by=None,
             locked_at=None,
+            heartbeat_at=None,
+            lease_deadline=None,
             finished_at=func.now() if status == JobStatus.failed else None,
             updated_at=func.now(),
         )
@@ -234,6 +208,22 @@ def _process_job(job_id: object, job_name: str, payload: dict) -> dict:
         eta_context.reset_current_job_id(token)
 
 
+def _heartbeat_loop(job_id: object, stop: threading.Event) -> None:
+    """Renew this job's lease while it runs, so a long handler is never
+    false-reclaimed by the stale reaper. Stops when ``stop`` is set (handler
+    done) or the worker is draining.
+    """
+    interval = max(1.0, HEARTBEAT_INTERVAL_SECONDS)
+    while not stop.is_set():
+        try:
+            with SessionLocal() as db:
+                renew_lease_sync(db, job_id)
+                db.commit()
+        except Exception:
+            logger.debug("heartbeat renew failed", extra={"job_id": str(job_id)}, exc_info=True)
+        stop.wait(interval)
+
+
 def _handle_reserved_job(job_id: object, execution_id: object) -> None:
     if execution_id:
         with SessionLocal.begin() as db:
@@ -249,6 +239,16 @@ def _handle_reserved_job(job_id: object, execution_id: object) -> None:
 
     job_name, payload, attempts, max_attempts, execution_id = snapshot
     logger.info("ETA job started", extra={"job_id": str(job_id), "job_name": job_name, "attempt": attempts, "max_attempts": max_attempts})
+    # Renew the lease for as long as the handler runs. If this pod dies, the
+    # lease expires and the reaper requeues the job — no false reclaim while live.
+    heartbeat_stop = threading.Event()
+    heartbeat = threading.Thread(
+        target=_heartbeat_loop,
+        args=(job_id, heartbeat_stop),
+        name=f"eta-heartbeat-{job_id}",
+        daemon=True,
+    )
+    heartbeat.start()
     try:
         result = _process_job(job_id, job_name, payload)
         with SessionLocal.begin() as db:
@@ -258,6 +258,8 @@ def _handle_reserved_job(job_id: object, execution_id: object) -> None:
         with SessionLocal.begin() as db:
             _mark_failed(db, job_id, attempts, max_attempts, str(exc), execution_id)
         logger.exception("ETA job failed", extra={"job_id": str(job_id)})
+    finally:
+        heartbeat_stop.set()
 
 
 def _reap_completed_jobs(running_jobs: dict[Future, str]) -> None:
@@ -320,24 +322,8 @@ def run_eta_worker(should_stop: Callable[[], bool] | None = None) -> None:
         max_workers=MAX_CONCURRENCY, thread_name_prefix="eta-cpu-worker"
     ) as executor:
         running_jobs: dict[Future, str] = {}
-        reclaim_tick = 0
         while True:
             _reap_completed_jobs(running_jobs)
-            reclaim_tick += 1
-            if reclaim_tick % 200 == 0:
-                try:
-                    from app.services.question_pool import _reclaim_stale_generate_jobs
-
-                    with SessionLocal.begin() as db:
-                        reclaimed_gen = _reclaim_stale_generate_jobs(db)
-                    if reclaimed_gen:
-                        logger.info(
-                            "Reclaimed stale generate.questions job(s)",
-                            extra={"count": reclaimed_gen},
-                        )
-                except Exception:
-                    logger.exception("Failed to reclaim stale generate jobs")
-
             if stop_requested() and not running_jobs:
                 reaper_stop.set()
                 break
