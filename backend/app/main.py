@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import app.eta  # noqa: F401 — register ETA handlers
@@ -64,10 +64,48 @@ app = FastAPI(
 )
 
 
+# SQLSTATE class prefixes for transient outage / infra conditions. Anything here
+# is genuinely "the DB is unreachable or refusing the operation right now" and
+# deserves a 503 with a retry hint. See https://www.postgresql.org/docs/current/errcodes-appendix.html
+_OUTAGE_SQLSTATE_CLASSES = {"08", "53", "57"}  # connection / insufficient_resources / operator_intervention
+
+
+def _is_db_outage(exc: SQLAlchemyError) -> bool:
+    """True only for connection / infra failures, not for SQL or data bugs.
+
+    A blanket ``except SQLAlchemyError -> 503`` (the old handler) turned every
+    DB error into "Database unavailable" — so a typo in a query (ProgrammingError)
+    or a violated constraint (IntegrityError) reported itself as an outage. That
+    is how two unrelated bugs (AmbiguousParameter on document open, and the
+    immutable-measurement trigger on signup) hid behind one misleading message.
+
+    We classify by SQLAlchemy subclass first (OperationalError/InterfaceError are
+    always connection-layer), then fall back to the driver's SQLSTATE class for
+    cases SQLAlchemy doesn't subsume (e.g. a server-side admin shutdown, 57P01,
+    still arrives as OperationalError but some clustered/proxy setups raise a
+    bare DBAPIError with the state set).
+    """
+    if isinstance(exc, (OperationalError, InterfaceError)):
+        return True
+    orig = getattr(exc, "orig", None)
+    sqlstate = getattr(orig, "sqlstate", None)
+    return bool(sqlstate) and sqlstate[:2] in _OUTAGE_SQLSTATE_CLASSES
+
+
 @app.exception_handler(SQLAlchemyError)
 async def database_error_handler(_: Request, exc: SQLAlchemyError) -> JSONResponse:
+    # Always log the real error with a full traceback — the handler must never
+    # be the place where the root cause gets hidden. The status code + detail
+    # message are what differ: outages 503 (clients retry / show "try again"),
+    # everything else 500 with an honest "this request failed" message that does
+    # NOT pretend the database is down.
     logger.exception("database error: %s", exc)
-    return JSONResponse(status_code=503, content={"detail": "Database unavailable"})
+    if _is_db_outage(exc):
+        return JSONResponse(status_code=503, content={"detail": "Database unavailable"})
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Something went wrong processing that request."},
+    )
 
 
 class HstsMiddleware(BaseHTTPMiddleware):
