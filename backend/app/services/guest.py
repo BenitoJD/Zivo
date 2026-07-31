@@ -188,27 +188,45 @@ def _claim_guest_measurements(
     guest_entity_id: uuid.UUID,
     account_entity_id: uuid.UUID,
 ) -> int:
-    moved = db.execute(
+    """Re-attribute a guest's answer measurements to their new account entity.
+
+    ``intel.measurement`` is INSERT-only — a ``BEFORE UPDATE OR DELETE`` trigger
+    (``intel.reject_update_delete``) enforces immutability, so the previous
+    UPDATE-then-DELETE approach raised ``intel.measurement is immutable (INSERT
+    only)`` and surfaced as a 503 "Database unavailable" on signup for any guest
+    who had practiced first.
+
+    Instead we copy the guest's rows onto the account entity via ``INSERT ...
+    SELECT``, deduping against rows the account already has via the partial
+    unique index ``measurement_answer_idempotent`` (the same index
+    ``answer_signal`` relies on for idempotent answer writes). The original
+    guest rows are immutable evidence and stay put; the now-unused guest entity
+    is harmless. The returned count is the number of rows newly attributed to
+    the account.
+    """
+    inserted = db.execute(
         text(
             """
-            UPDATE intel.measurement m
-            SET subject_entity_id = :account_entity
-            WHERE subject_entity_id = :guest_entity
-              AND NOT EXISTS (
-                SELECT 1 FROM intel.measurement existing
-                WHERE existing.subject_entity_id = :account_entity
-                  AND existing.source_assertion_id = m.source_assertion_id
-                  AND existing.metric_concept_id = m.metric_concept_id
-              )
+            INSERT INTO intel.measurement (
+                metric_concept_id, subject_entity_id, source_assertion_id,
+                observed_at, value_numeric, value_text, value_json, unit,
+                artifact_id, artifact_captured_at, activity_id, confidence
+            )
+            SELECT
+                m.metric_concept_id, :account_entity, m.source_assertion_id,
+                m.observed_at, m.value_numeric, m.value_text, m.value_json, m.unit,
+                m.artifact_id, m.artifact_captured_at, m.activity_id, m.confidence
+            FROM intel.measurement m
+            WHERE m.subject_entity_id = :guest_entity
+            ON CONFLICT (subject_entity_id, source_assertion_id, metric_concept_id)
+                WHERE subject_entity_id IS NOT NULL AND source_assertion_id IS NOT NULL
+              DO NOTHING
+            RETURNING 1
             """
         ),
         {"guest_entity": guest_entity_id, "account_entity": account_entity_id},
-    ).rowcount
-    db.execute(
-        text("DELETE FROM intel.measurement WHERE subject_entity_id = :guest_entity"),
-        {"guest_entity": guest_entity_id},
-    )
-    return int(moved or 0)
+    ).fetchall()
+    return len(inserted)
 
 
 def _claim_guest_sd_sessions(db: Session, *, account_id: uuid.UUID, guest_id: str) -> int:
