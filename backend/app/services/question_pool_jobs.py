@@ -663,6 +663,23 @@ def on_batch_failed(db: Session, document_id: uuid.UUID, *, page: int) -> None:
             tick_background_cook(db, document_id)
         except Exception:
             logger.exception("background cook re-tick failed after batch failure doc=%s page=%s", document_id, page)
+        return
+
+    # Newspaper editions are driven by enqueue_generate_if_needed (a single
+    # page-1 cook), not a self-chaining loop. If that batch dies and exhausts
+    # retries, nothing re-enqueues it — the edition sits at status='indexing'
+    # ("Preparing" in the catalog) until the 15-min scheduler catches it. Re-tick
+    # here for instant recovery. _next_newspaper_cook_page's active-job guard
+    # prevents a duplicate, and it skips pages past budget so a persistently
+    # failing page is abandoned, not retried forever.
+    if _is_newspaper_doc(doc):
+        try:
+            from app.services.newspaper import maybe_mark_newspaper_edition_ready
+
+            maybe_refill_pool(db, document_id)
+            maybe_mark_newspaper_edition_ready(db, doc)
+        except Exception:
+            logger.exception("newspaper cook recovery failed after batch failure doc=%s page=%s", document_id, page)
 
 
 def mark_aspect_asked(db: Session, document_id: uuid.UUID, page: int, aspect_key: str) -> None:

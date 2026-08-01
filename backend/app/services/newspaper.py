@@ -81,6 +81,12 @@ def list_paper_days(
             "days": [],
         }
     since = window_start()
+    # The hub polls this endpoint. Self-heal any stuck edition (status
+    # indexing/pending) before reading, so the catalog stops showing "Preparing"
+    # the moment its cook lands — instead of up to 15 min later when the
+    # newspaper.recover_stuck schedule runs. Same recovery the scheduler does,
+    # but on-demand for the editions the learner is actually looking at.
+    _heal_stuck_editions_for_hub(db, paper_slug, since=since)
     days = newspaper_repo.list_days_for_paper(db, paper_slug=paper_slug, since=since)
     title = days[0]["paper_title"] if days else paper_slug
 
@@ -143,6 +149,62 @@ def list_paper_days(
         "since": since.isoformat(),
         "days": day_items,
     }
+
+
+def _heal_stuck_editions_for_hub(db: Session, paper_slug: str, *, since: date) -> None:
+    """Recover stuck editions for the hub view, on-demand.
+
+    Mirrors what ``newspaper.recover_stuck`` (the 15-min schedule) does, but
+    scoped to the editions the learner is viewing so the catalog heals the
+    instant a cook lands rather than up to 15 min later. Two orphan states:
+
+    * doc still indexing/pending → re-queue missing RAG ingest (the schedule's
+      ``_recover_stuck_editions`` path).
+    * doc ready but edition still indexing → re-enqueue the page-1 cook, or
+      promote if nothing is cookable (the schedule's
+      ``_recover_editions_doc_ready_uncooked`` path).
+
+    Failures are logged and swallowed — a healing error on one edition must never
+    break the catalog list. The scheduler remains the authoritative backstop.
+    """
+    rows = db.execute(
+        text(
+            """
+            SELECT e.id, e.document_id
+            FROM qb.newspaper_edition e
+            JOIN qb.documents d ON d.id = e.document_id
+            WHERE e.paper_slug = :slug
+              AND e.edition_date >= :since
+              AND e.status IN ('indexing', 'pending')
+            """
+        ),
+        {"slug": paper_slug, "since": since},
+    ).mappings().all()
+
+    for row in rows:
+        document_id = row["document_id"]
+        try:
+            doc = db.get(Document, document_id)
+            if doc is None:
+                continue
+            if doc.status in ("indexing", "pending"):
+                # RAG not done — re-queue missing ingest pages.
+                from app.services.rag_window import maybe_recover_stuck_indexing
+
+                maybe_recover_stuck_indexing(db, doc)
+            elif doc.status == "ready":
+                # RAG done but the first-MCQ cook died — re-enqueue it, or
+                # promote the edition if page 1 has nothing to cook.
+                from app.services.question_pool import page_range_bounds
+                from app.services.question_pool_jobs import _enqueue_first_question_batch
+
+                page_from, _ = page_range_bounds(doc)
+                job = _enqueue_first_question_batch(db, doc, page=page_from)
+                if job is None:
+                    maybe_mark_newspaper_edition_ready(db, doc)
+                db.commit()
+        except Exception:
+            logger.exception("hub heal failed for edition %s (doc %s)", row["id"], document_id)
 
 
 def get_channel(db: Session) -> dict[str, Any]:
