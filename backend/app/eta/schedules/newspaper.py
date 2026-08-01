@@ -10,13 +10,17 @@ from sqlalchemy import text
 from app.db import SessionLocal
 from app.eta.scheduler_registry import eta_scheduler
 from app.eta.stale_jobs import ACTIVE_JOB_LIVENESS_SQL, stale_running_cutoff
-from app.models import JobWorkload
+from app.models import Document, JobWorkload
 from app.services.jobs import enqueue_job, enqueue_rag_window
 from app.services.newspaper import purge_expired_editions
 
 logger = logging.getLogger(__name__)
 
 _STUCK_INDEXING_TIMEOUT_MINUTES = 30
+# How long a READY document's edition may stay indexing before we conclude the
+# cook job died / exhausted retries and re-enqueue it. Generous so we don't race
+# a legitimately slow first MCQ cook on a large edition.
+_STUCK_READY_DOC_TIMEOUT_MINUTES = 20
 
 
 def _recover_stuck_editions() -> int:
@@ -80,8 +84,96 @@ def _recover_stuck_editions() -> int:
 @eta_scheduler(every_minutes=15, key="newspaper.recover_stuck")
 def run_newspaper_recover() -> None:
     n = _recover_stuck_editions()
+    n += _recover_editions_doc_ready_uncooked()
     if n:
         logger.info("newspaper recovery re-enqueued %s stuck editions", n)
+
+
+def _recover_editions_doc_ready_uncooked() -> int:
+    """Re-enqueue the MCQ cook for editions whose document is READY but whose
+    catalog status is still indexing/pending — the "document ready, edition
+    stuck" orphan state.
+
+    Newspapers decouple the two statuses by design (rag_window.py: the document
+    flips to ``ready`` once RAG indexing finishes, but the edition stays
+    ``indexing`` until the first MCQ lands via ``newspaper_learn_ready``). If
+    the ``generate.questions`` cook died, exhausted retries (``max_attempts``),
+    or was cancelled — and there is no scheduler that enqueues the cook — the
+    edition is stranded forever, which the catalog renders as "Preparing".
+
+    This catches that exact state: a ready document with an indexing edition and
+    NO active ``generate.questions`` job, then re-enqueues the page-1 batch
+    directly (bypassing ``enqueue_initial_pool``'s ``question_pool_initialized``
+    gate, which would have trapped the original failed cook). Idempotent: the
+    ``NOT EXISTS`` active-job guard prevents duplicate enqueues.
+    """
+    recovered = 0
+    with SessionLocal() as db:
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            minutes=_STUCK_READY_DOC_TIMEOUT_MINUTES
+        )
+        stuck = db.execute(
+            text(
+                f"""
+                SELECT e.id, e.document_id, e.paper_slug, e.edition_date
+                FROM qb.newspaper_edition e
+                JOIN qb.documents d ON d.id = e.document_id
+                WHERE e.status IN ('indexing', 'pending')
+                  AND d.status = 'ready'
+                  AND e.updated_at < :cutoff
+                  AND NOT EXISTS (
+                    SELECT 1 FROM qb.jobs j
+                    WHERE j.payload->>'document_id' = e.document_id::text
+                      AND j.name = 'generate.questions'
+                      AND {ACTIVE_JOB_LIVENESS_SQL}
+                  )
+                ORDER BY e.edition_date DESC
+                LIMIT 10
+                """
+            ),
+            {"cutoff": cutoff, "stale_cutoff": stale_running_cutoff()},
+        ).mappings().all()
+
+        for row in stuck:
+            try:
+                from app.services.question_pool import page_range_bounds
+                from app.services.question_pool_jobs import _enqueue_first_question_batch
+
+                doc = db.get(Document, row["document_id"])
+                if doc is None:
+                    continue
+                page_from, _ = page_range_bounds(doc)
+                job = _enqueue_first_question_batch(db, doc, page=page_from)
+                if job is not None:
+                    db.commit()
+                    recovered += 1
+                    logger.info(
+                        "newspaper recovery re-enqueued MCQ cook for %s %s (doc ready, edition stuck)",
+                        row["paper_slug"],
+                        row["edition_date"],
+                    )
+                else:
+                    # Nothing to cook on page 1 (worthiness engine marked it
+                    # non_content / budget 0). The readiness hook would normally
+                    # promote such an edition to 'ready', but that hook only fires
+                    # from on_triage_completed / on_batch_completed — if neither
+                    # ran (triage died too), the edition stays stuck. Promote it
+                    # here so the catalog stops showing "Preparing" forever.
+                    from app.services.newspaper import maybe_mark_newspaper_edition_ready
+
+                    maybe_mark_newspaper_edition_ready(db, doc)
+                    db.commit()
+                    recovered += 1
+                    logger.info(
+                        "newspaper recovery promoted %s %s to ready (no cookable MCQs on page 1)",
+                        row["paper_slug"],
+                        row["edition_date"],
+                    )
+            except Exception:
+                logger.exception(
+                    "newspaper doc-ready recovery failed for edition %s", row["id"]
+                )
+    return recovered
 
 
 @eta_scheduler(every_minutes=360, key="newspaper.purge_expired")
