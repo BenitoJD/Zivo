@@ -58,7 +58,7 @@ export default function NewspaperPaperPage({
     <Shell>
       <Container size="md" py={{ base: 32, md: 56 }}>
         <Stack gap="lg">
-          <Group gap="md" align="flex-start" wrap="wrap">
+          <Group gap="md" align="center" wrap="wrap">
             <NewspaperBrandMark slug={slug} title={title} size={56} />
             <LearnerPageHeader
               align="left"
