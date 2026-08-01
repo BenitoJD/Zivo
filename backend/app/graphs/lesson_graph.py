@@ -148,11 +148,25 @@ def generate_lesson(
     ]
 
     model_id = default_chat_model_id(db)
+    from app.services.chunk_map_cache import content_hash_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
+
+    lesson_key = content_hash_key("lesson_page", system, excerpt, _aspects_block(aspects), str(model_id))
+    hit = cache_get(db, kind="lesson_page", cache_key=lesson_key)
+    if isinstance(hit, str) and hit.strip():
+        parsed_hit = _parse_lesson(hit)
+        if parsed_hit:
+            return parsed_hit
+
     raw = _complete_chat_sync(db, messages, model_id=model_id)
     parsed = _parse_lesson(raw or "")
     if parsed:
+        cache_put(db, kind="lesson_page", cache_key=lesson_key, value=raw)
         return parsed
     # Intermittent empty / malformed completion — retry once via the pool.
     logger.warning("lesson parse failed on first attempt; retrying via pool")
     raw = _complete_chat_sync(db, messages, model_id=None)
-    return _parse_lesson(raw or "")
+    parsed = _parse_lesson(raw or "")
+    if parsed:
+        cache_put(db, kind="lesson_page", cache_key=lesson_key, value=raw)
+    return parsed

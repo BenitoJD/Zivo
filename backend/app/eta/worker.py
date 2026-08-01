@@ -14,7 +14,7 @@ from app.db import SessionLocal
 from app.eta import context as eta_context
 from app.eta.execution_state import cancel_descendants_sync, update_execution_state_sync
 from app.eta.handlers import cpu as _cpu_handlers  # noqa: F401
-from app.eta.lease import HEARTBEAT_INTERVAL_SECONDS, lease_deadline_from, renew_lease_sync
+from app.eta.lease import HEARTBEAT_INTERVAL_SECONDS, job_duration_exceeded, lease_deadline_from, renew_lease_sync
 from app.eta.priority import priority_sort_key
 from app.eta.registry import get_handler, normalize_result
 from app.eta.stale_jobs import (
@@ -116,11 +116,11 @@ def _reserve_next_job(db: Session) -> tuple[object, object] | None:
     return (row[0], row[1]) if row else None
 
 
-def _load_job_snapshot(db: Session, job_id: str) -> tuple[str, dict, int, int, object] | None:
+def _load_job_snapshot(db: Session, job_id: str) -> tuple[str, dict, int, int, object, datetime | None] | None:
     job = db.get(Job, job_id)
     if not job:
         return None
-    return job.name, job.payload, job.attempts, job.max_attempts, job.execution_id
+    return job.name, job.payload, job.attempts, job.max_attempts, job.execution_id, job.locked_at
 
 
 def _mark_succeeded(db: Session, job_id: str, result: dict, execution_id: object) -> None:
@@ -208,13 +208,25 @@ def _process_job(job_id: object, job_name: str, payload: dict) -> dict:
         eta_context.reset_current_job_id(token)
 
 
-def _heartbeat_loop(job_id: object, stop: threading.Event) -> None:
+def _heartbeat_loop(job_id: object, started_at: datetime | None, stop: threading.Event) -> None:
     """Renew this job's lease while it runs, so a long handler is never
     false-reclaimed by the stale reaper. Stops when ``stop`` is set (handler
     done) or the worker is draining.
+
+    Watchdog: once ``started_at`` is older than JOB_MAX_DURATION_SECONDS, stop
+    renewing the lease even though the handler is still alive — a hung handler
+    (provider call that never returns, network stall) would otherwise heartbeat
+    forever and the reaper would never reclaim it. The stale reaper then
+    requeues (retry) or fails (attempts exhausted) the job.
     """
     interval = max(1.0, HEARTBEAT_INTERVAL_SECONDS)
     while not stop.is_set():
+        if job_duration_exceeded(started_at):
+            logger.warning(
+                "ETA job exceeded max duration; releasing lease for reaper",
+                extra={"job_id": str(job_id)},
+            )
+            return
         try:
             with SessionLocal() as db:
                 renew_lease_sync(db, job_id)
@@ -237,14 +249,15 @@ def _handle_reserved_job(job_id: object, execution_id: object) -> None:
         logger.warning("ETA job snapshot missing after reservation", extra={"job_id": str(job_id)})
         return
 
-    job_name, payload, attempts, max_attempts, execution_id = snapshot
+    job_name, payload, attempts, max_attempts, execution_id, started_at = snapshot
     logger.info("ETA job started", extra={"job_id": str(job_id), "job_name": job_name, "attempt": attempts, "max_attempts": max_attempts})
     # Renew the lease for as long as the handler runs. If this pod dies, the
     # lease expires and the reaper requeues the job — no false reclaim while live.
+    # The watchdog releases the lease if the job outlives JOB_MAX_DURATION_SECONDS.
     heartbeat_stop = threading.Event()
     heartbeat = threading.Thread(
         target=_heartbeat_loop,
-        args=(job_id, heartbeat_stop),
+        args=(job_id, started_at, heartbeat_stop),
         name=f"eta-heartbeat-{job_id}",
         daemon=True,
     )

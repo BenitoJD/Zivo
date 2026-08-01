@@ -116,29 +116,41 @@ async def generate_memory_palace(
     body = "\n\n".join(chunk_texts)
 
     async def _build(source: str) -> dict:
-        raw = await complete_chat(
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": _user_msg(setting, source)},
+        # The palace JSON (6-8 stations × 5 fields) is large; providers
+        # intermittently return empty or truncated completions for it. Try the
+        # default model, then the failover pool, then a couple of explicit
+        # alternates before giving up — one empty response must not fail the
+        # whole build.
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": _user_msg(setting, source)},
+        ]
+        from app.services.llm_pool import iter_chat_model_attempts
+
+        attempts = [
+            model_id,
+            None,  # failover pool
+            *[
+                m.record.id
+                for m in iter_chat_model_attempts(db, require_vision=False)
+                if m.record.id != model_id
             ],
-            db,
-            log_tag="memory_palace_generate",
-            model_id=model_id,
-        )
-        palace = _finalize(_parse_palace(raw), setting)
-        if not palace:
-            # Intermittent empty/truncated completion — retry once via the failover pool.
+        ]
+        seen: set[str | None] = set()
+        for candidate in attempts:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
             raw = await complete_chat(
-                [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": _user_msg(setting, source)},
-                ],
+                messages,
                 db,
                 log_tag="memory_palace_generate",
-                model_id=None,
+                model_id=candidate,
             )
             palace = _finalize(_parse_palace(raw), setting)
-        return palace
+            if palace:
+                return palace
+        return {}
 
     if count_tokens(body) <= _SINGLE_SHOT_MAX_TOKENS:
         return await _build(truncate_to_tokens(body, _SINGLE_SHOT_MAX_TOKENS))

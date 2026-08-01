@@ -56,11 +56,23 @@ async def generate_whole_doc_summary(db: Session, document_id: uuid.UUID) -> str
     body = "\n\n".join(chunk_texts)
 
     if count_tokens(body) <= _SINGLE_SHOT_MAX_TOKENS:
+        from app.services.chunk_map_cache import content_hash_key
+        from app.services.generation_cache import get as cache_get, put as cache_put
+
+        summary_key = content_hash_key(
+            "summarize_doc", system, truncate_to_tokens(body, _SINGLE_SHOT_MAX_TOKENS), str(model_id)
+        )
+        hit = cache_get(db, kind="summarize_doc", cache_key=summary_key)
+        if isinstance(hit, str) and hit.strip():
+            return hit
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": f"Summarize this document:\n\n{truncate_to_tokens(body, _SINGLE_SHOT_MAX_TOKENS)}"},
         ]
-        return await complete_chat(messages, db, log_tag="summarize_doc", model_id=model_id)
+        out = (await complete_chat(messages, db, log_tag="summarize_doc", model_id=model_id)).strip()
+        if out:
+            cache_put(db, kind="summarize_doc", cache_key=summary_key, value=out)
+        return out
 
     section_sem = asyncio.Semaphore(_CHUNK_SUMMARY_CONCURRENCY)
 
@@ -76,6 +88,13 @@ async def generate_whole_doc_summary(db: Session, document_id: uuid.UUID) -> str
         return ""
 
     rollup_body = truncate_to_tokens("\n\n".join(section_summaries), _ROLLUP_INPUT_MAX_TOKENS)
+    from app.services.chunk_map_cache import content_hash_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
+
+    rollup_key = content_hash_key("summarize_rollup", system, rollup_body, str(model_id))
+    hit = cache_get(db, kind="summarize_rollup", cache_key=rollup_key)
+    if isinstance(hit, str) and hit.strip():
+        return hit
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": f"Section summaries:\n\n{rollup_body}"},
@@ -84,4 +103,7 @@ async def generate_whole_doc_summary(db: Session, document_id: uuid.UUID) -> str
             "content": "Write one cohesive document summary from these section summaries.",
         },
     ]
-    return await complete_chat(messages, db, log_tag="summarize_rollup", model_id=model_id)
+    out = (await complete_chat(messages, db, log_tag="summarize_rollup", model_id=model_id)).strip()
+    if out:
+        cache_put(db, kind="summarize_rollup", cache_key=rollup_key, value=out)
+    return out

@@ -191,6 +191,32 @@ EDITION MATERIAL (PII-scrubbed; do not reveal origin):
 """
 
     try:
+        from app.services.chunk_map_cache import content_hash_key
+        from app.services.generation_cache import get as cache_get, put as cache_put
+
+        digest_key = content_hash_key(
+            "seo_digest", _EDITION_SYSTEM, edition_date, title_hint, source_text[:16000]
+        )
+        hit = cache_get(db, kind="seo_digest", cache_key=digest_key)
+        if isinstance(hit, str) and hit.strip():
+            parsed = extract_json_obj(hit)
+            title = str(parsed.get("title") or title_hint or "Edition digest").strip()
+            lede = str(parsed.get("lede") or "").strip()
+            body = str(parsed.get("body_md") or "").strip()
+            if title and body:
+                fields = humanize_fields(title=title, lede=lede, body_md=body)
+                return {
+                    "title": fields["title"],
+                    "lede": fields["lede"],
+                    "body_md": fields["body_md"],
+                    "format": "explainer",
+                    "stream": "general",
+                    "cta_kind": "practice",
+                    "topic_fingerprint_hint": str(
+                        parsed.get("topic_fingerprint_hint") or fields["title"]
+                    ).strip(),
+                    "faq_jsonld": [],
+                }
         raw = _complete(
             db,
             [
@@ -199,6 +225,8 @@ EDITION MATERIAL (PII-scrubbed; do not reveal origin):
             ],
         )
         parsed = extract_json_obj(raw)
+        if parsed.get("title") and parsed.get("body_md"):
+            cache_put(db, kind="seo_digest", cache_key=digest_key, value=raw)
     except Exception:
         logger.exception("edition digest write failed")
         return None

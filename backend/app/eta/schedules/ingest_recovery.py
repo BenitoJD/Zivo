@@ -101,14 +101,14 @@ def _recover_stuck_prepping_documents() -> int:
                 WHERE d.status = 'prepping'
                   AND d.meta->>'prep_mode' = 'background'
                   AND d.meta->>'prep_complete' IS DISTINCT FROM 'true'
-                  AND d.updated_at < :cutoff
+                  AND d.created_at < :cutoff
                   AND NOT EXISTS (
                     SELECT 1 FROM qb.jobs j
                     WHERE j.payload->>'document_id' = d.id::text
                       AND j.name = ANY(CAST(:names AS text[]))
                       AND {ACTIVE_JOB_LIVENESS_SQL}
                   )
-                ORDER BY d.updated_at ASC
+                ORDER BY d.created_at ASC
                 LIMIT 25
                 """
             ),

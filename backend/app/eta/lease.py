@@ -35,12 +35,36 @@ HEARTBEAT_INTERVAL_SECONDS = float(os.getenv("ETA_HEARTBEAT_INTERVAL_SECONDS", "
 # A job is orphaned if its heartbeat is older than this (the reaper's effective
 # cutoff). Kept < LEASE_DURATION so reclaim happens promptly after a true crash.
 STALE_THRESHOLD_SECONDS = float(os.getenv("ETA_STALE_THRESHOLD_SECONDS", "90"))
+# Watchdog: the longest a single job may run before its lease stops being
+# renewed, even if the handler is still alive. A handler that hangs (provider
+# call that never returns, network stall, infinite loop) would otherwise keep
+# heartbeating forever and the reaper would never reclaim it — the UI sits at
+# "Processing…" indefinitely. Once the lease stops renewing, the reaper
+# requeues (retry) or fails (attempts exhausted) the job within
+# STALE_THRESHOLD_SECONDS. Must be larger than any legitimate job; tune per
+# deployment via env. 0 disables the watchdog.
+JOB_MAX_DURATION_SECONDS = float(os.getenv("ETA_JOB_MAX_DURATION_SECONDS", "3600"))
 
 
 def lease_deadline_from(now: datetime | None = None) -> datetime:
     """Deadline for a lease taken/renewed *now*."""
     now = now or datetime.now(timezone.utc)
     return now + timedelta(seconds=LEASE_DURATION_SECONDS)
+
+
+def job_duration_exceeded(started_at: datetime | None, now: datetime | None = None) -> bool:
+    """True when a running job has outlived ``JOB_MAX_DURATION_SECONDS``.
+
+    The worker's heartbeat loop checks this each tick: once exceeded, it stops
+    renewing the lease so the stale reaper reclaims the job (hang → retry/fail
+    instead of "Processing…" forever). ``started_at`` is the job's ``locked_at``.
+    """
+    if JOB_MAX_DURATION_SECONDS <= 0:
+        return False
+    if started_at is None:
+        return False
+    now = now or datetime.now(timezone.utc)
+    return (now - started_at).total_seconds() > JOB_MAX_DURATION_SECONDS
 
 
 def stale_heartbeat_cutoff(now: datetime | None = None) -> datetime:

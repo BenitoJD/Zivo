@@ -138,6 +138,11 @@ LOG_TAG_MAX_TOKENS: dict[str, int] = {
     "mains_grade": 1800,
     "mains_ocr": 3000,
     "page_vision_judge": 256,
+    # Memory palace: 6-8 stations × 5 detailed fields (locus/term/fact/image/cue).
+    # The 2048 chat default truncates the JSON mid-array, so `_finalize` drops the
+    # whole palace and the build fails with no_palace_generated. Generous cap so
+    # the full journey parses; generated off the answer path (background worker).
+    "memory_palace_generate": 6000,
 }
 
 

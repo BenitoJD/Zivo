@@ -473,8 +473,27 @@ async def _grade(
     )
     parsed = extract_json_obj(raw)
     # extract_json_obj returns {} on ANY parse failure — don't shape that into a
-    # confident-looking 0/10. A real grade always carries "marks"; else fail (the
-    # caller reverts to awaiting_answer so the user can resubmit).
+    # confident-looking 0/10. A real grade always carries "marks". One repair
+    # round: models occasionally wrap or truncate the JSON, so ask it to return
+    # ONLY the corrected object before giving up (the caller then reverts to
+    # awaiting_answer so the user can resubmit).
+    if "marks" not in parsed:
+        repair = await complete_chat(
+            [
+                {"role": "system", "content": _GRADE_SYSTEM},
+                {
+                    "role": "user",
+                    "content": (
+                        "Your previous response was not valid JSON. Return ONLY a valid JSON object "
+                        f"matching the requested shape for this grading task.\n\nMalformed response:\n{raw}"
+                    ),
+                },
+            ],
+            db,
+            log_tag="mains_grade_repair",
+            document_id=document_id,
+        )
+        parsed = extract_json_obj(repair)
     if "marks" not in parsed:
         raise ValueError("unparseable grade output")
     shaped = shape_mains_result(parsed, scheme, strictness).result

@@ -75,6 +75,16 @@ async def generate_notes(db: Session, document_id: uuid.UUID, *, kind: str = "no
     title_hint = (doc.meta or {}).get("page_title") or (doc.filename or "this material")
 
     if count_tokens(body) <= _SINGLE_SHOT_MAX_TOKENS:
+        from app.services.chunk_map_cache import content_hash_key
+        from app.services.generation_cache import get as cache_get, put as cache_put
+
+        single_key = content_hash_key(
+            "notes_generate", kind, system, title_hint,
+            truncate_to_tokens(body, _SINGLE_SHOT_MAX_TOKENS), str(model_id),
+        )
+        hit = cache_get(db, kind="notes_generate", cache_key=single_key)
+        if isinstance(hit, str) and hit.strip():
+            return _clean(hit)
         messages = [
             {"role": "system", "content": system},
             {
@@ -86,7 +96,10 @@ async def generate_notes(db: Session, document_id: uuid.UUID, *, kind: str = "no
             },
         ]
         raw = await complete_chat(messages, db, log_tag="notes_generate", model_id=model_id)
-        return _clean(raw)
+        out = _clean(raw)
+        if out:
+            cache_put(db, kind="notes_generate", cache_key=single_key, value=out)
+        return out
 
     # Map: notes per section; Reduce: merge into one cohesive document.
     sem = asyncio.Semaphore(_MAP_CONCURRENCY)
@@ -112,6 +125,15 @@ async def generate_notes(db: Session, document_id: uuid.UUID, *, kind: str = "no
 
     rollup_system = get_prompt(db, rollup_key)
     listing = truncate_to_tokens(merged, _ROLLUP_INPUT_MAX_TOKENS)
+    from app.services.chunk_map_cache import content_hash_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
+
+    rollup_key_hash = content_hash_key(
+        "notes_rollup", kind, rollup_system, title_hint, listing, str(model_id)
+    )
+    hit = cache_get(db, kind="notes_rollup", cache_key=rollup_key_hash)
+    if isinstance(hit, str) and hit.strip():
+        return _clean(hit)
     raw = await complete_chat(
         [
             {"role": "system", "content": rollup_system},
@@ -127,4 +149,7 @@ async def generate_notes(db: Session, document_id: uuid.UUID, *, kind: str = "no
         log_tag="notes_rollup",
         model_id=model_id,
     )
-    return _clean(raw) or _clean(merged)
+    out = _clean(raw) or _clean(merged)
+    if out:
+        cache_put(db, kind="notes_rollup", cache_key=rollup_key_hash, value=out)
+    return out

@@ -77,6 +77,15 @@ async def generate_flashcards(db: Session, document_id: uuid.UUID) -> list[dict[
     body = "\n\n".join(chunk_texts)
 
     if count_tokens(body) <= _SINGLE_SHOT_MAX_TOKENS:
+        from app.services.chunk_map_cache import content_hash_key
+        from app.services.generation_cache import get as cache_get, put as cache_put
+
+        single_key = content_hash_key(
+            "flashcards_generate", system, truncate_to_tokens(body, _SINGLE_SHOT_MAX_TOKENS), str(model_id)
+        )
+        hit = cache_get(db, kind="flashcards_generate", cache_key=single_key)
+        if isinstance(hit, str) and hit.strip():
+            return _finalize(_parse_cards(hit))
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": f"SOURCE:\n\n{truncate_to_tokens(body, _SINGLE_SHOT_MAX_TOKENS)}"},
@@ -87,6 +96,8 @@ async def generate_flashcards(db: Session, document_id: uuid.UUID) -> list[dict[
             # Intermittent empty/truncated completion — retry once via the failover pool.
             raw = await complete_chat(messages, db, log_tag="flashcards_generate", model_id=None)
             cards = _finalize(_parse_cards(raw))
+        if cards:
+            cache_put(db, kind="flashcards_generate", cache_key=single_key, value=raw)
         return cards
 
     sem = asyncio.Semaphore(_MAP_CONCURRENCY)

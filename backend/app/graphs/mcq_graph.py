@@ -169,11 +169,21 @@ async def _teach_feedback(state: McqGradeState, *, db: Session) -> dict[str, Any
         )
     messages.append({"role": "user", "content": user})
 
+    from app.services.chunk_map_cache import content_hash_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
+
+    grade_key = content_hash_key("grade_mcq", system, user)
+    hit = cache_get(db, kind="grade_mcq", cache_key=grade_key)
+    if isinstance(hit, str) and hit.strip():
+        return {"feedback": _sanitize_feedback(hit) or hit.strip()}
+
     try:
         feedback = await complete_chat(messages, db, log_tag="grade_mcq")
     except Exception:
         # Last-resort fallback so a provider hiccup never breaks grading.
         feedback = _fallback_feedback(is_correct=is_correct, correct=correct, chosen=chosen)
+    if feedback and (feedback or "").strip():
+        cache_put(db, kind="grade_mcq", cache_key=grade_key, value=feedback)
     return {"feedback": _sanitize_feedback(feedback) or feedback.strip()}
 
 

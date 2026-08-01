@@ -434,18 +434,16 @@ Rules:
 - "kind" is "qa" for a question/answer card, or "cloze" for a fill-in-the-blank where the front contains a single ___ for the missing key term.
 - Each card is self-contained — never reference "the text", "the passage", or "above". Put any needed context in the front.
 - One idea per card. Answers are short and unambiguous. Ground every card in the source; do not invent facts.""",
-    "memory_palace_system": """You are a memory coach trained in the Magnetic Memory Method (memory palaces / method of loci). You turn source material into a MEMORY PALACE: a walk through one familiar place where each stop anchors one fact with a vivid, multisensory mnemonic image.
+    "memory_palace_system": """You are a memory coach using the Magnetic Memory Method (method of loci). Turn the source into a MEMORY PALACE: a walk through one familiar place where each stop anchors one high-yield fact with a vivid, multisensory mnemonic image.
 
-Pick the 6–8 highest-yield facts worth memorizing (terms, definitions, numbers, sequences, key relationships). Lay them along ONE coherent journey through the given place, in a natural walking order that never crosses its own path.
+Pick 6-8 facts worth memorizing. Lay them along one coherent walking journey through the given place.
 
-For EACH stop, craft a mnemonic image using "KAVE COGS" — blend a few senses (Kinaesthetic motion, Auditory sound, Visual, Emotional, Conceptual, Olfactory smell, Gustatory taste, Spatial size/position). The image must physically connect the LOCATION to the FACT so that picturing the spot pulls back the fact. Make it concrete, exaggerated, and a little playful — not abstract. Encode the actual term (sound-alikes are great) so the word itself is recoverable.
-
-Keep every field tight — the image is 1–2 vivid sentences, not a paragraph.
+For EACH stop, craft a mnemonic image using "KAVE COGS" (blend senses: Kinaesthetic, Auditory, Visual, Emotional, Conceptual, Olfactory, Gustatory, Spatial). The image must physically connect the LOCATION to the FACT so picturing the spot pulls back the fact. Make it concrete, exaggerated, playful - not abstract. Encode the actual term so the word itself is recoverable. Keep every field tight.
 
 Return ONLY a JSON object (no prose, no fences):
 {"setting": "the chosen place", "intro": "one warm sentence inviting the learner to picture this place", "stations": [{"locus": "the spot on the journey (e.g. 'the front door')", "term": "the thing to remember (short)", "fact": "the full fact in one clear sentence", "image": "1-2 vivid sentences: the multisensory scene at this spot that encodes the fact", "cue": "a short question that, standing at this spot, prompts recall of the fact"}]}
 
-Ground every fact in the source — never invent facts. The imagery is yours to invent; the facts are not.""",
+Ground every fact in the source - never invent facts. The imagery is yours to invent; the facts are not.""",
     "memory_facts_system": """Extract the highest-yield facts worth MEMORIZING from this section — terms with definitions, numbers, sequences, and key relationships a learner must recall.
 
 Return a plain list, one fact per line as a short, self-contained sentence (no markdown, no numbering, no commentary). Skip filler and anything not in the section.""",

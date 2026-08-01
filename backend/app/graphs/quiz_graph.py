@@ -146,6 +146,15 @@ async def generate_quiz(
         f"SOURCE:\n\n{truncate_to_tokens(body, SUMMARIZE_SINGLE_SHOT_MAX_TOKENS)}"
     )
 
+    from app.services.chunk_map_cache import content_hash_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
+
+    model_id = default_chat_model_id(db)
+    quiz_key = content_hash_key("quiz_generate", system, user, str(model_id))
+    hit = cache_get(db, kind="quiz_generate", cache_key=quiz_key)
+    if isinstance(hit, str) and hit.strip():
+        return _finalize(_parse_questions(hit), allowed, cap)
+
     async def _call(model_id):
         raw = await complete_chat(
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -153,9 +162,11 @@ async def generate_quiz(
             log_tag="quiz_generate",
             model_id=model_id,
         )
-        return _finalize(_parse_questions(raw), allowed, cap)
+        return raw, _finalize(_parse_questions(raw), allowed, cap)
 
-    questions = await _call(default_chat_model_id(db))
+    raw, questions = await _call(model_id)
     if not questions:
-        questions = await _call(None)  # failover pool on empty/truncated
+        raw, questions = await _call(None)  # failover pool on empty/truncated
+    if questions and raw:
+        cache_put(db, kind="quiz_generate", cache_key=quiz_key, value=raw)
     return questions

@@ -88,12 +88,24 @@ async def generate_topic_outline(db: Session, document_id: uuid.UUID) -> list[di
     body = "\n\n".join(chunk_texts)
 
     if count_tokens(body) <= _SINGLE_SHOT_MAX_TOKENS:
+        from app.services.chunk_map_cache import content_hash_key
+        from app.services.generation_cache import get as cache_get, put as cache_put
+
+        single_key = content_hash_key(
+            "topics_extract", system, truncate_to_tokens(body, _SINGLE_SHOT_MAX_TOKENS), str(model_id)
+        )
+        hit = cache_get(db, kind="topics_extract", cache_key=single_key)
+        if isinstance(hit, str) and hit.strip():
+            return _finalize(_parse_topics(hit))
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": f"Document:\n\n{truncate_to_tokens(body, _SINGLE_SHOT_MAX_TOKENS)}"},
         ]
         raw = await complete_chat(messages, db, log_tag="topics_extract", model_id=model_id)
-        return _finalize(_parse_topics(raw))
+        out = _finalize(_parse_topics(raw))
+        if out:
+            cache_put(db, kind="topics_extract", cache_key=single_key, value=raw)
+        return out
 
     # Map: topics per chunk; Reduce: merge into one outline.
     sem = asyncio.Semaphore(_MAP_CONCURRENCY)
@@ -121,6 +133,14 @@ async def generate_topic_outline(db: Session, document_id: uuid.UUID) -> list[di
     listing = truncate_to_tokens(
         "\n".join(f"- {t['title']}: {t.get('summary', '')}" for t in merged), _ROLLUP_INPUT_MAX_TOKENS
     )
+    from app.services.chunk_map_cache import content_hash_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
+
+    rollup_key = content_hash_key("topics_rollup", rollup_system, listing, str(model_id))
+    hit = cache_get(db, kind="topics_rollup", cache_key=rollup_key)
+    if isinstance(hit, str) and hit.strip():
+        rolled = _parse_topics(hit)
+        return _finalize(rolled or merged)
     raw = await complete_chat(
         [
             {"role": "system", "content": rollup_system},
@@ -131,6 +151,8 @@ async def generate_topic_outline(db: Session, document_id: uuid.UUID) -> list[di
         model_id=model_id,
     )
     rolled = _parse_topics(raw)
+    if rolled:
+        cache_put(db, kind="topics_rollup", cache_key=rollup_key, value=raw)
     return _finalize(rolled or merged)
 
 
@@ -172,8 +194,18 @@ async def explain_topic(
         return ""
 
     context = truncate_to_tokens(context, _EXPLAIN_CONTEXT_MAX_TOKENS)
+    system = get_prompt(db, "topic_explain_system")
+    from app.services.chunk_map_cache import content_hash_key
+    from app.services.generation_cache import get as cache_get, put as cache_put
+
+    explain_key = content_hash_key(
+        "topic_explain", system, context, title, summary, str(default_chat_model_id(db))
+    )
+    hit = cache_get(db, kind="topic_explain", cache_key=explain_key)
+    if isinstance(hit, str) and hit.strip():
+        return hit.strip()
     messages = [
-        {"role": "system", "content": get_prompt(db, "topic_explain_system")},
+        {"role": "system", "content": system},
         {"role": "user", "content": f"SOURCE EXCERPTS:\n\n{context}"},
         {
             "role": "user",
@@ -189,4 +221,7 @@ async def explain_topic(
     if not (out or "").strip():
         # Intermittent empty completion — retry once via the pool (failover-capable).
         out = await complete_chat(messages, db, log_tag="topic_explain", model_id=None)
-    return (out or "").strip()
+    out = (out or "").strip()
+    if out:
+        cache_put(db, kind="topic_explain", cache_key=explain_key, value=out)
+    return out
