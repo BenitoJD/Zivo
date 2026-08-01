@@ -62,3 +62,13 @@ output/
 .claude/settings.local.json
 backend/.telegram_login_state
 backend/.telegram_login_session
+
+# Agent / coding-assistant session artifacts (plans, memories, rollouts).
+# These are local-only scratch — never commit them.
+.zcode/
+.zcode/plans/
+.zcode/memories/
+
+# Next.js Turbopack cache (Next 16 default bundler)
+.turbo/
+next-env.d.ts
