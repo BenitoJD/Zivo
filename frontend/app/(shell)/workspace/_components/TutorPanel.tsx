@@ -30,6 +30,7 @@ import { BrandMark } from "@/app/_components/BrandMark";
 import { AssistantMarkdown, MessageCopyAction } from "@/lib/chatMarkdown";
 import { splitAngles } from "@/lib/angles";
 import { useIsDark } from "@/lib/useIsDark";
+import type { ChatCitation } from "@/app/(shell)/workspace/_components/useTutorChat";
 
 /**
  * Tutor chat panel + its message UI (extracted from the workspace page monolith).
@@ -513,7 +514,7 @@ function ChatMessage({
   onExploreAngle,
   onKeepAngle,
 }: {
-  message: { role: string; content: string };
+  message: { role: string; content: string; citations?: ChatCitation[] | null };
   isUser: boolean;
   streaming: boolean;
   thinking?: boolean;
@@ -579,7 +580,50 @@ function ChatMessage({
             Thinking…
           </Text>
         ) : (
-          <AssistantMarkdown content={prose} isDark={isDark} streaming={streaming} />
+          <>
+            <AssistantMarkdown content={prose} isDark={isDark} streaming={streaming} />
+            {!streaming && message.citations && message.citations.length > 0 && (
+              <Stack gap={4} mt={8}>
+                <Text size="xs" fw={600} c="dimmed" tt="uppercase" style={{ letterSpacing: "0.04em" }}>
+                  From your source
+                </Text>
+                <Group gap={6} wrap="wrap">
+                  {message.citations.slice(0, 4).map((c, ci) => (
+                    <Tooltip
+                      key={`${c.chunk_id ?? c.document_id}-${ci}`}
+                      label={c.snippet || "Source passage"}
+                      position="top"
+                      withArrow
+                      maw={280}
+                      multiline
+                      openDelay={200}
+                    >
+                      <Text
+                        size="xs"
+                        fw={500}
+                        c="lavender.7"
+                        style={{
+                          whiteSpace: "nowrap",
+                          background: "var(--mantine-color-lavender-0)",
+                          border: "1px solid var(--mantine-color-lavender-2)",
+                          borderRadius: "var(--mantine-radius-xl)",
+                          padding: "2px 10px",
+                          cursor: "default",
+                        }}
+                      >
+                        {c.page_start && c.page_end && c.page_start === c.page_end
+                          ? `p.${c.page_start}`
+                          : c.page_start && c.page_end
+                            ? `p.${c.page_start}–${c.page_end}`
+                            : "source"}
+                        {typeof c.score === "number" ? ` · ${Math.round(c.score * 100)}%` : ""}
+                      </Text>
+                    </Tooltip>
+                  ))}
+                </Group>
+              </Stack>
+            )}
+          </>
         )}
         {/* Held back until the stream settles - half-written angles would flicker. */}
         {!streaming && angles.length > 0 && (

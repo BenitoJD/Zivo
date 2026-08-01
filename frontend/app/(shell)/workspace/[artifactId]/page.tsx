@@ -1634,6 +1634,7 @@ export default function WorkspaceArtifactPage({
       backLabel="Days"
       showLessonPill={lessonReadyForPage}
       onReopenLesson={reopenLesson}
+      selectionReason={mode === "learn" ? (queue?.selection_reason ?? null) : null}
     />
   );
 

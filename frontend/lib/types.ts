@@ -44,6 +44,8 @@ export type PagesInfo = {
 
 export type McqState = {
   current_assertion_id: string | null;
+  /** Adaptive selection reason — why this question was chosen (learn mode). */
+  selection_reason?: string | null;
   current_page?: number;
   page_from?: number;
   page_to?: number;

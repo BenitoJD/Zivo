@@ -14,7 +14,16 @@ import { ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import type { McqState } from "@/lib/types";
 import type { StudyMode } from "@/app/workspace/_components/studyNav";
 
-export type ChatMessage = { role: string; content: string };
+export type ChatCitation = {
+  document_id: string;
+  chunk_id?: string | null;
+  page_start?: number | null;
+  page_end?: number | null;
+  score?: number | null;
+  snippet?: string;
+};
+
+export type ChatMessage = { role: string; content: string; citations?: ChatCitation[] | null };
 
 type WikipediaLookup = { title: string; extract: string; source_url: string };
 
@@ -94,7 +103,11 @@ export function useTutorChat({
       chatMessagesQuery.data
         .filter((m) => (m.content || "").trim())
         .filter((m) => !(m.role === "assistant" && isTransientChatAssistantMessage(m.content)))
-        .map((m) => ({ role: m.role, content: m.content })),
+        .map((m) => ({
+          role: m.role,
+          content: m.content,
+          citations: (m as { citations?: ChatCitation[] | null }).citations ?? null,
+        })),
     );
   }, [artifactId, chatSurface, chatBusy, chatMessagesQuery.data]);
 
@@ -141,6 +154,7 @@ export function useTutorChat({
       }
       let assistant = "";
       let gotToken = false;
+      let citations: ChatCitation[] | null = null;
       await apiPostSSE(
         "/api/chat",
         { document_id: artifactId, message: userMsg, scope },
@@ -153,12 +167,33 @@ export function useTutorChat({
               const i = copy.length - 1;
               const last = copy[i];
               if (last?.role === "assistant") {
-                copy[i] = { ...last, content: assistant };
+                copy[i] = { ...last, content: assistant, citations: citations ?? last.citations };
               } else {
-                copy.push({ role: "assistant", content: assistant });
+                copy.push({ role: "assistant", content: assistant, citations });
               }
               return copy;
             });
+          },
+          onEvent: (event, data) => {
+            if (event === "sources") {
+              try {
+                const payload = JSON.parse(data) as { citations?: ChatCitation[] };
+                if (Array.isArray(payload.citations) && payload.citations.length > 0) {
+                  citations = payload.citations;
+                  setChatMessages((m) => {
+                    const copy = [...m];
+                    const i = copy.length - 1;
+                    const last = copy[i];
+                    if (last?.role === "assistant") {
+                      copy[i] = { ...last, citations };
+                    }
+                    return copy;
+                  });
+                }
+              } catch {
+                /* malformed sources payload — ignore */
+              }
+            }
           },
         },
         { signal: abort.signal },

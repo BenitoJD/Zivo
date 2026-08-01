@@ -1216,7 +1216,7 @@ export function useChatMessagesQuery(artifactId: string, mode: string, enabled =
   return useQuery({
     queryKey: queryKeys.chatMessages(artifactId, surface),
     queryFn: () =>
-      apiGet<{ role: string; content: string }[]>(
+      apiGet<{ role: string; content: string; citations?: unknown }[]>(
         `/api/chat/threads/${artifactId}/messages?surface=${surface}`,
       ),
     enabled: enabled && Boolean(artifactId),

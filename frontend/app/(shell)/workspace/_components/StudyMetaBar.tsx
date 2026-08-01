@@ -108,6 +108,8 @@ export function StudyMetaBar({
   /** Learn-only: show a "Lesson" pill to re-open the page's dismissed lesson. */
   showLessonPill = false,
   onReopenLesson,
+  /** Learn-only: why this question was chosen (focus / revisit / order). */
+  selectionReason,
 }: {
   questionIndex: number;
   questionTotal: number;
@@ -139,6 +141,8 @@ export function StudyMetaBar({
    *  learner has dismissed it — the pill re-opens the lesson over the MCQ. */
   showLessonPill?: boolean;
   onReopenLesson?: () => void;
+  /** Learn-only: why this question was chosen (focus / revisit / order). */
+  selectionReason?: string | null;
 }) {
   const modeSelect = showModeSelect ?? compact;
   const newspaperEditionTotal = editionTotal ?? 0;
@@ -405,6 +409,23 @@ export function StudyMetaBar({
               {compact
                 ? `${newspaperEditionAnswered}/${newspaperEditionTotal}`
                 : `${newspaperEditionAnswered} of ${newspaperEditionTotal}`}
+            </Text>
+          ) : null}
+          {selectionReason ? (
+            <Text
+              size="xs"
+              fw={500}
+              c="lavender.7"
+              style={{
+                whiteSpace: "nowrap",
+                letterSpacing: "0.01em",
+                background: "var(--mantine-color-lavender-0)",
+                border: "1px solid var(--mantine-color-lavender-2)",
+                borderRadius: "var(--mantine-radius-xl)",
+                padding: "1px 10px",
+              }}
+            >
+              {selectionReason}
             </Text>
           ) : null}
         </Group>
