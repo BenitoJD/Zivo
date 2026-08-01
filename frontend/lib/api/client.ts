@@ -10,10 +10,27 @@ const CHUNKED_RESUME_PREFIX = "zivo-chunked-upload:";
 
 const GUEST_HEADER = "X-Zivo-Guest-Id";
 const CSRF_HEADER = "X-CSRF-Token";
+/** Survives browser cookie purges (Safari ITP, private mode, cleared cookies):
+ *  the httponly guest cookie can silently vanish, which orphans every guest
+ *  document behind a brand-new anonymous id. localStorage is same-origin and
+ *  far stickier, so the identity (and thus the library) survives refreshes. */
+const GUEST_ID_STORAGE_KEY = "zivo-guest-id";
 
 let csrfToken: string | null = null;
 let guestId: string | null = null;
 let guestSessionPromise: Promise<void> | null = null;
+
+function restoreStoredGuestId(): void {
+  if (guestId !== null) return;
+  try {
+    const stored = localStorage.getItem(GUEST_ID_STORAGE_KEY);
+    if (stored && /^[a-f0-9]{32}$/.test(stored)) guestId = stored;
+  } catch {
+    /* storage unavailable (private mode / disabled) — cookie still works */
+  }
+}
+
+restoreStoredGuestId();
 
 const ARTIFACT_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -82,9 +99,18 @@ async function fetchWithTimeout(
   return fetch(url, { ...init, signal: signalAny });
 }
 
+function persistGuestId(id: string): void {
+  guestId = id;
+  try {
+    localStorage.setItem(GUEST_ID_STORAGE_KEY, id);
+  } catch {
+    /* storage unavailable — cookie path still covers identity */
+  }
+}
+
 function captureResponseMeta(res: Response) {
   const headerGuest = res.headers.get(GUEST_HEADER);
-  if (headerGuest) guestId = headerGuest;
+  if (headerGuest && headerGuest !== guestId) persistGuestId(headerGuest);
 }
 
 function buildHeaders(extra?: HeadersInit): Headers {
@@ -151,6 +177,11 @@ export function clearClientSessionState() {
   csrfToken = null;
   guestId = null;
   guestSessionPromise = null;
+  try {
+    localStorage.removeItem(GUEST_ID_STORAGE_KEY);
+  } catch {
+    /* storage unavailable */
+  }
 }
 
 /**
@@ -304,7 +335,7 @@ export async function apiPostForm<T>(
       xhr.onload = () => {
         cleanup();
         const headerGuest = xhr.getResponseHeader(GUEST_HEADER);
-        if (headerGuest) guestId = headerGuest;
+        if (headerGuest && headerGuest !== guestId) persistGuestId(headerGuest);
         if (xhr.status >= 200 && xhr.status < 300) {
           try {
             resolve(JSON.parse(xhr.responseText) as T);
