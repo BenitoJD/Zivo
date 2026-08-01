@@ -72,6 +72,10 @@ def retrieve_context(state: ChatState, *, db: Session) -> dict[str, Any]:
     citations = [
         {
             "document_id": c["document_id"],
+            "chunk_id": c.get("chunk_id"),
+            "page_start": c.get("page_start"),
+            "page_end": c.get("page_end"),
+            "score": round(float(c.get("score") or 0), 3),
             "snippet": _snippet_for_chunk(c.get("text", "")),
         }
         for c in chunks

@@ -847,6 +847,98 @@ def select_next_assertion(
     return verdict.assertion_id
 
 
+def selection_reason_for(
+    db: Session,
+    document_id: uuid.UUID,
+    doc: Document,
+    progress: dict[str, Any],
+    *,
+    page_ids: list[str] | None = None,
+) -> str | None:
+    """Human-readable "why this question now" for the chosen assertion.
+
+    Mirrors select_next_assertion's scoring so the Learn UI can show the learner
+    *why* this card came up (focus concept, spaced revisit, mastery reinforce,
+    new page, or plain sequence order). Returns a stable, short label string.
+    """
+    page = int(progress.get("current_page") or 1)
+    answered = {str(x) for x in progress.get("answered_ids") or []}
+    rows = page_ids if page_ids is not None else page_assertion_ids(db, document_id, page)
+    candidates = [rid for rid in rows if rid not in answered]
+    if not candidates:
+        return None
+
+    from app.config import get_settings
+    from app.services.adaptive_selection import (
+        build_learner_state,
+        normalize_policy,
+        select_next,
+    )
+
+    policy = normalize_policy(
+        str(progress.get("selection_policy") or "").strip().lower()
+        or (get_settings().selection_policy or "sequence")
+    )
+    serve_mode = parse_budget_mode(
+        progress.get("budget_serve_mode") if isinstance(progress.get("budget_serve_mode"), str) else None
+    )
+    state = build_learner_state(progress)
+
+    concept_by_id: dict[str, str | None] = {}
+    concept_label_by_id: dict[str, str | None] = {}
+    difficulty_by_id: dict[str, float] = {}
+    lineage_by_id: dict[str, str] = {}
+    exposure_by_id: dict[str, int] = {}
+
+    needs_concepts = (
+        bool(state.focus_concept)
+        or state.mastery_stop
+        or bool(state.concept_revisit_hours)
+        or policy in ("adaptive_v1", "difficulty_edge", "concept_reinforce")
+    )
+    if needs_concepts:
+        concept_by_id, concept_label_by_id = _concept_signals_for_ids(db, candidates)
+    if policy in ("adaptive_v1", "difficulty_edge"):
+        difficulty_by_id = _difficulty_for_ids(db, candidates)
+        if state.last_assertion_id:
+            lineage_by_id = _lineage_successors(db, state.last_assertion_id, candidates)
+        if policy == "adaptive_v1":
+            exposure_by_id = _exposure_for_ids(db, candidates)
+
+    verdict = select_next(
+        candidates,
+        state,
+        policy=policy,
+        mode=serve_mode,  # type: ignore[arg-type]
+        concept_by_id=concept_by_id,
+        concept_label_by_id=concept_label_by_id,
+        difficulty_by_id=difficulty_by_id,
+        lineage_by_id=lineage_by_id,
+        exposure_by_id=exposure_by_id,
+    )
+    if not verdict.assertion_id:
+        return None
+    return human_selection_reason(verdict.rationale, state)
+
+
+def human_selection_reason(rationale: str, state: object | None = None) -> str:
+    """Map the engine's internal rationale to a short, learner-facing label."""
+    r = (rationale or "").lower()
+    if "focus" in r or "mastery_reinforce" in r:
+        return "focus concept"
+    if "revisit" in r or "due" in r or "spaced" in r:
+        return "spaced revisit"
+    if "lineage" in r:
+        return "follows your last question"
+    if "new_page" in r or "page" in r:
+        return "new page"
+    if "difficulty" in r or "edge" in r:
+        return "right at your level"
+    if "reinforce" in r:
+        return "reinforces a recent miss"
+    return "in order through this page"
+
+
 def _candidates_matching_concept_label(
     db: Session, candidate_ids: list[str], focus: str
 ) -> list[str]:
@@ -1038,6 +1130,11 @@ def build_learn_queue_state(
     session_break = bool(session.n_session > 0 and session_items >= session.n_session)
     # Loop's choosing step (policy-driven; defaults to sequence order).
     next_id = select_next_assertion(db, document_id, doc, progress, page_ids=selection_ids)
+    selection_reason = (
+        selection_reason_for(db, document_id, doc, progress, page_ids=selection_ids)
+        if next_id
+        else None
+    )
     if newspaper:
         edition_page_question_total = len(selection_ids)
         edition_page_questions_answered = sum(
@@ -1096,6 +1193,7 @@ def build_learn_queue_state(
         "page_from": page_from,
         "page_to": page_to,
         "current_assertion_id": next_id,
+        "selection_reason": selection_reason,
         "question_number": questions_answered + 1 if next_id else questions_answered,
         # Page cook / UI Y = plan_budget (N_page). session_soft is serve pacing only.
         "question_budget": plan_budget,

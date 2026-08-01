@@ -23,7 +23,7 @@ from app.services.storage import delete_object, fetch_object, get_json, ingest_t
 
 logger = logging.getLogger(__name__)
 
-@eta(name="ingest.parse_document", workload=JobWorkload.cpu)
+@eta(name="ingest.parse_document", workload=JobWorkload.cpu, priority=JobPriority.HIGH)
 def parse_document_job(payload: dict) -> dict:
     document_id = UUID(payload["document_id"])
     with SessionLocal() as db:
@@ -62,7 +62,7 @@ def parse_document_job(payload: dict) -> dict:
     return {"document_id": str(document_id), "pages": len(pages)}
 
 
-@eta(name="ingest.chunk_pages", workload=JobWorkload.cpu)
+@eta(name="ingest.chunk_pages", workload=JobWorkload.cpu, priority=JobPriority.HIGH)
 def chunk_pages_job(payload: dict) -> dict:
     document_id = UUID(payload["document_id"])
     pages_data = get_json(ingest_tmp_key(document_id, "pages"))
@@ -84,7 +84,7 @@ def chunk_pages_job(payload: dict) -> dict:
     return {"document_id": str(document_id), "chunks": len(chunks)}
 
 
-@eta(name="ingest.embed_chunks", workload=JobWorkload.cpu)
+@eta(name="ingest.embed_chunks", workload=JobWorkload.cpu, priority=JobPriority.HIGH)
 def embed_chunks_job(payload: dict) -> dict:
     document_id = UUID(payload["document_id"])
     chunks_data = get_json(ingest_tmp_key(document_id, "chunks"))
@@ -112,7 +112,7 @@ def embed_chunks_job(payload: dict) -> dict:
     return {"document_id": str(document_id), "chunks": count}
 
 
-@eta(name="ingest.document", workload=JobWorkload.cpu)
+@eta(name="ingest.document", workload=JobWorkload.cpu, priority=JobPriority.HIGH)
 def ingest_document_job(payload: dict) -> dict:
     """Bundled ingest: parse → chunk → embed → persist in ONE job.
 
@@ -177,7 +177,7 @@ def ingest_document_job(payload: dict) -> dict:
     return {"document_id": str(document_id), "chunks": count}
 
 
-@eta(name="ingest.page", workload=JobWorkload.cpu)
+@eta(name="ingest.page", workload=JobWorkload.cpu, priority=JobPriority.HIGH)
 def ingest_page_job(payload: dict) -> dict:
     document_id = UUID(payload["document_id"])
     page_number = int(payload["page_number"])
@@ -230,7 +230,7 @@ def ingest_page_job(payload: dict) -> dict:
     return {"document_id": str(document_id), "page_number": page_number, "chunks": len(chunks)}
 
 
-@eta(name="ingest.rag_window", workload=JobWorkload.cpu)
+@eta(name="ingest.rag_window", workload=JobWorkload.cpu, priority=JobPriority.HIGH)
 def ingest_rag_window_job(payload: dict) -> dict:
     document_id = UUID(payload["document_id"])
     with SessionLocal() as db:
