@@ -180,3 +180,31 @@ CREATE TABLE IF NOT EXISTS qb.rate_limit_hit (
 );
 
 CREATE INDEX IF NOT EXISTS rate_limit_hit_bucket_idx ON qb.rate_limit_hit (bucket);
+
+-- -----------------------------------------------------------------------------
+-- Offline Mode study packs (Alembic 043_offline_packs, ADR 0006)
+-- A signed, expiring snapshot of an artifact's full active question pool WITH
+-- answer keys + pre-baked feedback, downloadable for offline study. Built by an
+-- ETA job (pending -> building -> ready | failed); pack_payload is NULL until
+-- ready. Exactly one of account_id / guest_id identifies the owner.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS qb.offline_packs (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  document_id     UUID NOT NULL REFERENCES qb.documents (id) ON DELETE CASCADE,
+  account_id      UUID,
+  guest_id        TEXT,
+  status          TEXT NOT NULL DEFAULT 'pending',
+  progress        NUMERIC(5,2) NOT NULL DEFAULT 0,
+  question_count  INTEGER NOT NULL DEFAULT 0,
+  pack_payload    JSONB,
+  signature       TEXT,
+  expires_at      TIMESTAMPTZ NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  error           TEXT,
+  CONSTRAINT offline_packs_owner_xor_check
+    CHECK ((account_id IS NULL) <> (guest_id IS NULL))
+);
+
+CREATE INDEX IF NOT EXISTS offline_packs_doc_owner_idx
+  ON qb.offline_packs (document_id, account_id, guest_id);

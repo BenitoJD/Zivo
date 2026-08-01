@@ -15,6 +15,7 @@ from app.api import (
     mcq,
     models,
     newspaper,
+    offline,
     practice,
     progress,
     reference,
@@ -47,6 +48,7 @@ api_router.include_router(coding.router, prefix="/coding", tags=["coding"])
 api_router.include_router(debug.router, prefix="/debug", tags=["debug"])
 api_router.include_router(system_design.router, prefix="/system-design", tags=["system-design"])
 api_router.include_router(newspaper.router, prefix="/newspaper", tags=["newspaper"])
+api_router.include_router(offline.router, prefix="/offline", tags=["offline"])
 api_router.include_router(seo_learn.router, prefix="/learn", tags=["learn-blog"])
 api_router.include_router(progress.router, prefix="/progress", tags=["progress"])
 api_router.include_router(reference.router, prefix="/reference", tags=["reference"])

@@ -1,0 +1,24 @@
+{
+  "name": "Zivo | Question Better.",
+  "short_name": "Zivo",
+  "description": "Upload anything. Get exam-style questions, scoped exactly to what you read, with a tutor that knows your source.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F4F1E9",
+  "theme_color": "#F4F1E9",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

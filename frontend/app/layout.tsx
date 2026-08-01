@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import { cookies, headers } from "next/headers";
-import Script from "next/script";
 import { Figtree, EB_Garamond } from "next/font/google";
 import "@mantine/core/styles.css";
 import "@mantine/dropzone/styles.css";
@@ -9,6 +8,7 @@ import "@/app/notifications-apple.css";
 import "@/app/responsive-scale.css";
 import "@/app/scrollbar.css";
 import Providers from "@/app/providers";
+import RegisterServiceWorker from "@/app/_components/RegisterServiceWorker";
 import {
   MANTINE_COLOR_SCHEME_COOKIE,
   MANTINE_COLOR_SCHEME_SCRIPT,
@@ -33,6 +33,8 @@ const ebGaramond = EB_Garamond({
 export const metadata: Metadata = {
   title: "Zivo | Question Better.",
   description: "Upload anything. Get exam-style questions, scoped exactly to what you read, with a tutor that knows your source.",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: { capable: true, title: "Zivo", statusBarStyle: "default" },
 };
 
 export const viewport: Viewport = {
@@ -64,9 +66,6 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
           data-mantine-script
           dangerouslySetInnerHTML={{ __html: MANTINE_COLOR_SCHEME_SCRIPT }}
         />
-        <Script id="unregister-stale-sw" strategy="beforeInteractive">
-          {`if("serviceWorker" in navigator){navigator.serviceWorker.getRegistrations().then((rs)=>{rs.forEach((r)=>r.unregister())})}`}
-        </Script>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         {/* eslint-disable-next-line @next/next/no-page-custom-font -- Google Fonts via <link>+preconnect in the App Router head is intentional; next/font would conflict with the Calm Paper CSS font variables */}
@@ -160,7 +159,10 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
           MozOsxFontSmoothing: "grayscale",
         }}
       >
-        <Providers colorScheme={colorScheme}>{children}</Providers>
+        <Providers colorScheme={colorScheme}>
+          <RegisterServiceWorker />
+          {children}
+        </Providers>
       </body>
     </html>
   );

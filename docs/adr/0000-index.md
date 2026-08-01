@@ -15,5 +15,6 @@ behind the shape those rules describe.
 | [0003](0003-mantine-only-calm-paper.md) | Mantine-only UI on the Calm Paper token system | 2026-06-27 |
 | [0004](0004-swappable-policy-seam.md) | Era-guess algorithms sit behind a swappable policy seam | 2026-06-27 |
 | [0005](0005-enforcement-and-known-divergences.md) | Document what-is; track divergences as dated debt to enforce | 2026-06-27 |
+| [0006](0006-offline-answer-keys.md) | Offline Mode ships answer keys to the device in signed, expiring packs | 2026-08-01 |
 
 To add one: scan for the highest number, increment, keep it short.

@@ -79,3 +79,17 @@ Speculative pre-triage `N_page` lives in **Question Budget** (`speculative_page_
 | Interview round plans by category | Session Design | `session_design.plan_interview_rounds` |
 | Speculative pre-triage `N_page` | Question Budget | `question_budget.speculative_page_budget` |
 | Practice-hub path mastery bands | Mastery / Evidence-Stop | `mastery_evidence.label_path_mastery` |
+
+## Client-side seams (Offline Mode)
+
+Offline Mode mirrors the verdict computation on the client so a learner can grade
+with no network, but **no policy is forked to the client.** The local seam is a
+pure index-compare, identical to the server's `grade_verdict`:
+
+| Seam | Mirrors | Scope |
+|------|---------|-------|
+| Local study engine (`frontend/lib/offline/engine.ts`) | `mcq_graph.grade_verdict` (verdict only) + pre-baked `option_feedback` | Verdict + bundled feedback offline; the real Adaptive/Calibration/Mastery engines run on sync |
+
+Pack build (server) and grade replay (server) are the authoritative paths; the
+local engine is a throwaway projection whose grades are recomputed server-side
+on reconnect. See [ADR 0006](adr/0006-offline-answer-keys.md).

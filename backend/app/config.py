@@ -127,6 +127,13 @@ class Settings(BaseSettings):
     # When false, the public practice endpoints return 404 (kill switch).
     practice_enabled: bool = True
 
+    # Offline Mode — signed, server-tracked study packs downloadable for offline
+    # study (ADR 0006). The pack ships answer keys on the device; off keeps the
+    # endpoints inert (404) and disables pack creation/serve until enabled.
+    offline_mode_enabled: bool = False
+    # How long a downloaded pack stays valid before the learner must rebuild it.
+    offline_pack_ttl_days: int = 7
+
     # Judge0 code-execution sandbox (interview coding rounds). Runs on a dedicated box
     # (see infra/judge0/); set JUDGE0_URL to its address in prod.
     judge0_url: str = "http://localhost:2358"

@@ -8,7 +8,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
@@ -21,7 +21,9 @@ from app.services.answer_signal import record_answer_signal, resolve_subject_ent
 from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.api.access import require_document
 from app.services.guest_session import guest_session_for_read
+from app.services.offline_pack import get_pack, is_expired, verify_pack
 from app.services.question_pool import (
+    build_learn_queue_state,
     get_progress,
     learner_key_for,
     next_assertion_id,
@@ -263,5 +265,79 @@ async def grade_stream(
         event_generator(),
         headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache, no-transform"},
     )
+
+
+class GradeBatchIn(BaseModel):
+    pack_id: uuid.UUID
+    # Bounded list, house style (see coding.py steps) — a full offline deck replay.
+    grades: list[GradeIn] = Field(min_length=1, max_length=2000)
+
+
+@router.post(
+    "/grade/batch",
+    dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)],
+)
+def grade_batch(
+    body: GradeBatchIn,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict:
+    """Replay a sequence of offline-graded answers through the real engines.
+
+    The server recomputes correctness from the stored key for every grade
+    (``grade_verdict``) — it never trusts a client-sent ``correct`` flag — then
+    runs the same ``_record_graded_answer`` path as the live grade endpoint.
+    Replay is safe-by-construction: the ``measurement_answer_idempotent`` partial
+    unique index makes a duplicate (learner, assertion) grade a no-op for
+    calibration. Returns the reconciled queue state so the client can refresh.
+    """
+    if not get_settings().offline_mode_enabled:
+        raise HTTPException(status_code=404, detail="Not found")
+    _require_actor(user, guest_id)
+    account_id = getattr(user, "id", None) if user else None
+    pack = get_pack(
+        db, body.pack_id, account_id=account_id, guest_id=guest_id, include_payload=True
+    )
+    if pack is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    if is_expired(pack):
+        raise HTTPException(status_code=410, detail="Pack expired")
+    payload = pack.get("pack_payload")
+    if not isinstance(payload, dict):
+        payload = json.loads(payload) if isinstance(payload, str) else {}
+    if not verify_pack(payload, str(pack.get("signature") or "")):
+        raise HTTPException(status_code=400, detail="Pack signature mismatch")
+
+    # Map the deck's assertions to their owning artifact once (all share it).
+    first_artifact = payload.get("document_id")
+    if not first_artifact:
+        raise HTTPException(status_code=400, detail="Malformed pack")
+    artifact_id = uuid.UUID(str(first_artifact))
+    require_document(db, artifact_id, user, guest_id)
+
+    replayed = 0
+    for g in body.grades:
+        # Per-item access + existence: resolve the assertion's artifact (same as
+        # the single-grade path) so a cross-pack id can't slip in.
+        g_artifact = _resolve_assertion_artifact(db, g.assertion_id, user, guest_id)
+        raw = load_grade_payload(db, g.assertion_id)
+        if raw is None:
+            continue
+        verdict = grade_verdict(raw, g.choice_index, g.choice_indices)
+        _record_graded_answer(
+            db, g, artifact_id=g_artifact, correct=bool(verdict["correct"]),
+            user=user, guest_id=guest_id,
+        )
+        replayed += 1
+
+    # Reconciled queue state for the client to refresh from server truth.
+    mastery: dict[str, Any] = {}
+    doc = db.get(Document, artifact_id)
+    if doc is not None:
+        lk = learner_key_for(user, guest_id)
+        progress = get_progress(doc, learner_key=lk)
+        mastery = build_learn_queue_state(db, artifact_id, doc, progress, learner_key=lk)
+    return {"replayed": replayed, "mastery": mastery}
 
 

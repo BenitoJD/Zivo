@@ -41,6 +41,7 @@ Decisions (rank, metric, gate, schedule, next-step) live behind named engine fac
 | **Engines index** | Ready | [docs/ENGINES.md](docs/ENGINES.md) - 18 Year-1+ engines (holy grail) |
 | **Answer intelligence** | Ready (engine) | Measurements + Elo + mastery stop + spaced revisit on grade |
 | **Question graph** | Ready (engine) | `docs/QUESTION_GRAPH_ENGINE.md` + lineage at cook |
+| **Offline Mode** | Ready | Signed, server-tracked study packs — pre-load, study offline, sync grades. [ADR 0006](docs/adr/0006-offline-answer-keys.md) + `offline_pack.py` |
 
 ## Layout
 

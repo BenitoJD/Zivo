@@ -237,3 +237,20 @@ def seo_cook_edition_digest(payload: dict) -> dict:
     force = bool(payload.get("force"))
     with SessionLocal() as db:
         return cook_edition_digest(db, edition_id, force=force)
+
+
+@eta(name="offline.build_pack", workload=JobWorkload.io)
+def build_offline_pack(payload: dict) -> dict:
+    """Assemble + sign + persist one offline study pack (ADR 0006).
+
+    Backfills per-option feedback across the deck, so this is the slow part of
+    Offline Mode and runs off the request path. Mirrors the coach.mcq_page lane.
+    """
+    from uuid import UUID
+
+    from app.services.offline_pack import build_pack
+
+    pack_id = UUID(payload["pack_id"])
+    with SessionLocal() as db:
+        build_pack(db, pack_id)
+    return {"pack_id": str(pack_id), "status": "built"}

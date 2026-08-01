@@ -58,6 +58,11 @@ import { StudySourcePanel } from "@/app/workspace/_components/StudySourcePanel";
 import { StudyEdgeTrigger } from "@/app/workspace/_components/StudyRails";
 import { FloatingPanel, type FloatingPanelGeometry, type FloatingPanelHandle } from "@/app/workspace/_components/FloatingPanel";
 import { StudyMobileShell } from "@/app/workspace/_components/StudyMobileShell";
+import { loadPackForDocument, seedAssertionCache } from "@/lib/offline/reader";
+import { localGrade, nextAssertionId } from "@/lib/offline/engine";
+import { enqueueGrade } from "@/lib/offline/outbox";
+import { syncPack } from "@/lib/offline/sync";
+import type { OfflineAssertion, OfflinePack } from "@/lib/offline/db";
 import { SelectionQuote } from "@/app/workspace/_components/SelectionQuote";
 import { StudyMetaBar, type StudyAlign } from "@/app/workspace/_components/StudyMetaBar";
 import { LessonScreen } from "@/app/workspace/_components/LessonScreen";
@@ -197,6 +202,15 @@ export default function WorkspaceArtifactPage({
   const [reviewIndex, setReviewIndex] = useState<number | null>(null);
   const [flagBusy, setFlagBusy] = useState(false);
   const [flaggedIds, setFlaggedIds] = useState<Record<string, true>>({});
+
+  // Offline Mode (ADR 0006): when a pack is downloaded for this artifact, the
+  // queue + grading branches read from Dexie instead of the network. onlineDeck
+  // holds the pack's assertions; offlinePackIds is the answered set (seeded
+  // from mastery + appended per grade) used to pick the next card locally.
+  const [offlineDeck, setOfflineDeck] = useState<OfflineAssertion[] | null>(null);
+  const [offlinePack, setOfflinePack] = useState<OfflinePack | null>(null);
+  const [offlineAnsweredIds, setOfflineAnsweredIds] = useState<Set<string>>(new Set());
+  const studyingOffline = offlineDeck !== null;
 
   const savedNotesQuery = useSavedNotesQuery(artifactId);
   const savedNotesActions = useSavedNotesActions(artifactId);
@@ -342,6 +356,10 @@ export default function WorkspaceArtifactPage({
     setMcqLoading(true);
     setAnsweredHistory([]);
     setReviewIndex(null);
+    // Offline Mode: clear the packed-deck projection so the next artifact loads fresh.
+    setOfflineDeck(null);
+    setOfflinePack(null);
+    setOfflineAnsweredIds(new Set());
     setLessonForcedOpenPage(null);
     // Non-newspaper: Settings Relaxed/Exam. Newspaper default Learn unless ?mode=test
     // (docs/QUESTION_BUDGET_ENGINE.md §0 — no Learn/Test modal on open).
@@ -645,12 +663,43 @@ export default function WorkspaceArtifactPage({
     if (invalidArtifactId || !studyRangeKey || artifact?.status === "indexing") return;
     let cancelled = false;
 
+    // Offline Mode (ADR 0006): if a pack is downloaded for this artifact, study
+    // from Dexie — no learn-queue fetch, no SSE, no poll. Seeds the assertion
+    // cache so useAssertionQuery returns instantly with no network round-trip.
+    // Falls through to the online path when there is no pack (or no IndexedDB).
+    if (typeof window !== "undefined" && "indexedDB" in window) {
+      void (async () => {
+        const loaded = await loadPackForDocument(artifactId);
+        if (cancelled || !loaded) {
+          // No offline pack → the online loader below takes over.
+          return;
+        }
+        setOfflineDeck(loaded.deck);
+        setOfflinePack(loaded.pack);
+        setOfflineAnsweredIds(new Set(loaded.pack.mastery.answered_ids));
+        seedAssertionCache(loaded.deck, queryClient, (id) => queryKeys.assertion(id));
+        const nextId = nextAssertionId(loaded.deck, new Set(loaded.pack.mastery.answered_ids));
+        setQueue({
+          current_assertion_id: nextId,
+          questions_generated: loaded.deck.length,
+          questions_answered: loaded.pack.mastery.answered_ids.length,
+          document_complete: nextId === null,
+          pool_available: loaded.deck.length,
+          study_mode: "classic",
+        } as McqState);
+        setMcqLoading(false);
+      })();
+    }
+
     void (async () => {
       await ensureGuestSession();
       if (cancelled) return;
+      // Offline Mode active (ADR 0006): the Dexie loader above owns the queue;
+      // never open the online learn-queue fetch / SSE while studying offline.
+      if (offlineDeck) return;
       try {
         const data = await apiGet<McqState>(learnQueuePath);
-        if (cancelled) return;
+        if (cancelled || offlineDeck) return;
         setQueue(data);
         setMcqLoading(false);
       } catch {
@@ -998,6 +1047,64 @@ export default function WorkspaceArtifactPage({
     const conceptSnapshot = currentConcept;
     const multiSnapshot = isMulti ? [...multiSelected] : undefined;
     setFeedback(null);
+
+    // Offline Mode (ADR 0006): grade locally against the bundled key + pre-baked
+    // feedback, queue the grade for sync, and reuse the SAME state setters the
+    // online path uses (verdict shape is identical). The server recomputes
+    // correctness on reconnect; the local verdict is a throwaway projection.
+    if (studyingOffline && offlineDeck && offlinePack) {
+      const assertion = offlineDeck.find((a) => a.id === answeredId);
+      if (assertion) {
+        const choiceIndex = isMulti ? (multiSelected[0] ?? -1) : Number(selected);
+        const choiceIndices = isMulti ? multiSelected : null;
+        const verdict = localGrade(assertion, choiceIndex, choiceIndices);
+        setGradeState({
+          correct: verdict.correct,
+          correctIndex: verdict.correct_index,
+          correctIndices: verdict.correct_indices,
+        });
+        setFeedback(verdict.feedback || verdict.explanation || "Answer recorded.");
+        setAnsweredHistory((h) => {
+          const prior = h.find((c) => c.assertionId === answeredId);
+          return [
+            ...h.filter((c) => c.assertionId !== answeredId),
+            {
+              assertionId: answeredId,
+              stem: stemSnapshot,
+              options: optionsSnapshot,
+              selectedIndex: answeredSelection,
+              selectedIndices: multiSnapshot,
+              gradeState: {
+                correct: verdict.correct,
+                correctIndex: verdict.correct_index,
+                correctIndices: verdict.correct_indices,
+              },
+              feedback: verdict.feedback || verdict.explanation,
+              concept: conceptSnapshot,
+              firstTryCorrect: prior ? prior.firstTryCorrect : verdict.correct,
+            },
+          ];
+        });
+        // Queue for sync + advance the local pointer.
+        await enqueueGrade(offlinePack.id, {
+          assertionId: answeredId,
+          choiceIndex,
+          choiceIndices,
+          mode,
+        });
+        const answered = new Set(offlineAnsweredIds);
+        answered.add(answeredId);
+        setOfflineAnsweredIds(answered);
+        const nextId = nextAssertionId(offlineDeck, answered);
+        pendingNextAssertionIdRef.current = nextId;
+        setPendingNextAssertionId(nextId);
+        // On reconnect, drain the outbox through the real engines (best-effort).
+        if (navigator.onLine) void syncPack(offlinePack.id).catch(() => undefined);
+      }
+      setSubmitting(false);
+      return;
+    }
+
     // Verdict-first stream: the outcome (index compare + stored explanation) lands
     // in ~200ms and reveals immediately; the LLM coaching follows as a second event.
     let gotVerdict = false;

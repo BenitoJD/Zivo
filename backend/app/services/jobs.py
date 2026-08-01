@@ -300,3 +300,13 @@ def enqueue_mains_grade(db: Session, document_id: uuid.UUID) -> Job:
         workload=JobWorkload.io,
         payload={"document_id": str(document_id)},
     )
+
+
+def enqueue_offline_pack(db: Session, pack_id: uuid.UUID) -> Job:
+    """Build an offline study pack off the request path (ADR 0006)."""
+    return enqueue_job(
+        db,
+        name="offline.build_pack",
+        workload=JobWorkload.io,
+        payload={"pack_id": str(pack_id)},
+    )

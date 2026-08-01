@@ -56,6 +56,7 @@ import { triggerDownload } from "@/lib/export";
 import type { SourceDocument } from "@/lib/types";
 import { useStudyNav, type StudyMode } from "@/app/workspace/_components/studyNav";
 import { SourceCoverChip, SourceCoverHover } from "@/app/workspace/_components/SourceCoverPreview";
+import { PrepareOfflinePackButton } from "@/app/(shell)/workspace/_components/PrepareOfflinePack";
 
 /**
  * Mode navigator below sources when an artifact is open.
@@ -378,6 +379,7 @@ function SourceRow({
             <IconDownload size={15} stroke={1.7} />
           </span>
         </Tooltip>
+        <PrepareOfflinePackButton documentId={doc.id} />
         <Tooltip label="Delete source" position="right" withArrow openDelay={300}>
           <span
             role="button"

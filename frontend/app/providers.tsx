@@ -17,6 +17,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { createQueryClient } from "@/lib/api/query-client";
+import { OfflineModeProvider } from "@/lib/offline/mode";
 import {
   type MantineColorScheme,
   cookieColorSchemeManager,
@@ -761,7 +762,7 @@ export default function Providers({
         <ColorSchemeCookieSync />
         <LandingSchemeSync />
         <Notifications position="top-right" />
-        {children}
+        <OfflineModeProvider>{children}</OfflineModeProvider>
       </MantineProvider>
     </QueryClientProvider>
   );
