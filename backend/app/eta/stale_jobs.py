@@ -42,6 +42,15 @@ logger = logging.getLogger(__name__)
 STALE_RUNNING_TIMEOUT_SECONDS = float(os.getenv("ETA_STALE_RUNNING_TIMEOUT", "600"))
 STALE_REAPER_INTERVAL_SECONDS = float(os.getenv("ETA_STALE_REAPER_INTERVAL", "60"))
 
+# A ``queued`` job that has sat un-run this long is treated as stale by the
+# raw-SQL liveness check (ACTIVE_JOB_LIVENESS_SQL), so it no longer masks a
+# stuck document from recovery. Generous vs. any real queue backpressure; the
+# intent is only to catch jobs that will *never* run — a DAG child orphaned by
+# a cancelled parent, or a row enqueued for a dead worker pool. A legitimately
+# deferred job (future ``run_after``) is always considered live regardless of
+# age. ``attempts >= max_attempts`` queued rows are also stale here.
+STALE_QUEUED_TIMEOUT_SECONDS = float(os.getenv("ETA_STALE_QUEUED_TIMEOUT", "1800"))
+
 
 def stale_running_cutoff(now: datetime | None = None) -> datetime:
     """Legacy ``locked_at`` cutoff, retained for the document-recovery schedules
@@ -53,16 +62,36 @@ def stale_running_cutoff(now: datetime | None = None) -> datetime:
     return now - timedelta(seconds=STALE_RUNNING_TIMEOUT_SECONDS)
 
 
-# Raw-SQL mirror of the *inverse* of :func:`_orphaned_clause`: a ``running`` job
-# is "active" while its lease is still valid (``lease_deadline >= NOW()``), or —
-# for legacy rows with no lease — while ``locked_at`` is within the old cutoff.
+def stale_queued_cutoff(now: datetime | None = None) -> datetime:
+    """``created_at`` cutoff past which an un-run ``queued`` job is stale."""
+    now = now or datetime.now(timezone.utc)
+    return now - timedelta(seconds=STALE_QUEUED_TIMEOUT_SECONDS)
+
+
+# Raw-SQL mirror of the *inverse* of :func:`_orphaned_clause`. A job counts as
+# "active" (live work, do not treat its document as stranded) when:
+#   * ``queued`` AND recent enough to plausibly still be picked up — OR with a
+#     future ``run_after`` (a legitimately deferred job) — AND not already
+#     exhausted (``attempts < max_attempts``). The age bound closes the hole
+#     where a queued job that will *never* run (DAG child of a cancelled parent,
+#     row for a dead worker pool) masked a stuck document from recovery forever.
+#   * ``running`` with a valid lease (``lease_deadline >= NOW()``), or a legacy
+#     row within the old ``locked_at`` cutoff.
 # Used by the raw-SQL recovery paths (rag_window, ingest/newspaper recovery) so a
 # long, actively-heartbeating job is never mistaken for dead and re-enqueued as a
 # duplicate. Aliases the jobs table as ``j`` and binds ``:stale_cutoff`` (a
-# ``stale_running_cutoff()`` datetime).
+# ``stale_running_cutoff()`` datetime) and ``:queued_cutoff`` (a
+# ``stale_queued_cutoff()`` datetime).
 ACTIVE_JOB_LIVENESS_SQL = """
 (
-    j.status = 'queued'
+    (
+        j.status = 'queued'
+        AND j.attempts < j.max_attempts
+        AND (
+            j.run_after IS NOT NULL AND j.run_after >= NOW()
+            OR j.created_at >= :queued_cutoff
+        )
+    )
     OR (
         j.status = 'running'
         AND (

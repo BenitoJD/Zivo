@@ -862,3 +862,61 @@ def test_write_batch_lineage_links_same_concept_and_sequence() -> None:
     assert (a1, a2, follow) in kinds  # same-concept follow-up
     assert (a1, a2, harder) in kinds  # sequential harder_than
     assert (a2, a3, harder) in kinds
+
+
+def test_on_batch_failed_reticks_background_prep_cook() -> None:
+    """A failed batch must re-tick the cook chain for a background-prep doc.
+
+    Regression: the cook is a self-chaining loop driven by the *success* callback
+    (on_batch_completed → tick_background_cook). on_batch_failed did nothing, so a
+    single batch exhausting retries broke the chain and stranded the doc at its
+    last prep_progress ("Prepping X%" forever). It now re-ticks; the per-page
+    active-job guards in tick_background_cook keep it from looping on the failing
+    page.
+    """
+    from app.services.question_pool_jobs import on_batch_failed
+
+    doc_id = uuid.uuid4()
+    doc = MagicMock()
+    doc.id = doc_id
+    doc.meta = {
+        "prep_mode": "background",
+        "prep_complete": False,
+        "question_progress": {"current_page": 3, "generation_pending": True},
+    }
+    db = MagicMock()
+    db.get.return_value = doc
+
+    with (
+        patch("app.services.question_pool_jobs.get_progress", return_value={"current_page": 3}),
+        patch("app.services.question_pool_jobs.save_progress"),
+        patch("app.services.background_prep.is_background_prep", return_value=True),
+        patch("app.services.background_prep.tick_background_cook") as tick,
+    ):
+        on_batch_failed(db, doc_id, page=3)
+
+    tick.assert_called_once_with(db, doc_id)
+
+
+def test_on_batch_failed_no_retick_for_foreground_doc() -> None:
+    """Foreground (non-background-prep) docs are unaffected by the re-tick fix."""
+    from app.services.question_pool_jobs import on_batch_failed
+
+    doc_id = uuid.uuid4()
+    doc = MagicMock()
+    doc.id = doc_id
+    doc.meta = {
+        "question_progress": {"current_page": 3, "generation_pending": True},
+    }
+    db = MagicMock()
+    db.get.return_value = doc
+
+    with (
+        patch("app.services.question_pool_jobs.get_progress", return_value={"current_page": 3}),
+        patch("app.services.question_pool_jobs.save_progress"),
+        patch("app.services.background_prep.is_background_prep", return_value=False),
+        patch("app.services.background_prep.tick_background_cook") as tick,
+    ):
+        on_batch_failed(db, doc_id, page=3)
+
+    tick.assert_not_called()

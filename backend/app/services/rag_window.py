@@ -11,7 +11,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.models import Document, JobWorkload
-from app.eta.stale_jobs import ACTIVE_JOB_LIVENESS_SQL, stale_running_cutoff
+from app.eta.stale_jobs import (
+    ACTIVE_JOB_LIVENESS_SQL,
+    stale_queued_cutoff,
+    stale_running_cutoff,
+)
 from app.services.chunks import indexed_pages_for_document
 from app.services.question_pool import get_progress, selected_page_list
 from app.services.tutor_retrieval import MAX_RAG_PAGES, plan_rag_window
@@ -80,6 +84,7 @@ def has_active_ingest_jobs(db: Session, document_id: uuid.UUID) -> bool:
             "document_id": str(document_id),
             "names": list(_INGEST_JOB_NAMES),
             "stale_cutoff": stale_running_cutoff(),
+            "queued_cutoff": stale_queued_cutoff(),
         },
     ).first()
     return row is not None

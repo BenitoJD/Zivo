@@ -9,7 +9,11 @@ from sqlalchemy import text
 
 from app.db import SessionLocal
 from app.eta.scheduler_registry import eta_scheduler
-from app.eta.stale_jobs import ACTIVE_JOB_LIVENESS_SQL, stale_running_cutoff
+from app.eta.stale_jobs import (
+    ACTIVE_JOB_LIVENESS_SQL,
+    stale_queued_cutoff,
+    stale_running_cutoff,
+)
 from app.models import Document, JobWorkload
 from app.services.jobs import enqueue_job, enqueue_rag_window
 from app.services.newspaper import purge_expired_editions
@@ -53,7 +57,11 @@ def _recover_stuck_editions() -> int:
                 ORDER BY e.edition_date DESC
                 """
             ),
-            {"cutoff": cutoff, "stale_cutoff": stale_running_cutoff()},
+            {
+                "cutoff": cutoff,
+                "stale_cutoff": stale_running_cutoff(),
+                "queued_cutoff": stale_queued_cutoff(),
+            },
         ).mappings().all()
 
         for row in stuck:
@@ -131,7 +139,11 @@ def _recover_editions_doc_ready_uncooked() -> int:
                 LIMIT 10
                 """
             ),
-            {"cutoff": cutoff, "stale_cutoff": stale_running_cutoff()},
+            {
+                "cutoff": cutoff,
+                "stale_cutoff": stale_running_cutoff(),
+                "queued_cutoff": stale_queued_cutoff(),
+            },
         ).mappings().all()
 
         for row in stuck:

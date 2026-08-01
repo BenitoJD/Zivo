@@ -645,6 +645,25 @@ def on_batch_failed(db: Session, document_id: uuid.UUID, *, page: int) -> None:
         save_progress(db, doc, {"generation_pending": False})
         db.commit()
 
+    # Background-prep docs cook via a self-chaining loop: each batch's *success*
+    # calls tick_background_cook to enqueue the next. A failure with no re-tick
+    # broke that chain — the failing page's job exhausted retries, no successor
+    # was ever enqueued, and the doc froze at its last prep_progress forever
+    # (the sidebar then renders "Prepping X%" indefinitely).
+    #
+    # Re-tick so the cook advances to the next page needing work. This does NOT
+    # loop on the failing page: tick_background_cook's _next_page_needing_cook
+    # and _has_active_generate_job_for_page guards skip pages already in flight
+    # or past their budget, so a repeatedly-failing page is skipped after its
+    # own retries are exhausted — not retried forever here.
+    from app.services.background_prep import is_background_prep, tick_background_cook
+
+    if is_background_prep(doc):
+        try:
+            tick_background_cook(db, document_id)
+        except Exception:
+            logger.exception("background cook re-tick failed after batch failure doc=%s page=%s", document_id, page)
+
 
 def mark_aspect_asked(db: Session, document_id: uuid.UUID, page: int, aspect_key: str) -> None:
     mark_aspects_asked(db, document_id, page, [aspect_key])

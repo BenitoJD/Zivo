@@ -9,7 +9,11 @@ from sqlalchemy import text
 
 from app.db import SessionLocal
 from app.eta.scheduler_registry import eta_scheduler
-from app.eta.stale_jobs import ACTIVE_JOB_LIVENESS_SQL, stale_running_cutoff
+from app.eta.stale_jobs import (
+    ACTIVE_JOB_LIVENESS_SQL,
+    stale_queued_cutoff,
+    stale_running_cutoff,
+)
 from app.models import Document
 from app.services.rag_window import maybe_recover_stuck_indexing
 
@@ -45,7 +49,11 @@ def _recover_stuck_indexing_documents() -> int:
                 LIMIT 50
                 """
             ),
-            {"cutoff": cutoff, "stale_cutoff": stale_running_cutoff()},
+            {
+                "cutoff": cutoff,
+                "stale_cutoff": stale_running_cutoff(),
+                "queued_cutoff": stale_queued_cutoff(),
+            },
         ).scalars().all()
         for doc_id in doc_ids:
             doc = db.get(Document, doc_id)
@@ -107,6 +115,7 @@ def _recover_stuck_prepping_documents() -> int:
             {
                 "cutoff": cutoff,
                 "stale_cutoff": stale_running_cutoff(),
+                "queued_cutoff": stale_queued_cutoff(),
                 # Ingest-stage + cook-stage names: a cook in flight keeps the
                 # doc out of recovery so we never enqueue a duplicate batch.
                 # Note: triage batches are enqueued as generate.questions with

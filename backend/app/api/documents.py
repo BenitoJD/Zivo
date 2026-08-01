@@ -98,27 +98,70 @@ def list_documents(
     guest_id: str | None = Depends(optional_guest_session),
 ) -> list[Document]:
     if user:
-        return (
+        docs = (
             db.query(Document)
             .filter(Document.account_id == user.id)
             .order_by(Document.created_at.desc())
             .limit(_LIST_DOCUMENTS_LIMIT)
             .all()
         )
-
-    # No user → guest scope. A real check (not `assert`, which -O strips): without a
-    # guest id there are no guest documents — and we must never fall through to an
-    # unfiltered query that could surface another anonymous user's documents.
-    if guest_id is None:
+    elif guest_id is None:
+        # No user → guest scope. A real check (not `assert`, which -O strips):
+        # without a guest id there are no guest documents — and we must never
+        # fall through to an unfiltered query that could surface another
+        # anonymous user's documents.
         return []
-    return (
-        db.query(Document)
-        .filter(Document.account_id.is_(None))
-        .filter(Document.meta["guest_id"].astext == guest_id)
-        .order_by(Document.created_at.desc())
-        .limit(_LIST_DOCUMENTS_LIMIT)
-        .all()
+    else:
+        docs = (
+            db.query(Document)
+            .filter(Document.account_id.is_(None))
+            .filter(Document.meta["guest_id"].astext == guest_id)
+            .order_by(Document.created_at.desc())
+            .limit(_LIST_DOCUMENTS_LIMIT)
+            .all()
+        )
+
+    # The sidebar polls this endpoint, so it must self-heal like the per-artifact
+    # GET does. Background-prep docs whose cook chain died would otherwise sit at
+    # a stale "Prepping X%" forever here: list_documents never ran recovery or
+    # recomputed progress, so the sidebar showed the last-persisted index_progress
+    # even after the detail view had moved on. Recover + recompute for any doc
+    # still in background prep; everything else passes through untouched.
+    return [_refresh_prep_state(db, doc) for doc in docs]
+
+
+def _refresh_prep_state(db: Session, doc: Document) -> Document:
+    """Recover a stranded background-prep doc and recompute its prep progress.
+
+    Cheap for the common case (ready/failed docs short-circuit on
+    ``is_background_prep``). Only docs still cooking hit the recovery + compute
+    path — the same work the detail view already does on open.
+    """
+    from app.services.background_prep import (
+        compute_prep_progress,
+        is_background_prep,
+        maybe_recover_stuck_background_prep,
     )
+    from app.services.rag_window import maybe_recover_stuck_indexing
+
+    try:
+        maybe_recover_stuck_indexing(db, doc)
+        maybe_recover_stuck_background_prep(db, doc)
+        if is_background_prep(doc):
+            db.refresh(doc)
+            progress = compute_prep_progress(db, doc)
+            doc.index_progress = int(progress["overall_pct"])
+            meta = dict(doc.meta or {})
+            meta["prep_progress"] = progress
+            doc.meta = meta
+            db.add(doc)
+            db.commit()
+            db.refresh(doc)
+    except Exception:
+        # Never let a healing failure on one doc break the whole list — the
+        # scheduler and per-artifact GET remain the authoritative backstops.
+        logger.exception("prep state refresh failed for document %s", doc.id)
+    return doc
 
 
 @router.get("/{document_id}", response_model=DocumentOut)
