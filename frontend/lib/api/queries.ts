@@ -1206,7 +1206,7 @@ export function useAssertionQuery(assertionId: string | null | undefined) {
  *  share "general". Mirrors `_CHAT_SURFACES` in backend/app/api/chat.py — a mode
  *  added to one and not the other silently merges into "general". */
 export function chatSurfaceForMode(mode: string): string {
-  return mode === "read" || mode === "learn" || mode === "test" || mode === "brainstorm"
+  return mode === "read" || mode === "learn" || mode === "test" || mode === "brainstorm" || mode === "socratic"
     ? mode
     : "general";
 }

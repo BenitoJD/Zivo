@@ -30,6 +30,10 @@ from app.services.llm_pool import (
 )
 from app.services.llm_prompt_cache import apply_prompt_cache
 from app.services.llm_registry import ResolvedLlmModel
+from app.services.llm_router_pool import (
+    build_router,
+    router_enabled,
+)
 from app.services.token_budget import (
     CHAT_OUTPUT_MAX_TOKENS,
     OUTPUT_MAX_TOKENS_BATCH,
@@ -380,6 +384,27 @@ async def acomplete_chat(
     attempts = _model_attempts(
         db, model_id=model_id, require_vision=require_vision, log_tag=log_tag
     )
+
+    # Router-backed path: the DB-default model first, automatic failover +
+    # per-model cooldown on rate limits/timeouts, then return to the default
+    # after the cooldown. Only used when no explicit model is pinned and the
+    # router is enabled — pinned models keep the deterministic manual path.
+    if model_id is None and router_enabled():
+        try:
+            return await _router_complete(
+                attempts,
+                messages=messages,
+                db=db,
+                log_tag=log_tag,
+                account_id=account_id,
+                document_id=document_id,
+                strip_output=strip_output,
+            )
+        except Exception as exc:
+            # Router raised (all models cooled down / hard error): fall back to
+            # the manual loop below so a router hiccup never loses a call.
+            logger.warning("router completion failed; falling back to manual loop: %s", exc)
+
     for resolved in attempts:
         provider_kwargs = _apply_model(resolved, log_tag=log_tag)
         cached_messages = _prepare_messages(messages, resolved)
@@ -419,6 +444,69 @@ async def acomplete_chat(
     if last_exc is not None:
         raise last_exc
     raise RuntimeError("complete_chat exhausted model pool without result")
+
+
+# --- Router-backed completion (cooldown + automatic failover) -----------------
+
+_router_cache: dict[str, object] = {}
+_router_lock = asyncio.Lock()
+
+
+def _router_for_attempts(attempts: list[ResolvedLlmModel]):
+    """Return a cached Router for the given pool, rebuilding when the pool changes.
+
+    Keyed by the ordered litellm model ids — when the admin toggles a model or
+    the env bootstrap changes the default, the next call rebuilds the router.
+    """
+    key = "|".join(m.litellm_model for m in attempts)
+    cached = _router_cache.get(key)
+    if cached is not None:
+        return cached
+    router = build_router(attempts)
+    _router_cache[key] = router
+    return router
+
+
+async def _router_complete(
+    attempts: list[ResolvedLlmModel],
+    *,
+    messages: list[dict],
+    db: Session | None,
+    log_tag: str,
+    account_id: uuid.UUID | None,
+    document_id: uuid.UUID | None,
+    strip_output: bool,
+) -> str:
+    """One completion through the litellm Router: default model first, automatic
+    failover on rate limits/timeouts, per-model cooldown, then return to the
+    default once the cooldown expires."""
+    if not attempts:
+        raise RuntimeError("no chat models in pool")
+    router = _router_for_attempts(attempts)
+    provider_kwargs = _apply_model(attempts[0], log_tag=log_tag)
+    started = time.perf_counter()
+    response = await asyncio.wait_for(
+        router.acompletion(
+            model=attempts[0].litellm_model,
+            messages=messages,
+            stream=False,
+            **provider_kwargs,
+        ),
+        timeout=_request_timeout_for(log_tag) + 30,
+    )
+    # Router may have failed over internally; log the model actually used.
+    used_model = str(getattr(response, "model", None) or attempts[0].litellm_model)
+    _log_usage(
+        log_tag,
+        used_model,
+        getattr(response, "usage", None),
+        started,
+        db=db,
+        account_id=account_id,
+        document_id=document_id,
+    )
+    content = response.choices[0].message.content or ""
+    return strip_dashes(content) if strip_output else content
 
 
 async def complete_chat(

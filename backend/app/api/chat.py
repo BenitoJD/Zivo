@@ -279,7 +279,7 @@ def _artifact_ref(doc: Document) -> tuple[uuid.UUID, datetime]:
     return doc.artifact_id or doc.id, doc.artifact_captured_at or doc.created_at
 
 
-_CHAT_SURFACES = {"read", "learn", "test", "brainstorm"}
+_CHAT_SURFACES = {"read", "learn", "test", "brainstorm", "socratic"}
 
 
 def _chat_surface(mode: str | None) -> str:
@@ -505,12 +505,15 @@ async def chat_stream(
                 mode = str(request_scope.get("mode") or "").lower()
                 read_mode = mode == "read"
                 brainstorm_mode = mode == "brainstorm"
+                socratic_mode = mode == "socratic"
                 scope["mode"] = "read" if read_mode else (request_scope.get("mode") or None)
                 # Read-mode chat is about the document, not the Learn loop — keep its
                 # page/question signal out of the scope entirely. Brainstorm is the
                 # same: it ranges over the whole source, so pinning it to the Learn
                 # queue's current question would collapse it back into tutoring.
-                if not read_mode and not brainstorm_mode:
+                # Socratic is a dialogue about the same material — no Learn pinning,
+                # so the questions follow the learner's answers, not the queue.
+                if not read_mode and not brainstorm_mode and not socratic_mode:
                     scope.update(
                         learn_scope_fields(
                             stream_db,
@@ -563,7 +566,7 @@ async def chat_stream(
                             )
 
                     def _learn_context_for_chat() -> str | None:
-                        if brainstorm_mode:
+                        if brainstorm_mode or socratic_mode:
                             return None
                         with SessionLocal() as learn_db:
                             learn_doc = learn_db.get(Document, document_id)
@@ -591,7 +594,10 @@ async def chat_stream(
                 # Per-surface system prompt. Still byte-stable *within* a surface, so
                 # prefix caching keeps hitting; brainstorm just gets a different prefix.
                 system = get_prompt(
-                    stream_db, "brainstorm_system" if brainstorm_mode else "tutor_system"
+                    stream_db,
+                    "socratic_system"
+                    if socratic_mode
+                    else ("brainstorm_system" if brainstorm_mode else "tutor_system"),
                 )
                 messages = [{"role": "system", "content": system}]
                 # Wikipedia / dictionary lookups carry their own reference text. Prior
