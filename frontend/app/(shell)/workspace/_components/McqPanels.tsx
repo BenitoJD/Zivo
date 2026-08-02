@@ -28,6 +28,7 @@ import {
   IconClipboardList,
   IconFlag,
   IconHistory,
+  IconTarget,
   IconX,
 } from "@tabler/icons-react";
 import { GenerationStages } from "@/app/workspace/_components/GenerationStages";
@@ -193,6 +194,8 @@ export function McqHeroPanel({
   isNewspaper = false,
   confidence = null,
   onConfidenceChange,
+  focusConcept,
+  onFocusConcept,
 }: {
   stem: string;
   options: string[];
@@ -227,6 +230,9 @@ export function McqHeroPanel({
   /** Calibration: learner's stated confidence before reveal (Learn only). */
   confidence?: number | null;
   onConfidenceChange?: (value: number) => void;
+  /** Gap→focus: current question's concept label (Learn, after a miss). */
+  focusConcept?: string | null;
+  onFocusConcept?: (concept: string) => void;
 }) {
   const isDark = useIsDark();
   const displayStem = formatMcqStemForDisplay(stem);
@@ -900,6 +906,20 @@ export function McqHeroPanel({
             compact={compact}
             isDark={isDark}
           />
+          {mode === "learn" && !gradeState?.correct && focusConcept && onFocusConcept ? (
+            <Group justify="center" mt={6}>
+              <Button
+                variant="light"
+                color="lavender"
+                radius="xl"
+                size="compact-sm"
+                leftSection={<IconTarget size={14} stroke={2} />}
+                onClick={() => onFocusConcept(focusConcept)}
+              >
+                Focus on “{focusConcept}”
+              </Button>
+            </Group>
+          ) : null}
           <Text fz="xs" c="dimmed" ta="center" mt={compact ? 6 : 8} fw={500}>
             Click anywhere, or press Enter, to continue →
           </Text>

@@ -22,6 +22,7 @@ import { IconArrowLeft, IconFileText, IconMessageCircle, IconNotebook } from "@t
 import { useQueryClient } from "@tanstack/react-query";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { apiFetchBytes, apiGet, apiPost, apiPostSSE, apiUrl, ensureGuestSession, isArtifactId } from "@/lib/api/client";
+import { notifications } from "@mantine/notifications";
 import {
   queryKeys,
   useArtifactPagesQuery,
@@ -1894,6 +1895,23 @@ export default function WorkspaceArtifactPage({
             gradeState={gradeState}
             confidence={confidence}
             onConfidenceChange={setConfidence}
+            focusConcept={mode === "learn" ? currentConcept : null}
+            onFocusConcept={
+              mode === "learn" && currentConcept
+                ? (concept) => {
+                    void apiPost(`/api/artifacts/${artifactId}/focus-concept`, { concept }).then(
+                      () => {
+                        void refreshQueue();
+                        notifications.show({
+                          title: "Focus set",
+                          message: `Questions on “${concept}” will come up first.`,
+                          color: "lavender",
+                        });
+                      },
+                    );
+                  }
+                : undefined
+            }
             submitting={submitting}
             compact={isNarrow}
             canReview={gradeState ? reviewableCount >= 2 : reviewableCount >= 1}

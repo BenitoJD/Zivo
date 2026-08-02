@@ -327,6 +327,22 @@ def build_learn_chat_context(
     else:
         lines.append(f"- On page {page}; no active question right now.")
 
+    # Weak-concept signal: the tutor sees which concepts the learner has missed
+    # most (calibrated ability) so it can weave those into hints and Socratic
+    # questions instead of re-teaching what's already strong.
+    concept_ability = progress.get("concept_ability") or {}
+    if isinstance(concept_ability, dict) and concept_ability:
+        weak = sorted(
+            ((str(k), float(v)) for k, v in concept_ability.items() if v is not None),
+            key=lambda kv: kv[1],
+        )[:3]
+        if weak:
+            weak_txt = "; ".join(f"{k} ({v:.2f})" for k, v in weak)
+            lines.append(
+                f"- Learner's weakest concepts so far (lowest calibrated ability): {weak_txt}. "
+                "When teaching, prefer these concepts."
+            )
+
     return "\n".join(lines)
 
 
