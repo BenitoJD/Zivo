@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
@@ -402,6 +403,77 @@ def clear_thread(
     db.add(thread)
     db.commit()
     return {"version": new_version}
+
+
+class PersistChatMcqsIn(BaseModel):
+    """One or more ``zv-mcq`` blocks the assistant produced in chat."""
+
+    questions: list[dict[str, Any]]
+    page_number: int = 1
+    surface: str | None = None
+
+
+@router.post("/mcqs/persist", dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)])
+def persist_chat_mcqs(
+    body: PersistChatMcqsIn,
+    document_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(guest_session_for_read),
+) -> dict[str, int]:
+    """Persist chat-produced MCQs into the Learn pool for a document.
+
+    Called from the tutor UI's "Add these to Learn" action: the assistant emits
+    ``zv-mcq`` blocks when asked for practice questions; the frontend parses them
+    and posts them here. Reuses the generation pipeline's ``_persist_assertion``
+    (facet, concepts, birth difficulty) so the questions behave exactly like
+    cooked ones — they surface in the Learn queue and feed the engines.
+    """
+    require_document(db, document_id, user, guest_id)  # access check + 404
+    questions = [q for q in (body.questions or []) if isinstance(q, dict) and str(q.get("question") or "").strip()]
+    if not questions:
+        raise HTTPException(status_code=422, detail="No valid questions provided")
+    if len(questions) > 10:
+        raise HTTPException(status_code=422, detail="At most 10 questions per request")
+
+    from app.graphs.generation_graph import _persist_assertion
+
+    page = max(1, int(body.page_number or 1))
+    # Next 1-based sequence for this page's MCQ facet (mirrors the cook path).
+    seq_row = db.execute(
+        text(
+            """
+            SELECT COALESCE(MAX(sequence), 0) + 1
+            FROM qb.mcq_assertion_facets
+            WHERE artifact_id = :aid AND page_number = :page
+            """
+        ),
+        {"aid": document_id, "page": page},
+    ).scalar()
+    sequence = int(seq_row or 1)
+    persisted = 0
+    for q in questions:
+        options = [str(o).strip() for o in (q.get("options") or []) if str(o).strip()]
+        correct = q.get("correct_index")
+        if len(options) < 2 or not isinstance(correct, int) or not (0 <= correct < len(options)):
+            continue
+        _persist_assertion(
+            db,
+            document_id,
+            {
+                "question": str(q["question"]).strip(),
+                "options": options,
+                "correct_index": correct,
+                "explanation": str(q.get("explanation") or "").strip(),
+            },
+            page_number=page,
+            sequence=sequence,
+            serve_mode="learn",
+        )
+        sequence += 1
+        persisted += 1
+    db.commit()
+    return {"persisted": persisted}
 
 
 def _prepare_chat_stream(

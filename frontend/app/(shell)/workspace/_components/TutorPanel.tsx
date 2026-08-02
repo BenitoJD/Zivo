@@ -30,6 +30,7 @@ import { BrandMark } from "@/app/_components/BrandMark";
 import { AssistantMarkdown, MessageCopyAction } from "@/lib/chatMarkdown";
 import { splitAngles } from "@/lib/angles";
 import { useIsDark } from "@/lib/useIsDark";
+import { parseChatMcqs, type ChatMcq } from "@/lib/chatMcqs";
 import type { ChatCitation } from "@/app/(shell)/workspace/_components/useTutorChat";
 
 /**
@@ -60,6 +61,10 @@ export function TutorPanel({
   showHeader = false,
   onExploreAngle,
   onKeepAngle,
+  onAddMcqs,
+  mcqPersistBusy = false,
+  mcqPersistDone = null,
+  mcqPersistError = null,
 }: {
   messages: { role: string; content: string }[];
   input: string;
@@ -84,6 +89,11 @@ export function TutorPanel({
   onExploreAngle?: (angle: string) => void;
   /** Brainstorm only: keep an angle on the idea board. */
   onKeepAngle?: (angle: string) => void;
+  /** "Add to Learn": persist chat MCQs (zv-mcq blocks) into the pool. */
+  onAddMcqs?: (mcqs: ChatMcq[]) => void;
+  mcqPersistBusy?: boolean;
+  mcqPersistDone?: number | null;
+  mcqPersistError?: string | null;
 }) {
   const isDark = useIsDark();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -233,6 +243,10 @@ export function TutorPanel({
                     }
                     onExploreAngle={onExploreAngle}
                     onKeepAngle={onKeepAngle}
+                    onAddMcqs={onAddMcqs}
+                    mcqPersistBusy={mcqPersistBusy}
+                    mcqPersistDone={mcqPersistDone}
+                    mcqPersistError={mcqPersistError}
                   />
                 ))}
               </Stack>
@@ -388,6 +402,7 @@ const CHAT_SUGGESTIONS = [
   "Explain this question in simple terms",
   "What concept is being tested here?",
   "Give me a hint without the answer",
+  "Turn this into 3 MCQs",
 ];
 
 // Reading-oriented prompts for Read / Study-Buddy mode (no question on screen).
@@ -513,6 +528,10 @@ function ChatMessage({
   onSaveNote,
   onExploreAngle,
   onKeepAngle,
+  onAddMcqs,
+  mcqPersistBusy = false,
+  mcqPersistDone = null,
+  mcqPersistError = null,
 }: {
   message: { role: string; content: string; citations?: ChatCitation[] | null };
   isUser: boolean;
@@ -525,6 +544,11 @@ function ChatMessage({
   onSaveNote?: () => void;
   onExploreAngle?: (angle: string) => void;
   onKeepAngle?: (angle: string) => void;
+  /** "Add to Learn": persist chat MCQs (zv-mcq blocks) into the pool. */
+  onAddMcqs?: (mcqs: ChatMcq[]) => void;
+  mcqPersistBusy?: boolean;
+  mcqPersistDone?: number | null;
+  mcqPersistError?: string | null;
 }) {
   const { hovered, ref } = useHover();
   const actionsEnabled =
@@ -532,6 +556,7 @@ function ChatMessage({
   // The last assistant reply keeps its actions visible (ChatGPT-style); others
   // reveal on hover.
   const showActions = (hovered || canRegenerate) && actionsEnabled;
+  const mcqs = message.role === "assistant" ? parseChatMcqs(message.content) : [];
 
   if (isUser) {
     return (
@@ -679,6 +704,28 @@ function ChatMessage({
             </ChatIconAction>
           )}
         </MessageActionRail>
+        {!streaming && onAddMcqs && mcqs.length > 0 && (
+          <Group gap={6} mt={8}>
+            <Button
+              variant="light"
+              color="lavender"
+              radius="xl"
+              size="compact-sm"
+              loading={mcqPersistBusy}
+              leftSection={<IconPlus size={14} stroke={2} />}
+              onClick={() => onAddMcqs(mcqs)}
+            >
+              {mcqPersistDone != null
+                ? `Added ${mcqPersistDone} to Learn`
+                : `Add ${mcqs.length} to Learn`}
+            </Button>
+            {mcqPersistError ? (
+              <Text size="xs" c="terracotta">
+                {mcqPersistError}
+              </Text>
+            ) : null}
+          </Group>
+        )}
       </Box>
     </Group>
   );

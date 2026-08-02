@@ -346,6 +346,31 @@ export function useTutorChat({
     chatAbortRef.current?.abort();
   }
 
+  // "Add to Learn": persist chat-produced MCQs (zv-mcq blocks) into the pool.
+  const [mcqPersistState, setMcqPersistState] = useState<
+    { busy: boolean; done: number | null; error: string | null }
+  >({ busy: false, done: null, error: null });
+
+  async function addChatMcqsToLearn(questions: { question: string; options: string[]; correct_index: number; explanation?: string }[]) {
+    if (!questions.length || mcqPersistState.busy) return;
+    setMcqPersistState({ busy: true, done: null, error: null });
+    try {
+      await ensureGuestSession();
+      const res = await apiPost<{ persisted: number }>(`/api/chat/mcqs/persist?document_id=${artifactId}`, {
+        questions,
+        page_number: 1,
+        surface: chatSurface,
+      });
+      setMcqPersistState({ busy: false, done: res.persisted, error: null });
+    } catch (e) {
+      setMcqPersistState({
+        busy: false,
+        done: null,
+        error: e instanceof Error ? e.message : "Could not add questions",
+      });
+    }
+  }
+
   return {
     chatInput,
     setChatInput,
@@ -361,5 +386,7 @@ export function useTutorChat({
     regenerateChat,
     editChatFromUser,
     stopChat,
+    addChatMcqsToLearn,
+    mcqPersistState,
   };
 }

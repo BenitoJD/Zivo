@@ -312,6 +312,8 @@ export default function WorkspaceArtifactPage({
     regenerateChat,
     editChatFromUser,
     stopChat,
+    addChatMcqsToLearn,
+    mcqPersistState,
   } = useTutorChat({
     artifactId,
     mode,
@@ -374,6 +376,12 @@ export default function WorkspaceArtifactPage({
   // reply ends with become chips you can explore (send as the next turn) or keep (pin
   // to the idea board). Spread into every TutorPanel so desktop and mobile match.
   const brainstormActions = useBrainstormActions(artifactId);
+  const chatMcqProps = {
+    onAddMcqs: addChatMcqsToLearn,
+    mcqPersistBusy: mcqPersistState.busy,
+    mcqPersistDone: mcqPersistState.done,
+    mcqPersistError: mcqPersistState.error,
+  };
   const brainstormChatProps =
     mode === "brainstorm"
       ? {
@@ -382,8 +390,9 @@ export default function WorkspaceArtifactPage({
             "Think out loud about this source. Every reply ends with three angles you could pull.",
           onExploreAngle: (angle: string) => askBuddy(angle),
           onKeepAngle: (angle: string) => void brainstormActions.keep(angle),
+          ...chatMcqProps,
         }
-      : {};
+      : { ...chatMcqProps };
 
   const selectedRange = useMemo(() => {
     if (artifact?.meta?.selected_range) return artifact.meta.selected_range;
@@ -2058,6 +2067,7 @@ export default function WorkspaceArtifactPage({
               suggestions={READ_CHAT_SUGGESTIONS}
               emptyHint="Read on the left. Highlight anything to ask about it, or start here:"
               showHeader
+              {...chatMcqProps}
             />
           </Box>
         </Box>
