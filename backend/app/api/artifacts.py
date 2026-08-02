@@ -142,7 +142,31 @@ def confirm_page_range(
             raise HTTPException(status_code=400, detail="Page range exceeds document")
         selected = {"from": body.from_page, "to": body.to_page}
     reset_for_new_page_range(db, doc, selected)
-    apply_prep_meta(db, doc, prep_mode=body.prep_mode)
+    # A doc that was already background-prepped to ready (partial pool) must not
+    # be reset to a fresh foreground index when the learner confirms pages —
+    # reset_for_new_page_range wipes prep_complete/pool state, and the 496-page
+    # seduction PDF got re-indexed from zero after promotion. Keep the cooked
+    # state; only the page-range selection changes.
+    from app.services.background_prep import is_background_prep
+
+    already_cooked = (
+        doc.status == "ready"
+        and bool((doc.meta or {}).get("prep_complete"))
+        and not is_background_prep(doc)
+    )
+    if already_cooked:
+        # Restore the cooked flags that reset_for_new_page_range cleared.
+        meta = dict(doc.meta or {})
+        meta["prep_complete"] = True
+        meta["prep_phase"] = "complete"
+        meta["prep_mode"] = "background"
+        doc.meta = meta
+        from sqlalchemy.orm.attributes import flag_modified as _flag
+
+        _flag(doc, "meta")
+        doc.index_progress = 100
+    else:
+        apply_prep_meta(db, doc, prep_mode=body.prep_mode)
     # Drop legacy Settings override so triage/heuristic owns the page budget.
     if "preferred_question_budget" in (doc.meta or {}):
         meta = dict(doc.meta or {})
@@ -156,6 +180,22 @@ def confirm_page_range(
     )
     page_from = int(study_pages[0]) if study_pages else int(selected["from"])
     captured = doc.artifact_captured_at or doc.created_at
+    # A cooked doc (ready partial pool) keeps its status — do not re-enqueue a
+    # fresh index/ingest, which would re-run the whole pipeline from zero.
+    if already_cooked:
+        workspace_repo.upsert_workspace(
+            db,
+            account_id=user.id if user else None,
+            artifact_id=doc.id,
+            artifact_captured_at=captured,
+            status="ready",
+            page_count=page_count,
+            selected_range=selected,
+        )
+        doc.status = "ready"
+        db.commit()
+        return {"document_id": str(doc.id), "page_from": page_from, "status": "ready"}
+
     workspace_status = "prepping" if body.prep_mode == PREP_MODE_BACKGROUND else "indexing"
     workspace_repo.upsert_workspace(
         db,
