@@ -11,6 +11,7 @@ import {
   Menu,
   Paper,
   Progress,
+  SegmentedControl,
   Stack,
   Text,
   ThemeIcon,
@@ -190,6 +191,8 @@ export function McqHeroPanel({
   flagBusy = false,
   flagged = false,
   isNewspaper = false,
+  confidence = null,
+  onConfidenceChange,
 }: {
   stem: string;
   options: string[];
@@ -221,6 +224,9 @@ export function McqHeroPanel({
   flagged?: boolean;
   /** Pre-cooked newspaper — no upload-style generation stages. */
   isNewspaper?: boolean;
+  /** Calibration: learner's stated confidence before reveal (Learn only). */
+  confidence?: number | null;
+  onConfidenceChange?: (value: number) => void;
 }) {
   const isDark = useIsDark();
   const displayStem = formatMcqStemForDisplay(stem);
@@ -982,6 +988,24 @@ export function McqHeroPanel({
       </ScrollHintArea>
 
       <Stack align="center" gap={8} pt={compact ? "sm" : "md"} style={{ flexShrink: 0 }}>
+        {!graded && hasSelection && mode === "learn" && onConfidenceChange && !checking ? (
+          <Stack gap={4} align="center" style={{ width: "100%", maxWidth: 340 }}>
+            <Text size="xs" c="dimmed" fw={500} tt="uppercase" style={{ letterSpacing: "0.05em" }}>
+              How sure are you?
+            </Text>
+            <SegmentedControl
+              size="xs"
+              radius="xl"
+              value={confidence == null ? "1" : String(confidence)}
+              onChange={(v) => onConfidenceChange(Number(v))}
+              data={[
+                { label: "Guess", value: "0" },
+                { label: "Unsure", value: "1" },
+                { label: "Confident", value: "2" },
+              ]}
+            />
+          </Stack>
+        ) : null}
         {showNextQuestion ? (
           <Button
             radius="xl"

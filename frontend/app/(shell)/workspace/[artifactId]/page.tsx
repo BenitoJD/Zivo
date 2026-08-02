@@ -188,6 +188,9 @@ export default function WorkspaceArtifactPage({
   const [currentConcept, setCurrentConcept] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [gradeState, setGradeState] = useState<{ correct: boolean; correctIndex: number; correctIndices?: number[] } | null>(null);
+  // Calibration signal: learner's stated confidence (0=guess, 1=unsure, 2=confident)
+  // before reveal. Sent with the grade; reset when the next question loads.
+  const [confidence, setConfidence] = useState<number | null>(null);
   // Pin the graded card until Continue — SSE learn-queue advances current_assertion_id
   // as soon as the answer is recorded, which would otherwise wipe feedback mid-coach.
   const [pinnedAssertionId, setPinnedAssertionId] = useState<string | null>(null);
@@ -871,6 +874,7 @@ export default function WorkspaceArtifactPage({
       setMultiSelected([]);
       setGradeState(null);
       setFeedback(null);
+      setConfidence(null);
       return;
     }
     if (pinnedAssertionIdRef.current) return;
@@ -878,6 +882,7 @@ export default function WorkspaceArtifactPage({
     setSelected(null);
     setGradeState(null);
     setFeedback(null);
+    setConfidence(null);
   }, [invalidArtifactId, queue?.current_assertion_id]);
 
   useEffect(() => {
@@ -1119,6 +1124,7 @@ export default function WorkspaceArtifactPage({
           choice_index: isMulti ? (multiSelected[0] ?? -1) : Number(selected),
           ...(isMulti ? { choice_indices: multiSelected } : {}),
           mode,
+          ...(mode === "learn" && confidence != null ? { confidence } : {}),
         },
         {
           onEvent: (event, data) => {
@@ -1877,6 +1883,8 @@ export default function WorkspaceArtifactPage({
             queue={queue}
             mode={mode as "learn" | "test"}
             gradeState={gradeState}
+            confidence={confidence}
+            onConfidenceChange={setConfidence}
             submitting={submitting}
             compact={isNarrow}
             canReview={gradeState ? reviewableCount >= 2 : reviewableCount >= 1}
