@@ -549,7 +549,7 @@ export function Sidebar({
           flex-direction: column;
           gap: 2px;
           text-align: left;
-          padding-right: 62px;
+          padding-right: 136px;
         }
         .zivo-source-row[data-active] .zivo-source-title { color: var(--mantine-color-lavender-8); }
         [data-mantine-color-scheme="dark"] .zivo-source-row[data-active] .zivo-source-title {
@@ -577,7 +577,7 @@ export function Sidebar({
           transform: translateY(-50%);
           display: flex;
           align-items: center;
-          gap: 4px;
+          gap: 6px;
           opacity: 0;
           visibility: hidden;
           pointer-events: none;
@@ -614,6 +614,21 @@ export function Sidebar({
         }
         .zivo-source-action:hover { background: var(--mantine-color-lavender-1); color: var(--mantine-color-lavender-7); }
         .zivo-source-action-del:hover { background: var(--mantine-color-terracotta-0); color: var(--mantine-color-terracotta-6); }
+        .zivo-source-action[data-audio="building"] {
+          background: var(--mantine-color-lavender-0);
+          color: var(--mantine-color-lavender-7);
+          box-shadow: 0 0 0 1px var(--mantine-color-lavender-2);
+        }
+        .zivo-source-action[data-audio="ready"] {
+          background: var(--mantine-color-sage-0);
+          color: var(--mantine-color-sage-7);
+          box-shadow: 0 0 0 1px var(--mantine-color-sage-2);
+        }
+        .zivo-source-action[data-offline="ready"] {
+          background: var(--mantine-color-lavender-0);
+          color: var(--mantine-color-lavender-7);
+          box-shadow: 0 0 0 1px var(--mantine-color-lavender-2);
+        }
 
         /* Section header count - a soft pill beside the label, not a stray number. */
         .zivo-count-pill {

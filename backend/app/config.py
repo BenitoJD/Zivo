@@ -141,6 +141,12 @@ class Settings(BaseSettings):
     piper_bin: str = "piper"
     piper_voices_dir: str = ""
 
+    # Vision OCR Fallback — transcribe sparse/blank PDF pages with a vision LLM
+    # (scanned pages, failed text layers). Costs a vision call per recovered
+    # page; cached per page. Off by default; enable when a vision model is in
+    # the pool.
+    vision_ocr_enabled: bool = False
+
     # Judge0 code-execution sandbox (interview coding rounds). Runs on a dedicated box
     # (see infra/judge0/); set JUDGE0_URL to its address in prod.
     judge0_url: str = "http://localhost:2358"

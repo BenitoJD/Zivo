@@ -49,7 +49,10 @@ export type FloatingPanelHandle = {
 };
 
 // Shared stacking counter so clicking a panel brings it above the others.
-let zTop = 40;
+// Starts well above the study row's content (edge triggers / corner buttons
+// use ~20) so Source and Zivo always float on top of everything in the
+// workspace — never tucked under the question column or meta bar.
+let zTop = 90;
 const nextZ = () => (zTop += 1);
 
 function clamp(v: number, lo: number, hi: number) {

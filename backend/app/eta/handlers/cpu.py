@@ -207,6 +207,22 @@ def ingest_page_job(payload: dict) -> dict:
             page_number,
             cached_pages=cached_pages,
         )
+        # Vision OCR fallback: scanned/image pages with no extractable text
+        # would otherwise be lost as blank. Render the page and transcribe it
+        # with a vision LLM (cached per page, never re-bills, degrades to
+        # blank on failure). Gated so the flag controls cost.
+        from app.config import get_settings
+
+        if (
+            get_settings().vision_ocr_enabled
+            and len((page.get("text") or "").strip()) < 40
+            and (doc.content_type.startswith("application/pdf") or raw[:4] == b"%PDF")
+        ):
+            from app.services.vision_ocr import transcribe_page_with_vision
+
+            ocr_text = transcribe_page_with_vision(db, document_id, page_number)
+            if ocr_text:
+                page["text"] = ocr_text
         chunks = chunk_pages([page])
         texts = [f"passage: {c['text']}" for c in chunks if c.get("text")]
         vectors = embed_texts(texts) if texts else []
