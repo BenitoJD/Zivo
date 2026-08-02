@@ -115,10 +115,12 @@ export default function NewspaperPaperPage({
                       {/* Actions row: wraps on narrow screens; right-aligned cluster on wider ones.
                           Every card has the same meta+actions structure, so rows align regardless
                           of whether a blog "Read analysis" button is present. */}
-                      <Group gap="xs" wrap="wrap" justify="flex-end">
+                      <Group gap="xs" wrap="wrap" justify="flex-end" align="center">
                         {d.has_blog && d.blog_href ? (
                           <Button
                             radius="xl"
+                            size="md"
+                            h={36}
                             variant="subtle"
                             color="lavender"
                             leftSection={<IconBook2 size={16} />}
@@ -129,6 +131,8 @@ export default function NewspaperPaperPage({
                         ) : null}
                         <Button
                           radius="xl"
+                          size="md"
+                          h={36}
                           variant="subtle"
                           color="gray"
                           disabled={!canOpen}
@@ -142,6 +146,8 @@ export default function NewspaperPaperPage({
                         </Button>
                         <Button
                           radius="xl"
+                          size="md"
+                          h={36}
                           variant="light"
                           color="lavender"
                           disabled={!canOpen}
