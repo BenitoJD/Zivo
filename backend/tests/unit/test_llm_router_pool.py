@@ -51,6 +51,10 @@ def test_router_cooldown_and_retry_config() -> None:
         assert kwargs["fallbacks"] == [{"backup": ["openai/b"]}]
         # Router never double-retries (policy governs).
         assert kwargs["num_retries"] == 0
+        # Recommended production routing: no per-request overhead.
+        assert kwargs["routing_strategy"] == "simple-shuffle"
+        # Pre-flight context check on.
+        assert kwargs["enable_pre_call_checks"] is True
 
 
 def test_router_enabled_default() -> None:

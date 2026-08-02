@@ -95,8 +95,12 @@ def build_router(models: list[Any]) -> Router:
         fallbacks=[
             {"backup": [m["model_name"] for m in model_list[1:]]}
         ],
-        routing_strategy="usage-based-routing-v2",
-        enable_pre_call_checks=False,
+        # simple-shuffle is the recommended production default: zero per-request
+        # overhead (usage-based-routing adds Redis latency on every call).
+        routing_strategy="simple-shuffle",
+        # Pre-flight context-window check: skip a deployment whose context is too
+        # small for the message before spending a request on it.
+        enable_pre_call_checks=True,
     )
 
 
