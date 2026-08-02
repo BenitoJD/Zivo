@@ -18,6 +18,7 @@ COPY requirements.txt .
 # removal is last + best-effort so pip uninstalling itself can't fail the build.
 RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir piper-tts \
     && find /opt/venv -depth -type d -name '__pycache__' -exec rm -rf {} + \
     && find /opt/venv -type f -name '*.pyc' -delete \
     && { pip uninstall -y wheel pip || true; }
@@ -26,12 +27,23 @@ FROM python:3.12-slim AS runtime
 
 WORKDIR /app
 
+# ffmpeg (WAV→MP3) + Piper TTS (open-source, on-device, CPU-only). Piper's CLI
+# ships in the venv; the voice model is baked into /app/piper_voices so the
+# worker renders audio with no network access.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
     procps \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 1000 appuser
+
+RUN mkdir -p /app/piper_voices \
+    && curl -sL -o /app/piper_voices/en_US-lessac-medium.onnx \
+      https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/en_US-lessac-medium.onnx \
+    && curl -sL -o /app/piper_voices/en_US-lessac-medium.onnx.json \
+      https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json \
+    && chown -R appuser:appuser /app/piper_voices
 
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH" \
