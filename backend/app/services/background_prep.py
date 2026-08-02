@@ -44,6 +44,25 @@ def is_background_prep(doc: Document | None) -> bool:
     return meta.get("prep_mode") == PREP_MODE_BACKGROUND and not meta.get("prep_complete")
 
 
+def count_assertions_for_document(db: Session, document_id: uuid.UUID) -> int:
+    """Total active MCQ assertions cooked for a document (any page)."""
+    from sqlalchemy import text
+
+    return int(
+        db.execute(
+            text(
+                """
+                SELECT count(*) FROM intel.assertion
+                WHERE payload->>'artifact_id' = :aid
+                  AND status = 'active'
+                """
+            ),
+            {"aid": str(document_id)},
+        ).scalar()
+        or 0
+    )
+
+
 def prep_phase(doc: Document) -> str:
     meta = doc.meta or {}
     return str(meta.get("prep_phase") or _PREP_PHASE_INDEXING)
@@ -300,6 +319,19 @@ def tick_background_cook(db: Session, document_id: uuid.UUID) -> Job | None:
 
     cook_page = _next_page_needing_cook(db, document_id, doc)
     if cook_page is None:
+        maybe_complete_prep(db, doc)
+        return None
+
+    # Background-prep cap: a very large document (e.g. a 496-page PDF) would
+    # otherwise chain one cook batch per page forever, flooding the ETA queue
+    # and starving every other document's jobs (newspaper editions sat in
+    # "Preparing" behind ~300 queued generate.questions from one upload). Once
+    # the document's total cooked questions reach the cap, stop and mark the
+    # prep complete — the learner still gets a fully studyable partial pool.
+    from app.services.question_pool_jobs import BACKGROUND_PREP_MAX_QUESTIONS
+
+    total_generated = count_assertions_for_document(db, document_id)
+    if total_generated >= BACKGROUND_PREP_MAX_QUESTIONS:
         maybe_complete_prep(db, doc)
         return None
 

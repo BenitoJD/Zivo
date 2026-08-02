@@ -24,6 +24,12 @@ from app.repositories import workspace as workspace_repo
 from app.services.document_learn_state import save_progress_row
 from app.services.jobs import enqueue_generate, enqueue_rag_window, enqueue_transition_prep
 from app.services.question_budget import Mode
+
+# Background-prep cap: a single very large document must not flood the ETA
+# queue with an unbounded chain of cook batches (a 496-page PDF generated
+# ~2400 jobs and starved every other document). Once a doc's total cooked
+# questions reach this, prep stops and the partial pool is marked ready.
+BACKGROUND_PREP_MAX_QUESTIONS = 200
 from app.services.question_pool import (
     EAGER_TRIAGE_LOOKAHEAD,
     FIRST_QUESTION_BATCH_SIZE,
