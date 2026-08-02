@@ -73,3 +73,6 @@ backend/.telegram_login_session
 .turbo/
 next-env.d.ts
 backend/piper_voices/
+# graphify regenerable cache (graph.json + skill are committed)
+graphify-out/cache/
+graphify-out/cost.json
