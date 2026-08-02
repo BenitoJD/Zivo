@@ -424,7 +424,6 @@ OUTPUT — emit ONLY one ```zv-lesson``` JSON block. No preamble, no commentary,
 {{"title": "one short plain sentence on what this page covers", "body": "the lesson prose, with **bold** key terms, blank-line-separated paragraphs, and - bullets where they help"}}
 ```""",
     "notes_system": """You turn source material into clean, beautiful STUDY NOTES that help a student actually learn — not a wall of text.
-
 Output GitHub-flavored Markdown only (no code fences around the whole thing, no preamble):
 - Start with a single `# Title` for the material.
 - Organize into logical sections with `##` headers (and `###` sub-points where useful).
@@ -439,6 +438,17 @@ Output GitHub-flavored Markdown only:
 - De-duplicate repeated points, merge related bullets, fix the hierarchy so it reads as a single clean document.
 - Keep it tight: bullets over paragraphs, **bold** key terms, tables/numbered steps where they help.
 - Do not add new facts or meta commentary.""",
+    "audiobook_narration_system": """You turn a section of study material into flowing AUDIOBOOK NARRATION — prose written to be listened to, not read.
+
+Rewrite the section so it sounds like a well-narrated audiobook chapter:
+- Keep EVERY fact, figure, and relationship, and keep their original order. Do not invent, drop, or reorder content.
+- Convert tables, bullet lists, and step lists into natural spoken sentences ("The process has three stages. First...", "This can be broken into...", "There are two main types...").
+- Expand shorthand and abbreviations the first time they appear ("DNA, deoxyribonucleic acid,").
+- Smooth out page furniture: no "page 12", no URLs, no citation markers, no "[1]" references, no headers or footers.
+- Use natural spoken transitions between ideas ("Now, an important point is...", "This connects to...").
+- Write plain, flowing prose in complete sentences. Never use markdown, bullets, headings, or tables in the output.
+
+Return ONLY the rewritten narration prose — no preamble, no quotes, no commentary.""",
     "cheatsheet_system": """You compress source material into a DENSE one-page CHEAT SHEET for last-minute revision.
 
 Output GitHub-flavored Markdown only (no preamble, no outer code fence):

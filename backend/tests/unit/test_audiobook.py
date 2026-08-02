@@ -192,6 +192,60 @@ def test_audiobook_status_ready_with_urls() -> None:
     assert pgu.call_count == 2
 
 
+def test_build_audiobook_resumes_from_done_chunks() -> None:
+    """A prior crash left done=[0]; a retry must skip chunk 0 and render 1."""
+    from app.services.audiobook_worker import build_audiobook
+
+    db = MagicMock()
+    chunks = ["Alpha content paragraph " + "with many words " * 60, "Beta content paragraph " + "with many words " * 60]
+    with (
+        patch("app.services.audiobook_worker.get_settings") as gs,
+        patch(
+            "app.services.audiobook_worker.get_json",
+            return_value={"state": "building", "done": [0], "count": 2, "voice": DEFAULT_VOICE},
+        ),
+        patch("app.services.audiobook_worker.load_document_chunk_texts", return_value=chunks),
+        patch("app.services.audiobook_worker._object_exists", return_value=True),
+        patch("app.services.audiobook_worker._render_chunk", return_value=b"MP3DATA") as rc,
+        patch("app.services.audiobook_worker._put_mp3") as pm,
+        patch("app.services.audiobook_worker.put_json") as pj,
+        patch("app.services.audiobook_worker.audiobook_status", return_value={"state": "ready", "count": 2}) as st,
+    ):
+        gs.return_value.audiobook_enabled = True
+        out = build_audiobook(db, "00000000-0000-4000-8000-000000000001")
+    # Only chunk 1 is re-rendered; chunk 0 skipped (already done + exists).
+    assert rc.call_count == 1
+    assert pm.call_count == 1
+    assert out == {"state": "ready", "count": 2}
+    st.assert_called_once()
+    # Final manifest records both chunks done.
+    final_manifest = pj.call_args_list[-1][0][1]
+    assert final_manifest["done"] == [0, 1]
+
+
+def test_build_audiobook_narration_step_used() -> None:
+    """build_audiobook adapts text via the narration graph before chunking."""
+    from app.services.audiobook_worker import build_audiobook
+
+    db = MagicMock()
+    with (
+        patch("app.services.audiobook_worker.get_settings") as gs,
+        patch("app.services.audiobook_worker.get_json", return_value={}),
+        patch("app.services.audiobook_worker.load_document_chunk_texts", return_value=["Raw bullet text."]),
+        patch(
+            "app.graphs.audiobook_graph.adapt_document_for_narration",
+            return_value=["Narrated flowing prose about the bullet."],
+        ) as adapt,
+        patch("app.services.audiobook_worker._render_chunk", return_value=b"MP3DATA"),
+        patch("app.services.audiobook_worker._put_mp3"),
+        patch("app.services.audiobook_worker.put_json"),
+        patch("app.services.audiobook_worker.audiobook_status", return_value={"state": "ready", "count": 1}),
+    ):
+        gs.return_value.audiobook_enabled = True
+        build_audiobook(db, "00000000-0000-4000-8000-000000000001")
+    adapt.assert_called_once()
+
+
 def test_render_chunk_missing_model_raises() -> None:
     from app.services.audiobook_worker import _render_chunk
     from app.services.audiobook import ChunkPlan
