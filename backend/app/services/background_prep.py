@@ -332,7 +332,13 @@ def tick_background_cook(db: Session, document_id: uuid.UUID) -> Job | None:
 
     total_generated = count_assertions_for_document(db, document_id)
     if total_generated >= BACKGROUND_PREP_MAX_QUESTIONS:
-        maybe_complete_prep(db, doc)
+        # Cap reached: mark prep complete (partial pool is studyable) and
+        # promote the doc to ready so the UI stops showing the indexing modal.
+        meta = dict(doc.meta or {})
+        meta["prep_complete"] = True
+        doc.meta = meta
+        flag_modified(doc, "meta")
+        ensure_capped_prep_ready(db, doc)
         return None
 
     generated = count_assertions_on_page(db, document_id, cook_page)
@@ -387,6 +393,35 @@ def maybe_complete_prep(db: Session, doc: Document) -> bool:
 
     meta = dict(doc.meta or {})
     meta["prep_complete"] = True
+    meta["prep_phase"] = _PREP_PHASE_COMPLETE
+    doc.meta = meta
+    flag_modified(doc, "meta")
+    doc.status = "ready"
+    doc.index_progress = 100
+    db.add(doc)
+    db.commit()
+
+    from app.services.question_pool import _count_available, get_progress
+
+    progress = get_progress(doc)
+    pool = _count_available(db, doc.id, progress)
+    _update_workspace(db, doc, status="page_ready", pool_available_count=pool)
+    return True
+
+
+def ensure_capped_prep_ready(db: Session, doc: Document) -> bool:
+    """Flip a capped background-prep doc to ready once the cap halts its cook.
+
+    The background-prep cap stops a huge document's cook chain mid-way
+    (BACKGROUND_PREP_MAX_QUESTIONS). The doc is left with prep_complete=true
+    but status='prepping', so the UI shows the indexing modal forever at a
+    stale percent even though the partial pool is studyable. This promotes it
+    to ready (partial pool) so the learner can actually open it.
+    """
+    meta = doc.meta or {}
+    if not meta.get("prep_complete") or doc.status == "ready":
+        return False
+    meta = dict(meta)
     meta["prep_phase"] = _PREP_PHASE_COMPLETE
     doc.meta = meta
     flag_modified(doc, "meta")

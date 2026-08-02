@@ -41,14 +41,45 @@ def test_background_prep_cap_halts_chaining() -> None:
             "app.services.background_prep.count_assertions_for_document",
             return_value=BACKGROUND_PREP_MAX_QUESTIONS,
         ),
-        patch("app.services.background_prep.maybe_complete_prep") as complete,
+        patch("app.services.background_prep.ensure_capped_prep_ready") as promote,
         patch("app.services.question_pool_jobs.enqueue_page_batch") as enqueue,
     ):
         out = tick_background_cook(db, "00000000-0000-4000-8000-000000000001")
 
     assert out is None
-    complete.assert_called_once()
+    promote.assert_called_once()
     enqueue.assert_not_called()
+
+
+def test_ensure_capped_prep_ready_promotes_to_ready() -> None:
+    """A capped doc with prep_complete=true + status prepping → ready."""
+    from app.services.background_prep import ensure_capped_prep_ready
+
+    db = MagicMock()
+    doc = MagicMock()
+    doc.meta = {"prep_mode": "background", "prep_complete": True, "prep_phase": "cooking"}
+    doc.status = "prepping"
+    doc.index_progress = 53
+
+    with patch("app.services.background_prep._update_workspace"):
+        ok = ensure_capped_prep_ready(db, doc)
+
+    assert ok is True
+    assert doc.status == "ready"
+    assert doc.index_progress == 100
+    assert doc.meta["prep_phase"] == "complete"
+    db.commit.assert_called()
+
+
+def test_ensure_capped_prep_ready_skips_when_not_capped() -> None:
+    from app.services.background_prep import ensure_capped_prep_ready
+
+    db = MagicMock()
+    doc = MagicMock()
+    doc.meta = {"prep_mode": "background"}  # prep_complete not set
+    doc.status = "prepping"
+    assert ensure_capped_prep_ready(db, doc) is False
+    db.commit.assert_not_called()
 
 
 def test_background_prep_below_cap_keeps_cooking() -> None:
