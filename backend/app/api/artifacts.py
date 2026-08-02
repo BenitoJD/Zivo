@@ -16,7 +16,8 @@ from app.models import Account
 from app.repositories import workspace as workspace_repo
 from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.api.access import require_document, require_document_source
-from app.services.guest_session import optional_guest_session
+from app.services.guest_session import optional_guest_session, require_actor
+from app.services.rate_limit import rate_limit_dependency
 from app.services.background_prep import (
     PREP_MODE_BACKGROUND,
     PREP_MODE_NOW,
@@ -108,7 +109,14 @@ def get_pages(
     }
 
 
-@router.post("/{artifact_id}/page-range", dependencies=[Depends(require_csrf_or_guest)])
+@router.post(
+    "/{artifact_id}/page-range",
+    dependencies=[
+        Depends(require_csrf_or_guest),
+        Depends(rate_limit_dependency),
+        Depends(require_actor),
+    ],
+)
 def confirm_page_range(
     artifact_id: uuid.UUID,
     body: PageRangeIn,

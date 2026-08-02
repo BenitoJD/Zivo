@@ -12,6 +12,7 @@ from app.models import Account
 from app.services.auth import get_optional_user
 from app.services.guest_session import guest_session_for_read
 from app.api.access import require_document
+from app.services.rate_limit import rate_limit_dependency
 from app.services.topics import (
     ensure_explanation,
     ensure_topics,
@@ -22,7 +23,7 @@ from app.services.topics import (
 router = APIRouter()
 
 
-@router.get("/{artifact_id}/topics")
+@router.get("/{artifact_id}/topics", dependencies=[Depends(rate_limit_dependency)])
 def get_topics(
     artifact_id: uuid.UUID,
     db: Session = Depends(get_db),
@@ -39,7 +40,10 @@ def get_topics(
     return ensure_topics(db, artifact_id)
 
 
-@router.get("/{artifact_id}/topics/{topic_key}/explain")
+@router.get(
+    "/{artifact_id}/topics/{topic_key}/explain",
+    dependencies=[Depends(rate_limit_dependency)],
+)
 def explain_topic_endpoint(
     artifact_id: uuid.UUID,
     topic_key: str,

@@ -25,7 +25,7 @@ from app.repositories.intel import (
 from app.services import wikidata
 from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.services.answer_signal import answered_assertion_ids, resolve_subject_entity
-from app.services.guest_session import guest_session_for_read
+from app.services.guest_session import guest_session_for_read, require_actor
 from app.services.practice_generation import (
     DEFAULT_MIN_QUESTIONS,
     concept_status,
@@ -270,7 +270,11 @@ class GenerateOut(BaseModel):
 @router.post(
     "/concepts/{qid}/generate",
     response_model=GenerateOut,
-    dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)],
+    dependencies=[
+        Depends(require_csrf_or_guest),
+        Depends(rate_limit_dependency),
+        Depends(require_actor),
+    ],
 )
 def generate(
     qid: str,

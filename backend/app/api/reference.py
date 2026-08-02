@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.services import reference_lookup
+from app.services.rate_limit import rate_limit_dependency
 
 router = APIRouter()
 
@@ -39,7 +40,7 @@ class WikipediaOut(BaseModel):
     source_url: str
 
 
-@router.get("/dictionary", response_model=DictionaryOut)
+@router.get("/dictionary", response_model=DictionaryOut, dependencies=[Depends(rate_limit_dependency)])
 def dictionary_lookup(
     word: str = Query(..., min_length=1, max_length=120),
 ) -> DictionaryOut:
@@ -56,7 +57,7 @@ def dictionary_lookup(
     )
 
 
-@router.get("/wikipedia", response_model=WikipediaOut)
+@router.get("/wikipedia", response_model=WikipediaOut, dependencies=[Depends(rate_limit_dependency)])
 def wikipedia_lookup(
     query: str = Query(..., min_length=1, max_length=200),
 ) -> WikipediaOut:

@@ -37,7 +37,7 @@ from app.services.debug_curation import (
     public_payload,
 )
 from app.services.debug_grading import grade_step, record_debug_understood
-from app.services.guest_session import optional_guest_session
+from app.services.guest_session import optional_guest_session, require_actor
 from app.services.llm_router import stream_chat_completion
 from app.services.rate_limit import rate_limit_dependency
 
@@ -466,7 +466,10 @@ def grade_scenario_step(
     return result
 
 
-@router.post("/{assertion_id}/reflect/stream", dependencies=[Depends(rate_limit_dependency)])
+@router.post(
+    "/{assertion_id}/reflect/stream",
+    dependencies=[Depends(rate_limit_dependency), Depends(require_actor)],
+)
 async def reflect_stream(
     assertion_id: uuid.UUID,
     db: Session = Depends(get_db),

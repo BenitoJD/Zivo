@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from fastapi import Response
+import pytest
+from fastapi import HTTPException, Response
 
 from app.services.guest_session import (
     GUEST_ID_HEADER,
@@ -10,6 +11,7 @@ from app.services.guest_session import (
     publish_guest_id,
     read_guest_id,
     read_guest_id_from_cookie,
+    require_actor,
     resolve_guest_id,
 )
 
@@ -53,3 +55,24 @@ def test_publish_guest_id() -> None:
     gid = "e" * 32
     publish_guest_id(response, gid)
     assert response.headers[GUEST_ID_HEADER] == gid
+
+
+def test_require_actor_accepts_signed_in_user() -> None:
+    class FakeUser:
+        id = "00000000-0000-4000-8000-000000000001"
+
+    require_actor(user=FakeUser(), zivo_demo_id=None, x_zivo_guest_id=None)
+
+
+def test_require_actor_accepts_guest_cookie() -> None:
+    require_actor(user=None, zivo_demo_id="b" * 32, x_zivo_guest_id=None)
+
+
+def test_require_actor_accepts_guest_header() -> None:
+    require_actor(user=None, zivo_demo_id=None, x_zivo_guest_id="c" * 32)
+
+
+def test_require_actor_rejects_bare_anonymous() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        require_actor(user=None, zivo_demo_id=None, x_zivo_guest_id=None)
+    assert exc_info.value.status_code == 401

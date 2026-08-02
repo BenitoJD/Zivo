@@ -38,7 +38,7 @@ def _owner(user: Account | None) -> uuid.UUID | None:
 
 
 
-@router.get("/{artifact_id}/notes")
+@router.get("/{artifact_id}/notes", dependencies=[Depends(rate_limit_dependency)])
 def get_notes(
     artifact_id: uuid.UUID,
     kind: str = Query("notes"),
@@ -60,7 +60,7 @@ def get_notes(
     return {"status": state["status"], "kind": kind, "content": state["content"]}
 
 
-@router.get("/{artifact_id}/flashcards")
+@router.get("/{artifact_id}/flashcards", dependencies=[Depends(rate_limit_dependency)])
 def get_flashcards(
     artifact_id: uuid.UUID,
     db: Session = Depends(get_db),
@@ -78,7 +78,7 @@ def get_flashcards(
     return {"status": state["status"], "cards": state["cards"]}
 
 
-@router.get("/{artifact_id}/memory-palace")
+@router.get("/{artifact_id}/memory-palace", dependencies=[Depends(rate_limit_dependency)])
 def get_memory_palace(
     artifact_id: uuid.UUID,
     setting: str = Query(""),
@@ -248,7 +248,10 @@ def get_interview(
     )
 
 
-@router.post("/{artifact_id}/interview/start", dependencies=[Depends(require_csrf_or_guest)])
+@router.post(
+    "/{artifact_id}/interview/start",
+    dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)],
+)
 async def start_interview(
     artifact_id: uuid.UUID,
     body: InterviewStartIn,
@@ -266,7 +269,10 @@ async def start_interview(
     )
 
 
-@router.post("/{artifact_id}/interview/answer", dependencies=[Depends(require_csrf_or_guest)])
+@router.post(
+    "/{artifact_id}/interview/answer",
+    dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)],
+)
 async def answer_interview(
     artifact_id: uuid.UUID,
     body: InterviewAnswerIn,
@@ -333,7 +339,10 @@ def get_mains(
     return mains_service.load_mains(db, artifact_id)
 
 
-@router.post("/{artifact_id}/mains/start", dependencies=[Depends(require_csrf_or_guest)])
+@router.post(
+    "/{artifact_id}/mains/start",
+    dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)],
+)
 def start_mains(
     artifact_id: uuid.UUID,
     body: MainsStartIn,
@@ -348,7 +357,10 @@ def start_mains(
     )
 
 
-@router.post("/{artifact_id}/mains/answer", dependencies=[Depends(require_csrf_or_guest)])
+@router.post(
+    "/{artifact_id}/mains/answer",
+    dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)],
+)
 def answer_mains(
     artifact_id: uuid.UUID,
     body: MainsAnswerIn,
@@ -499,7 +511,7 @@ def _parse_types(types: str) -> list[str]:
     return [t.strip() for t in (types or "").split(",") if t.strip()]
 
 
-@router.get("/{artifact_id}/quiz")
+@router.get("/{artifact_id}/quiz", dependencies=[Depends(rate_limit_dependency)])
 def get_quiz(
     artifact_id: uuid.UUID,
     types: str = Query("mcq"),

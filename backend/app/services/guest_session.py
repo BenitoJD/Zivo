@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from fastapi import Cookie, Depends, Header, Response
+from fastapi import Cookie, Depends, Header, HTTPException, Response
 
 from app.models import Account
 from app.services.auth import get_optional_user
@@ -86,3 +86,22 @@ def guest_session_for_read(
     if user is not None:
         return None
     return read_guest_id(zivo_demo_id, x_zivo_guest_id)
+
+
+def require_actor(
+    user: Account | None = Depends(get_optional_user),
+    zivo_demo_id: str | None = Cookie(default=None, alias=DEMO_COOKIE),
+    x_zivo_guest_id: str | None = Header(default=None, alias=GUEST_ID_HEADER),
+) -> None:
+    """Guard for LLM-cost routes: signed-in user OR a real guest session.
+
+    ``require_csrf_or_guest`` admits a completely bare anonymous request (no
+    cookie, no header) — fine for low-cost reads, but LLM-triggering endpoints
+    must only run for an identifiable actor so spend can be attributed to an
+    account or a guest cookie (and quota'd / rate-limited against it).
+    """
+    if user is not None:
+        return
+    if read_guest_id(zivo_demo_id, x_zivo_guest_id) is not None:
+        return
+    raise HTTPException(status_code=401, detail="Authentication required")

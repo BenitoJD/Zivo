@@ -21,6 +21,7 @@ from app.api.access import require_document
 from app.repositories.intel import concept_id
 from app.services.answer_signal import ANSWER_CORRECT_METRIC_URI, resolve_subject_entity
 from app.services.guest_session import guest_session_for_read
+from app.services.rate_limit import rate_limit_dependency
 from app.services.mcq_dedup import short_concept_label
 from app.services.learn_answered_review import build_learn_answered_review
 from app.services.question_pool import (
@@ -166,7 +167,7 @@ def _learn_stream_tick(
         return _learn_queue_payload(db, artifact_id, doc, user, mode=mode, guest_id=guest_id)
 
 
-@router.get("/{artifact_id}/learn-queue")
+@router.get("/{artifact_id}/learn-queue", dependencies=[Depends(rate_limit_dependency)])
 async def learn_queue(
     artifact_id: uuid.UUID,
     mode: str | None = None,
@@ -192,7 +193,7 @@ async def learn_answered(
     return {"items": items}
 
 
-@router.get("/{artifact_id}/learn-queue/stream")
+@router.get("/{artifact_id}/learn-queue/stream", dependencies=[Depends(rate_limit_dependency)])
 async def learn_queue_stream(
     artifact_id: uuid.UUID,
     mode: str | None = None,
