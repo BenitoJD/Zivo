@@ -193,19 +193,25 @@ def test_audiobook_status_ready_with_urls() -> None:
 
 
 def test_build_audiobook_resumes_from_done_chunks() -> None:
-    """A prior crash left done=[0]; a retry must skip chunk 0 and render 1."""
+    """A prior crash left chunk 0 done in the job checkpoint; retry skips it."""
     from app.services.audiobook_worker import build_audiobook
 
     db = MagicMock()
+    job = MagicMock()
+    job.result = {
+        "work_checkpoint": {"items": ["0", "1"], "done": ["0"], "version": "qb.workckpt.v1"}
+    }
+    db.get.return_value = job
     chunks = ["Alpha content paragraph " + "with many words " * 60, "Beta content paragraph " + "with many words " * 60]
     with (
         patch("app.services.audiobook_worker.get_settings") as gs,
-        patch(
-            "app.services.audiobook_worker.get_json",
-            return_value={"state": "building", "done": [0], "count": 2, "voice": DEFAULT_VOICE},
-        ),
+        patch("app.services.audiobook_worker.get_json", return_value={}),
         patch("app.services.audiobook_worker.load_document_chunk_texts", return_value=chunks),
         patch("app.services.audiobook_worker._object_exists", return_value=True),
+        patch(
+            "app.services.work_checkpoint.current_job_id",
+            return_value="00000000-0000-4000-8000-000000000001",
+        ),
         patch("app.services.audiobook_worker._render_chunk", return_value=b"MP3DATA") as rc,
         patch("app.services.audiobook_worker._put_mp3") as pm,
         patch("app.services.audiobook_worker.put_json") as pj,
@@ -213,7 +219,7 @@ def test_build_audiobook_resumes_from_done_chunks() -> None:
     ):
         gs.return_value.audiobook_enabled = True
         out = build_audiobook(db, "00000000-0000-4000-8000-000000000001")
-    # Only chunk 1 is re-rendered; chunk 0 skipped (already done + exists).
+    # Only chunk 1 is re-rendered; chunk 0 skipped (done + MP3 exists).
     assert rc.call_count == 1
     assert pm.call_count == 1
     assert out == {"state": "ready", "count": 2}

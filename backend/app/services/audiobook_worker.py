@@ -107,28 +107,44 @@ def build_audiobook(db: Session, document_id: uuid.UUID) -> dict:
         return {"state": "failed", "progress": 0, "chunks": [], "error": "empty_text"}
 
     total = len(plan.chunks)
-    # Resume set: chunk indices already rendered in a prior attempt. A chunk is
-    # only considered done if its MP3 exists — we re-verify below so a torn
-    # upload (crash between render and manifest write) is re-rendered.
-    done = set(int(x) for x in (existing.get("done") or []) if isinstance(x, int))
+    # Work Checkpoint Engine: one item per chunk. resume_work re-verifies each
+    # done chunk's MP3 still exists (torn uploads re-render) and drops items
+    # that no longer fit a changed plan.
+    from app.services.work_checkpoint import current_job_id, mark_done, resume_work, save, to_dict
+
+    item_keys = [str(i) for i in range(total)]
+    job_id = current_job_id()
+    ckpt = resume_work(
+        db,
+        items=item_keys,
+        is_done=lambda k: _object_exists(_storage_key(document_id, f"{k}.mp3")),
+        job_id=job_id,
+    )
+    if job_id is not None:
+        save(db, ckpt, job_id=job_id)
+    done = set(ckpt.done)
     rendered = 0
     for i, chunk_text in enumerate(plan.chunks):
         key = _storage_key(document_id, f"{i}.mp3")
-        if i in done and _object_exists(key):
+        if str(i) in done and _object_exists(key):
             rendered += 1
             continue
         try:
             mp3 = _render_chunk(chunk_text, plan)
             _put_mp3(key, mp3)
             rendered += 1
-            done.add(i)
+            done.add(str(i))
+            ckpt = mark_done(ckpt, str(i))
+            if job_id is not None:
+                save(db, ckpt, job_id=job_id)
             if i % 5 == 0 or i == total - 1:
                 manifest = {
                     "state": "building",
                     "progress": chunk_progress(rendered, total),
                     "count": total,
                     "voice": plan.voice,
-                    "done": sorted(done),
+                    "done": sorted(int(x) for x in done),
+                    "work_checkpoint": to_dict(ckpt),
                 }
                 put_json(manifest_key, manifest)
         except Exception:
@@ -138,7 +154,8 @@ def build_audiobook(db: Session, document_id: uuid.UUID) -> dict:
                 "progress": chunk_progress(rendered, total),
                 "count": total,
                 "voice": plan.voice,
-                "done": sorted(done),
+                "done": sorted(int(x) for x in done),
+                "work_checkpoint": to_dict(ckpt),
                 "error": f"chunk_{i}",
             }
             put_json(manifest_key, manifest)
@@ -149,7 +166,8 @@ def build_audiobook(db: Session, document_id: uuid.UUID) -> dict:
         "progress": 100,
         "count": total,
         "voice": plan.voice,
-        "done": sorted(done),
+        "done": sorted(int(x) for x in done),
+        "work_checkpoint": to_dict(ckpt),
     }
     put_json(manifest_key, manifest)
     return audiobook_status(db, document_id)
