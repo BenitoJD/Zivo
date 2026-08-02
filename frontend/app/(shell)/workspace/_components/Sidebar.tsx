@@ -57,6 +57,7 @@ import type { SourceDocument } from "@/lib/types";
 import { useStudyNav, type StudyMode } from "@/app/workspace/_components/studyNav";
 import { SourceCoverChip, SourceCoverHover } from "@/app/workspace/_components/SourceCoverPreview";
 import { PrepareOfflinePackButton } from "@/app/(shell)/workspace/_components/PrepareOfflinePack";
+import { ListenAudiobookButton } from "@/app/(shell)/workspace/_components/ListenAudiobookButton";
 
 /**
  * Mode navigator below sources when an artifact is open.
@@ -380,6 +381,7 @@ function SourceRow({
           </span>
         </Tooltip>
         <PrepareOfflinePackButton documentId={doc.id} />
+        <ListenAudiobookButton documentId={doc.id} />
         <Tooltip label="Delete source" position="right" withArrow openDelay={300}>
           <span
             role="button"

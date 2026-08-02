@@ -134,6 +134,13 @@ class Settings(BaseSettings):
     # How long a downloaded pack stays valid before the learner must rebuild it.
     offline_pack_ttl_days: int = 7
 
+    # Audiobook Engine (ADR 0004 seam) — local Piper TTS (open-source, CPU-only).
+    # Path to the piper binary + a voices directory of .onnx models. Empty paths
+    # keep the listen endpoints inert (404) until the worker image ships Piper.
+    audiobook_enabled: bool = False
+    piper_bin: str = "piper"
+    piper_voices_dir: str = ""
+
     # Judge0 code-execution sandbox (interview coding rounds). Runs on a dedicated box
     # (see infra/judge0/); set JUDGE0_URL to its address in prod.
     judge0_url: str = "http://localhost:2358"

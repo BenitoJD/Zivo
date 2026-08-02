@@ -149,7 +149,7 @@ def is_failover_eligible(exc: BaseException) -> bool:
     if status is None:
         response = getattr(exc, "response", None)
         status = getattr(response, "status_code", None)
-    if isinstance(status, int) and status in {408, 409, 429, 500, 502, 503, 504}:
+    if isinstance(status, int) and status in {401, 402, 403, 408, 409, 429, 500, 502, 503, 504}:
         return True
 
     if isinstance(exc, APIError):
@@ -170,6 +170,14 @@ def is_failover_eligible(exc: BaseException) -> bool:
             "overloaded",
             "unavailable",
             "connection error",
+            "insufficient balance",
+            "billing",
+            "payment required",
+            "invalid api key",
+            "authentication",
+            "403",
+            "402",
+            "401",
             "503",
             "502",
             "429",

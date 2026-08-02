@@ -72,3 +72,4 @@ backend/.telegram_login_session
 # Next.js Turbopack cache (Next 16 default bundler)
 .turbo/
 next-env.d.ts
+backend/piper_voices/

@@ -217,6 +217,17 @@ def seo_cook_batch(payload: dict) -> dict:
         return cook_batch(db, limit=limit)
 
 
+@eta(name="audiobook.build", workload=JobWorkload.io)
+def audiobook_build(payload: dict) -> dict:
+    """Render a document's text to MP3 chunks with local Piper TTS."""
+    from app.services.audiobook_worker import build_audiobook
+
+    document_id = UUID(payload["document_id"])
+    with SessionLocal() as db:
+        status = build_audiobook(db, document_id)
+    return {"document_id": str(document_id), "state": status.get("state")}
+
+
 @eta(name="seo.ensure_sd_daily", workload=JobWorkload.io)
 def seo_ensure_sd_daily(payload: dict) -> dict:
     """Ensure ≥1 system_design post published today (IST)."""
