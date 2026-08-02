@@ -95,7 +95,6 @@ import { budgetModeQuery, defaultWorkspaceMode } from "@/lib/studyPreferences";
 import { formatMcqStemForDisplay } from "@/lib/mcqStemFormat";
 import {
   normalizeMcqOptions,
-  sanitizeMcqStem,
   type ArtifactMeta,
   type AssertionPayload,
   type McqState,
@@ -197,7 +196,6 @@ export default function WorkspaceArtifactPage({
   const [pinnedAssertionId, setPinnedAssertionId] = useState<string | null>(null);
   const pinnedAssertionIdRef = useRef<string | null>(null);
   // Prefetched next id from grade/stream "next" event — Continue swaps without a full queue RT.
-  const [pendingNextAssertionId, setPendingNextAssertionId] = useState<string | null>(null);
   const pendingNextAssertionIdRef = useRef<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [mcqLoading, setMcqLoading] = useState(true);
@@ -357,7 +355,6 @@ export default function WorkspaceArtifactPage({
     pinnedAssertionIdRef.current = null;
     setPinnedAssertionId(null);
     pendingNextAssertionIdRef.current = null;
-    setPendingNextAssertionId(null);
     setSubmitting(false);
     setMcqLoading(true);
     setAnsweredHistory([]);
@@ -746,7 +743,6 @@ export default function WorkspaceArtifactPage({
                 !pendingNextAssertionIdRef.current
               ) {
                 pendingNextAssertionIdRef.current = realNext;
-                setPendingNextAssertionId(realNext);
               }
               return {
                 ...data,
@@ -845,7 +841,6 @@ export default function WorkspaceArtifactPage({
               !pendingNextAssertionIdRef.current
             ) {
               pendingNextAssertionIdRef.current = realNext;
-              setPendingNextAssertionId(realNext);
             }
             setQueue({ ...data, current_assertion_id: pinnedAssertionIdRef.current });
             return;
@@ -1014,7 +1009,6 @@ export default function WorkspaceArtifactPage({
       pinnedAssertionIdRef.current = null;
       setPinnedAssertionId(null);
       pendingNextAssertionIdRef.current = null;
-      setPendingNextAssertionId(null);
       setGradeState(null);
       setFeedback(null);
       setSelected(null);
@@ -1112,7 +1106,6 @@ export default function WorkspaceArtifactPage({
         setOfflineAnsweredIds(answered);
         const nextId = nextAssertionId(offlineDeck, answered);
         pendingNextAssertionIdRef.current = nextId;
-        setPendingNextAssertionId(nextId);
         // On reconnect, drain the outbox through the real engines (best-effort).
         if (navigator.onLine) void syncPack(offlinePack.id).catch(() => undefined);
       }
@@ -1183,7 +1176,6 @@ export default function WorkspaceArtifactPage({
               const nextId = n.next_assertion_id;
               if (!nextId) return;
               pendingNextAssertionIdRef.current = nextId;
-              setPendingNextAssertionId(nextId);
               // Prefetch stem+options so Continue is one-frame instant.
               void queryClient.prefetchQuery({
                 queryKey: queryKeys.assertion(nextId),
@@ -1299,7 +1291,6 @@ export default function WorkspaceArtifactPage({
     pinnedAssertionIdRef.current = null;
     setPinnedAssertionId(null);
     pendingNextAssertionIdRef.current = null;
-    setPendingNextAssertionId(null);
     setMode("test");
     router.replace(`/workspace/${artifactId}?mode=test`);
   }

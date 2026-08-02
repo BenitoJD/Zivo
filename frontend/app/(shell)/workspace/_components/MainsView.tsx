@@ -10,7 +10,6 @@ import {
   FileButton,
   Group,
   Paper,
-  Progress,
   RingProgress,
   SegmentedControl,
   Stack,

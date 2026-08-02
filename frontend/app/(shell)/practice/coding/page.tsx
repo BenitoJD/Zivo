@@ -8,7 +8,6 @@
 import { useEffect, useState } from "react";
 import {
   Badge,
-  Box,
   Container,
   Group,
   Paper,

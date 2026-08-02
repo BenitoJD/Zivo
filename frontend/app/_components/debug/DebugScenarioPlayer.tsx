@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   Box,
   Button,
@@ -40,11 +40,6 @@ export function DebugScenarioPlayer({ scenario, onGradeStep }: Props) {
 
   const current = steps[stepIndex];
   const currentState = stepStates[stepIndex] ?? { selected: null, graded: null };
-
-  const correctCount = useMemo(
-    () => stepStates.filter((s) => s.graded?.correct).length,
-    [stepStates],
-  );
 
   const handleSelect = useCallback((idx: number) => {
     if (currentState.graded) return;
