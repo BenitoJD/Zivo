@@ -216,6 +216,31 @@ Design decisions are in [docs/adr/](docs/adr/0000-index.md). Quick pointers:
 - Decisions: engines, not if-else in call sites — see [Holy grail](#holy-grail-engines).
 - Agent writing: no em dashes (`—`); see `.cursor/rules/no-em-dashes.mdc`.
 
+## Agent tooling
+
+**Graphify — query the codebase graph before grepping.** `graphify-out/graph.json`
+maps the whole repo (6225 nodes, local tree-sitter AST, zero LLM cost) with an
+agent skill at `.agents/skills/graphify/SKILL.md`. For architecture / relationship
+questions, run `graphify query "..." --graph graphify-out/graph.json`,
+`graphify path A B`, or `graphify explain X` instead of reading files one by one.
+Regenerate with `graphify extract . --code-only --no-viz` (incremental; keep the
+skill and graph.json committed, cache is gitignored).
+
+**Work Checkpoint Engine — every long-running LLM job must resume, not redo.**
+`app/services/work_checkpoint.py` (`qb.workckpt.v1`, [docs/WORK_CHECKPOINT_ENGINE.md](docs/WORK_CHECKPOINT_ENGINE.md)):
+plan/mark_done/resume_work persist per-item progress on the ETA job row so a
+pod death never re-bills completed LLM work. Any new multi-item job (audiobook,
+notes, flashcards, mains, quiz, interview, generation) adopts this seam.
+
+**Chrome MCP — UI work.** `cmd mcp` config has a `chrome` server
+(`agent-browser mcp`). Use browser snapshots/click/type for UI testing; for
+pure UI reads prefer the agent-browser CLI (`agent-browser open/snapshot/click`).
+
+**Audiobook Engine — sources become listenable audio.** Local Piper TTS (MIT,
+CPU-only, no API cost) + ffmpeg + LLM narration adaptation + per-chunk
+checkpoint resume. [docs/AUDIOBOOK_ENGINE.md](docs/AUDIOBOOK_ENGINE.md). Kill
+switch: `AUDIOBOOK_ENABLED` (default off; enabled in prod).
+
 ## Skills
 
 Cursor skills live in `.cursor/skills/`. Start with **`zivo-dev`** for local workflow;
