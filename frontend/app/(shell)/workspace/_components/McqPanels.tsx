@@ -58,27 +58,51 @@ const FEEDBACK_WRITING_MESSAGES = [
   "Almost there",
 ];
 
-function FeedbackWritingStatus({ compact }: { compact?: boolean }) {
+const CHECKING_MESSAGES = [
+  "Reading your answer",
+  "Weighing your choice",
+  "One moment",
+];
+
+function RotatingStatusLine({
+  messages,
+  compact,
+  className,
+}: {
+  messages: readonly string[];
+  compact?: boolean;
+  className?: string;
+}) {
   const [i, setI] = useState(0);
   useEffect(() => {
-    const id = window.setInterval(
-      () => setI((v) => (v + 1) % FEEDBACK_WRITING_MESSAGES.length),
-      1300,
-    );
+    const id = window.setInterval(() => setI((v) => (v + 1) % messages.length), 1300);
     return () => window.clearInterval(id);
-  }, []);
+  }, [messages]);
   return (
-    <Group justify="center" mt={compact ? 8 : 12} style={{ flexShrink: 0, minHeight: 22 }}>
+    <Group
+      justify="center"
+      mt={compact ? 8 : 12}
+      className={className}
+      style={{ flexShrink: 0, minHeight: 22 }}
+    >
       <style>{`
         @keyframes zv-fb-rotate { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
         .zv-fb-rotate { animation: zv-fb-rotate 320ms cubic-bezier(0.32,0.72,0,1) both; }
         @media (prefers-reduced-motion: reduce) { .zv-fb-rotate { animation: none !important; } }
       `}</style>
       <Text key={i} className="zv-fb-rotate" fz="sm" c="dimmed" fw={500}>
-        {FEEDBACK_WRITING_MESSAGES[i]}
+        {messages[i]}
       </Text>
     </Group>
   );
+}
+
+function FeedbackWritingStatus({ compact }: { compact?: boolean }) {
+  return <RotatingStatusLine messages={FEEDBACK_WRITING_MESSAGES} compact={compact} />;
+}
+
+function McqCheckingStatus({ compact }: { compact?: boolean }) {
+  return <RotatingStatusLine messages={CHECKING_MESSAGES} compact={compact} className="mcq-checking-status" />;
 }
 
 /**
@@ -680,10 +704,8 @@ export function McqHeroPanel({
           50% { box-shadow: 0 0 0 4px rgba(124, 109, 242, 0.22); }
         }
         .mcq-opt-checking { animation: mcq-check-pulse 1.05s ease-in-out infinite !important; }
-        @keyframes mcq-check-dots { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
-        .mcq-check-dot { animation: mcq-check-dots 1.2s ease-in-out infinite; }
         @media (prefers-reduced-motion: reduce) {
-          .mcq-q, .mcq-opt, .mcq-opt-checking, .mcq-check-dot { animation: none !important; }
+          .mcq-q, .mcq-opt, .mcq-opt-checking { animation: none !important; }
         }
       `}</style>
 
@@ -787,6 +809,7 @@ export function McqHeroPanel({
           });
           const dim = optionsLocked && !isCorrectOption && !isWrongSelected;
           const isChecking = checking && isSelected;
+          const checkingDim = checking && !isSelected;
           return (
             <UnstyledButton
               key={value}
@@ -819,7 +842,8 @@ export function McqHeroPanel({
                 minHeight: 48,
                 border: `${borderWidth}px solid ${border}`,
                 background,
-                opacity: dim ? 0.6 : 1,
+                opacity: checkingDim ? 0.42 : dim ? 0.6 : 1,
+                transition: "opacity 280ms cubic-bezier(0.32,0.72,0,1)",
               }}
             >
               <Group wrap="nowrap" align="center" gap={compact ? "sm" : "md"}>
@@ -937,20 +961,13 @@ export function McqHeroPanel({
             Answer recorded - you&rsquo;ll see your score at the end
           </Text>
         </Group>
-      ) : null}
-      {checking ? (
-        <Group justify="center" gap={10} py={compact ? "xs" : "sm"} style={{ flexShrink: 0 }}>
-          <Loader size="sm" color="lavender" type="oval" />
-          <Text size="sm" c="dimmed" fw={500}>
-            Checking your answer
-            <Text component="span" inherit className="mcq-check-dot">…</Text>
-          </Text>
-        </Group>
+      ) : checking ? (
+        <McqCheckingStatus compact={compact} />
       ) : null}
       </Box>
 
-      {/* Roaming cat only while idle — never during grade/check (empty void). */}
-      {catEnabled && !isTest && !compact && !graded && !checking ? (
+      {/* Roaming cat while idle or checking — keeps the card alive, no spinner chrome. */}
+      {catEnabled && !isTest && !compact && !graded ? (
         <Box style={{ flex: 1, minHeight: 150, width: "100%" }}>
           <PetPlayground count={1} species="cat" wander height="100%" style={{ width: "100%" }} />
         </Box>
@@ -1007,8 +1024,9 @@ export function McqHeroPanel({
       ) : null}
       </ScrollHintArea>
 
+      {!checking ? (
       <Stack align="center" gap={8} pt={compact ? "sm" : "md"} style={{ flexShrink: 0 }}>
-        {!graded && hasSelection && mode === "learn" && onConfidenceChange && !checking ? (
+        {!graded && hasSelection && mode === "learn" && onConfidenceChange ? (
           <Stack gap={4} align="center" style={{ width: "100%", maxWidth: 340 }}>
             <Text size="xs" c="dimmed" fw={500} tt="uppercase" style={{ letterSpacing: "0.05em" }}>
               How sure are you?
@@ -1047,10 +1065,9 @@ export function McqHeroPanel({
             maw={compact ? "100%" : 300}
             w="100%"
             onClick={onSubmit}
-            loading={checking}
-            disabled={!hasSelection || checking}
+            disabled={!hasSelection}
           >
-            {checking ? "Checking…" : isTest ? "Submit answer" : "Check answer"}
+            {isTest ? "Submit answer" : "Check answer"}
           </Button>
         )}
         {onAdvance && (
@@ -1077,6 +1094,7 @@ export function McqHeroPanel({
           </Text>
         ) : null}
       </Stack>
+      ) : null}
     </Stack>
   );
 }
