@@ -329,75 +329,75 @@ function SourceRow({
         data-active={active || undefined}
         onClick={onNavigate}
         aria-label={label}
+        aria-current={active ? "page" : undefined}
       >
-        <span className="zivo-source-chip" aria-hidden>
-          <SourceCoverChip />
-          {meta && (
-            <span
-              className={meta.pulse ? "zivo-chip-dot zivo-chip-dot-pulse" : "zivo-chip-dot"}
-              style={{ background: meta.dot }}
-            />
-          )}
+        <span className="zivo-source-main">
+          <span className="zivo-source-chip" aria-hidden>
+            <SourceCoverChip />
+            {meta && (
+              <span
+                className={meta.pulse ? "zivo-chip-dot zivo-chip-dot-pulse" : "zivo-chip-dot"}
+                style={{ background: meta.dot }}
+              />
+            )}
+          </span>
+          <span className="zivo-source-body">
+            <Text size="sm" fw={active ? 600 : 500} lh={1.35} className="zivo-source-title">
+              {label}
+            </Text>
+            {meta && (
+              <Text size="xs" c="dimmed" className="zivo-source-statusline">
+                {meta.label}
+              </Text>
+            )}
+            {(doc.status === "indexing" ||
+              doc.status === "prepping" ||
+              (doc.meta?.prep_mode === "background" && !doc.meta?.prep_complete)) && (
+              <span className="zivo-source-track" aria-hidden>
+                <span
+                  className="zivo-source-fill"
+                  style={{ width: `${Math.max(4, Math.min(100, doc.index_progress))}%` }}
+                />
+              </span>
+            )}
+          </span>
         </span>
-      <span className="zivo-source-body">
-        <Text
-          size="sm"
-          fw={500}
-          truncate
-          className="zivo-source-title"
-        >
-          {label}
-        </Text>
-        {meta && (
-          <Text size="xs" c="dimmed" truncate className="zivo-source-statusline">
-            {meta.label}
-          </Text>
-        )}
-        {(doc.status === "indexing" || doc.status === "prepping" || (doc.meta?.prep_mode === "background" && !doc.meta?.prep_complete)) && (
-          <span className="zivo-source-track" aria-hidden>
+        <span className="zivo-source-actions" aria-hidden={false}>
+          <Tooltip label="Download" position="top" withArrow openDelay={400}>
             <span
-              className="zivo-source-fill"
-              style={{ width: `${Math.max(4, Math.min(100, doc.index_progress))}%` }}
-            />
-          </span>
-        )}
-      </span>
-      <span className="zivo-source-actions" aria-hidden={false}>
-        <Tooltip label="Download source" position="right" withArrow openDelay={300}>
-          <span
-            role="button"
-            tabIndex={-1}
-            aria-label={`Download ${label}`}
-            aria-busy={downloading}
-            className="zivo-source-action"
-            data-loading={downloading || undefined}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              void handleDownload();
-            }}
-          >
-            <IconDownload size={15} stroke={1.7} />
-          </span>
-        </Tooltip>
-        <PrepareOfflinePackButton documentId={doc.id} />
-        <ListenAudiobookButton documentId={doc.id} />
-        <Tooltip label="Delete source" position="right" withArrow openDelay={300}>
-          <span
-            role="button"
-            tabIndex={-1}
-            aria-label={`Delete ${label}`}
-            className="zivo-source-action zivo-source-action-del"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onDelete();
-            }}
-          >
-            <IconTrash size={15} stroke={1.7} />
-          </span>
-        </Tooltip>
-      </span>
+              role="button"
+              tabIndex={-1}
+              aria-label={`Download ${label}`}
+              aria-busy={downloading}
+              className="zivo-source-action"
+              data-loading={downloading || undefined}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                void handleDownload();
+              }}
+            >
+              <IconDownload size={15} stroke={1.7} />
+            </span>
+          </Tooltip>
+          <PrepareOfflinePackButton documentId={doc.id} />
+          <ListenAudiobookButton documentId={doc.id} />
+          <Tooltip label="Remove" position="top" withArrow openDelay={400}>
+            <span
+              role="button"
+              tabIndex={-1}
+              aria-label={`Delete ${label}`}
+              className="zivo-source-action zivo-source-action-del"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onDelete();
+              }}
+            >
+              <IconTrash size={15} stroke={1.7} />
+            </span>
+          </Tooltip>
+        </span>
       </UnstyledButton>
     </SourceCoverHover>
   );
@@ -476,61 +476,67 @@ export function Sidebar({
   return (
     <>
       <style>{`
-        /* Source row - Wispr-calm: one quiet line per ready source, tinted glyph chip,
-           hover-reveal delete. Status appears only while something is happening. */
+        /* Source row - paper cards: title breathes, actions sit below (never crowd the name). */
         .zivo-source-row {
           position: relative;
           width: 100%;
           display: flex;
-          align-items: center;
-          gap: 10px;
-          padding: 7px 10px;
-          min-height: 46px;
-          border-radius: 12px;
+          flex-direction: column;
+          align-items: stretch;
+          gap: 0;
+          padding: 11px 12px;
+          border-radius: 16px;
           border: 1px solid transparent;
-          overflow: hidden;
-          transition: background 140ms ease, border-color 140ms ease;
+          background: transparent;
+          text-align: left;
+          transition: background 200ms cubic-bezier(0.32, 0.72, 0, 1),
+            border-color 200ms cubic-bezier(0.32, 0.72, 0, 1),
+            box-shadow 200ms cubic-bezier(0.32, 0.72, 0, 1),
+            transform 200ms cubic-bezier(0.32, 0.72, 0, 1);
         }
-        .zivo-source-row:hover { background: var(--mantine-color-default-hover); }
+        .zivo-source-row:hover:not([data-active]) {
+          background: var(--mantine-color-default-hover);
+        }
         .zivo-source-row:focus-visible {
           outline: 2px solid var(--mantine-color-lavender-4);
-          outline-offset: -1px;
+          outline-offset: 2px;
         }
         .zivo-source-row[data-active] {
-          background: var(--mantine-color-lavender-0);
-          border-color: var(--mantine-color-lavender-2);
+          background: var(--mantine-color-gray-0);
+          border-color: var(--mantine-color-default-border);
+          box-shadow: 0 4px 20px -12px rgba(35, 34, 32, 0.22), 0 1px 0 rgba(255, 255, 255, 0.6) inset;
         }
-        /* lavender-0/2 are remapped in dark, but bump the active wash one step
-           so the selected source still lifts off the ink page body. */
         [data-mantine-color-scheme="dark"] .zivo-source-row[data-active] {
-          background: var(--mantine-color-lavender-1);
-          border-color: var(--mantine-color-lavender-3);
+          background: var(--mantine-color-dark-6);
+          border-color: var(--mantine-color-dark-4);
+          box-shadow: 0 8px 28px -14px rgba(0, 0, 0, 0.55);
+        }
+        .zivo-source-main {
+          display: flex;
+          align-items: flex-start;
+          gap: 12px;
+          width: 100%;
+          min-width: 0;
         }
         .zivo-source-chip {
           position: relative;
           flex-shrink: 0;
-          width: 32px;
-          height: 32px;
-          border-radius: 10px;
+          width: 36px;
+          height: 36px;
+          border-radius: 11px;
           display: flex;
           align-items: center;
           justify-content: center;
           background: var(--mantine-color-default-hover);
           color: var(--mantine-color-dimmed);
           overflow: hidden;
-          transition: background 140ms ease, color 140ms ease, transform 200ms cubic-bezier(0.32, 0.72, 0, 1), box-shadow 200ms ease;
-        }
-        .zivo-source-row:hover .zivo-source-chip {
-          background: var(--mantine-color-gray-2);
-          transform: scale(1.06);
-          box-shadow: 0 2px 8px rgba(35, 34, 32, 0.1);
+          transition: background 200ms ease, box-shadow 200ms ease;
         }
         .zivo-source-row[data-active] .zivo-source-chip {
-          background: var(--mantine-color-lavender-1);
+          background: var(--mantine-color-lavender-0);
           color: var(--mantine-color-lavender-7);
           box-shadow: 0 0 0 1px var(--mantine-color-lavender-2);
         }
-        /* Busy signal lives on the chip's corner, ringed by the page so it reads as a badge. */
         .zivo-chip-dot {
           position: absolute;
           right: -2px;
@@ -547,18 +553,24 @@ export function Sidebar({
           min-width: 0;
           display: flex;
           flex-direction: column;
-          gap: 2px;
+          gap: 3px;
           text-align: left;
-          padding-right: 136px;
         }
-        .zivo-source-row[data-active] .zivo-source-title { color: var(--mantine-color-lavender-8); }
-        [data-mantine-color-scheme="dark"] .zivo-source-row[data-active] .zivo-source-title {
-          color: var(--mantine-color-lavender-9);
+        .zivo-source-title {
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+          word-break: break-word;
+          color: var(--mantine-color-text);
         }
-        .zivo-source-statusline { line-height: 1.3; }
+        .zivo-source-row[data-active] .zivo-source-title {
+          color: var(--mantine-color-text);
+        }
+        .zivo-source-statusline { line-height: 1.35; }
         .zivo-source-track {
           height: 3px;
-          margin-top: 3px;
+          margin-top: 4px;
           border-radius: 999px;
           background: var(--mantine-color-default-hover);
           overflow: hidden;
@@ -571,79 +583,101 @@ export function Sidebar({
           transition: width 400ms ease;
         }
         .zivo-source-actions {
-          position: absolute;
-          right: 8px;
-          top: 50%;
-          transform: translateY(-50%);
           display: flex;
           align-items: center;
-          gap: 6px;
+          justify-content: flex-start;
+          gap: 4px;
+          margin-top: 0;
+          padding-top: 0;
+          max-height: 0;
           opacity: 0;
-          visibility: hidden;
+          overflow: hidden;
           pointer-events: none;
-          transition: opacity 120ms ease, visibility 120ms ease;
+          transition: max-height 240ms cubic-bezier(0.32, 0.72, 0, 1),
+            opacity 180ms ease,
+            margin-top 240ms cubic-bezier(0.32, 0.72, 0, 1),
+            padding-top 240ms cubic-bezier(0.32, 0.72, 0, 1);
+        }
+        .zivo-source-row[data-active] .zivo-source-actions,
+        .zivo-source-row:hover .zivo-source-actions,
+        .zivo-source-row:focus-visible .zivo-source-actions {
+          max-height: 40px;
+          opacity: 1;
+          margin-top: 10px;
+          padding-top: 10px;
+          border-top: 1px solid var(--mantine-color-default-border);
+          pointer-events: auto;
+        }
+        @media (hover: none) {
+          .zivo-source-row:hover .zivo-source-actions {
+            max-height: 0;
+            opacity: 0;
+            margin-top: 0;
+            padding-top: 0;
+            border-top: none;
+            pointer-events: none;
+          }
+          .zivo-source-row[data-active] .zivo-source-actions {
+            max-height: 40px;
+            opacity: 1;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid var(--mantine-color-default-border);
+            pointer-events: auto;
+          }
         }
         .zivo-source-action {
-          width: 28px;
-          height: 28px;
-          border-radius: 8px;
+          width: 30px;
+          height: 30px;
+          border-radius: 999px;
           display: flex;
           align-items: center;
           justify-content: center;
           color: var(--mantine-color-dimmed);
-          background: var(--mantine-color-gray-2);
+          background: transparent;
           transition: background 140ms ease, color 140ms ease, opacity 140ms ease;
           cursor: pointer;
         }
         .zivo-source-action[data-loading] {
-          opacity: 0.55;
+          opacity: 0.45;
           pointer-events: none;
         }
-        .zivo-source-row:hover .zivo-source-actions,
-        .zivo-source-row:focus-visible .zivo-source-actions {
-          opacity: 1;
-          visibility: visible;
-          pointer-events: auto;
+        .zivo-source-action:hover {
+          background: var(--mantine-color-default-hover);
+          color: var(--mantine-color-text);
         }
-        @media (hover: none) {
-          .zivo-source-actions {
-            opacity: 1;
-            visibility: visible;
-            pointer-events: auto;
-          }
+        .zivo-source-action-del:hover {
+          background: var(--mantine-color-terracotta-0);
+          color: var(--mantine-color-terracotta-6);
         }
-        .zivo-source-action:hover { background: var(--mantine-color-lavender-1); color: var(--mantine-color-lavender-7); }
-        .zivo-source-action-del:hover { background: var(--mantine-color-terracotta-0); color: var(--mantine-color-terracotta-6); }
         .zivo-source-action[data-audio="building"] {
           background: var(--mantine-color-lavender-0);
           color: var(--mantine-color-lavender-7);
-          box-shadow: 0 0 0 1px var(--mantine-color-lavender-2);
         }
         .zivo-source-action[data-audio="ready"] {
           background: var(--mantine-color-sage-0);
           color: var(--mantine-color-sage-7);
-          box-shadow: 0 0 0 1px var(--mantine-color-sage-2);
         }
         .zivo-source-action[data-offline="ready"] {
           background: var(--mantine-color-lavender-0);
           color: var(--mantine-color-lavender-7);
-          box-shadow: 0 0 0 1px var(--mantine-color-lavender-2);
         }
 
-        /* Section header count - a soft pill beside the label, not a stray number. */
+        /* Section header count - quiet tabular pill. */
         .zivo-count-pill {
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          min-width: 18px;
-          height: 17px;
-          padding: 0 5px;
+          min-width: 20px;
+          height: 18px;
+          padding: 0 6px;
           border-radius: 999px;
-          background: var(--mantine-color-default-hover);
+          background: transparent;
           color: var(--mantine-color-dimmed);
-          font-size: 10.5px;
+          font-size: 11px;
           font-weight: 600;
           font-variant-numeric: tabular-nums;
+          border: 1px solid var(--mantine-color-default-border);
         }
 
         /* Add source - the sidebar's one hero: a soft lavender gradient pill with an
@@ -777,8 +811,8 @@ export function Sidebar({
             px="sm"
             pt={isMobile ? "md" : "xs"}
           >
-            <Group gap={7} align="center" px="sm" mb={10} mt={2}>
-              <Text size="xs" tt="uppercase" fw={700} c="dimmed" lts={1.4} style={{ fontSize: 11 }}>
+            <Group gap={8} align="center" px="sm" mb={16} mt={6}>
+              <Text size="xs" tt="uppercase" fw={700} c="dimmed" lts={1.6} style={{ fontSize: 10.5 }}>
                 Sources
               </Text>
               {documents.length > 0 && <span className="zivo-count-pill">{documents.length}</span>}
@@ -804,7 +838,7 @@ export function Sidebar({
                 </Text>
               </Stack>
             ) : (
-              <Stack gap={4}>
+              <Stack gap={8}>
                 {documents.map((d) => (
                   <SourceRow
                     key={d.id}

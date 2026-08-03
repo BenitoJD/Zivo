@@ -220,6 +220,7 @@ export function McqHeroPanel({
   onConfidenceChange,
   focusConcept,
   onFocusConcept,
+  cardKey,
 }: {
   stem: string;
   options: string[];
@@ -257,6 +258,8 @@ export function McqHeroPanel({
   /** Gap→focus: current question's concept label (Learn, after a miss). */
   focusConcept?: string | null;
   onFocusConcept?: (concept: string) => void;
+  /** Stable remount key (assertion id) — avoids double entrance when stem text updates after fetch. */
+  cardKey?: string | null;
 }) {
   const isDark = useIsDark();
   const displayStem = formatMcqStemForDisplay(stem);
@@ -677,8 +680,10 @@ export function McqHeroPanel({
     );
   }
 
+  const panelKey = cardKey ?? displayStem;
+
   return (
-    <Stack key={displayStem} h="100%" gap={0} align="stretch" miw={0} style={{ overflow: "hidden", minWidth: 0 }}>
+    <Stack key={panelKey} h="100%" gap={0} align="stretch" miw={0} style={{ overflow: "hidden", minWidth: 0 }}>
       <style>{`
         @keyframes mcq-rise {
           from { opacity: 0; transform: translateY(14px) scale(0.99); filter: blur(4px); }

@@ -82,72 +82,81 @@ export default function NewspaperPaperPage({
                 const canOpen = Boolean(d.document_id) && ready;
                 return (
                   <Paper key={d.id} radius="xl" p={{ base: "md", sm: "lg" }} withBorder bg="gray.0" shadow="paper">
-                    <Stack gap="sm">
-                      {/* Meta row: date + status. Identical on every card so rows align. */}
-                      <Group justify="space-between" align="center" gap="sm" wrap="wrap">
-                        <Text fw={600} ff="var(--font-serif)" style={{ minWidth: 0 }} truncate="end">
+                    <Stack gap={10}>
+                      <Group justify="space-between" align="center" gap="md" wrap="nowrap">
+                        <Text
+                          fw={600}
+                          ff="var(--font-serif)"
+                          fz={{ base: "md", sm: "lg" }}
+                          style={{ minWidth: 0 }}
+                          truncate="end"
+                        >
                           {d.edition_date}
                         </Text>
-                        <Badge
-                          variant="light"
-                          color={ready ? "sage" : d.status === "failed" ? "terracotta" : "lavender"}
-                          radius="xl"
-                          style={{ flexShrink: 0 }}
-                        >
-                          {ready
-                            ? "Ready"
-                            : d.status === "indexing" || d.status === "pending"
-                              ? "Preparing"
-                              : d.status}
-                        </Badge>
-                        {d.learner?.learn_complete ? (
-                          <Badge variant="light" color="sage" radius="xl" style={{ flexShrink: 0 }}>
-                            Complete
+                        <Group gap={6} wrap="wrap" justify="flex-end" style={{ flexShrink: 0 }}>
+                          <Badge
+                            variant="light"
+                            color={ready ? "sage" : d.status === "failed" ? "terracotta" : "lavender"}
+                            radius="xl"
+                          >
+                            {ready
+                              ? "Ready"
+                              : d.status === "indexing" || d.status === "pending"
+                                ? "Preparing"
+                                : d.status}
                           </Badge>
-                        ) : d.learner?.in_progress ? (
-                          <Badge variant="light" color="lavender" radius="xl" style={{ flexShrink: 0 }}>
-                            {d.learner.questions_total > 0
-                              ? `${d.learner.questions_answered}/${d.learner.questions_total}`
-                              : `${d.learner.questions_answered} answered`}
-                          </Badge>
-                        ) : null}
+                          {d.learner?.learn_complete ? (
+                            <Badge variant="light" color="sage" radius="xl">
+                              Complete
+                            </Badge>
+                          ) : d.learner?.in_progress ? (
+                            <Badge variant="light" color="lavender" radius="xl">
+                              {d.learner.questions_total > 0
+                                ? `${d.learner.questions_answered}/${d.learner.questions_total}`
+                                : `${d.learner.questions_answered} answered`}
+                            </Badge>
+                          ) : null}
+                        </Group>
                       </Group>
-                      {/* Actions row: wraps on narrow screens; right-aligned cluster on wider ones.
-                          Every card has the same meta+actions structure, so rows align regardless
-                          of whether a blog "Read analysis" button is present. */}
-                      <Group gap="xs" wrap="wrap" justify="flex-end" align="center">
-                        {d.has_blog && d.blog_href ? (
+                      <Group
+                        gap="xs"
+                        wrap="wrap"
+                        justify="space-between"
+                        align="center"
+                        pt={2}
+                        style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}
+                      >
+                        <Group gap="xs" wrap="wrap">
+                          {d.has_blog && d.blog_href ? (
+                            <Button
+                              radius="xl"
+                              size="compact-sm"
+                              variant="subtle"
+                              color="lavender"
+                              leftSection={<IconBook2 size={15} />}
+                              onClick={() => router.push(d.blog_href!)}
+                            >
+                              Read analysis
+                            </Button>
+                          ) : null}
                           <Button
                             radius="xl"
-                            size="md"
-                            h={36}
+                            size="compact-sm"
                             variant="subtle"
-                            color="lavender"
-                            leftSection={<IconBook2 size={16} />}
-                            onClick={() => router.push(d.blog_href!)}
+                            color="gray"
+                            disabled={!canOpen}
+                            leftSection={<IconClipboardList size={15} />}
+                            onClick={() => {
+                              if (!d.document_id) return;
+                              router.push(`/workspace/${d.document_id}?mode=test`);
+                            }}
                           >
-                            Read analysis
+                            Test this edition
                           </Button>
-                        ) : null}
+                        </Group>
                         <Button
                           radius="xl"
-                          size="md"
-                          h={36}
-                          variant="subtle"
-                          color="gray"
-                          disabled={!canOpen}
-                          leftSection={<IconClipboardList size={16} />}
-                          onClick={() => {
-                            if (!d.document_id) return;
-                            router.push(`/workspace/${d.document_id}?mode=test`);
-                          }}
-                        >
-                          Test this edition
-                        </Button>
-                        <Button
-                          radius="xl"
-                          size="md"
-                          h={36}
+                          size="sm"
                           variant="light"
                           color="lavender"
                           disabled={!canOpen}

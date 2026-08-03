@@ -197,6 +197,7 @@ export default function WorkspaceArtifactPage({
   const pinnedAssertionIdRef = useRef<string | null>(null);
   // Prefetched next id from grade/stream "next" event — Continue swaps without a full queue RT.
   const pendingNextAssertionIdRef = useRef<string | null>(null);
+  const advancingMcqRef = useRef(false);
   const [submitting, setSubmitting] = useState(false);
   const [mcqLoading, setMcqLoading] = useState(true);
   // Answered-question history + a "review" cursor (null = on the live question).
@@ -902,19 +903,7 @@ export default function WorkspaceArtifactPage({
     // While pinned on a graded card, never clobber the on-screen question from SSE
     // advances or transient null display ids during the grade handshake.
     if (pinnedAssertionIdRef.current) return;
-    const row = assertionQuery.data;
-    const p = (row.payload ?? {}) as AssertionPayload;
-    setQuestion(formatMcqStemForDisplay(p.question ?? p.stem ?? row.title ?? "Question"));
-    setOptions(normalizeMcqOptions(p.options, p.choices));
-    setCurrentConcept((p.primary_concept ?? "").trim() || null);
-    setIsMulti(
-      p.is_multi === true ||
-      (Array.isArray(p.correct_indices) && p.correct_indices.length >= 2)
-    );
-    setMultiSelected([]);
-    setSelected(null);
-    setFeedback(null);
-    setGradeState(null);
+    applyAssertionRowToMcq(assertionQuery.data, displayAssertionId);
   }, [assertionQuery.data, assertionQuery.isError, assertionQuery.isPlaceholderData, displayAssertionId, invalidArtifactId]);
 
   // After a transient assertion 502, keep retrying until the card loads so Learn
@@ -1002,8 +991,29 @@ export default function WorkspaceArtifactPage({
     );
   }
 
+  function applyAssertionRowToMcq(
+    row: { id?: string; payload?: Record<string, unknown>; title?: string },
+    expectedId: string,
+  ) {
+    if (row.id != null && String(row.id) !== expectedId) return false;
+    const p = (row.payload ?? {}) as AssertionPayload;
+    setQuestion(formatMcqStemForDisplay(p.question ?? p.stem ?? row.title ?? "Question"));
+    setOptions(normalizeMcqOptions(p.options, p.choices));
+    setCurrentConcept((p.primary_concept ?? "").trim() || null);
+    setIsMulti(
+      p.is_multi === true ||
+        (Array.isArray(p.correct_indices) && p.correct_indices.length >= 2),
+    );
+    setMultiSelected([]);
+    setSelected(null);
+    setFeedback(null);
+    setGradeState(null);
+    return true;
+  }
+
   async function advanceMcq() {
-    setSubmitting(true);
+    if (advancingMcqRef.current) return;
+    advancingMcqRef.current = true;
     try {
       const nextId = pendingNextAssertionIdRef.current;
       pinnedAssertionIdRef.current = null;
@@ -1014,17 +1024,29 @@ export default function WorkspaceArtifactPage({
       setSelected(null);
       setMultiSelected([]);
       if (nextId) {
-        // Instant Next: swap to the prefetched card; background-refresh pool metadata.
+        const cached = queryClient.getQueryData<{
+          id?: string;
+          payload?: Record<string, unknown>;
+          title?: string;
+        }>(queryKeys.assertion(nextId));
+        if (cached) {
+          applyAssertionRowToMcq({ ...cached, id: nextId }, nextId);
+        }
+        // Instant Next: swap pointer; refresh pool metadata without regressing the card.
         setQueue((q) => (q ? { ...q, current_assertion_id: nextId } : q));
         void apiGet<McqState>(learnQueuePath)
           .then((data) => {
             if (pinnedAssertionIdRef.current) return;
-            setQueue(data);
+            setQueue((prev) => ({
+              ...data,
+              current_assertion_id: prev?.current_assertion_id ?? data.current_assertion_id,
+            }));
           })
           .catch(() => {});
       } else {
         // Grade often finishes before the next card cooks. Poll briefly so we
         // do not freeze on the wait ring if SSE is quiet.
+        setMcqLoading(true);
         let data = await apiGet<McqState>(learnQueuePath);
         for (let i = 0; i < 20 && !data.current_assertion_id && !data.document_complete; i += 1) {
           await new Promise((r) => window.setTimeout(r, 750));
@@ -1036,7 +1058,8 @@ export default function WorkspaceArtifactPage({
     } catch {
       setFeedback("Could not load next question.");
     } finally {
-      setSubmitting(false);
+      advancingMcqRef.current = false;
+      setMcqLoading(false);
     }
   }
 
@@ -1869,6 +1892,7 @@ export default function WorkspaceArtifactPage({
             disabled={mcqLoading || !displayAssertionId}
           >
           <McqHeroPanel
+            cardKey={displayAssertionId}
             stem={stem}
             options={options}
             selected={selected}
