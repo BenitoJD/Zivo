@@ -907,7 +907,7 @@ export function McqHeroPanel({
             isDark={isDark}
           />
           {mode === "learn" && !gradeState?.correct && focusConcept && onFocusConcept ? (
-            <Group justify="center" mt={6}>
+            <Group justify="center" mt={compact ? 12 : 16}>
               <Button
                 variant="light"
                 color="lavender"
