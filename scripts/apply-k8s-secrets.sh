@@ -28,6 +28,7 @@ kubectl -n zivo create secret generic zivo-secrets \
   --from-literal=DEEPSEEK_API_BASE="${DEEPSEEK_API_BASE:-https://api.deepseek.com/v1}" \
   --from-literal=ZAI_API_KEY="${ZAI_API_KEY:-}" \
   --from-literal=ZAI_API_BASE="${ZAI_API_BASE:-}" \
+  --from-literal=ZAI_ENABLED="${ZAI_ENABLED:-true}" \
   --from-literal=STEPFUN_API_KEY="${STEPFUN_API_KEY:-}" \
   --from-literal=STEPFUN_API_BASE="${STEPFUN_API_BASE:-}" \
   --from-literal=STEPFUN_ENABLED="${STEPFUN_ENABLED:-false}" \

@@ -373,18 +373,30 @@ def _upsert_model(
     return model
 
 
-def _disable_stepfun(db: Session, stepfun: LlmProvider) -> bool:
-    """Turn off Step Fun provider + models (pool and admin toggles respect is_enabled)."""
+def _disable_provider_models(db: Session, provider: LlmProvider) -> bool:
+    """Turn off a provider + its models (pool and admin toggles respect is_enabled)."""
     dirty = False
-    if stepfun.is_enabled:
-        stepfun.is_enabled = False
+    if provider.is_enabled:
+        provider.is_enabled = False
         dirty = True
-    for model in db.query(LlmModel).filter(LlmModel.provider_id == stepfun.id).all():
+    for model in db.query(LlmModel).filter(LlmModel.provider_id == provider.id).all():
         if model.is_enabled or model.is_default:
             model.is_enabled = False
             if model.is_default:
                 model.is_default = False
             dirty = True
+    return dirty
+
+
+def _disable_stepfun(db: Session, stepfun: LlmProvider) -> bool:
+    return _disable_provider_models(db, stepfun)
+
+
+def _disable_zai(db: Session, zai: LlmProvider) -> bool:
+    dirty = _disable_provider_models(db, zai)
+    if (zai.api_key or "").strip():
+        zai.api_key = None
+        dirty = True
     return dirty
 
 
@@ -422,38 +434,48 @@ def ensure_registry_providers(db: Session, settings: Settings | None = None) -> 
         display_name="Z.AI",
         litellm_prefix="openai",
         api_base_url=settings.zai_api_base.rstrip("/") or None,
-        api_key=settings.zai_api_key or None,
+        api_key=settings.zai_api_key or None if settings.zai_enabled else None,
     )
-    before = (
-        db.query(LlmModel)
-        .filter(LlmModel.provider_id == zai.id, LlmModel.slug == "glm-4.7")
-        .count()
-    )
-    _upsert_model(
-        db,
-        provider=zai,
-        slug="glm-4.7",
-        litellm_model="openai/glm-4.7",
-        display_name="GLM 4.7",
-        kind=LlmModelKind.chat,
-        sort_order=15,
-        max_input_tokens=200_000,
-        max_output_tokens=8_192,
-        update_fields=True,
-        meta=GLM_THINKING_DISABLED_META,
-    )
-    # Force the thinking-disabled meta onto pre-existing GLM rows whose meta was
-    # previously empty, so live DBs pick up the latency fix on next boot.
-    glm = (
-        db.query(LlmModel)
-        .filter(LlmModel.provider_id == zai.id, LlmModel.slug == "glm-4.7")
-        .first()
-    )
-    if glm and not (glm.meta or {}).get("thinking_disabled"):
-        glm.meta = GLM_THINKING_DISABLED_META
-        dirty = True
-    if before == 0:
-        dirty = True
+    if settings.zai_enabled:
+        before = (
+            db.query(LlmModel)
+            .filter(LlmModel.provider_id == zai.id, LlmModel.slug == "glm-4.7")
+            .count()
+        )
+        _upsert_model(
+            db,
+            provider=zai,
+            slug="glm-4.7",
+            litellm_model="openai/glm-4.7",
+            display_name="GLM 4.7",
+            kind=LlmModelKind.chat,
+            sort_order=15,
+            max_input_tokens=200_000,
+            max_output_tokens=8_192,
+            update_fields=True,
+            meta=GLM_THINKING_DISABLED_META,
+        )
+        # Force the thinking-disabled meta onto pre-existing GLM rows whose meta was
+        # previously empty, so live DBs pick up the latency fix on next boot.
+        glm = (
+            db.query(LlmModel)
+            .filter(LlmModel.provider_id == zai.id, LlmModel.slug == "glm-4.7")
+            .first()
+        )
+        if glm and not (glm.meta or {}).get("thinking_disabled"):
+            glm.meta = GLM_THINKING_DISABLED_META
+            dirty = True
+        if glm and not glm.is_enabled and settings.zai_api_key:
+            glm.is_enabled = True
+            dirty = True
+        if not zai.is_enabled:
+            zai.is_enabled = True
+            dirty = True
+        if before == 0:
+            dirty = True
+    else:
+        if _disable_zai(db, zai):
+            dirty = True
 
     deepseek = _upsert_provider(
         db,
@@ -703,7 +725,7 @@ def refresh_llm_registry_from_env(
                 provider.api_base_url = settings.deepseek_api_base.rstrip("/")
                 dirty = True
 
-    if settings.zai_api_key or settings.zai_api_base:
+    if settings.zai_enabled and (settings.zai_api_key or settings.zai_api_base):
         provider = db.query(LlmProvider).filter(LlmProvider.slug == "zai").first()
         if provider:
             if settings.zai_api_key and (force_keys or not provider.api_key):
@@ -909,27 +931,28 @@ def bootstrap_llm_registry_from_env(db: Session, settings: Settings | None = Non
             max_output_tokens=8_192,
         )
 
-        zai = _upsert_provider(
-            db,
-            slug="zai",
-            display_name="Z.AI",
-            litellm_prefix="openai",
-            api_base_url=settings.zai_api_base.rstrip("/") or None,
-            api_key=settings.zai_api_key or None,
-        )
-        _upsert_model(
-            db,
-            provider=zai,
-            slug="glm-4.7",
-            litellm_model="openai/glm-4.7",
-            display_name="GLM 4.7",
-            kind=LlmModelKind.chat,
-            is_default=settings.litellm_model == "openai/glm-4.7",
-            sort_order=15,
-            max_input_tokens=200_000,
-            max_output_tokens=8_192,
-            meta=GLM_THINKING_DISABLED_META,
-        )
+        if settings.zai_enabled:
+            zai = _upsert_provider(
+                db,
+                slug="zai",
+                display_name="Z.AI",
+                litellm_prefix="openai",
+                api_base_url=settings.zai_api_base.rstrip("/") or None,
+                api_key=settings.zai_api_key or None,
+            )
+            _upsert_model(
+                db,
+                provider=zai,
+                slug="glm-4.7",
+                litellm_model="openai/glm-4.7",
+                display_name="GLM 4.7",
+                kind=LlmModelKind.chat,
+                is_default=settings.litellm_model == "openai/glm-4.7",
+                sort_order=15,
+                max_input_tokens=200_000,
+                max_output_tokens=8_192,
+                meta=GLM_THINKING_DISABLED_META,
+            )
 
         deepseek = _upsert_provider(
             db,

@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     zai_api_base: str = "https://api.z.ai/api/coding/paas/v4"
     zai_api_key: str = ""
+    # Z.AI (z.ai) — OpenAI-compatible GLM route. On by default when a key is set;
+    # set ZAI_ENABLED=false to unregister models and keep the provider out of the pool.
+    zai_enabled: bool = True
     # Step Fun (stepfun.com) — OpenAI-compatible. Off by default; set STEPFUN_ENABLED=true
     # to register models and sync keys from env.
     stepfun_enabled: bool = False
