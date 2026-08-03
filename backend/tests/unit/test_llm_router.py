@@ -64,3 +64,32 @@ def test_stream_chat_completion_uses_registry() -> None:
         return tokens
 
     assert asyncio.run(run()) == ["hi"]
+
+
+def test_stream_chat_completion_strips_em_dash() -> None:
+    db = MagicMock()
+    resolved = _resolved()
+
+    async def fake_stream():
+        chunk = MagicMock()
+        chunk.choices = [MagicMock(delta=MagicMock(content="a\u2014b"))]
+        yield chunk
+
+    mock_litellm = MagicMock()
+    mock_litellm.acompletion = AsyncMock(return_value=fake_stream())
+
+    async def run() -> list[str]:
+        tokens: list[str] = []
+        with (
+            patch(
+                "app.services.llm_router.iter_chat_model_attempts",
+                return_value=iter([resolved]),
+            ),
+            patch("app.services.llm_router.litellm_provider_kwargs", return_value={"api_key": "test-key"}),
+            patch.dict(sys.modules, {"litellm": mock_litellm}),
+        ):
+            async for token in llm_router.stream_chat_completion([{"role": "user", "content": "x"}], db):
+                tokens.append(token)
+        return tokens
+
+    assert asyncio.run(run()) == ["a-b"]

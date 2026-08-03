@@ -25,13 +25,14 @@ Index of durable policy engines (ADR 0004 seams). Budget plans N; Quality decide
 | 17 | Open Response Measurement | (this index) | `open_response.py` | mains + interview + coding teach + SD heuristic + coding bank gate | yes | DONE |
 | 18 | Aspect Discovery | (this index) | `aspect_discovery.py` | triage pick + speculative + next-unasked | yes | DONE |
 | 19 | Learn Lesson | (this index) | `page_lessons.py` | page cook (before MCQ loop) → learn-queue `page_lesson` | yes | DONE |
+| 20 | LLM Prose | [LLM_PROSE_ENGINE.md](LLM_PROSE_ENGINE.md) | `llm_prose_engine.py` | `llm_router` output boundary | yes | DONE |
 
 ## Pipeline sketch
 
 ```
 cook:  Worthiness → Budget → Aspect Discovery pick → generate → Grounding + Distractor → Quality → Graph lineage → birth Calibration prior
 serve: Session Design → Selection (reads Calibration + Graph + KC + Spaced due + Mastery stop) → learner
-tutor: Tutor Retrieval (gate → window → rank) → LLM
+tutor: Tutor Retrieval (gate → window → rank) → LLM → LLM Prose sanitize
 grade: measurement (MCQ or Open Response) → Calibration update → Mastery stop + Spaced revisit persisted
 hygiene: Item Health / retirement (CTT)
 practice hubs: Practice Selection (overlap×difficulty)

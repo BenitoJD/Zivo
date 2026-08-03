@@ -34,6 +34,7 @@ from app.services.llm_router_pool import (
     build_router,
     router_enabled,
 )
+from app.services.llm_prose_engine import sanitize_llm_output
 from app.services.token_budget import (
     CHAT_OUTPUT_MAX_TOKENS,
     OUTPUT_MAX_TOKENS_BATCH,
@@ -326,16 +327,8 @@ async def _stream_chat_impl(
     raise RuntimeError("stream_chat_completion exhausted model pool without result")
 
 
-# The product voice uses NO em/en dashes in generated text — they read as
-# "AI-written" and the user asked for none. Normalize them to a plain hyphen at the
-# single LLM output boundary, so every generated question / answer / comment / chat
-# token is clean regardless of what any individual prompt asks for. Each is a single
-# Unicode char, so per-token streaming replacement is safe.
-_DASH_TABLE = {0x2014: "-", 0x2013: "-", 0x2015: "-", 0x2012: "-"}
-
-
-def strip_dashes(text: str) -> str:
-    return text.translate(_DASH_TABLE) if text else text
+# LLM Prose Engine — every completion/chunk passes sanitize_llm_output (see
+# docs/LLM_PROSE_ENGINE.md). Verbatim opt-out via strip_output=False (OCR, etc.).
 
 
 async def stream_chat_completion(
@@ -359,7 +352,7 @@ async def stream_chat_completion(
             account_id=account_id,
             document_id=document_id,
         ):
-            yield strip_dashes(chunk)
+            yield sanitize_llm_output(chunk).text
 
 
 async def acomplete_chat(
@@ -432,7 +425,11 @@ async def acomplete_chat(
                 document_id=document_id,
             )
             content = response.choices[0].message.content or ""
-            return strip_dashes(content) if strip_output else content
+            return (
+                sanitize_llm_output(content).text
+                if strip_output
+                else content
+            )
         except Exception as exc:
             last_exc = exc
             # A hard-timeout (stalled provider) is failover-eligible: try the next
@@ -506,7 +503,7 @@ async def _router_complete(
         document_id=document_id,
     )
     content = response.choices[0].message.content or ""
-    return strip_dashes(content) if strip_output else content
+    return sanitize_llm_output(content).text if strip_output else content
 
 
 async def complete_chat(
