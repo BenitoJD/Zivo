@@ -239,6 +239,11 @@ async def grade_stream(
                     stream_db.refresh(doc)
                     lk = learner_key_for(user, guest_id)
                     progress = get_progress(doc, learner_key=lk)
+                    # Record may not be visible to get_progress yet on a fast Continue;
+                    # always exclude the card we just graded from selection.
+                    answered = {str(x) for x in progress.get("answered_ids") or []}
+                    answered.add(str(body.assertion_id))
+                    progress = {**progress, "answered_ids": sorted(answered)}
                     next_id = next_assertion_id(stream_db, artifact_id, progress)
             except Exception:
                 logger.exception("grade answer-record failed")

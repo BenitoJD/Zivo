@@ -135,6 +135,32 @@ function learnAnsweredToCards(items: LearnAnsweredItem[]): AnsweredCard[] {
   }));
 }
 
+/** Stale learn-queue ticks can arrive after Continue and rewind current_assertion_id. */
+function coalesceQueueAssertionId(
+  incoming: string | null | undefined,
+  prevCurrent: string | null | undefined,
+  answeredIds: ReadonlySet<string>,
+): string | null | undefined {
+  if (!incoming) return incoming;
+  if (!prevCurrent || incoming === prevCurrent) return incoming;
+  if (answeredIds.has(incoming)) return prevCurrent;
+  return incoming;
+}
+
+function mergeQueueState(
+  data: McqState,
+  prev: McqState | null,
+  answeredIds: ReadonlySet<string>,
+): McqState {
+  const resolved = coalesceQueueAssertionId(
+    data.current_assertion_id,
+    prev?.current_assertion_id ?? null,
+    answeredIds,
+  );
+  if (resolved === data.current_assertion_id) return data;
+  return { ...data, current_assertion_id: resolved ?? null };
+}
+
 export default function WorkspaceArtifactPage({
   params,
 }: {
@@ -197,6 +223,8 @@ export default function WorkspaceArtifactPage({
   const pinnedAssertionIdRef = useRef<string | null>(null);
   // Prefetched next id from grade/stream "next" event — Continue swaps without a full queue RT.
   const pendingNextAssertionIdRef = useRef<string | null>(null);
+  // Graded assertion ids — blocks SSE/poll from rewinding to an already-answered card.
+  const answeredAssertionIdsRef = useRef<Set<string>>(new Set());
   const advancingMcqRef = useRef(false);
   const [submitting, setSubmitting] = useState(false);
   const [mcqLoading, setMcqLoading] = useState(true);
@@ -356,6 +384,7 @@ export default function WorkspaceArtifactPage({
     pinnedAssertionIdRef.current = null;
     setPinnedAssertionId(null);
     pendingNextAssertionIdRef.current = null;
+    answeredAssertionIdsRef.current = new Set();
     setSubmitting(false);
     setMcqLoading(true);
     setAnsweredHistory([]);
@@ -750,7 +779,7 @@ export default function WorkspaceArtifactPage({
                 current_assertion_id: pinned,
               };
             }
-            return data;
+            return mergeQueueState(data, prev, answeredAssertionIdsRef.current);
           });
           setMcqLoading(false);
         } catch {
@@ -843,10 +872,16 @@ export default function WorkspaceArtifactPage({
             ) {
               pendingNextAssertionIdRef.current = realNext;
             }
-            setQueue({ ...data, current_assertion_id: pinnedAssertionIdRef.current });
+            setQueue((prev) =>
+              mergeQueueState(
+                { ...data, current_assertion_id: pinnedAssertionIdRef.current },
+                prev,
+                answeredAssertionIdsRef.current,
+              ),
+            );
             return;
           }
-          setQueue(data);
+          setQueue((prev) => mergeQueueState(data, prev, answeredAssertionIdsRef.current));
         })
         .catch(() => {});
     }, waitingForNextCard ? 1500 : 3000);
@@ -934,11 +969,16 @@ export default function WorkspaceArtifactPage({
 
   async function refreshQueue() {
     const data = await apiGet<McqState>(learnQueuePath);
-    if (pinnedAssertionIdRef.current) {
-      setQueue({ ...data, current_assertion_id: pinnedAssertionIdRef.current });
-    } else {
-      setQueue(data);
-    }
+    setQueue((prev) => {
+      if (pinnedAssertionIdRef.current) {
+        return mergeQueueState(
+          { ...data, current_assertion_id: pinnedAssertionIdRef.current },
+          prev,
+          answeredAssertionIdsRef.current,
+        );
+      }
+      return mergeQueueState(data, prev, answeredAssertionIdsRef.current);
+    });
   }
 
   async function setStudyMode(nextMode: "adaptive" | "classic") {
@@ -1014,8 +1054,12 @@ export default function WorkspaceArtifactPage({
   async function advanceMcq() {
     if (advancingMcqRef.current) return;
     advancingMcqRef.current = true;
+    const answered = answeredAssertionIdsRef.current;
+    const isStaleCurrent = (id: string | null | undefined) =>
+      !id || answered.has(id);
     try {
-      const nextId = pendingNextAssertionIdRef.current;
+      const rawNext = pendingNextAssertionIdRef.current;
+      const nextId = rawNext && !answered.has(rawNext) ? rawNext : null;
       pinnedAssertionIdRef.current = null;
       setPinnedAssertionId(null);
       pendingNextAssertionIdRef.current = null;
@@ -1037,10 +1081,7 @@ export default function WorkspaceArtifactPage({
         void apiGet<McqState>(learnQueuePath)
           .then((data) => {
             if (pinnedAssertionIdRef.current) return;
-            setQueue((prev) => ({
-              ...data,
-              current_assertion_id: prev?.current_assertion_id ?? data.current_assertion_id,
-            }));
+            setQueue((prev) => mergeQueueState(data, prev, answered));
           })
           .catch(() => {});
       } else {
@@ -1048,12 +1089,14 @@ export default function WorkspaceArtifactPage({
         // do not freeze on the wait ring if SSE is quiet.
         setMcqLoading(true);
         let data = await apiGet<McqState>(learnQueuePath);
-        for (let i = 0; i < 20 && !data.current_assertion_id && !data.document_complete; i += 1) {
+        for (let i = 0; i < 20 && isStaleCurrent(data.current_assertion_id) && !data.document_complete; i += 1) {
           await new Promise((r) => window.setTimeout(r, 750));
           if (pinnedAssertionIdRef.current) return;
           data = await apiGet<McqState>(learnQueuePath);
         }
-        if (!pinnedAssertionIdRef.current) setQueue(data);
+        if (!pinnedAssertionIdRef.current) {
+          setQueue((prev) => mergeQueueState(data, prev, answered));
+        }
       }
     } catch {
       setFeedback("Could not load next question.");
@@ -1067,6 +1110,7 @@ export default function WorkspaceArtifactPage({
     const hasSelection = isMulti ? multiSelected.length > 0 : selected !== null;
     if (!displayAssertionId || !hasSelection || submitting) return;
     const answeredId = displayAssertionId;
+    answeredAssertionIdsRef.current.add(answeredId);
     // Pin before submitting so queue SSE cannot advance the visible card mid-grade.
     pinnedAssertionIdRef.current = answeredId;
     setPinnedAssertionId(answeredId);
@@ -1271,6 +1315,7 @@ export default function WorkspaceArtifactPage({
         setFeedback(null);
         setAnsweredHistory([]);
         setReviewIndex(null);
+        answeredAssertionIdsRef.current = new Set();
       }
     } catch (e) {
       setSetupError(e instanceof Error ? e.message : "Could not start indexing");
@@ -1314,6 +1359,7 @@ export default function WorkspaceArtifactPage({
     pinnedAssertionIdRef.current = null;
     setPinnedAssertionId(null);
     pendingNextAssertionIdRef.current = null;
+    answeredAssertionIdsRef.current = new Set();
     setMode("test");
     router.replace(`/workspace/${artifactId}?mode=test`);
   }
