@@ -30,11 +30,26 @@ const ebGaramond = EB_Garamond({
   display: "swap",
 });
 
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://zivo.fyi";
+
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: "Zivo | Question Better.",
   description: "Upload anything. Get exam-style questions, scoped exactly to what you read, with a tutor that knows your source.",
   manifest: "/manifest.webmanifest",
   appleWebApp: { capable: true, title: "Zivo", statusBarStyle: "default" },
+  // Stable /public paths (no Next file-convention cache-bust query strings) so Google
+  // Search can fetch and cache the favicon reliably.
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/icon-48.png", sizes: "48x48", type: "image/png" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+    shortcut: "/favicon.ico",
+  },
 };
 
 export const viewport: Viewport = {

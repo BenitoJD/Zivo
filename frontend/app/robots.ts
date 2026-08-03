@@ -9,7 +9,7 @@ export default function robots(): MetadataRoute.Robots {
   return {
     rules: {
       userAgent: "*",
-      allow: ["/", "/learn", "/learn/", "/practice"],
+      // Disallow-only: a restrictive Allow list blocked /favicon.ico from Googlebot.
       disallow: ["/workspace", "/api/", "/login", "/signup"],
     },
     sitemap: `${origin}/sitemap.xml`,
