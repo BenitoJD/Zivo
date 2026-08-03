@@ -37,7 +37,9 @@ import { CAT_ENABLED_KEY } from "@/app/_components/pets/PetPlayground";
 import {
   MCQ_CONTENT_MAX,
   MCQ_OPTION_FONT_SIZE,
+  MCQ_SELECTABLE_TEXT_STYLE,
   MCQ_STEM_FONT_SIZE,
+  mcqHasTextSelection,
   mcqOptionChrome,
   McqFeedbackCard,
 } from "@/app/_components/mcq/McqCard";
@@ -365,10 +367,11 @@ export function McqHeroPanel({
         // the option's own click handler and preventDefault to suppress the native
         // activation, rather than relying on that native activation to fire at all -
         // one click either way, and Enter behaves the same however you got here.
-        const focusedOption = (document.activeElement as HTMLElement | null)?.closest<HTMLButtonElement>(
+        const focusedOption = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(
           "[data-mcq-option]",
         );
         if (focusedOption) {
+          if (mcqHasTextSelection()) return;
           e.preventDefault();
           focusedOption.click();
           return;
@@ -393,11 +396,11 @@ export function McqHeroPanel({
       if (dir !== 0) {
         if (optionsLocked || checking) return;
         const nodes = Array.from(
-          document.querySelectorAll<HTMLButtonElement>("[data-mcq-option]"),
+          document.querySelectorAll<HTMLElement>("[data-mcq-option]"),
         );
         if (nodes.length === 0) return;
         e.preventDefault();
-        const focused = nodes.indexOf(document.activeElement as HTMLButtonElement);
+        const focused = nodes.indexOf(document.activeElement as HTMLElement);
         // Start from whatever is focused, else the current answer, else "before the
         // first" so Down lands on A and Up wraps to the last option.
         const from =
@@ -697,12 +700,13 @@ export function McqHeroPanel({
           animation: mcq-rise 460ms cubic-bezier(0.32,0.72,0,1) both;
           transition: transform 160ms cubic-bezier(0.32,0.72,0,1), border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
         }
-        .mcq-opt:not(:disabled):hover { transform: translateY(-2px); box-shadow: var(--mantine-shadow-paper); border-color: var(--mantine-color-lavender-4) !important; }
-        .mcq-opt:not(:disabled):active { transform: translateY(0); }
+        .mcq-opt:not([aria-disabled="true"]):hover { transform: translateY(-2px); box-shadow: var(--mantine-shadow-paper); border-color: var(--mantine-color-lavender-4) !important; }
+        .mcq-opt:not([aria-disabled="true"]):active { transform: translateY(0); }
         /* UnstyledButton strips the default ring, so arrow-key focus would be
            invisible - which matters most for select-all, where moving focus is the
            only feedback until you toggle. */
         .mcq-opt:focus-visible { outline: 2px solid var(--mantine-color-lavender-5); outline-offset: 2px; }
+        .mcq-opt[aria-disabled="true"] { cursor: default; }
         /* Checking: the chosen option breathes while the grade comes back. */
         @keyframes mcq-check-pulse {
           0%, 100% { box-shadow: 0 0 0 0 rgba(124, 109, 242, 0.0); }
@@ -785,6 +789,7 @@ export function McqHeroPanel({
           wordBreak: "normal",
           whiteSpace: "pre-line",
           paddingInline: onFlagQuestion && !isTest ? 28 : 0,
+          ...MCQ_SELECTABLE_TEXT_STYLE,
         }}
       >
         {displayStem}
@@ -816,26 +821,21 @@ export function McqHeroPanel({
           const isChecking = checking && isSelected;
           const checkingDim = checking && !isSelected;
           return (
-            <UnstyledButton
+            <Box
               key={value}
               className={isChecking ? "mcq-opt mcq-opt-checking" : "mcq-opt"}
-              // Arrow-key navigation targets these by attribute. Only the interactive
-              // panel carries it - the read-only review view renders its own options.
               data-mcq-option={i}
-              // Keep clickable when locked: disabled buttons swallow clicks, and after
-              // a correct answer the focused option is exactly where the learner taps
-              // again / presses Enter. Treat that as Continue.
-              disabled={checking}
-              aria-disabled={optionsLocked || checking}
+              role="button"
+              tabIndex={checking ? -1 : 0}
+              aria-disabled={optionsLocked || checking ? true : undefined}
               onClick={() => {
+                if (mcqHasTextSelection()) return;
                 if (checking) return;
                 if (optionsLocked) {
                   onContinue();
                   return;
                 }
                 if (multiSelect) { onToggle?.(i); return; }
-                // Second click on the already-selected option checks it - the
-                // answer IS the button, so there's no reach for the far one.
                 if (isSelected && !submitting) { onSubmit(); return; }
                 onSelect(value);
               }}
@@ -849,6 +849,8 @@ export function McqHeroPanel({
                 background,
                 opacity: checkingDim ? 0.42 : dim ? 0.6 : 1,
                 transition: "opacity 280ms cubic-bezier(0.32,0.72,0,1)",
+                cursor: checking ? "default" : "pointer",
+                textAlign: "left",
               }}
             >
               <Group wrap="nowrap" align="center" gap={compact ? "sm" : "md"}>
@@ -888,6 +890,7 @@ export function McqHeroPanel({
                     flex: 1,
                     minWidth: 0,
                     overflowWrap: "break-word",
+                    ...MCQ_SELECTABLE_TEXT_STYLE,
                   }}
                 >
                   {opt}
@@ -914,7 +917,7 @@ export function McqHeroPanel({
                   </Box>
                 )}
               </Group>
-            </UnstyledButton>
+            </Box>
           );
         })}
       </Stack>
@@ -1191,6 +1194,7 @@ export function McqReviewView({
               overflowWrap: "break-word",
               wordBreak: "normal",
               whiteSpace: "pre-line",
+              ...MCQ_SELECTABLE_TEXT_STYLE,
             }}
           >
             {displayStem}
@@ -1257,6 +1261,7 @@ export function McqReviewView({
                         flex: 1,
                         minWidth: 0,
                         overflowWrap: "break-word",
+                        ...MCQ_SELECTABLE_TEXT_STYLE,
                       }}
                     >
                       {opt}

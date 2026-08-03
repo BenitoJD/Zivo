@@ -30,6 +30,16 @@ export const MCQ_OPTION_FONT_SIZE = {
   default: "1.0625rem",
 } as const;
 
+/** Lets learners highlight stem/option copy for Ask / Explain / Dictionary / Wikipedia. */
+export const MCQ_SELECTABLE_TEXT_STYLE = {
+  userSelect: "text",
+  WebkitUserSelect: "text",
+} as const;
+
+export function mcqHasTextSelection(): boolean {
+  return Boolean(window.getSelection()?.toString().trim());
+}
+
 export type GradeState = { correct: boolean; correctIndex: number; correctIndices?: number[] } | null;
 
 export type McqOptionVisualState = {
@@ -162,7 +172,11 @@ export function McqFeedbackCard({
               key={i}
               c="var(--mantine-color-text)"
               mt={i === 0 ? 0 : "sm"}
-              style={{ lineHeight: 1.7, fontSize: compact ? "0.92rem" : "1.02rem" }}
+              style={{
+                lineHeight: 1.7,
+                fontSize: compact ? "0.92rem" : "1.02rem",
+                ...MCQ_SELECTABLE_TEXT_STYLE,
+              }}
             >
               {p}
             </Text>

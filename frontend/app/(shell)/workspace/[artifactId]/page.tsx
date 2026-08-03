@@ -1851,6 +1851,11 @@ export default function WorkspaceArtifactPage({
           // Reviewing a previously-answered question - read-only, with the learner's
           // choice + the correct answer + explanation, and step controls.
           <Box style={{ height: "100%", minHeight: 0, width: "100%", overflow: "hidden" }}>
+          <SelectionQuote
+            onAsk={quoteSelectionToChat}
+            onExplain={explainSelectionInChat}
+            onWikipedia={wikipediaSelectionInChat}
+          >
           <McqReviewView
             card={answeredHistory[reviewIndex]}
             index={reviewIndex}
@@ -1862,6 +1867,7 @@ export default function WorkspaceArtifactPage({
             }
             onExit={() => setReviewIndex(null)}
           />
+          </SelectionQuote>
           </Box>
           ) : showLesson && queue?.page_lesson ? (
           // Learn-only pre-question lesson: the learner reads the page's teaching

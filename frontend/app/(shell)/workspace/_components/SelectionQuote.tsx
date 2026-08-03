@@ -85,6 +85,19 @@ export function SelectionQuote({
     };
   }, []);
 
+  useEffect(() => {
+    const onSelectionChange = () => {
+      const s = window.getSelection();
+      if (!s || s.isCollapsed || !s.toString().trim()) {
+        setSel(null);
+        return;
+      }
+      window.setTimeout(showSelection, 0);
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => document.removeEventListener("selectionchange", onSelectionChange);
+  }, [showSelection]);
+
   const act = (fn: () => void) => {
     fn();
     setSel(null);
