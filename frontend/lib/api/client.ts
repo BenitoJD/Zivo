@@ -385,6 +385,7 @@ export async function apiPostForm<T>(
     signal,
   );
   captureResponseMeta(res);
+  await maybeClearSessionOnAuthFailure(res);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json() as Promise<T>;
 }
@@ -574,10 +575,14 @@ function stripCr(value: string): string {
 
 function parseSseEventBlock(part: string): { event: string; data: string } | null {
   const lines = part.split(/\n/).map(stripCr);
-  const dataLine = lines.find((l) => l.startsWith("data:"))?.replace(/^data:\s*/, "");
-  if (!dataLine) return null;
+  // One SSE event may carry several `data:` lines; the spec joins them with "\n".
+  // Taking only the first silently truncated any payload containing a newline.
+  const dataLines = lines
+    .filter((l) => l.startsWith("data:"))
+    .map((l) => l.replace(/^data:\s?/, ""));
+  if (dataLines.length === 0) return null;
   const event = stripCr(lines.find((l) => l.startsWith("event:"))?.replace(/^event:\s*/, "") ?? "message");
-  return { event, data: dataLine };
+  return { event, data: dataLines.join("\n") };
 }
 
 export type ChatSseHandlers = {

@@ -260,7 +260,7 @@ function BuildTab({ artifactId }: { artifactId: string }) {
       {(form.experience ?? []).map((job, i) => (
         <Paper key={i} radius="md" p="sm" withBorder style={{ borderColor: border }}>
           <Group justify="flex-end" mb={4}>
-            <ActionIcon variant="subtle" color="terracotta" size="sm"
+            <ActionIcon variant="subtle" color="terracotta" size="sm" aria-label="Remove this role"
               onClick={() => set("experience", (form.experience ?? []).filter((_, idx) => idx !== i))}>
               <IconTrash size={14} />
             </ActionIcon>

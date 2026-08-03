@@ -707,39 +707,45 @@ export default function WorkspaceArtifactPage({
     // from Dexie — no learn-queue fetch, no SSE, no poll. Seeds the assertion
     // cache so useAssertionQuery returns instantly with no network round-trip.
     // Falls through to the online path when there is no pack (or no IndexedDB).
-    if (typeof window !== "undefined" && "indexedDB" in window) {
-      void (async () => {
-        const loaded = await loadPackForDocument(artifactId);
-        if (cancelled || !loaded) {
-          // No offline pack → the online loader below takes over.
-          return;
-        }
-        setOfflineDeck(loaded.deck);
-        setOfflinePack(loaded.pack);
-        setOfflineAnsweredIds(new Set(loaded.pack.mastery.answered_ids));
-        seedAssertionCache(loaded.deck, queryClient, (id) => queryKeys.assertion(id));
-        const nextId = nextAssertionId(loaded.deck, new Set(loaded.pack.mastery.answered_ids));
-        setQueue({
-          current_assertion_id: nextId,
-          questions_generated: loaded.deck.length,
-          questions_answered: loaded.pack.mastery.answered_ids.length,
-          document_complete: nextId === null,
-          pool_available: loaded.deck.length,
-          study_mode: "classic",
-        } as McqState);
-        setMcqLoading(false);
-      })();
-    }
+    // Both branches await the SAME probe: reading `offlineDeck` from the render
+    // closure could never see the value the other branch had just set, so a
+    // downloaded pack still opened the online queue + SSE on top of it.
+    const offlineProbe =
+      typeof window !== "undefined" && "indexedDB" in window
+        ? loadPackForDocument(artifactId).catch(() => null)
+        : Promise.resolve(null);
 
     void (async () => {
-      await ensureGuestSession();
-      if (cancelled) return;
+      const loaded = await offlineProbe;
+      if (cancelled || !loaded) {
+        // No offline pack → the online loader below takes over.
+        return;
+      }
+      setOfflineDeck(loaded.deck);
+      setOfflinePack(loaded.pack);
+      setOfflineAnsweredIds(new Set(loaded.pack.mastery.answered_ids));
+      seedAssertionCache(loaded.deck, queryClient, (id) => queryKeys.assertion(id));
+      const nextId = nextAssertionId(loaded.deck, new Set(loaded.pack.mastery.answered_ids));
+      setQueue({
+        current_assertion_id: nextId,
+        questions_generated: loaded.deck.length,
+        questions_answered: loaded.pack.mastery.answered_ids.length,
+        document_complete: nextId === null,
+        pool_available: loaded.deck.length,
+        study_mode: "classic",
+      } as McqState);
+      setMcqLoading(false);
+    })();
+
+    void (async () => {
       // Offline Mode active (ADR 0006): the Dexie loader above owns the queue;
       // never open the online learn-queue fetch / SSE while studying offline.
-      if (offlineDeck) return;
+      if (await offlineProbe) return;
+      await ensureGuestSession();
+      if (cancelled) return;
       try {
         const data = await apiGet<McqState>(learnQueuePath);
-        if (cancelled || offlineDeck) return;
+        if (cancelled) return;
         setQueue(data);
         setMcqLoading(false);
       } catch {
@@ -827,7 +833,7 @@ export default function WorkspaceArtifactPage({
       queueStreamRef.current = null;
       setStreamConnected(false);
     };
-  }, [artifactId, invalidArtifactId, studyRangeKey, artifact?.status, learnQueuePath, learnQueueStreamPath]);
+  }, [artifactId, invalidArtifactId, studyRangeKey, artifact?.status, learnQueuePath, learnQueueStreamPath, queryClient]);
 
   useEffect(() => {
     if (invalidArtifactId || !studyRangeKey || artifact?.status !== "ready") return;

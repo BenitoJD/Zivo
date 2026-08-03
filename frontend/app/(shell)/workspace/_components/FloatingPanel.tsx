@@ -181,7 +181,6 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
       const h = Math.max(MIN_H, ch - topMin - MARGIN);
       next = { x: defaultSide === "left" ? MARGIN : Math.max(MARGIN, cw - w - MARGIN), y: topMin, w, h };
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time init from container
     setRect(next);
   }, [open, rect, storageKey, defaultSide, bounds, topInset]);
 

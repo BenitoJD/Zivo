@@ -348,8 +348,14 @@ export function McqHeroPanel({
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (showWaitChrome) return;
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+      // An open modal / drawer / menu owns the keyboard. Mantine unmounts these
+      // when closed, so their presence IS the "something is over the card" test.
+      // Without this, typing "d" in Settings — or arrowing through the flag menu —
+      // silently answered the question underneath.
+      if (document.querySelector('[role="dialog"], [role="menu"], [role="listbox"]')) return;
       // Enter OR Space advances / checks - whichever hand is on the keyboard, no
       // reach for the mouse. A focused button/link keeps its native activation so
       // we never double-fire.
@@ -801,7 +807,13 @@ export function McqHeroPanel({
           Select all that apply
         </Text>
       ) : null}
-      <Stack gap={compact ? 8 : 10} mih={0} style={{ flexShrink: 0 }}>
+      <Stack
+        gap={compact ? 8 : 10}
+        mih={0}
+        style={{ flexShrink: 0 }}
+        role={multiSelect ? "group" : "radiogroup"}
+        aria-label={multiSelect ? "Answer options — select all that apply" : "Answer options"}
+      >
         {safeOptions.map((opt, i) => {
           const value = String(i);
           const isSelected = multiSelect ? multiChosen.includes(i) : selected === value;
@@ -825,7 +837,10 @@ export function McqHeroPanel({
               key={value}
               className={isChecking ? "mcq-opt mcq-opt-checking" : "mcq-opt"}
               data-mcq-option={i}
-              role="button"
+              // radio/checkbox (not "button") so a screen reader announces WHICH
+              // option is chosen — role="button" exposed no selected state at all.
+              role={multiSelect ? "checkbox" : "radio"}
+              aria-checked={isSelected}
               tabIndex={checking ? -1 : 0}
               aria-disabled={optionsLocked || checking ? true : undefined}
               onClick={() => {
