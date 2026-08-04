@@ -26,7 +26,7 @@ from app.services.llm_pool import (
     iter_chat_model_attempts,
     iter_failover_attempts,
     litellm_provider_kwargs,
-    log_failover,
+    record_failover,
 )
 from app.services.llm_prompt_cache import apply_prompt_cache
 from app.services.llm_registry import ResolvedLlmModel
@@ -321,7 +321,7 @@ async def _stream_chat_impl(
             last_exc = exc
             if model_id is not None or not is_failover_eligible(exc):
                 raise
-            log_failover(resolved, exc, log_tag=log_tag)
+            record_failover(resolved, exc, log_tag=log_tag)
     if last_exc is not None:
         raise last_exc
     raise RuntimeError("stream_chat_completion exhausted model pool without result")
@@ -437,7 +437,7 @@ async def acomplete_chat(
             timed_out = isinstance(exc, (asyncio.TimeoutError, TimeoutError))
             if model_id is not None or (not timed_out and not is_failover_eligible(exc)):
                 raise
-            log_failover(resolved, exc, log_tag=log_tag)
+            record_failover(resolved, exc, log_tag=log_tag)
     if last_exc is not None:
         raise last_exc
     raise RuntimeError("complete_chat exhausted model pool without result")

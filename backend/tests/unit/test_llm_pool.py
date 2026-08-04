@@ -12,11 +12,28 @@ from app.config import Settings
 from app.models.llm import LlmModel, LlmModelKind, LlmProvider
 from app.services.llm_pool import (
     is_failover_eligible,
+    is_hard_provider_error,
+    is_provider_benched,
     iter_chat_model_attempts,
     list_pool_chat_models,
     litellm_provider_kwargs,
+    record_failover,
+    reset_provider_breakers,
 )
 from app.services.llm_registry import ResolvedLlmModel
+
+
+@pytest.fixture(autouse=True)
+def _clear_breakers() -> None:
+    reset_provider_breakers()
+
+
+def _db_returning(*models: LlmModel) -> MagicMock:
+    """A db whose pool query yields ``models`` (query→join→options→filter→order_by→filter→all)."""
+    db = MagicMock()
+    chain = db.query.return_value.join.return_value.options.return_value
+    chain.filter.return_value.order_by.return_value.filter.return_value.all.return_value = list(models)
+    return db
 
 
 def _chat_model(
@@ -121,8 +138,58 @@ def test_list_pool_chat_models_skips_missing_keys() -> None:
         kind=LlmModelKind.chat.value,
         is_enabled=True,
     )
-    db = MagicMock()
-    db.query.return_value.join.return_value.options.return_value.filter.return_value.order_by.return_value.all.return_value = [
-        model
-    ]
-    assert list_pool_chat_models(db) == []
+    assert list_pool_chat_models(_db_returning(model)) == []
+
+
+def test_is_hard_provider_error_separates_billing_from_rate_limits() -> None:
+    """Benching is for account death, not for a provider that's merely busy."""
+
+    class Boom(Exception):
+        def __init__(self, message: str, status_code: int | None = None) -> None:
+            super().__init__(message)
+            self.status_code = status_code
+
+    assert is_hard_provider_error(Boom("OpenAIException - Insufficient Balance")) is True
+    assert is_hard_provider_error(Boom("Insufficient account balance", 402)) is True
+    assert is_hard_provider_error(Boom("token expired or incorrect", 401)) is True
+    assert is_hard_provider_error(Boom("Rate limit exceeded: free-models-per-day", 429)) is True
+    # A plain per-minute 429 is transient — retrying it is correct.
+    assert is_hard_provider_error(Boom("rate limit exceeded, slow down", 429)) is False
+    assert is_hard_provider_error(Boom("connection timed out")) is False
+    # A doc-link footer must not bench a provider that is merely busy.
+    assert (
+        is_hard_provider_error(Boom("overloaded, see https://x.ai/docs/billing", 429)) is False
+    )
+
+
+def test_record_failover_benches_provider_and_drops_it_from_pool() -> None:
+    """A drained provider leaves the pool, so the next job skips it entirely."""
+    dead = _chat_model(slug="deepseek", litellm_model="openai/deepseek-v4-flash", provider_slug="deepseek")
+    live = _chat_model(slug="step", litellm_model="openai/step-3.7-flash", provider_slug="stepfun")
+
+    db = _db_returning(dead.record, live.record)
+    assert len(list_pool_chat_models(db)) == 2
+
+    record_failover(dead, RuntimeError("OpenAIException - Insufficient Balance"), log_tag="test")
+
+    assert is_provider_benched(dead.provider) is True
+    assert is_provider_benched(live.provider) is False
+    assert [m.litellm_model for m in list_pool_chat_models(db)] == ["openai/step-3.7-flash"]
+
+
+def test_record_failover_keeps_provider_on_transient_error() -> None:
+    model = _chat_model(slug="step", litellm_model="openai/step-3.7-flash", provider_slug="stepfun")
+    record_failover(model, RuntimeError("connection timed out"), log_tag="test")
+    assert is_provider_benched(model.provider) is False
+
+
+def test_all_providers_benched_fails_fast_with_cause() -> None:
+    """The whole pool dead must say why, not grind out a generic 503."""
+    dead = _chat_model(slug="deepseek", litellm_model="openai/deepseek-v4-flash", provider_slug="deepseek")
+    db = _db_returning(dead.record)
+    record_failover(dead, RuntimeError("Insufficient Balance"), log_tag="test")
+
+    with pytest.raises(HTTPException) as exc:
+        list(iter_chat_model_attempts(db))
+    assert exc.value.status_code == 503
+    assert "billing" in exc.value.detail.lower()

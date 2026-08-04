@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import time
 import uuid
 from collections.abc import Iterator
 
@@ -35,6 +37,84 @@ def _provider_ready(provider: LlmProvider) -> bool:
     return bool((provider.api_key or "").strip())
 
 
+# --- Hard-failure breaker -----------------------------------------------------
+#
+# A drained balance or a dead key is not transient: the next call gets the same
+# 402. Without a breaker every job re-probes the corpse — LiteLLM retries it
+# twice, failover moves to the next model, that one is also dead, twice more —
+# so a pool-wide billing outage reads as "stuck" (workers pinned, queue backing
+# up) instead of "broken". Cooldown is short so restoring credit self-heals
+# without a deploy.
+# ponytail: in-process dict, per replica. Move to Redis only if replicas ever
+# need to share the verdict; today each one learns it within one call.
+_HARD_ERROR_COOLDOWN_S = float(os.getenv("ZIVO_LLM_PROVIDER_COOLDOWN_S", "300"))
+_provider_down_until: dict[uuid.UUID, float] = {}
+
+_HARD_ERROR_TOKENS = (
+    "insufficient balance",
+    "insufficient account balance",
+    "insufficient_balance",
+    "exceeded your current quota",
+    "credit balance is too low",
+    "invalid api key",
+    "incorrect api key",
+    "token expired",
+    "payment required",
+    # Free-tier per-day caps are hard until the daily reset, unlike a
+    # per-minute rate limit which is worth retrying immediately.
+    "per-day",
+    "per day",
+)
+# Deliberately NOT matched: a bare "billing" or "quota", which show up in the
+# doc-link footer of healthy providers' transient errors and would bench them.
+
+
+def is_hard_provider_error(exc: BaseException) -> bool:
+    """Account-level failure: no balance, dead key, or spent daily quota.
+
+    Distinct from ``is_failover_eligible`` — that asks "try the next model?",
+    this asks "is this provider worth calling again soon?".
+    """
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+    # Only auth/billing codes. A bare 429 is a transient rate limit.
+    if isinstance(status, int) and status in {401, 402, 403}:
+        return True
+
+    message = str(exc).lower()
+    return any(token in message for token in _HARD_ERROR_TOKENS)
+
+
+def mark_provider_down(provider: LlmProvider, exc: BaseException) -> None:
+    """Bench a provider that returned an account-level failure."""
+    if _HARD_ERROR_COOLDOWN_S <= 0:
+        return
+    _provider_down_until[provider.id] = time.monotonic() + _HARD_ERROR_COOLDOWN_S
+    logger.error(
+        "llm_provider_down provider=%s cooldown_s=%s error=%s",
+        provider.slug,
+        _HARD_ERROR_COOLDOWN_S,
+        exc,
+    )
+
+
+def is_provider_benched(provider: LlmProvider) -> bool:
+    until = _provider_down_until.get(provider.id)
+    if until is None:
+        return False
+    if time.monotonic() >= until:
+        del _provider_down_until[provider.id]
+        return False
+    return True
+
+
+def reset_provider_breakers() -> None:
+    """Clear all cooldowns — for tests and for an admin-triggered retry."""
+    _provider_down_until.clear()
+
+
 def list_pool_chat_models(
     db: Session,
     *,
@@ -61,7 +141,7 @@ def list_pool_chat_models(
 
     out: list[ResolvedLlmModel] = []
     for model in query.all():
-        if _provider_ready(model.provider):
+        if _provider_ready(model.provider) and not is_provider_benched(model.provider):
             out.append(ResolvedLlmModel(record=model, provider=model.provider))
     return out
 
@@ -122,6 +202,14 @@ def iter_chat_model_attempts(
 
     pool = list_pool_chat_models(db, require_vision=require_vision)
     if not pool:
+        if _provider_down_until:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "No LLM capacity: every configured provider returned a billing or "
+                    "credential failure. Check provider balances and API keys."
+                ),
+            )
         raise HTTPException(status_code=503, detail="No chat model configured")
 
     start = next((i for i, m in enumerate(pool) if m.record.is_default), 0)
@@ -232,7 +320,12 @@ def litellm_provider_kwargs(resolved: ResolvedLlmModel) -> dict[str, str]:
     return params
 
 
-def log_failover(resolved: ResolvedLlmModel, exc: BaseException, *, log_tag: str) -> None:
+def record_failover(resolved: ResolvedLlmModel, exc: BaseException, *, log_tag: str) -> None:
+    """Log the failover and, on an account-level error, bench the provider.
+
+    Every failover path routes through here, so this is the one place the
+    breaker has to trip.
+    """
     logger.warning(
         "llm_failover tag=%s model=%s provider=%s error=%s",
         log_tag,
@@ -240,3 +333,5 @@ def log_failover(resolved: ResolvedLlmModel, exc: BaseException, *, log_tag: str
         resolved.provider.slug,
         exc,
     )
+    if is_hard_provider_error(exc):
+        mark_provider_down(resolved.provider, exc)
