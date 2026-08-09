@@ -57,6 +57,45 @@ rollout_wait() {
   kubectl -n "$NS" rollout status "$kind/$name" --timeout="$timeout"
 }
 
+# --- Preflight: disk-space gates ---------------------------------------------
+# 2026-08-09 outage: the prod node hit kubelet disk-pressure MID-ROLLOUT (orphaned
+# Docker stores had filled the disk); pods were evicted, postgres included, and the
+# pgbouncer helm --wait timed out. Fail fast here instead — a deploy must never be
+# the thing that tips the node over the eviction threshold.
+MIN_RUNNER_FREE_GB="${MIN_RUNNER_FREE_GB:-8}"   # docker build scratch on this box
+MIN_NODE_FREE_GB="${MIN_NODE_FREE_GB:-20}"      # image pull + rollout headroom on prod
+
+runner_free_gb=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+if (( runner_free_gb < MIN_RUNNER_FREE_GB )); then
+  echo "PREFLIGHT FAIL: runner has ${runner_free_gb}G free (< ${MIN_RUNNER_FREE_GB}G)." \
+       "Run 'docker builder prune -af' / drop old image tags on this box and retry." >&2
+  exit 1
+fi
+
+NODE="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')"
+if kubectl get node "$NODE" \
+     -o jsonpath='{range .status.conditions[?(@.type=="DiskPressure")]}{.status}{end}' \
+     | grep -q True; then
+  echo "PREFLIGHT FAIL: node ${NODE} is under DiskPressure — free disk on the VPS before deploying." >&2
+  exit 1
+fi
+node_free_bytes=$(kubectl get --raw "/api/v1/nodes/${NODE}/proxy/stats/summary" 2>/dev/null \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["node"]["fs"]["availableBytes"])' \
+  2>/dev/null || echo "")
+if [[ -n "$node_free_bytes" ]]; then
+  node_free_gb=$(( node_free_bytes / 1024 / 1024 / 1024 ))
+  if (( node_free_gb < MIN_NODE_FREE_GB )); then
+    echo "PREFLIGHT FAIL: prod node ${NODE} has ${node_free_gb}G free (< ${MIN_NODE_FREE_GB}G)." \
+         "Free disk on the VPS (check /var/lib/containerd + /var/lib/docker for orphaned" \
+         "Docker stores — see 2026-08-09 outage) before deploying." >&2
+    exit 1
+  fi
+  echo "Preflight OK: runner ${runner_free_gb}G free, node ${NODE} ${node_free_gb}G free"
+else
+  # ponytail: stats API unreadable -> rely on the DiskPressure condition alone.
+  echo "Preflight: node fs stats unavailable; DiskPressure=False, continuing" >&2
+fi
+
 cd "$REPO"
 git fetch origin main
 git reset --hard origin/main
