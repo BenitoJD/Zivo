@@ -1,3 +1,4 @@
+import json
 import logging
 import uuid
 
@@ -30,28 +31,89 @@ def _wake_workers(db: Session) -> None:
         logger.debug("eta worker wake failed", exc_info=True)
 
 
+def _payload_key(name: str, payload: dict | None) -> str:
+    """Identity of a unit of work: same name + same payload == same job."""
+    return name + "\x1f" + json.dumps(payload or {}, sort_keys=True, default=str)
+
+
+def _dedupable(spec: dict) -> bool:
+    """Only standalone work is deduped — a DAG node's identity includes its
+    edges, so two same-payload jobs under different parents are NOT the same job.
+    """
+    return not spec.get("execution_id") and not spec.get("parent_job_ids")
+
+
+def _already_queued_keys(db: Session, specs: list[dict]) -> set[str]:
+    """Identity keys of standalone jobs already sitting in ``queued`` for these
+    documents.
+
+    Scoped by document_id so the lookup rides ix_jobs_payload_document_id; specs
+    without a document_id are not deduped (nothing cheap to scope by).
+    """
+    doc_ids = {
+        str(d)
+        for s in specs
+        if _dedupable(s) and (d := (s.get("payload") or {}).get("document_id"))
+    }
+    if not doc_ids:
+        return set()
+    rows = db.execute(
+        text(
+            """
+            SELECT name, payload FROM qb.jobs
+            WHERE status = 'queued'
+              AND execution_id IS NULL
+              AND payload->>'document_id' = ANY(CAST(:doc_ids AS text[]))
+            """
+        ),
+        {"doc_ids": list(doc_ids)},
+    ).all()
+    return {_payload_key(name, payload) for name, payload in rows}
+
+
 def batch_enqueue_jobs(
     db: Session,
     specs: list[dict],
     *,
     chunk_size: int = 50,
 ) -> list[Job]:
-    """Enqueue many jobs with batched commits and one NOTIFY per chunk."""
+    """Enqueue many jobs with batched commits and one NOTIFY per chunk.
+
+    Identical work already queued is skipped. The recovery schedulers re-enqueue
+    whenever they see no *live* job, and ACTIVE_JOB_LIVENESS_SQL calls a queued
+    job stale after ETA_STALE_QUEUED_TIMEOUT — so a backed-up queue used to
+    breed a fresh duplicate set every scheduler tick, forever (2026-08-09: 1,709
+    copies of the same 8 documents' page ingests, which starved the real work and
+    left newspaper editions "Preparing" for days). A queued job always runs
+    eventually; a second copy of it is pure waste.
+    """
     from app.eta.submit import build_job
 
+    seen = _already_queued_keys(db, specs)
     jobs: list[Job] = []
+    skipped = 0
     for offset in range(0, len(specs), chunk_size):
         chunk = specs[offset : offset + chunk_size]
         batch: list[Job] = []
         for spec in chunk:
+            key = _payload_key(spec.get("name", ""), spec.get("payload"))
+            if _dedupable(spec):
+                if key in seen:
+                    skipped += 1
+                    continue
+                seen.add(key)  # also dedups repeats within this call
             job = build_job(**spec)
             db.add(job)
             batch.append(job)
+        if not batch:
+            continue
         db.commit()
         _wake_workers(db)
         for job in batch:
             db.refresh(job)
         jobs.extend(batch)
+    if skipped:
+        logger.info("batch_enqueue_jobs skipped %s already-queued duplicate job(s)", skipped)
     return jobs
 
 
@@ -71,6 +133,39 @@ def enqueue_job(
     registered; explicit ``workload`` overrides only when the handler is unknown.
     """
     from app.eta.submit import build_job
+
+    spec = {
+        "name": name,
+        "payload": payload,
+        "execution_id": execution_id,
+        "parent_job_ids": parent_job_ids,
+    }
+    if _dedupable(spec):
+        key = _payload_key(name, payload)
+        existing_id = next(
+            (
+                row_id
+                for row_id, row_name, row_payload in db.execute(
+                    text(
+                        """
+                        SELECT id, name, payload FROM qb.jobs
+                        WHERE status = 'queued'
+                          AND execution_id IS NULL
+                          AND name = :name
+                          AND payload->>'document_id' = :doc_id
+                        """
+                    ),
+                    {"name": name, "doc_id": str((payload or {}).get("document_id"))},
+                ).all()
+                if _payload_key(row_name, row_payload) == key
+            ),
+            None,
+        )
+        if existing_id is not None:
+            # Identical work is already waiting — hand back that job rather than
+            # breeding a duplicate every scheduler tick. See batch_enqueue_jobs.
+            logger.info("enqueue_job reused already-queued %s for the same payload", name)
+            return db.get(Job, existing_id)
 
     job = build_job(
         name=name,
