@@ -91,11 +91,15 @@ def put(
             "value": json.dumps(value, default=str),
         },
     )
-    _opportunistic_sweep(db, ttl_seconds)
+    _opportunistic_sweep(db, ttl_seconds, kind)
 
 
-def _opportunistic_sweep(db: Session, ttl_seconds: int) -> None:
-    """Delete a bounded batch of expired rows. Best-effort; ignore errors."""
+def _opportunistic_sweep(db: Session, ttl_seconds: int, kind: str) -> None:
+    """Delete a bounded batch of expired rows. Best-effort; ignore errors.
+
+    Same-kind only: kinds carry different TTLs (vision_ocr keeps entries for
+    30 days), so a 24h-TTL writer must never sweep another kind's live rows.
+    """
     try:
         db.execute(
             text(
@@ -103,12 +107,12 @@ def _opportunistic_sweep(db: Session, ttl_seconds: int) -> None:
                 DELETE FROM qb.generation_cache
                 WHERE ctid IN (
                     SELECT ctid FROM qb.generation_cache
-                    WHERE created_at < :cutoff
+                    WHERE kind = :kind AND created_at < :cutoff
                     LIMIT :batch
                 )
                 """
             ),
-            {"cutoff": _expired_expr(ttl_seconds), "batch": SWEEP_BATCH},
+            {"kind": kind, "cutoff": _expired_expr(ttl_seconds), "batch": SWEEP_BATCH},
         )
     except Exception:
         logger.debug("generation cache sweep failed", exc_info=True)
@@ -125,19 +129,25 @@ def batch_drafts_key(
     model_id: uuid.UUID | None = None,
     content_type: str | None = None,
     prompt_version: str = "v1",
+    page_text: str = "",
 ) -> str:
     """Deterministic key for a batch-draft cache entry.
 
-    Page number + sorted aspect keys define the page-context intent; the prior
-    MCQ digest is included so two batches with different "don't repeat these"
-    histories don't collide. Model / content_type / prompt_version bind the
-    entry so a model swap or prompt bump cannot serve stale drafts.
+    The page TEXT digest is the identity of what drafts were generated from —
+    without it, two documents whose triage produced the same positional aspect
+    slugs on the same page number collide and serve each other's drafts for the
+    TTL. Sorted aspect keys define the intent; the prior MCQ digest is included
+    so two batches with different "don't repeat these" histories don't collide.
+    Model / content_type / prompt_version bind the entry so a model swap or
+    prompt bump cannot serve stale drafts.
     """
     import hashlib
 
     aspect_keys = sorted(str(t.get("key") or "") for t in targets)
     h = hashlib.sha256()
     h.update(str(page_number).encode("ascii"))
+    h.update(b"\x1f")
+    h.update(hashlib.sha256((page_text or "").encode("utf-8", "ignore")).hexdigest().encode("ascii"))
     h.update(b"\x1f")
     h.update("\x1e".join(aspect_keys).encode("utf-8", "ignore"))
     h.update(b"\x1f")

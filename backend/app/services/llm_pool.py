@@ -1,4 +1,10 @@
-"""Round-robin chat model pool with failover across configured providers."""
+"""Default-first chat model pool — failover-only, never rotation.
+
+One provider takes all traffic so its server-side prefix cache stays hot;
+the rest of the pool exists solely for failover (same-provider siblings
+first). Rotating requests across providers would destroy the prefix-cache
+hit rate this design exists to protect.
+"""
 
 from __future__ import annotations
 

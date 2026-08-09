@@ -321,11 +321,13 @@ async def _generate_question(
     else:
         schema = '{"question":"..."}'
         rules = "An open-ended question the candidate answers by typing. No options."
+    # Prefix-cache discipline: the resume is byte-stable across every call of an
+    # interview, so it leads; the asked-list changes each question and rides last.
     user = (
+        f"CANDIDATE RESUME:\n{truncate_to_tokens(resume, RESUME_MAX_TOKENS) or '(resume unavailable)'}\n\n"
         f"Company type: {label}\n"
         f"Round: {rnd['name']} — focus on {rnd['focus']}.\n\n"
         f"Questions already asked this interview (do not repeat):\n{already}\n\n"
-        f"CANDIDATE RESUME:\n{truncate_to_tokens(resume, RESUME_MAX_TOKENS) or '(resume unavailable)'}\n\n"
         f"Ask one {rnd['kind']} question. {rules}\nReturn JSON matching: {schema}"
     )
     from app.services.chunk_map_cache import content_hash_key

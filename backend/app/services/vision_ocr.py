@@ -28,6 +28,11 @@ from app.services.llm_sync import run_coro_in_worker
 
 logger = logging.getLogger(__name__)
 
+# Vision OCR is the priciest per-call cache entry and its inputs never change
+# (a stored page image is immutable), so it outlives the 24h default TTL:
+# offline-pack rebuilds and re-ingests weeks later must not re-bill the model.
+VISION_OCR_TTL_SECONDS = 30 * 24 * 60 * 60
+
 _OCR_SYSTEM = (
     "You are a precise OCR engine for study material. Transcribe the text "
     "content in the image EXACTLY as written: every sentence, heading, "
@@ -66,10 +71,20 @@ def transcribe_page_with_vision(
     doc = db.get(Document, document_id)
     if not doc:
         return ""
+    # Key binds the vision model + prompt text: at a 30-day horizon a model or
+    # prompt upgrade must invalidate old transcriptions (the page image itself
+    # is immutable per storage_key).
+    model_id = vision_chat_model_id(db)
     cache_key = content_hash_key(
-        "vision_ocr", doc.storage_key or str(doc.id), int(page_number)
+        "vision_ocr", doc.storage_key or str(doc.id), int(page_number),
+        str(model_id), _OCR_SYSTEM, _OCR_USER,
     )
-    hit = cache_get(db, kind="vision_ocr", cache_key=cache_key)
+    hit = cache_get(db, kind="vision_ocr", cache_key=cache_key, ttl_seconds=VISION_OCR_TTL_SECONDS)
+    if hit == "BLANK":
+        # A provider returning an empty 200 (filtered/degraded) also lands here,
+        # not just genuinely blank pages — trust BLANK only for the 24h default
+        # so a transient empty response can't suppress a page for a month.
+        hit = cache_get(db, kind="vision_ocr", cache_key=cache_key)
     if isinstance(hit, str) and hit:
         return "" if hit == "BLANK" else hit
 
@@ -89,7 +104,7 @@ def transcribe_page_with_vision(
                     {"role": "user", "content": content},
                 ],
                 db,
-                model_id=vision_chat_model_id(db),
+                model_id=model_id,
                 require_vision=True,
                 log_tag="vision_ocr",
                 document_id=doc.id,
@@ -106,7 +121,9 @@ def transcribe_page_with_vision(
 
     out = (raw or "").strip()
     if not out or out.upper() == "BLANK":
-        cache_put(db, kind="vision_ocr", cache_key=cache_key, value="BLANK")
+        cache_put(db, kind="vision_ocr", cache_key=cache_key, value="BLANK",
+                  ttl_seconds=VISION_OCR_TTL_SECONDS)
         return ""
-    cache_put(db, kind="vision_ocr", cache_key=cache_key, value=out)
+    cache_put(db, kind="vision_ocr", cache_key=cache_key, value=out,
+              ttl_seconds=VISION_OCR_TTL_SECONDS)
     return out

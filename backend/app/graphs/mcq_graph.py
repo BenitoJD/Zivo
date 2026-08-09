@@ -117,14 +117,15 @@ async def _teach_feedback(state: McqGradeState, *, db: Session) -> dict[str, Any
 
     system = get_prompt(db, "mcq_grader_system")
     outcome = "The learner answered CORRECTLY." if is_correct else "The learner answered INCORRECTLY."
+    # Prefix-cache discipline: everything stable per QUESTION leads so calls for
+    # different selections of the same question share the provider prefix; the
+    # per-selection outcome/choice lines ride at the end.
     user_lines = [
         f"Question: {state.get('question', '')}",
         "Options:",
         *[f"{i}. {opt}" for i, opt in enumerate(options)],
-        outcome,
         ("This is a select-all-that-apply question with more than one correct option."
          if is_multi else ""),
-        f"Learner chose: {chosen}",
         f"Correct answer{'s' if is_multi else ''}: {correct}",
     ]
     user_lines = [ln for ln in user_lines if ln]
@@ -134,6 +135,8 @@ async def _teach_feedback(state: McqGradeState, *, db: Session) -> dict[str, Any
         user_lines.append(f"Author explanation (ground truth — stay faithful to it): {explanation}")
     else:
         user_lines.append("Author explanation: (none provided)")
+    user_lines.append(outcome)
+    user_lines.append(f"Learner chose: {chosen}")
     user = "\n".join(user_lines)
 
     if is_correct:

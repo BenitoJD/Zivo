@@ -48,7 +48,9 @@ def test_router_cooldown_and_retry_config() -> None:
         assert kwargs["cooldown_time"] == COOLDOWN_SECONDS
         assert kwargs["allowed_fails"] == ALLOWED_FAILS
         assert kwargs["retry_policy"]["RateLimitErrorRetries"] == RATE_LIMIT_RETRIES
-        assert kwargs["fallbacks"] == [{"backup": ["openai/b"]}]
+        # Fallbacks must be keyed by the PRIMARY model group name — litellm
+        # matches the key against the requested model; anything else is dead config.
+        assert kwargs["fallbacks"] == [{"openai/a": ["openai/b"]}]
         # Router never double-retries (policy governs).
         assert kwargs["num_retries"] == 0
         # Recommended production routing: no per-request overhead.

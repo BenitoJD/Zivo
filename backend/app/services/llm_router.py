@@ -5,8 +5,9 @@ prompt/completion/cached token counts and latency. This is the before/after
 ruler for compute-cost optimization work (provider prompt caching, retrieval
 gating, semantic cache).
 
-When ``model_id`` is omitted and the pool is enabled, requests round-robin
-across all configured chat models and fail over on transient provider errors.
+When ``model_id`` is omitted and the pool is enabled, requests go DEFAULT-FIRST:
+the DB-default model takes every call (keeping its provider prefix cache hot)
+and the rest of the pool is used only for failover on transient provider errors.
 """
 
 from collections.abc import AsyncIterator
@@ -223,7 +224,9 @@ def _apply_model(resolved: ResolvedLlmModel, *, log_tag: str = "complete") -> di
     kwargs = litellm_provider_kwargs(resolved)
     tag_cap = LOG_TAG_MAX_TOKENS.get(log_tag, CHAT_DEFAULT_MAX_TOKENS)
     meta_cap = kwargs.get("max_tokens")
-    if log_tag in {"chat", "complete"}:
+    # coding_assist is chat-shaped: it gets its own usage tag purely for cost
+    # attribution and must keep chat's cap/failover behavior.
+    if log_tag in {"chat", "complete", "coding_assist"}:
         if isinstance(meta_cap, int) and meta_cap > 0:
             kwargs["max_tokens"] = min(meta_cap, tag_cap)
         else:
@@ -263,7 +266,7 @@ def _model_attempts(
     else:
         first_model = next(iter(iter_chat_model_attempts(db, require_vision=require_vision)))
         attempts = list(iter_failover_attempts(db, start=first_model, require_vision=require_vision))
-    if log_tag == "chat" and CHAT_FAILOVER_MAX > 0:
+    if log_tag in {"chat", "coding_assist"} and CHAT_FAILOVER_MAX > 0:
         return attempts[:CHAT_FAILOVER_MAX]
     return attempts
 
@@ -299,14 +302,32 @@ async def _stream_chat_impl(
                 **provider_kwargs,
             )
             final_usage: object = None
-            async for chunk in response:
-                if getattr(chunk, "usage", None):
-                    final_usage = chunk.usage
-                choices = getattr(chunk, "choices", None) or []
-                if choices:
-                    delta = choices[0].delta.content or ""
-                    if delta:
-                        yield delta
+            try:
+                async for chunk in response:
+                    if getattr(chunk, "usage", None):
+                        final_usage = chunk.usage
+                    choices = getattr(chunk, "choices", None) or []
+                    if choices:
+                        delta = choices[0].delta.content or ""
+                        if delta:
+                            yield delta
+            except BaseException:
+                # Client disconnect raises GeneratorExit/CancelledError at the
+                # yield — BaseExceptions the failover clause below never sees — and
+                # the provider still billed everything generated so far. Log under
+                # a separate tag so completed-stream cache stats stay clean.
+                # (Usage rides the FINAL chunk, so this is often a 0-token row:
+                # it counts the call, not the abandoned tokens.)
+                _log_usage(
+                    f"{log_tag}_aborted",
+                    resolved.litellm_model,
+                    final_usage,
+                    started,
+                    db=db,
+                    account_id=account_id,
+                    document_id=document_id,
+                )
+                raise
             _log_usage(
                 log_tag,
                 resolved.litellm_model,
@@ -480,19 +501,42 @@ async def _router_complete(
     if not attempts:
         raise RuntimeError("no chat models in pool")
     router = _router_for_attempts(attempts)
-    provider_kwargs = _apply_model(attempts[0], log_tag=log_tag)
+    # Forward only per-CALL knobs. Request-level api_key/api_base are treated by
+    # litellm as clientside credentials that override EVERY fallback deployment's
+    # own credentials — cross-provider failover would hit the primary's endpoint
+    # with the primary's key. The deployments (router_model_list) already carry
+    # per-model credentials and params.
+    full_kwargs = _apply_model(attempts[0], log_tag=log_tag)
+    provider_kwargs = {
+        k: v for k, v in full_kwargs.items() if k in {"max_tokens", "temperature", "timeout"}
+    }
     started = time.perf_counter()
     response = await asyncio.wait_for(
         router.acompletion(
             model=attempts[0].litellm_model,
-            messages=messages,
+            # Same cache treatment as the manual/streaming paths: passthrough for
+            # DeepSeek/OpenAI-compatible, cache_control breakpoints for Anthropic.
+            # (If an Anthropic primary fails over inside the Router to an
+            # OpenAI-compatible deployment, the annotated content blocks ride
+            # along; litellm drops unsupported params.)
+            messages=_prepare_messages(messages, attempts[0]),
             stream=False,
             **provider_kwargs,
         ),
         timeout=_request_timeout_for(log_tag) + 30,
     )
-    # Router may have failed over internally; log the model actually used.
-    used_model = str(getattr(response, "model", None) or attempts[0].litellm_model)
+    # Router may have failed over internally. response.model is the provider-raw
+    # name ("deepseek-v4-flash"); map it back to the registry string
+    # ("openai/deepseek-v4-flash") so qb.llm_usage_event has ONE label per model.
+    raw_model = str(getattr(response, "model", "") or "")
+    used_model = next(
+        (
+            m.litellm_model
+            for m in attempts
+            if m.litellm_model == raw_model or m.litellm_model.endswith("/" + raw_model)
+        ),
+        attempts[0].litellm_model,
+    )
     _log_usage(
         log_tag,
         used_model,

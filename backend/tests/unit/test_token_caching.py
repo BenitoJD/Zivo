@@ -21,11 +21,14 @@ def test_chunk_map_key_stable_for_same_inputs() -> None:
 def test_batch_drafts_key_includes_model_and_content_type() -> None:
     mid = uuid.uuid4()
     targets = [{"key": "a"}, {"key": "b"}]
-    base = batch_drafts_key(1, targets, None, model_id=mid, content_type="prose")
-    other_model = batch_drafts_key(1, targets, None, model_id=uuid.uuid4(), content_type="prose")
-    other_type = batch_drafts_key(1, targets, None, model_id=mid, content_type="code")
+    base = batch_drafts_key(1, targets, None, model_id=mid, content_type="prose", page_text="p1")
+    other_model = batch_drafts_key(1, targets, None, model_id=uuid.uuid4(), content_type="prose", page_text="p1")
+    other_type = batch_drafts_key(1, targets, None, model_id=mid, content_type="code", page_text="p1")
+    other_text = batch_drafts_key(1, targets, None, model_id=mid, content_type="prose", page_text="p2")
     assert base != other_model
     assert base != other_type
+    # Different page text must never share drafts, even with identical aspect slugs.
+    assert base != other_text
 
 
 def test_verify_and_triage_keys_change_with_content() -> None:

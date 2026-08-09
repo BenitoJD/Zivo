@@ -32,8 +32,6 @@ from typing import Any
 
 from litellm import Router
 
-from app.services.llm_registry import configure_litellm
-
 logger = logging.getLogger(__name__)
 
 ROUTER_ENABLED = os.getenv("ZIVO_ROUTER_ENABLED", "1") not in {"0", "false", "False"}
@@ -46,23 +44,17 @@ TIMEOUT_RETRIES = int(os.getenv("ZIVO_ROUTER_TIMEOUT_RETRIES", "2"))
 def router_model_list(models: list[Any]) -> list[dict]:
     """Build litellm Router ``model_list`` from the app's ResolvedLlmModel rows.
 
-    Each deployment carries the provider credentials + model-level kwargs the
-    manual path used (api_key/api_base/max_tokens/temperature/thinking flags).
+    Each deployment carries the SAME credentials + model-level kwargs the manual
+    path computes (api_key/api_base/max_tokens/temperature/thinking flags) via
+    llm_pool.litellm_provider_kwargs — the deployment, not the request, is where
+    these belong so Router fallbacks use each model's own credentials.
     """
+    from app.services.llm_pool import litellm_provider_kwargs
+
     out: list[dict] = []
     for m in models:
         litellm_model = m.litellm_model
-        params = dict(configure_litellm(m.provider))
-        if m.provider.api_key:
-            params["api_key"] = m.provider.api_key
-        if m.provider.api_base_url:
-            params["api_base"] = str(m.provider.api_base_url).rstrip("/")
-        meta = m.record.meta or {}
-        if isinstance(meta, dict):
-            if meta.get("max_tokens"):
-                params["max_tokens"] = int(meta["max_tokens"])
-            if meta.get("temperature") is not None:
-                params["temperature"] = float(meta["temperature"])
+        params = dict(litellm_provider_kwargs(m))
         out.append(
             {
                 "model_name": litellm_model,
@@ -90,11 +82,15 @@ def build_router(models: list[Any]) -> Router:
             "InternalServerErrorRetries": 1,
         },
         num_retries=0,  # Router-level retry policy above governs; avoid double-retry.
-        # Fallbacks = remaining models in the list (failover chain). Router tries
-        # them in order when the primary fails and cools it down.
-        fallbacks=[
-            {"backup": [m["model_name"] for m in model_list[1:]]}
-        ],
+        # Fallbacks = remaining models in the list (failover chain). litellm matches
+        # the dict KEY against the requested model group, so it must be the primary
+        # model's name — a literal like "backup" matches nothing and silently
+        # disables Router-level failover.
+        fallbacks=(
+            [{model_list[0]["model_name"]: [m["model_name"] for m in model_list[1:]]}]
+            if len(model_list) > 1
+            else []
+        ),
         # simple-shuffle is the recommended production default: zero per-request
         # overhead (usage-based-routing adds Redis latency on every call).
         routing_strategy="simple-shuffle",

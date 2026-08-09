@@ -281,7 +281,9 @@ async def assist_event_stream(setup: dict[str, Any]) -> EventSourceResponse:
                 messages.append({"role": "user", "content": "\n\n".join(user_parts)})
 
                 full = ""
-                async for token in stream_chat_completion(messages, stream_db, model_id=None):
+                async for token in stream_chat_completion(
+                    messages, stream_db, model_id=None, log_tag="coding_assist"
+                ):
                     full += token
                     yield {"event": "token", "data": json.dumps({"text": token})}
                 if not full.strip():

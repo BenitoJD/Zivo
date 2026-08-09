@@ -1185,6 +1185,7 @@ def generate_quality_mcq_batch(
         prior_mcqs,
         model_id=draft_model_id,
         content_type=content_type,
+        page_text=page_text,
     )
     drafts = cache_get(db, kind="batch_drafts", cache_key=drafts_cache_key)
 

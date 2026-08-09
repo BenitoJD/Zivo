@@ -140,10 +140,13 @@ async def generate_quiz(
 
     system = get_prompt(db, "quiz_system")
     type_lines = "\n".join(f"- {t}: {QUESTION_TYPES[t]}" for t in allowed)
+    # Prefix-cache discipline: the document source is stable across the educator's
+    # iterate-on-settings loop (change count/types/difficulty, regenerate), so it
+    # leads and the per-run instructions ride last.
     user = (
+        f"SOURCE:\n\n{truncate_to_tokens(body, SUMMARIZE_SINGLE_SHOT_MAX_TOKENS)}\n\n"
         f"Create exactly {cap} questions at {diff} difficulty, distributed across these "
-        f"types (use only these):\n{type_lines}\n\n"
-        f"SOURCE:\n\n{truncate_to_tokens(body, SUMMARIZE_SINGLE_SHOT_MAX_TOKENS)}"
+        f"types (use only these):\n{type_lines}"
     )
 
     from app.services.chunk_map_cache import content_hash_key

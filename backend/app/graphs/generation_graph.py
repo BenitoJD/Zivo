@@ -134,23 +134,35 @@ def _reusable_mcq_payloads(
             JOIN qb.documents d ON d.id::text = a.payload->>'artifact_id'
             WHERE a.status = 'active'
               AND a.payload->>'page_content_hash' = :page_hash
-              AND (a.payload->>'page_number')::int = :page
               AND a.payload->>'artifact_id' != :exclude_artifact
               {demo_filter}
-            ORDER BY (a.payload->>'sequence')::int ASC
+            ORDER BY a.payload->>'artifact_id', (a.payload->>'page_number')::int,
+                     (a.payload->>'sequence')::int ASC
             LIMIT :limit
             """
         ),
+        # No page_number predicate: the full-page-text hash IS the identity, and
+        # requiring the same page index false-misses re-exports with a cover page
+        # or merged/split PDFs — re-paying the whole draft+critic+verify pipeline.
+        # (_persist_assertions rewrites page_number onto cloned payloads.)
         {
             "page_hash": page_hash,
-            "page": page_number,
             "limit": limit,
             "exclude_artifact": str(exclude_artifact_id),
         },
     ).scalars().all()
     out: list[dict[str, Any]] = []
+    # Several source pages can share the hash (a doc AND its re-export). Their
+    # question sets are near-identical, so interleaving them would clone the
+    # same question twice — take everything from the FIRST source page only.
+    src_page: tuple[Any, Any] | None = None
     for raw in rows:
         payload = raw if isinstance(raw, dict) else json.loads(raw)
+        key = (payload.get("artifact_id"), payload.get("page_number"))
+        if src_page is None:
+            src_page = key
+        elif key != src_page:
+            continue
         if payload.get("question") and payload.get("options"):
             out.append(payload)
     return out
