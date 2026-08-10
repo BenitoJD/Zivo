@@ -52,5 +52,13 @@ kubectl -n zivo create secret generic zivo-secrets \
   --from-literal=OPENAI_API_BASE="${OPENAI_API_BASE:-}" \
   --from-literal=TELEGRAM_API_ID="${TELEGRAM_API_ID:-}" \
   --from-literal=TELEGRAM_API_HASH="${TELEGRAM_API_HASH:-}" \
-  --from-literal=TELEGRAM_SESSION="${TELEGRAM_SESSION:-}"
+  --from-literal=TELEGRAM_SESSION="${TELEGRAM_SESSION:-}" \
+  --from-literal=GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-}" \
+  --from-literal=GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:-}" \
+  --from-literal=GOOGLE_REDIRECT_URI="${GOOGLE_REDIRECT_URI:-https://zivo.fyi/api/auth/google/callback}"
 echo "zivo-secrets updated"
+
+if [ -z "${GOOGLE_CLIENT_ID:-}" ] || [ -z "${GOOGLE_CLIENT_SECRET:-}" ]; then
+  echo "NOTE: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET are empty — /api/auth/google/status" \
+       "reports enabled=false and the UI hides the 'Continue with Google' button." >&2
+fi
