@@ -37,6 +37,7 @@ kubectl -n zivo create secret generic zivo-secrets \
   --from-literal=LITELLM_MODEL="${LITELLM_MODEL:-openai/step-3.5-flash}" \
   --from-literal=LLM_POOL_ENABLED="${LLM_POOL_ENABLED:-true}" \
   --from-literal=LLM_MAX_CONCURRENT="${LLM_MAX_CONCURRENT:-8}" \
+  --from-literal=LLM_GLOBAL_SLOT_WAIT="${LLM_GLOBAL_SLOT_WAIT:-150}" \
   --from-literal=DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-}" \
   --from-literal=DEEPSEEK_API_BASE="${DEEPSEEK_API_BASE:-https://api.deepseek.com/v1}" \
   --from-literal=ZAI_API_KEY="${ZAI_API_KEY:-}" \
