@@ -7,8 +7,22 @@ Step Fun rejects the 9th concurrent call outright, so the limit has to hold the
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import MagicMock, patch
 
-from app.eta.llm_concurrency import provider_slot_async, provider_slot_sync
+import pytest
+
+from app.eta.llm_concurrency import _slot_key, provider_slot_async, provider_slot_sync
+
+
+@pytest.fixture(autouse=True)
+def _fake_pg_slots():
+    """Stand in for Postgres advisory locks: every slot is free."""
+    conn = MagicMock()
+    conn.execute.return_value.scalar.return_value = True
+    engine = MagicMock()
+    engine.connect.return_value = conn
+    with patch.dict("sys.modules", {"app.db": MagicMock(engine=engine)}):
+        yield engine
 
 
 def test_no_limit_is_a_noop() -> None:
@@ -65,6 +79,31 @@ def test_async_slot_caps_concurrent_holders() -> None:
     asyncio.run(main())
     assert state["peak"] <= limit
     assert state["live"] == 0
+
+
+def test_slot_key_is_stable_and_int4() -> None:
+    assert _slot_key("stepfun") == _slot_key("stepfun")
+    assert _slot_key("stepfun") != _slot_key("deepseek")
+    # Must fit Postgres int4 or pg_try_advisory_lock(int4, int4) errors out.
+    assert -(2**31) <= _slot_key("stepfun") < 2**31
+
+
+def test_global_slot_is_released_after_the_call(_fake_pg_slots) -> None:
+    with provider_slot_sync("stepfun", 8):
+        pass
+    # Closing the connection is what drops the advisory lock — never leak it.
+    _fake_pg_slots.connect.return_value.close.assert_called()
+
+
+def test_fails_open_when_the_database_is_unreachable() -> None:
+    engine = MagicMock()
+    engine.connect.side_effect = RuntimeError("pool exhausted")
+    with patch.dict("sys.modules", {"app.db": MagicMock(engine=engine)}):
+        ran = False
+        with provider_slot_sync("stepfun", 8):
+            ran = True
+        # A limiter outage must never wedge generation.
+        assert ran
 
 
 def test_limit_change_rebuilds_the_semaphore() -> None:
