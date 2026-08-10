@@ -4,6 +4,18 @@ SECRETS_FILE="${1:-/root/.zivo/secrets.env}"
 # shellcheck disable=SC1090
 source "$SECRETS_FILE"
 kubectl -n zivo delete secret zivo-secrets --ignore-not-found=true
+
+# LITELLM_MODEL is the DEFAULT chat model: sync_default_chat_model_from_env pins it
+# at every boot, overriding the DeepSeek-first precedence hardcoded in
+# ensure_registry_providers. Switch providers HERE (or in secrets.env) — never by
+# editing is_default in the DB, which the next pod restart reverts.
+# LLM_MAX_CONCURRENT is the process-wide cap across ALL providers. Per-provider
+# ceilings are data now — qb.llm_providers.max_concurrency (Step Fun = 8, which
+# hard-rejects the 9th concurrent call) — so change a provider's limit in the
+# registry, not here.
+# NOTE: no inline comments inside the command below — a '#' on a backslash-continued
+# line comments out the rest of THAT line including the '\', silently truncating
+# the secret and dropping every key after it.
 kubectl -n zivo create secret generic zivo-secrets \
   --from-literal=POSTGRES_USER="$POSTGRES_USER" \
   --from-literal=POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
@@ -22,8 +34,9 @@ kubectl -n zivo create secret generic zivo-secrets \
   --from-literal=TRUSTED_PROXY_IPS="${TRUSTED_PROXY_IPS:-}" \
   --from-literal=SECRET_KEY="${SECRET_KEY:-}" \
   --from-literal=CSRF_SECRET="${CSRF_SECRET:-}" \
-  --from-literal=LITELLM_MODEL="${LITELLM_MODEL:-openai/deepseek-v4-flash}" \
+  --from-literal=LITELLM_MODEL="${LITELLM_MODEL:-openai/step-3.5-flash}" \
   --from-literal=LLM_POOL_ENABLED="${LLM_POOL_ENABLED:-true}" \
+  --from-literal=LLM_MAX_CONCURRENT="${LLM_MAX_CONCURRENT:-8}" \
   --from-literal=DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-}" \
   --from-literal=DEEPSEEK_API_BASE="${DEEPSEEK_API_BASE:-https://api.deepseek.com/v1}" \
   --from-literal=ZAI_API_KEY="${ZAI_API_KEY:-}" \

@@ -28,6 +28,11 @@ class LlmProvider(Base):
     api_base_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     api_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     extra_env: Mapped[dict] = mapped_column(JSONB, default=dict)
+    # Max concurrent in-flight calls this provider tolerates. NULL = no
+    # provider-specific limit (only the process-wide LLM_MAX_CONCURRENT applies).
+    # Step Fun rejects the 9th concurrent call outright, and a global env cap
+    # can't express "8 here, more there" — so the limit lives with the provider.
+    max_concurrency: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

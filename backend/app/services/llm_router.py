@@ -19,7 +19,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from app.eta.llm_concurrency import llm_slot_async
+from app.eta.llm_concurrency import llm_slot_async, provider_slot_async
 from app.services.llm_usage_log import record_llm_usage
 from app.services.llm_pool import (
     is_failover_eligible,
@@ -249,6 +249,14 @@ def _prepare_messages(messages: list[dict], resolved: ResolvedLlmModel) -> list[
     return apply_prompt_cache(messages, provider_slug=resolved.provider.slug)
 
 
+def _provider_limit(resolved: ResolvedLlmModel) -> tuple[str | None, int | None]:
+    """(slug, max_concurrency) for the provider's own in-flight cap."""
+    provider = getattr(resolved, "provider", None)
+    if provider is None:
+        return None, None
+    return getattr(provider, "slug", None), getattr(provider, "max_concurrency", None)
+
+
 def _model_attempts(
     db: Session,
     *,
@@ -293,33 +301,46 @@ async def _stream_chat_impl(
         cached_messages = _prepare_messages(messages, resolved)
         started = time.perf_counter()
         try:
-            response = await litellm.acompletion(
-                model=resolved.litellm_model,
-                messages=cached_messages,
-                stream=True,
-                stream_options={"include_usage": True},
-                num_retries=LLM_NUM_RETRIES,
-                **provider_kwargs,
-            )
-            final_usage: object = None
-            try:
-                async for chunk in response:
-                    if getattr(chunk, "usage", None):
-                        final_usage = chunk.usage
-                    choices = getattr(chunk, "choices", None) or []
-                    if choices:
-                        delta = choices[0].delta.content or ""
-                        if delta:
-                            yield delta
-            except BaseException:
-                # Client disconnect raises GeneratorExit/CancelledError at the
-                # yield — BaseExceptions the failover clause below never sees — and
-                # the provider still billed everything generated so far. Log under
-                # a separate tag so completed-stream cache stats stay clean.
-                # (Usage rides the FINAL chunk, so this is often a 0-token row:
-                # it counts the call, not the abandoned tokens.)
+            # Held for the whole stream — the connection is in flight until the
+            # last chunk, so releasing at first token would overshoot the cap.
+            async with provider_slot_async(*_provider_limit(resolved)):
+                response = await litellm.acompletion(
+                    model=resolved.litellm_model,
+                    messages=cached_messages,
+                    stream=True,
+                    stream_options={"include_usage": True},
+                    num_retries=LLM_NUM_RETRIES,
+                    **provider_kwargs,
+                )
+                final_usage: object = None
+                try:
+                    async for chunk in response:
+                        if getattr(chunk, "usage", None):
+                            final_usage = chunk.usage
+                        choices = getattr(chunk, "choices", None) or []
+                        if choices:
+                            delta = choices[0].delta.content or ""
+                            if delta:
+                                yield delta
+                except BaseException:
+                    # Client disconnect raises GeneratorExit/CancelledError at the
+                    # yield — BaseExceptions the failover clause below never sees — and
+                    # the provider still billed everything generated so far. Log under
+                    # a separate tag so completed-stream cache stats stay clean.
+                    # (Usage rides the FINAL chunk, so this is often a 0-token row:
+                    # it counts the call, not the abandoned tokens.)
+                    _log_usage(
+                        f"{log_tag}_aborted",
+                        resolved.litellm_model,
+                        final_usage,
+                        started,
+                        db=db,
+                        account_id=account_id,
+                        document_id=document_id,
+                    )
+                    raise
                 _log_usage(
-                    f"{log_tag}_aborted",
+                    log_tag,
                     resolved.litellm_model,
                     final_usage,
                     started,
@@ -327,16 +348,6 @@ async def _stream_chat_impl(
                     account_id=account_id,
                     document_id=document_id,
                 )
-                raise
-            _log_usage(
-                log_tag,
-                resolved.litellm_model,
-                final_usage,
-                started,
-                db=db,
-                account_id=account_id,
-                document_id=document_id,
-            )
             return
         except Exception as exc:
             last_exc = exc
@@ -424,18 +435,19 @@ async def acomplete_chat(
         cached_messages = _prepare_messages(messages, resolved)
         started = time.perf_counter()
         try:
-            response = await asyncio.wait_for(
-                litellm.acompletion(
-                    model=resolved.litellm_model,
-                    messages=cached_messages,
-                    stream=False,
-                    num_retries=LLM_NUM_RETRIES,
-                    **provider_kwargs,
-                ),
-                # Hard backstop tracks the per-tag request timeout so a stalled
-                # generation attempt aborts fast and fails over to the next model.
-                timeout=_request_timeout_for(log_tag) + 15,
-            )
+            async with provider_slot_async(*_provider_limit(resolved)):
+                response = await asyncio.wait_for(
+                    litellm.acompletion(
+                        model=resolved.litellm_model,
+                        messages=cached_messages,
+                        stream=False,
+                        num_retries=LLM_NUM_RETRIES,
+                        **provider_kwargs,
+                    ),
+                    # Hard backstop tracks the per-tag request timeout so a stalled
+                    # generation attempt aborts fast and fails over to the next model.
+                    timeout=_request_timeout_for(log_tag) + 15,
+                )
             _log_usage(
                 log_tag,
                 resolved.litellm_model,
@@ -511,20 +523,21 @@ async def _router_complete(
         k: v for k, v in full_kwargs.items() if k in {"max_tokens", "temperature", "timeout"}
     }
     started = time.perf_counter()
-    response = await asyncio.wait_for(
-        router.acompletion(
-            model=attempts[0].litellm_model,
-            # Same cache treatment as the manual/streaming paths: passthrough for
-            # DeepSeek/OpenAI-compatible, cache_control breakpoints for Anthropic.
-            # (If an Anthropic primary fails over inside the Router to an
-            # OpenAI-compatible deployment, the annotated content blocks ride
-            # along; litellm drops unsupported params.)
-            messages=_prepare_messages(messages, attempts[0]),
-            stream=False,
-            **provider_kwargs,
-        ),
-        timeout=_request_timeout_for(log_tag) + 30,
-    )
+    async with provider_slot_async(*_provider_limit(attempts[0])):
+        response = await asyncio.wait_for(
+            router.acompletion(
+                model=attempts[0].litellm_model,
+                # Same cache treatment as the manual/streaming paths: passthrough
+                # for DeepSeek/OpenAI-compatible, cache_control breakpoints for
+                # Anthropic. (If an Anthropic primary fails over inside the Router
+                # to an OpenAI-compatible deployment, the annotated content blocks
+                # ride along; litellm drops unsupported params.)
+                messages=_prepare_messages(messages, attempts[0]),
+                stream=False,
+                **provider_kwargs,
+            ),
+            timeout=_request_timeout_for(log_tag) + 30,
+        )
     # Router may have failed over internally. response.model is the provider-raw
     # name ("deepseek-v4-flash"); map it back to the registry string
     # ("openai/deepseek-v4-flash") so qb.llm_usage_event has ONE label per model.

@@ -293,6 +293,7 @@ def _upsert_provider(
     litellm_prefix: str,
     api_base_url: str | None = None,
     api_key: str | None = None,
+    max_concurrency: int | None = None,
 ) -> LlmProvider:
     provider = db.query(LlmProvider).filter(LlmProvider.slug == slug).first()
     if provider:
@@ -300,6 +301,9 @@ def _upsert_provider(
             provider.api_base_url = api_base_url
         if api_key:
             provider.api_key = api_key
+        # Seed only: an admin edit (including clearing it) is never overwritten.
+        if max_concurrency is not None and provider.max_concurrency is None:
+            provider.max_concurrency = max_concurrency
         return provider
 
     provider = LlmProvider(
@@ -308,6 +312,7 @@ def _upsert_provider(
         litellm_prefix=litellm_prefix,
         api_base_url=api_base_url,
         api_key=api_key,
+        max_concurrency=max_concurrency,
     )
     db.add(provider)
     db.flush()
@@ -524,6 +529,9 @@ def ensure_registry_providers(db: Session, settings: Settings | None = None) -> 
         litellm_prefix="openai",
         api_base_url=settings.stepfun_api_base.rstrip("/") or None,
         api_key=settings.stepfun_api_key or None if settings.stepfun_enabled else None,
+        # Step Fun hard-rejects the 9th concurrent call ("concurrency reached,
+        # current: 9, limit: 8") — queue locally instead of eating a 429.
+        max_concurrency=8,
     )
     before = (
         db.query(LlmModel)
