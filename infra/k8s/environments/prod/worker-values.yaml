@@ -16,18 +16,21 @@ workloads:
     command: ["python", "run_eta_worker_async.py"]
     env:
       ETA_WORKER_WORKLOADS: io
+      STORAGE_URL: http://zivo-storage:8000
   cpu:
     enabled: true
     command: ["python", "run_eta_worker_cpu.py"]
     env:
       ETA_WORKER_WORKLOADS: cpu
+      STORAGE_URL: http://zivo-storage:8000
   newspaper:
     # Telethon → MyBookZon; The Hindu allowlist; LLM paper-id.
     # Requires TELEGRAM_* in zivo-secrets + channel_ref in DB.
     enabled: true
     replicaCount: 1
     command: ["python", "run_newspaper_ingest.py"]
-    env: {}
+    env:
+      STORAGE_URL: http://zivo-storage:8000
 resources:
   requests:
     cpu: 100m

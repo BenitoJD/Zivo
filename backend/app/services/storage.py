@@ -1,43 +1,56 @@
-import json
+"""HTTP client to the storage service. Product and workers never talk to MinIO."""
+
+from __future__ import annotations
+
+import logging
 import re
 import uuid
 
-import boto3
-from botocore.client import Config
+import httpx
+from fastapi import HTTPException
 
 from app.config import get_settings
 
-settings = get_settings()
+logger = logging.getLogger(__name__)
+
+_TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=300.0, pool=5.0)
 
 
-def _s3_client(*, endpoint: str, secure: bool):
-    return boto3.client(
-        "s3",
-        endpoint_url=f"{'https' if secure else 'http'}://{endpoint}",
-        aws_access_key_id=settings.minio_access_key,
-        aws_secret_access_key=settings.minio_secret_key,
-        config=Config(signature_version="s3v4"),
-        region_name="us-east-1",
+def _client() -> httpx.Client:
+    settings = get_settings()
+    return httpx.Client(
+        base_url=settings.storage_url.rstrip("/"),
+        timeout=_TIMEOUT,
+        headers={"X-Zivo-Internal-Key": settings.secret_key},
     )
 
 
-def _internal_client():
-    return _s3_client(endpoint=settings.minio_endpoint, secure=settings.minio_secure)
-
-
-def _presign_client():
-    return _s3_client(
-        endpoint=settings.minio_presign_endpoint,
-        secure=settings.minio_presign_secure,
-    )
-
-
-def ensure_bucket() -> None:
-    client = _internal_client()
+def _raise_for_status(response: httpx.Response) -> None:
+    if response.status_code < 400:
+        return
+    detail = "Storage unavailable"
     try:
-        client.head_bucket(Bucket=settings.minio_bucket)
+        body = response.json()
+        if isinstance(body, dict) and body.get("detail"):
+            detail = str(body["detail"])
     except Exception:
-        client.create_bucket(Bucket=settings.minio_bucket)
+        if response.text:
+            detail = response.text[:200]
+    if response.status_code in {400, 401, 403, 404, 410, 413, 415}:
+        raise HTTPException(status_code=response.status_code, detail=detail)
+    logger.warning("storage service error status=%s detail=%s", response.status_code, detail)
+    raise HTTPException(status_code=503, detail="Storage unavailable")
+
+
+def _request(method: str, path: str, **kwargs) -> httpx.Response:
+    try:
+        with _client() as client:
+            response = client.request(method, path, **kwargs)
+    except httpx.RequestError as exc:
+        logger.warning("storage service unreachable: %s", exc)
+        raise HTTPException(status_code=503, detail="Storage unavailable") from exc
+    _raise_for_status(response)
+    return response
 
 
 def slugify_filename(filename: str) -> str:
@@ -47,114 +60,115 @@ def slugify_filename(filename: str) -> str:
 
 
 def _safe_storage_filename(filename: str) -> str:
-    """Sanitize a user-provided filename for inclusion in an object key.
-
-    Strips path separators and ``..`` segments so a malicious filename can't
-    escape its parent prefix (S3 keys are flat, but defensive sanitization
-    keeps logs, listings, and presigned URLs predictable).
-    """
-    # Drop any directory components — keep only the basename.
+    """Sanitize a user-provided filename for inclusion in an object key."""
     base = (filename or "").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-    # Replace anything that's not a safe filename character.
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", base).strip("._-")
     return safe[:200] or "upload"
 
 
+def ingest_tmp_key(document_id: uuid.UUID, stage: str) -> str:
+    return f"tmp/ingest/{document_id}/{stage}.json"
+
+
+def ensure_bucket() -> None:
+    _request("POST", "/api/storage/internal/ensure-bucket")
+
+
 def save_upload(account_id: uuid.UUID | None, filename: str, data: bytes, content_type: str) -> str:
-    prefix = f"users/{account_id}" if account_id else "demo"
-    key = f"{prefix}/{uuid.uuid4()}/{_safe_storage_filename(filename)}"
-    client = _internal_client()
-    client.put_object(Bucket=settings.minio_bucket, Key=key, Body=data, ContentType=content_type)
-    return key
+    params: dict[str, str] = {
+        "filename": filename,
+        "content_type": content_type,
+    }
+    if account_id is not None:
+        params["account_id"] = str(account_id)
+    response = _request("PUT", "/api/storage/internal/objects", params=params, content=data)
+    body = response.json()
+    return str(body["storage_key"])
+
+
+def put_bytes(storage_key: str, data: bytes, content_type: str, filename: str = "object") -> str:
+    params = {
+        "filename": filename,
+        "content_type": content_type,
+        "storage_key": storage_key,
+    }
+    response = _request("PUT", "/api/storage/internal/objects", params=params, content=data)
+    body = response.json()
+    return str(body["storage_key"])
 
 
 def start_multipart_upload(storage_key: str, content_type: str) -> str:
-    client = _internal_client()
-    resp = client.create_multipart_upload(
-        Bucket=settings.minio_bucket,
-        Key=storage_key,
-        ContentType=content_type,
+    response = _request(
+        "POST",
+        "/api/storage/internal/multipart/start",
+        params={"key": storage_key, "content_type": content_type},
     )
-    return resp["UploadId"]
+    return str(response.json()["upload_id"])
 
 
 def upload_multipart_part(storage_key: str, upload_id: str, part_number: int, data: bytes) -> str:
-    client = _internal_client()
-    resp = client.upload_part(
-        Bucket=settings.minio_bucket,
-        Key=storage_key,
-        UploadId=upload_id,
-        PartNumber=part_number,
-        Body=data,
+    response = _request(
+        "PUT",
+        "/api/storage/internal/multipart/part",
+        params={"key": storage_key, "upload_id": upload_id, "part_number": part_number},
+        content=data,
     )
-    return resp["ETag"]
+    return str(response.json()["etag"])
 
 
 def complete_multipart_upload(storage_key: str, upload_id: str, parts: list[dict]) -> None:
-    client = _internal_client()
-    client.complete_multipart_upload(
-        Bucket=settings.minio_bucket,
-        Key=storage_key,
-        UploadId=upload_id,
-        MultipartUpload={"Parts": parts},
+    _request(
+        "POST",
+        "/api/storage/internal/multipart/complete",
+        json={"key": storage_key, "upload_id": upload_id, "parts": parts},
     )
 
 
 def abort_multipart_upload(storage_key: str, upload_id: str) -> None:
-    client = _internal_client()
-    client.abort_multipart_upload(
-        Bucket=settings.minio_bucket,
-        Key=storage_key,
-        UploadId=upload_id,
+    _request(
+        "POST",
+        "/api/storage/internal/multipart/abort",
+        params={"key": storage_key, "upload_id": upload_id},
     )
 
 
 def fetch_object(storage_key: str) -> bytes:
-    client = _internal_client()
-    resp = client.get_object(Bucket=settings.minio_bucket, Key=storage_key)
-    return resp["Body"].read()
+    response = _request("GET", "/api/storage/internal/objects", params={"key": storage_key})
+    return response.content
 
 
 def put_json(storage_key: str, data: object) -> None:
-    body = json.dumps(data).encode("utf-8")
-    client = _internal_client()
-    client.put_object(
-        Bucket=settings.minio_bucket,
-        Key=storage_key,
-        Body=body,
-        ContentType="application/json",
-    )
+    _request("PUT", "/api/storage/internal/objects/json", json={"key": storage_key, "data": data})
 
 
 def get_json(storage_key: str) -> object:
-    raw = fetch_object(storage_key)
-    return json.loads(raw.decode("utf-8"))
+    response = _request("GET", "/api/storage/internal/objects/json", params={"key": storage_key})
+    return response.json()["data"]
 
 
 def delete_object(storage_key: str) -> None:
-    client = _internal_client()
-    client.delete_object(Bucket=settings.minio_bucket, Key=storage_key)
+    _request("DELETE", "/api/storage/internal/objects", params={"key": storage_key})
+
+
+def object_exists(storage_key: str) -> bool:
+    response = _request("GET", "/api/storage/internal/objects/exists", params={"key": storage_key})
+    return bool(response.json().get("exists"))
 
 
 def presigned_get_url(storage_key: str, expires: int = 3600) -> str:
-    client = _presign_client()
-    # Force download, never inline rendering. User-uploaded bytes are served via
-    # this URL through GET /sources/{id}/file; without these overrides MinIO
-    # serves the object with whatever Content-Type was stored, so a malicious
-    # text/html / image/svg+xml object would execute in a viewer's browser
-    # (stored XSS). The upload type gate blocks such types at write time; this
-    # is the defense-in-depth that holds even if that gate is ever weakened.
-    return client.generate_presigned_url(
-        "get_object",
-        Params={
-            "Bucket": settings.minio_bucket,
-            "Key": storage_key,
-            "ResponseContentType": "application/octet-stream",
-            "ResponseContentDisposition": "attachment",
-        },
-        ExpiresIn=expires,
+    response = _request(
+        "GET",
+        "/api/storage/internal/objects/url",
+        params={"key": storage_key, "expires": expires},
     )
+    return str(response.json()["url"])
 
 
-def ingest_tmp_key(document_id: uuid.UUID, stage: str) -> str:
-    return f"tmp/ingest/{document_id}/{stage}.json"
+def get_object_meta(*, object_id: uuid.UUID | None = None, storage_key: str | None = None) -> dict:
+    params: dict[str, str] = {}
+    if object_id is not None:
+        params["object_id"] = str(object_id)
+    if storage_key:
+        params["key"] = storage_key
+    response = _request("GET", "/api/storage/internal/objects/meta", params=params)
+    return response.json()

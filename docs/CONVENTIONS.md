@@ -25,10 +25,11 @@ The monorepo layout and the local-dev commands are in
 [AGENTS.md → Local development](../AGENTS.md#local-development). Do not duplicate them.
 
 The one thing to internalize: **product API is `backend/`, identity is `auth/`,
-frontend is `frontend/`, and the package manager is `npm`** (proof:
+object storage is `storage/`, frontend is `frontend/`, and the package manager is
+`npm`** (proof:
 [frontend/package-lock.json](../frontend/package-lock.json),
 CI `npm ci` ([.github/workflows/ci.yml](../.github/workflows/ci.yml)),
-auth import check in the same workflow). If a skill or
+auth and storage import checks in the same workflow). If a skill or
 doc names a different frontend directory or a different package manager, it was ported
 from another project and is stale; fix it to match the proof above.
 
@@ -124,13 +125,17 @@ from another project and is stale; fix it to match the proof above.
   product tables are additive in `qb.*`. See [ADR 0002](adr/0002-intel-frozen-qb-additive.md).
   Identity DDL lives in `auth/schema/auth.sql` and is applied by a **separate**
   Alembic chain (`auth/alembic/`, version table `alembic_version_auth`) that only
-  touches `auth.*`. Credentials are not written from the product API.
-  See [ADR 0007](adr/0007-auth-microservice.md).
+  touches `auth.*`. Object metadata lives in `storage/schema/storage.sql` and is
+  applied by `storage/alembic/` (`alembic_version_storage`) that only touches
+  `storage.*`. Credentials and MinIO writes are not performed from the product API.
+  See [ADR 0007](adr/0007-auth-microservice.md) and
+  [ADR 0008](adr/0008-storage-microservice.md).
 - **Why.** Reproducible, ordered, CI-verified migrations; an untouched legacy schema;
-  identity write-ownership stays in one service.
+  identity and object-storage write-ownership stay in their own services.
 - **Proof.** `backend/alembic/versions/001_intel_foundation.py` …
   `045_auth_account_split.py`; `auth/alembic/versions/001_auth_schema.py`;
-  CI steps "Alembic migrations" and auth "Apply schema" in
+  `storage/alembic/versions/001_storage_schema.py`;
+  CI steps "Alembic migrations", auth "Apply schema", and storage "Apply schema" in
   [.github/workflows/ci.yml](../.github/workflows/ci.yml).
 
 ## 3. Frontend (Next.js App Router + Mantine)

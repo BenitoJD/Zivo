@@ -15,6 +15,7 @@ from app.services.auth import get_current_user, get_optional_user, require_csrf,
 from app.services.document_bundle import build_document_bundle
 from app.services.document_create import (
     assert_upload_content_type_allowed,
+    create_document_from_storage,
     create_document_record,
     normalize_upload_content_type,
 )
@@ -22,7 +23,7 @@ from app.services.document_purge import purge_document, purge_ingest_tmp
 from app.services.guest import document_owned_by_guest
 from app.services.guest_session import guest_session_for_read, optional_guest_session
 from app.services.jobs import enqueue_summarize
-from app.services.storage import delete_object, presigned_get_url
+from app.services.storage import delete_object, get_object_meta, presigned_get_url
 from app.services.web_import import (
     WebImportError,
     article_filename,
@@ -77,6 +78,10 @@ class ImportTextIn(BaseModel):
     text: str = Field(min_length=40, max_length=500_000)
     title: str | None = Field(default=None, max_length=200)
     source_url: str | None = Field(default=None, max_length=2048)
+
+
+class FromObjectIn(BaseModel):
+    object_id: uuid.UUID
 
 
 class ImportGithubIn(BaseModel):
@@ -288,6 +293,45 @@ async def _read_files_capped(files: list[UploadFile]) -> list[tuple[str, str, by
             )
         )
     return payloads
+
+
+@router.post(
+    "/from-object",
+    response_model=DocumentOut,
+    dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)],
+)
+async def create_from_storage_object(
+    body: FromObjectIn,
+    db: Session = Depends(get_db),
+    user: Account | None = Depends(get_optional_user),
+    guest_id: str | None = Depends(optional_guest_session),
+) -> Document:
+    """Register a storage object as a product document and enqueue ingest."""
+    meta = get_object_meta(object_id=body.object_id)
+    owner_account = meta.get("account_id")
+    owner_guest = meta.get("guest_id")
+    if user:
+        if owner_account != str(user.id):
+            raise HTTPException(status_code=404, detail="Object not found")
+    elif guest_id:
+        if owner_guest != guest_id:
+            raise HTTPException(status_code=404, detail="Object not found")
+    else:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    def _run() -> Document:
+        return create_document_from_storage(
+            db,
+            user=user,
+            guest_id=guest_id,
+            filename=meta["filename"],
+            content_type=meta["content_type"],
+            storage_key=meta["storage_key"],
+            size_bytes=int(meta["size_bytes"]),
+            guest_id_override=owner_guest,
+        )
+
+    return await asyncio.to_thread(_run)
 
 
 @router.post("", response_model=DocumentOut, dependencies=[Depends(require_csrf_or_guest), Depends(rate_limit_dependency)])

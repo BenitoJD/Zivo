@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .env import AUTH_DIR, BACKEND_DIR, resolve_env
+from .env import AUTH_DIR, BACKEND_DIR, STORAGE_DIR, resolve_env
 
 VENV = Path.home() / ".venv" / "zivo"
 
@@ -47,6 +47,7 @@ def backend_env(port: int | None = None) -> dict[str, str]:
     env.update(resolve_env().backend)
     env["DATABASE_URL"] = database_url()
     env.setdefault("MINIO_ENDPOINT", "localhost:9020")
+    env.setdefault("STORAGE_URL", "http://127.0.0.1:8202")
     env["PYTHONUNBUFFERED"] = "1"
     return env
 
@@ -67,9 +68,18 @@ def run_auth_alembic(*args: str, env: dict[str, str] | None = None) -> None:
         raise RuntimeError(f"auth alembic {' '.join(args)} failed")
 
 
+def run_storage_alembic(*args: str, env: dict[str, str] | None = None) -> None:
+    cmd = [python_bin(), "-m", "alembic", *args]
+    print("+", " ".join(cmd), "(storage)")
+    proc = subprocess.run(cmd, cwd=STORAGE_DIR, env=env or backend_env(), text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"storage alembic {' '.join(args)} failed")
+
+
 def apply_schema(env: dict[str, str] | None = None) -> None:
-    """Apply auth then product schema migrations via Alembic."""
+    """Apply auth then storage then product schema migrations via Alembic."""
     run_auth_alembic("upgrade", "head", env=env)
+    run_storage_alembic("upgrade", "head", env=env)
     run_alembic("upgrade", "head", env=env)
 
 

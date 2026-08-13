@@ -41,6 +41,17 @@ run_auth() {
   (cd auth && "$PYTHON_BIN" -m pytest tests/unit/ -q --tb=no)
 }
 
+run_storage() {
+  echo "==> storage: ruff"
+  (cd storage && "$PYTHON_BIN" -m ruff check .)
+
+  echo "==> storage: import check"
+  (cd storage && "$PYTHON_BIN" -c "from app.main import app; assert app.title == 'Zivo Storage'")
+
+  echo "==> storage: unit tests"
+  (cd storage && "$PYTHON_BIN" -m pytest tests/unit/ -q --tb=no)
+}
+
 run_frontend() {
   echo "==> frontend: eslint"
   (cd frontend && npm run lint)
@@ -53,6 +64,7 @@ case "$SCOPE" in
   all)
     run_backend
     run_auth
+    run_storage
     run_frontend
     ;;
   backend)
@@ -61,11 +73,14 @@ case "$SCOPE" in
   auth)
     run_auth
     ;;
+  storage)
+    run_storage
+    ;;
   frontend)
     run_frontend
     ;;
   *)
-    echo "Usage: $0 [all|backend|auth|frontend]" >&2
+    echo "Usage: $0 [all|backend|auth|storage|frontend]" >&2
     exit 2
     ;;
 esac

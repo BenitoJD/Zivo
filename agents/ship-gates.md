@@ -16,7 +16,7 @@ commit or trigger **Deploy Zivo**.
 | Before `gh workflow run deploy.yml` | **Yes** |
 | After fixing a CI failure | **Yes** (re-run full gates) |
 
-Agents: if you touched `backend/`, `auth/`, or `frontend/`, run ship gates before telling
+Agents: if you touched `backend/`, `auth/`, `storage/`, or `frontend/`, run ship gates before telling
 the user the work is done. Do not offer deploy until gates pass.
 
 ## One command
@@ -32,6 +32,7 @@ Optional: pass a scope when you only changed one side:
 ```bash
 ./scripts/ship-gates.sh backend    # ruff + import check + unit tests
 ./scripts/ship-gates.sh auth       # ruff + import check + unit tests
+./scripts/ship-gates.sh storage    # ruff + import check + unit tests
 ./scripts/ship-gates.sh frontend   # eslint + next build
 ```
 
@@ -47,6 +48,12 @@ Optional: pass a scope when you only changed one side:
 
 1. `python -m ruff check .` (same ruff set as backend)
 2. Import smoke: `from app.main import app` (`Zivo Auth`)
+3. `python -m pytest tests/unit/ -q --tb=no`
+
+### Storage
+
+1. `python -m ruff check .` (same ruff set as backend)
+2. Import smoke: `from app.main import app` (`Zivo Storage`)
 3. `python -m pytest tests/unit/ -q --tb=no`
 
 ### Frontend

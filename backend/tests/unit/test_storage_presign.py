@@ -1,4 +1,4 @@
-"""Presigned URLs use the public MinIO endpoint, not the internal cluster address."""
+"""Presigned URLs are issued by the storage service over HTTP."""
 
 from __future__ import annotations
 
@@ -9,10 +9,7 @@ import pytest
 
 @pytest.fixture()
 def storage_module(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("MINIO_ENDPOINT", "minio.zivo.svc:9000")
-    monkeypatch.setenv("MINIO_SECURE", "false")
-    monkeypatch.setenv("MINIO_PUBLIC_ENDPOINT", "s3.zivo.example")
-    monkeypatch.setenv("MINIO_PUBLIC_SECURE", "true")
+    monkeypatch.setenv("STORAGE_URL", "http://storage.test:8000")
     from app.config import get_settings
 
     get_settings.cache_clear()
@@ -20,20 +17,25 @@ def storage_module(monkeypatch: pytest.MonkeyPatch):
     return importlib.reload(module)
 
 
-def test_presign_client_uses_public_https_endpoint(storage_module, monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, str] = {}
+def test_presign_asks_storage_service(storage_module, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
 
-    def fake_client(*, endpoint: str, secure: bool):
-        captured["endpoint"] = endpoint
-        captured["secure"] = str(secure)
+    class _Response:
+        status_code = 200
+        content = b""
 
-        class _Client:
-            def generate_presigned_url(self, *_args, **_kwargs) -> str:
-                return f"https://{endpoint}/zivo/demo/file.pdf?sig=1"
+        def json(self) -> dict:
+            return {"url": "https://s3.zivo.example/zivo/demo/file.pdf?sig=1"}
 
-        return _Client()
+    def fake_request(method: str, path: str, **kwargs):
+        captured["method"] = method
+        captured["path"] = path
+        captured["params"] = kwargs.get("params")
+        return _Response()
 
-    monkeypatch.setattr(storage_module, "_s3_client", fake_client)
+    monkeypatch.setattr(storage_module, "_request", fake_request)
     url = storage_module.presigned_get_url("demo/file.pdf")
-    assert captured == {"endpoint": "s3.zivo.example", "secure": "True"}
+    assert captured["method"] == "GET"
+    assert captured["path"] == "/api/storage/internal/objects/url"
+    assert captured["params"] == {"key": "demo/file.pdf", "expires": 3600}
     assert url.startswith("https://s3.zivo.example/")

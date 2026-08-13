@@ -20,8 +20,10 @@ const nextConfig: NextConfig = {
   },
   async rewrites() {
     const authProxy = process.env.AUTH_PROXY_URL ?? "http://127.0.0.1:8201";
+    const storageProxy = process.env.STORAGE_PROXY_URL ?? "http://127.0.0.1:8202";
     return [
       { source: "/api/auth/:path*", destination: `${authProxy}/api/auth/:path*` },
+      { source: "/api/storage/:path*", destination: `${storageProxy}/api/storage/:path*` },
       { source: "/api/:path*", destination: `${API_PROXY_URL}/api/:path*` },
       { source: "/health", destination: `${API_PROXY_URL}/health` },
     ];

@@ -11,7 +11,7 @@ Use for local development on the Zivo monorepo.
 
 ```bash
 ./scripts/dev.sh setup          # ~/.venv/zivo + pip install
-./scripts/dev.sh start          # deps + migrate + API :8200 + auth :8201 + Next.js :3000
+./scripts/dev.sh start          # deps + migrate + API :8200 + auth :8201 + storage :8202 + Next.js :3000
 ./scripts/dev.sh stop
 ./scripts/dev.sh doctor
 ./scripts/dev.sh db migrate     # alembic upgrade head
@@ -27,6 +27,7 @@ Use for local development on the Zivo monorepo.
 | `backend/schema/*.sql` | DDL source for baseline Alembic revisions |
 | `backend/alembic/versions/` | Alembic migration chain |
 | `auth/` | Identity FastAPI (signup, login, session, Google OAuth) |
+| `storage/` | Object FastAPI (MinIO writes, chunked upload) |
 | `frontend/app/` | Next.js App Router UI — **Mantine only** (no `components/`) |
 | `frontend/lib/` | API client, types, constants (not UI) |
 | `infra/k8s/` | Helm charts + prod values |
@@ -37,13 +38,16 @@ Use for local development on the Zivo monorepo.
 - Defaults: `backend/.env.example` (shared `SECRET_KEY` / `DATABASE_URL` with auth)
 - Local overrides: `backend/.env.local` (create manually, gitignored)
 - Auth: `auth/.env.example` (same Postgres; prod host `auth.zivo.fyi`)
-- Frontend: `frontend/.env.local` (`NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_AUTH_URL` if needed; empty locally)
+- Storage: `storage/.env.example` (same Postgres + MinIO; prod host `storage.zivo.fyi`)
+- Frontend: `frontend/.env.local` (`NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_AUTH_URL` / `NEXT_PUBLIC_STORAGE_URL` if needed; empty locally)
 
 ## Schema
 
 Zivo uses **Alembic**. `./scripts/dev.sh db migrate` applies `auth/` first
-(`alembic_version_auth`), then `backend/`. Baseline product revisions execute
-`backend/schema/*.sql`; identity DDL is `auth/schema/auth.sql`.
+(`alembic_version_auth`), then `storage/` (`alembic_version_storage`), then
+`backend/`. Baseline product revisions execute
+`backend/schema/*.sql`; identity DDL is `auth/schema/auth.sql`; object DDL is
+`storage/schema/storage.sql`.
 
 ```bash
 ./scripts/dev.sh db migrate

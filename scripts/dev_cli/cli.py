@@ -11,8 +11,8 @@ from pathlib import Path
 
 from .db import apply_schema, backend_env, python_bin
 from .deps import deps_status, start_deps
-from .env import AUTH_DIR, BACKEND_DEFAULTS, BACKEND_DIR, FRONTEND_DIR, ROOT, require_defaults
-from .ports import allocate_auth_port, allocate_backend_port
+from .env import AUTH_DIR, BACKEND_DEFAULTS, BACKEND_DIR, FRONTEND_DIR, ROOT, STORAGE_DIR, require_defaults
+from .ports import allocate_auth_port, allocate_backend_port, allocate_storage_port
 
 FRONTEND_PORT = 3000
 
@@ -48,6 +48,7 @@ def setup(_: argparse.Namespace) -> int:
     # Dev venv gets pytest/ruff too (requirements-dev pulls in requirements.txt).
     run([str(VENV / "bin" / "pip"), "install", "-q", "-r", str(BACKEND_DIR / "requirements-dev.txt")])
     run([str(VENV / "bin" / "pip"), "install", "-q", "-r", str(AUTH_DIR / "requirements-dev.txt")])
+    run([str(VENV / "bin" / "pip"), "install", "-q", "-r", str(STORAGE_DIR / "requirements-dev.txt")])
     local_env = BACKEND_DIR / ".env.local"
     if not local_env.exists():
         print(f"Tip: copy overrides to {local_env.relative_to(ROOT)}")
@@ -60,6 +61,7 @@ def doctor(_: argparse.Namespace) -> int:
     print("zivo dev doctor")
     print(f"{'✓' if BACKEND_DEFAULTS.exists() else '✗'} {BACKEND_DEFAULTS.relative_to(ROOT)}")
     print(f"{'✓' if (AUTH_DIR / '.env.example').exists() else '✗'} {(AUTH_DIR / '.env.example').relative_to(ROOT)}")
+    print(f"{'✓' if (STORAGE_DIR / '.env.example').exists() else '✗'} {(STORAGE_DIR / '.env.example').relative_to(ROOT)}")
     print(f"{'✓' if (VENV / 'bin' / 'python').exists() else '✗'} venv: {VENV}")
     if deps_status() != 0:
         status = 1
@@ -122,16 +124,19 @@ def start(args: argparse.Namespace) -> int:
         raise RuntimeError("Run ./scripts/dev.sh setup first.")
 
     state = load_state()
-    if pid_running(state.get("api_pid")) or pid_running(state.get("auth_pid")) or pid_running(state.get("frontend_pid")):
+    if pid_running(state.get("api_pid")) or pid_running(state.get("auth_pid")) or pid_running(state.get("storage_pid")) or pid_running(state.get("frontend_pid")):
         raise RuntimeError("Dev stack already running. Use ./scripts/dev.sh stop first.")
 
     port = allocate_backend_port(args.port)
     auth_port = allocate_auth_port()
+    storage_port = allocate_storage_port()
     start_deps()
     benv = backend_env()
-    from .db import run_alembic, run_auth_alembic
+    benv["STORAGE_URL"] = f"http://127.0.0.1:{storage_port}"
+    from .db import run_alembic, run_auth_alembic, run_storage_alembic
 
     run_auth_alembic("upgrade", "head", env=benv)
+    run_storage_alembic("upgrade", "head", env=benv)
     run_alembic("upgrade", "head", env=benv)
     subprocess.run(
         [python_bin(), "scripts/seed_question_vocab.py"],
@@ -174,6 +179,16 @@ def start(args: argparse.Namespace) -> int:
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
+    storage_log = LOG_ROOT / "storage.log"
+    with storage_log.open("ab") as storage_out:
+        storage_proc = subprocess.Popen(
+            [py, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(storage_port), "--reload"],
+            cwd=STORAGE_DIR,
+            env=benv,
+            stdout=storage_out,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
     io_log = LOG_ROOT / "worker-io.log"
     cpu_log = LOG_ROOT / "worker-cpu.log"
     with io_log.open("ab") as io_out:
@@ -210,6 +225,7 @@ def start(args: argparse.Namespace) -> int:
         **os.environ,
         "API_PROXY_URL": f"http://127.0.0.1:{port}",
         "AUTH_PROXY_URL": f"http://127.0.0.1:{auth_port}",
+        "STORAGE_PROXY_URL": f"http://127.0.0.1:{storage_port}",
     }
     with frontend_log.open("ab") as fe_out:
         frontend_proc = subprocess.Popen(
@@ -227,6 +243,8 @@ def start(args: argparse.Namespace) -> int:
             "api_port": port,
             "auth_pid": auth_proc.pid,
             "auth_port": auth_port,
+            "storage_pid": storage_proc.pid,
+            "storage_port": storage_port,
             "io_pid": io_proc.pid,
             "cpu_pid": cpu_proc.pid,
             "frontend_pid": frontend_proc.pid,
@@ -235,17 +253,18 @@ def start(args: argparse.Namespace) -> int:
     )
     print(f"API running at http://127.0.0.1:{port} (logs: {log_path.relative_to(ROOT)})")
     print(f"Auth running at http://127.0.0.1:{auth_port} (logs: {auth_log.relative_to(ROOT)})")
+    print(f"Storage running at http://127.0.0.1:{storage_port} (logs: {storage_log.relative_to(ROOT)})")
     print(f"Workers: IO pid {io_proc.pid}, CPU pid {cpu_proc.pid}")
     print(
         f"Frontend at http://localhost:{FRONTEND_PORT} "
-        f"(logs: {frontend_log.relative_to(ROOT)}, proxy → :{port} auth → :{auth_port})"
+        f"(logs: {frontend_log.relative_to(ROOT)}, proxy → :{port} auth → :{auth_port} storage → :{storage_port})"
     )
     return 0
 
 
 def stop(_: argparse.Namespace) -> int:
     state = load_state()
-    for key in ("frontend_pid", "api_pid", "auth_pid", "io_pid", "cpu_pid"):
+    for key in ("frontend_pid", "api_pid", "auth_pid", "storage_pid", "io_pid", "cpu_pid"):
         pid = state.get(key)
         if pid_running(pid):
             os.kill(pid, signal.SIGTERM)
@@ -257,9 +276,10 @@ def stop(_: argparse.Namespace) -> int:
 def db_cmd(args: argparse.Namespace) -> int:
     if args.db_command == "migrate":
         start_deps()
-        from .db import run_alembic, run_auth_alembic
+        from .db import run_alembic, run_auth_alembic, run_storage_alembic
 
         run_auth_alembic("upgrade", "head")
+        run_storage_alembic("upgrade", "head")
         run_alembic("upgrade", "head")
     elif args.db_command == "schema":
         start_deps()

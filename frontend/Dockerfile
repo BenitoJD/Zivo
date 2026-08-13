@@ -3,12 +3,16 @@ WORKDIR /app
 
 ARG NEXT_PUBLIC_API_URL=
 ARG NEXT_PUBLIC_AUTH_URL=https://auth.zivo.fyi
+ARG NEXT_PUBLIC_STORAGE_URL=https://storage.zivo.fyi
 ARG API_PROXY_URL=http://zivo-api:8000
 ARG AUTH_PROXY_URL=http://zivo-auth:8000
+ARG STORAGE_PROXY_URL=http://zivo-storage:8000
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_PUBLIC_AUTH_URL=$NEXT_PUBLIC_AUTH_URL
+ENV NEXT_PUBLIC_STORAGE_URL=$NEXT_PUBLIC_STORAGE_URL
 ENV API_PROXY_URL=$API_PROXY_URL
 ENV AUTH_PROXY_URL=$AUTH_PROXY_URL
+ENV STORAGE_PROXY_URL=$STORAGE_PROXY_URL
 
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --prefer-offline
@@ -22,6 +26,7 @@ ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 ENV API_PROXY_URL=http://zivo-api:8000
 ENV AUTH_PROXY_URL=http://zivo-auth:8000
+ENV STORAGE_PROXY_URL=http://zivo-storage:8000
 
 RUN addgroup -S app && adduser -S app -G app
 

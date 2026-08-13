@@ -15,7 +15,7 @@ from app.models import Document, JobWorkload
 from app.repositories import newspaper as newspaper_repo
 from app.services.document_purge import purge_document, purge_ingest_tmp
 from app.services.parse import count_pdf_pages
-from app.services.storage import _internal_client, _safe_storage_filename, ensure_bucket
+from app.services.storage import _safe_storage_filename, ensure_bucket, put_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -23,15 +23,7 @@ logger = logging.getLogger(__name__)
 def _save_newspaper_pdf(filename: str, data: bytes) -> str:
     ensure_bucket()
     key = f"newspaper/{uuid.uuid4()}/{_safe_storage_filename(filename)}"
-    client = _internal_client()
-    settings = get_settings()
-    client.put_object(
-        Bucket=settings.minio_bucket,
-        Key=key,
-        Body=data,
-        ContentType="application/pdf",
-    )
-    return key
+    return put_bytes(key, data, "application/pdf", filename=filename)
 
 
 def window_start(today: date | None = None) -> date:

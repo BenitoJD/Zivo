@@ -45,6 +45,8 @@ spec:
             # Judge0 code-execution sandbox (dedicated box — see infra/judge0/).
             - name: JUDGE0_URL
               value: {{ .Values.judge0Url | quote }}
+            - name: STORAGE_URL
+              value: {{ .Values.storageUrl | default "http://zivo-storage:8000" | quote }}
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

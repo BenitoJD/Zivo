@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     minio_secure: bool = False
     minio_public_endpoint: str = ""
     minio_public_secure: bool | None = None
+    storage_url: str = "http://127.0.0.1:8202"
 
     litellm_model: str = "openai/deepseek-v4-flash"
     openai_api_base: str = ""

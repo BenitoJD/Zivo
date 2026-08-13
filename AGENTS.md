@@ -22,12 +22,13 @@ Decisions (rank, metric, gate, schedule, next-step) live behind named engine fac
 
 | Area | Status | Notes |
 |------|--------|-------|
-| **Repo structure** | Ready | `backend/`, `auth/`, `frontend/`, `infra/k8s/`, `scripts/` |
+| **Repo structure** | Ready | `backend/`, `auth/`, `storage/`, `frontend/`, `infra/k8s/`, `scripts/` |
 | **DB + extensions** | Ready | Postgres 16, pgvector — foundation for question graph |
 | **Legacy `intel` schema** | Present | `intel_foundation.sql` unchanged; product data in `intel.*` |
 | **QB app schema** | Ready | `qb_app.sql` + `qb_infra.sql` via Alembic (`./scripts/dev.sh db migrate`) |
 | **API** | Ready | FastAPI product API: sources, artifacts, activities, assertions, chat, mcq |
 | **Auth service** | Ready | Identity FastAPI (`auth/`): signup, login, logout, session, Google OAuth. [ADR 0007](docs/adr/0007-auth-microservice.md) |
+| **Storage service** | Ready | Object FastAPI (`storage/`): MinIO writes, chunked upload, `storage.*`. [ADR 0008](docs/adr/0008-storage-microservice.md) |
 | **Workers** | Ready | Zivo ETA IO+CPU — `backend/app/eta/`, `run_eta_worker_*.py` |
 | **Workspace UI** | Ready | `/workspace` — Mantine `AppShell`, Learn/Test layout in `app/` routes |
 | **Helm / K8s** | Ready | postgres, minio, api, auth, web, db-schema charts |
@@ -61,6 +62,7 @@ zivo/
 │   ├── schema/           # SQL DDL (question graph next)
 │   └── scripts/
 ├── auth/                 # identity FastAPI: signup, login, session, Google OAuth
+├── storage/              # object FastAPI: MinIO writes, chunked upload, storage.*
 ├── frontend/             # Next.js App Router — Mantine-only UI in app/
 ├── infra/k8s/            # Helm charts + prod values
 ├── scripts/              # dev.sh, bootstrap-vps.sh, deploy helpers
@@ -89,8 +91,8 @@ Python 3.12+, Node.js 22+, Docker (for Postgres + MinIO).
 
 ```bash
 ./scripts/dev.sh setup
-./scripts/dev.sh start              # API + auth + workers + Next.js (:8200, :8201, :3000)
-./scripts/dev.sh db migrate        # auth Alembic then product Alembic
+./scripts/dev.sh start              # API + auth + storage + workers + Next.js (:8200, :8201, :8202, :3000)
+./scripts/dev.sh db migrate        # auth Alembic, storage Alembic, then product Alembic
 ./scripts/dev.sh db seed           # question vocab seeds
 ./scripts/dev.sh doctor
 ./scripts/dev.sh stop
@@ -105,6 +107,7 @@ cd frontend && npm run build && npm run lint
 |---------|------|
 | API | `8200` |
 | Auth | `8201` |
+| Storage | `8202` |
 | Next.js | `3000` |
 | Postgres | `5455` |
 | MinIO API / console | `9020` / `9021` |
@@ -114,11 +117,11 @@ cd frontend && npm run build && npm run lint
 - `backend/.env.example` : defaults (shared `SECRET_KEY` / `DATABASE_URL` with auth)
 - `backend/.env.local` : your overrides (gitignored)
 - `auth/.env.example` : identity-service defaults (same Postgres)
-- `frontend/.env.local` : `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_AUTH_URL` if needed (empty locally so Next rewrites `/api/auth` to `:8201`)
+- `frontend/.env.local` : `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_AUTH_URL` / `NEXT_PUBLIC_STORAGE_URL` if needed (empty locally so Next rewrites `/api/auth` to `:8201` and `/api/storage` to `:8202`)
 
 ## Schema
 
-DDL source files live in `backend/schema/` and `auth/schema/`. **Alembic** applies them (`./scripts/dev.sh db migrate` runs auth first, then product):
+DDL source files live in `backend/schema/`, `auth/schema/`, and `storage/schema/`. **Alembic** applies them (`./scripts/dev.sh db migrate` runs auth first, then storage, then product):
 
 ```bash
 ./scripts/dev.sh db migrate
@@ -127,7 +130,7 @@ DDL source files live in `backend/schema/` and `auth/schema/`. **Alembic** appli
 
 Product migrations: `backend/alembic/versions/` (`001_intel_foundation` → `002_qb_schema`, …). New product schema changes: add a revision with `cd backend && alembic revision --autogenerate -m "message"`, then run `backend/scripts/test_alembic_migrations.sh`.
 
-Identity migrations: `auth/alembic/versions/` with version table `alembic_version_auth` (only `auth.*`). Product FKs stay on `qb.account`; credentials live in `auth.account`. See [ADR 0007](docs/adr/0007-auth-microservice.md).
+Identity migrations: `auth/alembic/versions/` with version table `alembic_version_auth` (only `auth.*`). Storage migrations: `storage/alembic/versions/` with `alembic_version_storage` (only `storage.*`). Product FKs stay on `qb.account`; credentials live in `auth.account`. See [ADR 0007](docs/adr/0007-auth-microservice.md) and [ADR 0008](docs/adr/0008-storage-microservice.md).
 
 Product tables: `intel.*` (unchanged DDL) + additive `qb.*` — see [docs/WORKSPACE.md](docs/WORKSPACE.md) and [ADR 0002](docs/adr/0002-intel-frozen-qb-additive.md).
 
@@ -136,7 +139,7 @@ Product tables: `intel.*` (unchanged DDL) + additive `qb.*` — see [docs/WORKSP
 | | |
 |---|---|
 | **Host** | `103.194.228.47` (`ssh zivo-vps`) |
-| **DNS** | `zivo.fyi`, `www.zivo.fyi`, `api.zivo.fyi`, `auth.zivo.fyi`, `s3.zivo.fyi` → VPS IP |
+| **DNS** | `zivo.fyi`, `www.zivo.fyi`, `api.zivo.fyi`, `auth.zivo.fyi`, `storage.zivo.fyi`, `s3.zivo.fyi` → VPS IP |
 | **Namespace** | `zivo` |
 | **Runner labels** | `self-hosted`, `zivo` |
 
@@ -149,7 +152,7 @@ ssh zivo-vps "RUNNER_TOKEN=$RUNNER_TOKEN bash -s" < scripts/bootstrap-vps.sh
 
 Deploy: GitHub → Actions → **Deploy Zivo** → Run workflow.
 
-Google OAuth redirect URI in production is `https://auth.zivo.fyi/api/auth/google/callback` (Google Cloud Console + `GOOGLE_REDIRECT_URI` in `zivo-secrets`). Add an `auth.zivo.fyi` A record to the VPS before TLS will issue.
+Google OAuth redirect URI in production is `https://auth.zivo.fyi/api/auth/google/callback` (Google Cloud Console + `GOOGLE_REDIRECT_URI` in `zivo-secrets`). Add an `auth.zivo.fyi` A record to the VPS before TLS will issue. Storage TLS needs a `storage.zivo.fyi` A record the same way.
 
 ## Frontend UI
 

@@ -17,5 +17,6 @@ behind the shape those rules describe.
 | [0005](0005-enforcement-and-known-divergences.md) | Document what-is; track divergences as dated debt to enforce | 2026-06-27 |
 | [0006](0006-offline-answer-keys.md) | Offline Mode ships answer keys to the device in signed, expiring packs | 2026-08-01 |
 | [0007](0007-auth-microservice.md) | Identity is the first microservice; shared Postgres; product stub table | 2026-08-13 |
+| [0008](0008-storage-microservice.md) | Object storage is the second microservice; MinIO writes leave the product API | 2026-08-13 |
 
 To add one: scan for the highest number, increment, keep it short.

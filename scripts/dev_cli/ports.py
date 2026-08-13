@@ -4,6 +4,7 @@ import socket
 
 DEFAULT_BACKEND_PORT = 8200
 DEFAULT_AUTH_PORT = 8201
+DEFAULT_STORAGE_PORT = 8202
 
 
 def port_available(port: int, host: str = "127.0.0.1") -> bool:
@@ -33,3 +34,7 @@ def allocate_backend_port(requested: int | None = None) -> int:
 
 def allocate_auth_port() -> int:
     return find_available_port(DEFAULT_AUTH_PORT)
+
+
+def allocate_storage_port() -> int:
+    return find_available_port(DEFAULT_STORAGE_PORT)

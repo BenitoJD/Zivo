@@ -2,10 +2,15 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 /** Auth service origin. Empty in dev so /api/auth/* stays same-origin via Next rewrite. */
 const AUTH_BASE = process.env.NEXT_PUBLIC_AUTH_URL ?? "";
+/** Storage service origin. Empty in dev so /api/storage/* stays same-origin via Next rewrite. */
+const STORAGE_BASE = process.env.NEXT_PUBLIC_STORAGE_URL ?? "";
 
 export function apiUrl(path: string): string {
   if (path.startsWith("/api/auth")) {
     return `${AUTH_BASE}${path}`;
+  }
+  if (path.startsWith("/api/storage")) {
+    return `${STORAGE_BASE}${path}`;
   }
   return `${API_BASE}${path}`;
 }
@@ -458,7 +463,7 @@ export async function apiUploadChunked<T extends { id: string }>(
         received_parts: number[];
         chunk_size: number;
         expected_parts: number;
-      }>(`/api/sources/chunked/${sessionId}`);
+      }>(`/api/storage/chunked/${sessionId}`);
       chunkSize = status.chunk_size;
       expectedParts = status.expected_parts;
       status.received_parts.forEach((p) => uploaded.add(p));
@@ -473,7 +478,7 @@ export async function apiUploadChunked<T extends { id: string }>(
       session_id: string;
       chunk_size: number;
       expected_parts: number;
-    }>("/api/sources/chunked/init", {
+    }>("/api/storage/chunked/init", {
       filename: file.name,
       content_type: contentType,
       total_size: file.size,
@@ -501,7 +506,7 @@ export async function apiUploadChunked<T extends { id: string }>(
     const start = (part - 1) * chunkSize;
     const end = Math.min(start + chunkSize, file.size);
     const blob = file.slice(start, end);
-    const res = await fetch(apiUrl(`/api/sources/chunked/${sessionId}/parts/${part}`), {
+    const res = await fetch(apiUrl(`/api/storage/chunked/${sessionId}/parts/${part}`), {
       method: "PUT",
       credentials: "include",
       headers: buildHeaders({ "Content-Type": "application/octet-stream" }),
@@ -523,7 +528,14 @@ export async function apiUploadChunked<T extends { id: string }>(
     if (onProgress) onProgress(end, file.size);
   }
 
-  const done = await apiPost<T>(`/api/sources/chunked/${sessionId}/complete`, {});
+  const stored = await apiPost<{
+    object_id: string;
+    storage_key: string;
+    filename: string;
+    content_type: string;
+    size_bytes: number;
+  }>(`/api/storage/chunked/${sessionId}/complete`, {});
+  const done = await apiPost<T>("/api/sources/from-object", { object_id: stored.object_id });
   clearChunkedResume(file);
   return done;
 }

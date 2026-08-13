@@ -175,12 +175,10 @@ def build_audiobook(db: Session, document_id: uuid.UUID) -> dict:
 
 def _object_exists(key: str) -> bool:
     """True when the object exists in MinIO (used for torn-write detection)."""
-    from app.services.storage import _internal_client
+    from app.services.storage import object_exists
 
-    settings = get_settings()
     try:
-        _internal_client().stat_object(Bucket=settings.minio_bucket, Key=key)
-        return True
+        return object_exists(key)
     except Exception:
         return False
 
@@ -224,15 +222,9 @@ def _render_chunk(text: str, plan: ChunkPlan) -> bytes:
 
 
 def _put_mp3(key: str, data: bytes) -> None:
-    from app.services.storage import _internal_client
+    from app.services.storage import put_bytes
 
-    settings = get_settings()
-    _internal_client().put_object(
-        Bucket=settings.minio_bucket,
-        Key=key,
-        Body=data,
-        ContentType=CONTENT_TYPE_MP3,
-    )
+    put_bytes(key, data, CONTENT_TYPE_MP3, filename="chunk.mp3")
 
 
 def audiobook_manifest_payload(document_id: uuid.UUID) -> dict:
