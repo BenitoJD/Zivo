@@ -1,0 +1,23 @@
+# Build context for practice/content/study images (repo root).
+.git
+.github
+.cursor
+.agents
+.claude
+.commandcode
+frontend
+infra
+docs
+auth
+storage
+logs
+graphify-out
+landing
+output
+**/.venv
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/.env.local

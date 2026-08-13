@@ -13,7 +13,7 @@ import { ScrollViewport } from "@/app/_components/ScrollViewport";
 import { LearnMcqSection } from "@/app/learn/_components/LearnMcqSection";
 import { LinkAnchor, LinkButton } from "@/app/learn/_components/AppLink";
 import { MCQ_CONTENT_MAX } from "@/app/_components/mcq/McqCard";
-import { serverApiBase } from "@/lib/serverApi";
+import { serverApiUrl } from "@/lib/serverApi";
 
 type LearnPost = {
   slug: string;
@@ -30,7 +30,7 @@ type LearnPost = {
 
 async function fetchPost(slug: string): Promise<LearnPost | null> {
   try {
-    const res = await fetch(`${serverApiBase()}/api/learn/posts/${encodeURIComponent(slug)}`, {
+    const res = await fetch(serverApiUrl(`/api/learn/posts/${encodeURIComponent(slug)}`), {
       next: { revalidate: 300 },
     });
     if (res.status === 404) return null;

@@ -13,7 +13,7 @@ import { ScrollViewport } from "@/app/_components/ScrollViewport";
 import { LearnMcqSection } from "@/app/learn/_components/LearnMcqSection";
 import { LinkAnchor, LinkButton } from "@/app/learn/_components/AppLink";
 import { MCQ_CONTENT_MAX } from "@/app/_components/mcq/McqCard";
-import { serverApiBase } from "@/lib/serverApi";
+import { serverApiUrl } from "@/lib/serverApi";
 
 type EditionBlog = {
   slug: string;
@@ -35,7 +35,7 @@ async function fetchEditionBlog(
 ): Promise<EditionBlog | null> {
   try {
     const res = await fetch(
-      `${serverApiBase()}/api/learn/newspaper/${encodeURIComponent(paperSlug)}/${encodeURIComponent(editionDate)}`,
+      serverApiUrl(`/api/learn/newspaper/${encodeURIComponent(paperSlug)}/${encodeURIComponent(editionDate)}`),
       { next: { revalidate: 300 } },
     );
     if (res.status === 404) return null;

@@ -25,11 +25,12 @@ The monorepo layout and the local-dev commands are in
 [AGENTS.md → Local development](../AGENTS.md#local-development). Do not duplicate them.
 
 The one thing to internalize: **product API is `backend/`, identity is `auth/`,
-object storage is `storage/`, frontend is `frontend/`, and the package manager is
+object storage is `storage/`, practice/content/study are HTTP slices that import
+backend engines as libraries, frontend is `frontend/`, and the package manager is
 `npm`** (proof:
 [frontend/package-lock.json](../frontend/package-lock.json),
 CI `npm ci` ([.github/workflows/ci.yml](../.github/workflows/ci.yml)),
-auth and storage import checks in the same workflow). If a skill or
+auth, storage, practice, content, and study import checks in the same workflow). If a skill or
 doc names a different frontend directory or a different package manager, it was ported
 from another project and is stale; fix it to match the proof above.
 
@@ -162,16 +163,18 @@ truth for UI; this file does not restate it.
   database; tests that need Postgres go in `integration/` (or skip when the table
   is missing) and self-skip when the dev DB is unreachable.
 - **Why.** Fast, DB-free unit tests gate every PR; DB-bound tests stay opt-in.
-- **Proof.** CI "Unit tests" steps run `backend/tests/unit/` and `auth/tests/unit/`
+- **Proof.** CI "Unit tests" steps run `backend/tests/unit/`, `auth/tests/unit/`,
+  `storage/tests/unit/`, `practice/tests/unit/`, `content/tests/unit/`, and
+  `study/tests/unit/`
   ([.github/workflows/ci.yml](../.github/workflows/ci.yml)); the skip pattern is in
-  `tests/integration/test_learn_queue_api.py:19-29` and
+  `tests/integration/test_learn_queue_api.py` and
   `auth/tests/unit/test_auth_session.py` (`pytest.skip` when `auth.account` is missing).
 
 ## 5. What is enforced, and what is not (yet)
 
 | Rule area | Enforcement today | Gap |
 |-----------|-------------------|-----|
-| Import health, migrations, unit tests | CI (`ci.yml` backend + auth) | — |
+| Import health, migrations, unit tests | CI (`ci.yml` backend + auth + storage + practice + content + study) | — |
 | Dead code, unused imports, undefined names | **`ruff check` (E9, F) in CI** ([backend/ruff.toml](../backend/ruff.toml)) | ruleset is conservative |
 | Frontend build + lint | CI (`npm run build`, `npm run lint`) | warnings only in eslint today |
 | Python format + broader lint (`I`/`B`) | none | `ruff format`, import sorting not on yet |

@@ -1,0 +1,2 @@
+# Dev/CI-only tooling. Runtime deps come from backend/requirements.txt.
+-r ../backend/requirements-dev.txt

@@ -10,6 +10,9 @@ ROOT = Path(__file__).resolve().parents[2]
 BACKEND_DIR = ROOT / "backend"
 AUTH_DIR = ROOT / "auth"
 STORAGE_DIR = ROOT / "storage"
+PRACTICE_DIR = ROOT / "practice"
+CONTENT_DIR = ROOT / "content"
+STUDY_DIR = ROOT / "study"
 FRONTEND_DIR = ROOT / "frontend"
 BACKEND_DEFAULTS = BACKEND_DIR / ".env.example"
 

@@ -15,6 +15,16 @@ service:
 env:
   - name: API_PROXY_URL
     value: http://zivo-api:8000
+  - name: AUTH_PROXY_URL
+    value: http://zivo-auth:8000
+  - name: STORAGE_PROXY_URL
+    value: http://zivo-storage:8000
+  - name: PRACTICE_PROXY_URL
+    value: http://zivo-practice:8000
+  - name: CONTENT_PROXY_URL
+    value: http://zivo-content:8000
+  - name: STUDY_PROXY_URL
+    value: http://zivo-study:8000
   - name: NEXT_PUBLIC_API_URL
     value: https://api.zivo.fyi
 

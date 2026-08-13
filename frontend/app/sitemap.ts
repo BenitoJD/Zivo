@@ -1,5 +1,5 @@
 import type { MetadataRoute } from "next";
-import { serverApiBase } from "@/lib/serverApi";
+import { serverApiUrl } from "@/lib/serverApi";
 
 function siteOrigin(): string {
   return process.env.NEXT_PUBLIC_SITE_URL ?? "https://zivo.fyi";
@@ -15,7 +15,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   ];
 
   try {
-    const res = await fetch(`${serverApiBase()}/api/learn/sitemap-slugs`, {
+    const res = await fetch(serverApiUrl("/api/learn/sitemap-slugs"), {
       next: { revalidate: 600 },
     });
     if (!res.ok) return staticEntries;

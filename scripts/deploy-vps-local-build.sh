@@ -28,6 +28,9 @@ OWNER="${OWNER:-benitojd}"
 API_IMAGE="ghcr.io/${OWNER}/zivo-api:${TAG}"
 AUTH_IMAGE="ghcr.io/${OWNER}/zivo-auth:${TAG}"
 STORAGE_IMAGE="ghcr.io/${OWNER}/zivo-storage:${TAG}"
+PRACTICE_IMAGE="ghcr.io/${OWNER}/zivo-practice:${TAG}"
+CONTENT_IMAGE="ghcr.io/${OWNER}/zivo-content:${TAG}"
+STUDY_IMAGE="ghcr.io/${OWNER}/zivo-study:${TAG}"
 WEB_IMAGE="ghcr.io/${OWNER}/zivo-web:${TAG}"
 NS=zivo
 ROLLBACK_RELEASES=()
@@ -154,6 +157,9 @@ if [[ "${PREBUILT:-0}" != "1" ]]; then
   docker build --pull -t "${API_IMAGE}" -f backend/Dockerfile --target runtime backend/
   docker build --pull -t "${AUTH_IMAGE}" -f auth/Dockerfile --target runtime auth/
   docker build --pull -t "${STORAGE_IMAGE}" -f storage/Dockerfile --target runtime storage/
+  docker build --pull -t "${PRACTICE_IMAGE}" -f practice/Dockerfile --target runtime .
+  docker build --pull -t "${CONTENT_IMAGE}" -f content/Dockerfile --target runtime .
+  docker build --pull -t "${STUDY_IMAGE}" -f study/Dockerfile --target runtime .
   docker build --pull -t "${WEB_IMAGE}" -f frontend/Dockerfile --target runtime \
     --build-arg NEXT_PUBLIC_API_URL= \
     --build-arg NEXT_PUBLIC_AUTH_URL= \
@@ -161,14 +167,20 @@ if [[ "${PREBUILT:-0}" != "1" ]]; then
     --build-arg API_PROXY_URL=http://zivo-api:8000 \
     --build-arg AUTH_PROXY_URL=http://zivo-auth:8000 \
     --build-arg STORAGE_PROXY_URL=http://zivo-storage:8000 \
+    --build-arg PRACTICE_PROXY_URL=http://zivo-practice:8000 \
+    --build-arg CONTENT_PROXY_URL=http://zivo-content:8000 \
+    --build-arg STUDY_PROXY_URL=http://zivo-study:8000 \
     frontend/
   # Push to GHCR; prod k3s pulls these (images are public, unique tag per deploy).
   docker push "${API_IMAGE}"
   docker push "${AUTH_IMAGE}"
   docker push "${STORAGE_IMAGE}"
+  docker push "${PRACTICE_IMAGE}"
+  docker push "${CONTENT_IMAGE}"
+  docker push "${STUDY_IMAGE}"
   docker push "${WEB_IMAGE}"
 else
-  echo "PREBUILT=1 — ${API_IMAGE}, ${AUTH_IMAGE}, ${STORAGE_IMAGE}, and ${WEB_IMAGE} assumed already in GHCR"
+  echo "PREBUILT=1 — ${API_IMAGE}, ${AUTH_IMAGE}, ${STORAGE_IMAGE}, ${PRACTICE_IMAGE}, ${CONTENT_IMAGE}, ${STUDY_IMAGE}, and ${WEB_IMAGE} assumed already in GHCR"
 fi
 
 ensure_ghcr_pull_secret
@@ -211,6 +223,39 @@ helm upgrade --install storage-schema ./infra/k8s/charts/db-schema -n "$NS" \
   "${PULL_SECRET_SET[@]}" \
   --wait --wait-for-jobs --timeout 15m
 wait_job storage-alembic-migrate 15m
+
+kubectl -n "$NS" delete job practice-alembic-migrate --ignore-not-found=true
+helm upgrade --install practice-schema ./infra/k8s/charts/db-schema -n "$NS" \
+  -f infra/k8s/environments/prod/backend-release-values.yaml \
+  --set image.tag="${TAG}" \
+  --set image.repository="ghcr.io/${OWNER}/zivo-practice" \
+  --set namespace="$NS" \
+  --set jobName=practice-alembic-migrate \
+  "${PULL_SECRET_SET[@]}" \
+  --wait --wait-for-jobs --timeout 15m
+wait_job practice-alembic-migrate 15m
+
+kubectl -n "$NS" delete job content-alembic-migrate --ignore-not-found=true
+helm upgrade --install content-schema ./infra/k8s/charts/db-schema -n "$NS" \
+  -f infra/k8s/environments/prod/backend-release-values.yaml \
+  --set image.tag="${TAG}" \
+  --set image.repository="ghcr.io/${OWNER}/zivo-content" \
+  --set namespace="$NS" \
+  --set jobName=content-alembic-migrate \
+  "${PULL_SECRET_SET[@]}" \
+  --wait --wait-for-jobs --timeout 15m
+wait_job content-alembic-migrate 15m
+
+kubectl -n "$NS" delete job study-alembic-migrate --ignore-not-found=true
+helm upgrade --install study-schema ./infra/k8s/charts/db-schema -n "$NS" \
+  -f infra/k8s/environments/prod/backend-release-values.yaml \
+  --set image.tag="${TAG}" \
+  --set image.repository="ghcr.io/${OWNER}/zivo-study" \
+  --set namespace="$NS" \
+  --set jobName=study-alembic-migrate \
+  "${PULL_SECRET_SET[@]}" \
+  --wait --wait-for-jobs --timeout 15m
+wait_job study-alembic-migrate 15m
 
 kubectl -n "$NS" delete job alembic-migrate --ignore-not-found=true
 helm upgrade --install db-schema ./infra/k8s/charts/db-schema -n "$NS" \
@@ -262,6 +307,30 @@ helm upgrade --install zivo-storage ./infra/k8s/charts/storage -n "$NS" \
   "${PULL_SECRET_SET[@]}" \
   --wait --timeout 20m
 rollout_wait deployment zivo-storage 20m
+
+helm_record zivo-practice
+helm upgrade --install zivo-practice ./infra/k8s/charts/practice -n "$NS" \
+  -f infra/k8s/environments/prod/practice-values.yaml \
+  --set image.tag="${TAG}" \
+  "${PULL_SECRET_SET[@]}" \
+  --wait --timeout 20m
+rollout_wait deployment zivo-practice 20m
+
+helm_record zivo-content
+helm upgrade --install zivo-content ./infra/k8s/charts/content -n "$NS" \
+  -f infra/k8s/environments/prod/content-values.yaml \
+  --set image.tag="${TAG}" \
+  "${PULL_SECRET_SET[@]}" \
+  --wait --timeout 20m
+rollout_wait deployment zivo-content 20m
+
+helm_record zivo-study
+helm upgrade --install zivo-study ./infra/k8s/charts/study -n "$NS" \
+  -f infra/k8s/environments/prod/study-values.yaml \
+  --set image.tag="${TAG}" \
+  "${PULL_SECRET_SET[@]}" \
+  --wait --timeout 20m
+rollout_wait deployment zivo-study 20m
 
 helm_record zivo-api
 helm upgrade --install zivo-api ./infra/k8s/charts/api -n "$NS" \

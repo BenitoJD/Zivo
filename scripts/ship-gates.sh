@@ -52,6 +52,32 @@ run_storage() {
   (cd storage && "$PYTHON_BIN" -m pytest tests/unit/ -q --tb=no)
 }
 
+run_product_service() {
+  local name="$1"
+  local title="$2"
+  local module="$3"
+  echo "==> ${name}: ruff"
+  (cd "$name" && "$PYTHON_BIN" -m ruff check .)
+
+  echo "==> ${name}: import check"
+  (cd "$name" && PYTHONPATH="../backend:." "$PYTHON_BIN" -c "from ${module} import app; assert app.title == '${title}'")
+
+  echo "==> ${name}: unit tests"
+  (cd "$name" && PYTHONPATH="../backend:." "$PYTHON_BIN" -m pytest tests/unit/ -q --tb=no)
+}
+
+run_practice() {
+  run_product_service practice "Zivo Practice" practice_main
+}
+
+run_content() {
+  run_product_service content "Zivo Content" content_main
+}
+
+run_study() {
+  run_product_service study "Zivo Study" study_main
+}
+
 run_frontend() {
   echo "==> frontend: eslint"
   (cd frontend && npm run lint)
@@ -65,6 +91,9 @@ case "$SCOPE" in
     run_backend
     run_auth
     run_storage
+    run_practice
+    run_content
+    run_study
     run_frontend
     ;;
   backend)
@@ -76,11 +105,20 @@ case "$SCOPE" in
   storage)
     run_storage
     ;;
+  practice)
+    run_practice
+    ;;
+  content)
+    run_content
+    ;;
+  study)
+    run_study
+    ;;
   frontend)
     run_frontend
     ;;
   *)
-    echo "Usage: $0 [all|backend|auth|storage|frontend]" >&2
+    echo "Usage: $0 [all|backend|auth|storage|practice|content|study|frontend]" >&2
     exit 2
     ;;
 esac

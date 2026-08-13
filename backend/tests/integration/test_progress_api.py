@@ -10,12 +10,19 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select, text
 
 from app.db import SessionLocal
-from app.main import app
 from app.models import Account
 from app.services.answer_signal import record_answer_signal, resolve_subject_entity
 from app.services.guest_session import GUEST_ID_HEADER
 from app.services.progress import build_learner_progress
 from app.repositories.intel import concept_id
+
+import sys
+from pathlib import Path
+
+_STUDY = Path(__file__).resolve().parents[2].parent / "study"
+if str(_STUDY) not in sys.path:
+    sys.path.insert(0, str(_STUDY))
+from study_main import app
 
 GUEST_ID = "c" * 32
 

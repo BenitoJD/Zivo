@@ -100,3 +100,67 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/component: web
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: study
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: zivo-practice-ingress
+  namespace: zivo
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: practice
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: web
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: zivo-content-ingress
+  namespace: zivo
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: content
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: web
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: zivo-study-ingress
+  namespace: zivo
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: study
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: web
+

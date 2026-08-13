@@ -8,7 +8,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { ScrollViewport } from "@/app/_components/ScrollViewport";
 import { LinkAnchor, LinkBox } from "@/app/learn/_components/AppLink";
-import { serverApiBase } from "@/lib/serverApi";
+import { serverApiUrl } from "@/lib/serverApi";
 
 type ArchiveItem = {
   edition_id: string;
@@ -28,7 +28,7 @@ type ArchiveResponse = {
 async function fetchArchive(paperSlug: string): Promise<ArchiveResponse | null> {
   try {
     const res = await fetch(
-      `${serverApiBase()}/api/learn/newspaper/${encodeURIComponent(paperSlug)}`,
+      serverApiUrl(`/api/learn/newspaper/${encodeURIComponent(paperSlug)}`),
       { next: { revalidate: 300 } },
     );
     if (res.status === 404) return null;

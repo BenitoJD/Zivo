@@ -1,34 +1,20 @@
-"""Newspaper practice API — catalog, questions, admin channel knob."""
+"""Newspaper practice API — catalog and edition questions."""
 
 from __future__ import annotations
 
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import Account
 from app.services import newspaper as newspaper_svc
-from app.services.auth import get_optional_user, require_admin, require_csrf
+from app.services.auth import get_optional_user
 from app.services.document_learner_state import learner_key_for_user
 from app.services.guest_session import guest_session_for_read
 
 router = APIRouter()
-
-
-class ChannelIn(BaseModel):
-    channel_ref: str = Field(min_length=1, max_length=512)
-    channel_label: str = Field(default="", max_length=256)
-
-
-class AllowlistIn(BaseModel):
-    allowlist_only: bool
-
-
-class BrandEnabledIn(BaseModel):
-    enabled: bool
 
 
 @router.get("/catalog")
@@ -56,7 +42,6 @@ def get_edition(edition_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
         raise HTTPException(status_code=404, detail="Edition not found")
     if not newspaper_repo.is_brand_allowed(db, ed["paper_slug"]):
         raise HTTPException(status_code=404, detail="Edition not found")
-    # Practice catalog is last RETENTION_DAYS only — stale editions stay out.
     if not newspaper_svc.edition_in_practice_window(ed["edition_date"]):
         raise HTTPException(status_code=404, detail="Edition not found")
     return {
@@ -84,41 +69,3 @@ def edition_questions(
     if out["edition"] is None:
         raise HTTPException(status_code=404, detail="Edition not found")
     return out
-
-
-@router.get("/admin/channel", dependencies=[Depends(require_admin)])
-def get_channel(db: Session = Depends(get_db)) -> dict:
-    return newspaper_svc.get_channel(db)
-
-
-@router.patch("/admin/channel", dependencies=[Depends(require_admin), Depends(require_csrf)])
-def put_channel(body: ChannelIn, db: Session = Depends(get_db)) -> dict:
-    try:
-        return newspaper_svc.update_channel(
-            db, channel_ref=body.channel_ref, channel_label=body.channel_label
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.get("/admin/brands", dependencies=[Depends(require_admin)])
-def get_brands(db: Session = Depends(get_db)) -> dict:
-    return newspaper_svc.list_admin_brands(db)
-
-
-@router.patch("/admin/allowlist", dependencies=[Depends(require_admin), Depends(require_csrf)])
-def patch_allowlist(body: AllowlistIn, db: Session = Depends(get_db)) -> dict:
-    return newspaper_svc.set_allowlist_only(db, allowlist_only=body.allowlist_only)
-
-
-@router.patch(
-    "/admin/brands/{paper_slug}",
-    dependencies=[Depends(require_admin), Depends(require_csrf)],
-)
-def patch_brand(paper_slug: str, body: BrandEnabledIn, db: Session = Depends(get_db)) -> dict:
-    try:
-        return newspaper_svc.set_brand_enabled(
-            db, paper_slug=paper_slug, enabled=body.enabled
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc

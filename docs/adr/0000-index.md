@@ -19,5 +19,8 @@ behind the shape those rules describe.
 | [0007](0007-auth-microservice.md) | Identity is the first microservice; shared Postgres; product stub table | 2026-08-13 |
 | [0008](0008-storage-microservice.md) | Object storage is the second microservice; MinIO writes leave the product API | 2026-08-13 |
 | [0009](0009-jobs-workers-are-the-process.md) | ETA workers are the jobs microservice; do not add a second qb.jobs writer | 2026-08-13 |
+| [0010](0010-practice-microservice.md) | Practice banks HTTP leave the product API (`practice/`, `:8203`) | 2026-08-13 |
+| [0011](0011-content-microservice.md) | SEO /learn + newspaper admin HTTP leave the product API (`content/`, `:8204`) | 2026-08-13 |
+| [0012](0012-study-microservice.md) | Learn/grade/chat HTTP leave the product API (`study/`, `:8205`) | 2026-08-13 |
 
 To add one: scan for the highest number, increment, keep it short.

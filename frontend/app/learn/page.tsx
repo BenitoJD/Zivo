@@ -8,7 +8,7 @@ import {
 import type { Metadata } from "next";
 import { ScrollViewport } from "@/app/_components/ScrollViewport";
 import { LinkAnchor, LinkBox } from "@/app/learn/_components/AppLink";
-import { serverApiBase } from "@/lib/serverApi";
+import { serverApiUrl } from "@/lib/serverApi";
 
 export const metadata: Metadata = {
   title: "Learn | Question Better.",
@@ -33,7 +33,7 @@ type LearnListResponse = {
 
 async function fetchPosts(): Promise<LearnListResponse> {
   try {
-    const res = await fetch(`${serverApiBase()}/api/learn/posts?limit=40`, {
+    const res = await fetch(serverApiUrl("/api/learn/posts?limit=40"), {
       next: { revalidate: 300 },
     });
     if (!res.ok) return { items: [], total: 0 };

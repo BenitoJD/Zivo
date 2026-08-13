@@ -23,7 +23,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: [self-hosted, zivo]
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
       # Runner lives entirely on the small Judge0 box: it builds the images, pushes them to GHCR, and
       # rolls out to the prod K3s over the network via this kubeconfig (staged to point at the prod API;

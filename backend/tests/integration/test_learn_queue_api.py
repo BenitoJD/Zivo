@@ -9,9 +9,16 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.main import app
 from app.models import Document
 from app.services.guest_session import GUEST_ID_HEADER
+
+import sys
+from pathlib import Path
+
+_STUDY = Path(__file__).resolve().parents[2].parent / "study"
+if str(_STUDY) not in sys.path:
+    sys.path.insert(0, str(_STUDY))
+from study_main import app
 
 GUEST_ID = "b" * 32
 

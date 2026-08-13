@@ -1,0 +1,35 @@
+replicaCount: 1
+namespace: zivo
+
+image:
+  repository: ghcr.io/benitojd/zivo-practice
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Judge0 code-execution sandbox (coding practice) — dedicated box.
+judge0Url: "http://203.57.85.20:2358"
+
+service:
+  port: 8000
+
+ingress:
+  enabled: false
+  className: traefik
+  host: practice.example.com
+  tls: true
+  entrypoint: websecure
+  tlsSecret: zivo-practice-tls
+
+resources: {}
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 2
+  targetCPUUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1

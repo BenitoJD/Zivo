@@ -18,10 +18,13 @@ Helm charts and prod values. Deploy model matches [zivo](https://github.com/Beni
 |-------|---------|---------|
 | `charts/postgres` | `zivo-postgres` | pgvector Postgres |
 | `charts/minio` | `zivo-minio` | artifact object storage |
-| `charts/db-schema` | `auth-schema`, `storage-schema`, `db-schema` | Alembic jobs (`auth.*`, `storage.*`, then `qb.*`) |
+| `charts/db-schema` | `auth-schema`, `storage-schema`, `practice-schema`, `content-schema`, `study-schema`, `db-schema` | Alembic jobs |
 | `charts/auth` | `zivo-auth` | identity FastAPI (`auth.zivo.fyi`) |
 | `charts/storage` | `zivo-storage` | object FastAPI (`storage.zivo.fyi`) |
-| `charts/api` | `zivo-api` | product FastAPI |
+| `charts/practice` | `zivo-practice` | coding / system-design / newspaper practice (`practice.zivo.fyi`) |
+| `charts/content` | `zivo-content` | SEO /learn + newspaper admin (`content.zivo.fyi`) |
+| `charts/study` | `zivo-study` | learn/grade/chat (`study.zivo.fyi`) |
+| `charts/api` | `zivo-api` | product FastAPI (sources, documents, guest) |
 | `charts/web` | `zivo-web` | Next.js frontend |
 
 Prod values: `environments/prod/*.yaml`
@@ -35,11 +38,14 @@ Prod values: `environments/prod/*.yaml`
 | `api.zivo.fyi` | `103.194.228.47` |
 | `auth.zivo.fyi` | `103.194.228.47` |
 | `storage.zivo.fyi` | `103.194.228.47` |
+| `practice.zivo.fyi` | `103.194.228.47` |
+| `content.zivo.fyi` | `103.194.228.47` |
+| `study.zivo.fyi` | `103.194.228.47` |
 | `s3.zivo.fyi` | `103.194.228.47` |
 
 ## Deploy
 
-**Normal path:** GitHub Actions → **Deploy Zivo** (builds API + auth + storage + web images, Helm upgrade on VPS).
+**Normal path:** GitHub Actions → **Deploy Zivo** (builds API + auth + storage + practice + content + study + web images, Helm upgrade on VPS).
 
 **Manual** (on VPS with repo checked out):
 
@@ -94,15 +100,16 @@ Re-apply to cluster:
 cert-manager ClusterIssuer: `infra/k8s/cert-manager/cluster-issuer.yaml`  
 Install: `scripts/install-cert-manager.sh`
 
-`auth.zivo.fyi` and `storage.zivo.fyi` need A records to `103.194.228.47` before
-Let's Encrypt will issue. Until those records exist:
+`auth.zivo.fyi`, `storage.zivo.fyi`, `practice.zivo.fyi`, `content.zivo.fyi`,
+and `study.zivo.fyi` need A records to `103.194.228.47` before Let's Encrypt
+will issue. Until those records exist:
 
 - Docker build must leave `NEXT_PUBLIC_AUTH_URL` and `NEXT_PUBLIC_STORAGE_URL`
-  **empty** so the browser stays on `zivo.fyi` and Next rewrites `/api/auth`
-  and `/api/storage` to in-cluster `zivo-auth` / `zivo-storage`.
-- Auth and storage Ingress stay HTTP-only (`tls: false`) so cert-manager does
-  not park an ACME solver on a hostname that does not resolve.
-- After DNS answers: set `tls: true` / `entrypoint: websecure` on
-  `auth-values.yaml` and `storage-values.yaml`, bake the public URLs, and
-  make `ghcr.io/benitojd/zivo-storage` public in GitHub Packages if k3s
-  should pull it without the deploy-job token.
+  **empty** so the browser stays on `zivo.fyi` and Next rewrites `/api/auth`,
+  `/api/storage`, practice, content, and study paths to in-cluster services.
+- Those Ingresses stay HTTP-only (`tls: false`) so cert-manager does not park
+  an ACME solver on a hostname that does not resolve.
+- After DNS answers: set `tls: true` / `entrypoint: websecure` on the matching
+  `*-values.yaml`, bake public URLs if you want them, and make new GHCR
+  packages public if k3s should pull them without the deploy-job token
+  (same footgun as `zivo-auth` / `zivo-storage`).

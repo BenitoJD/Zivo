@@ -21,9 +21,27 @@ const nextConfig: NextConfig = {
   async rewrites() {
     const authProxy = process.env.AUTH_PROXY_URL ?? "http://127.0.0.1:8201";
     const storageProxy = process.env.STORAGE_PROXY_URL ?? "http://127.0.0.1:8202";
+    const practiceProxy = process.env.PRACTICE_PROXY_URL ?? "http://127.0.0.1:8203";
+    const contentProxy = process.env.CONTENT_PROXY_URL ?? "http://127.0.0.1:8204";
+    const studyProxy = process.env.STUDY_PROXY_URL ?? "http://127.0.0.1:8205";
     return [
       { source: "/api/auth/:path*", destination: `${authProxy}/api/auth/:path*` },
       { source: "/api/storage/:path*", destination: `${storageProxy}/api/storage/:path*` },
+      { source: "/api/coding/:path*", destination: `${practiceProxy}/api/coding/:path*` },
+      { source: "/api/coding", destination: `${practiceProxy}/api/coding` },
+      { source: "/api/system-design/:path*", destination: `${practiceProxy}/api/system-design/:path*` },
+      { source: "/api/system-design", destination: `${practiceProxy}/api/system-design` },
+      { source: "/api/practice/:path*", destination: `${practiceProxy}/api/practice/:path*` },
+      { source: "/api/newspaper/admin/:path*", destination: `${contentProxy}/api/newspaper/admin/:path*` },
+      { source: "/api/newspaper/:path*", destination: `${practiceProxy}/api/newspaper/:path*` },
+      { source: "/api/learn/:path*", destination: `${contentProxy}/api/learn/:path*` },
+      { source: "/api/artifacts/:path*", destination: `${studyProxy}/api/artifacts/:path*` },
+      { source: "/api/assertions/:path*", destination: `${studyProxy}/api/assertions/:path*` },
+      { source: "/api/chat/:path*", destination: `${studyProxy}/api/chat/:path*` },
+      { source: "/api/chat", destination: `${studyProxy}/api/chat` },
+      { source: "/api/mcq/:path*", destination: `${studyProxy}/api/mcq/:path*` },
+      { source: "/api/progress/:path*", destination: `${studyProxy}/api/progress/:path*` },
+      { source: "/api/progress", destination: `${studyProxy}/api/progress` },
       { source: "/api/:path*", destination: `${API_PROXY_URL}/api/:path*` },
       { source: "/health", destination: `${API_PROXY_URL}/health` },
     ];
