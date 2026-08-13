@@ -29,13 +29,13 @@ Decisions (rank, metric, gate, schedule, next-step) live behind named engine fac
 | **API** | Ready | FastAPI product API: sources, artifacts, activities, assertions, chat, mcq |
 | **Auth service** | Ready | Identity FastAPI (`auth/`): signup, login, logout, session, Google OAuth. [ADR 0007](docs/adr/0007-auth-microservice.md) |
 | **Storage service** | Ready | Object FastAPI (`storage/`): MinIO writes, chunked upload, `storage.*`. [ADR 0008](docs/adr/0008-storage-microservice.md) |
-| **Workers** | Ready | Zivo ETA IO+CPU — `backend/app/eta/`, `run_eta_worker_*.py` |
+| **Workers (jobs)** | Ready | ETA IO+CPU Helm is the jobs process (`qb.jobs` lease). [ADR 0009](docs/adr/0009-jobs-workers-are-the-process.md) |
 | **Workspace UI** | Ready | `/workspace` — Mantine `AppShell`, Learn/Test layout in `app/` routes |
-| **Helm / K8s** | Ready | postgres, minio, api, auth, web, db-schema charts |
+| **Helm / K8s** | Ready | postgres, minio, api, auth, storage, web, worker, db-schema charts |
 | **CI** | Ready | `.github/workflows/ci.yml` — self-hosted `zivo` runner on VPS |
 | **Deploy workflow** | Ready | `.github/workflows/deploy.yml` (needs push + workflow run) |
 | **VPS base** | Ready | K3s, Traefik, cert-manager, GH runner at `103.194.228.47` |
-| **VPS app stack** | Empty | Run deploy after code is on `main` |
+| **VPS app stack** | Auth live | Storage rolls out this deploy. Add A records for `auth.zivo.fyi` and `storage.zivo.fyi` → `103.194.228.47` before TLS. |
 | **Question generation** | Ready | Upload source → MCQs; Budget + Quality + Graph + priors |
 | **Question evaluation** | Ready (engine) | `docs/QUALITY_EVALUATION_ENGINE.md` + `quality_evaluation.py` |
 | **Adaptive selection** | Ready (engine) | `docs/ADAPTIVE_SELECTION_ENGINE.md` + `adaptive_selection.py` |

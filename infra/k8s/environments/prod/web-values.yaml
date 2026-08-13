@@ -19,10 +19,13 @@ env:
     value: http://zivo-storage:8000
   - name: NEXT_PUBLIC_API_URL
     value: https://api.zivo.fyi
+  # Empty until auth.zivo.fyi and storage.zivo.fyi A records exist. Next bakes
+  # NEXT_PUBLIC_* at image build; empty keeps /api/auth and /api/storage on
+  # zivo.fyi rewrites to in-cluster zivo-auth / zivo-storage.
   - name: NEXT_PUBLIC_AUTH_URL
-    value: https://auth.zivo.fyi
+    value: ""
   - name: NEXT_PUBLIC_STORAGE_URL
-    value: https://storage.zivo.fyi
+    value: ""
 ingress:
   enabled: true
   className: traefik

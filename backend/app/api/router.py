@@ -7,7 +7,6 @@ from app.api import (
     audiobook,
     chat,
     guest,
-    chunked_uploads,
     coding,
     debug,
     documents,
@@ -31,9 +30,6 @@ api_router = APIRouter()
 api_router.include_router(health.router, tags=["health"])
 api_router.include_router(guest.router, tags=["guest"])
 api_router.include_router(sources.router, prefix="/sources", tags=["sources"])
-api_router.include_router(
-    chunked_uploads.router, prefix="/sources/chunked", tags=["chunked-uploads"]
-)
 api_router.include_router(documents.router, prefix="/documents", tags=["documents"])
 api_router.include_router(artifacts.router, prefix="/artifacts", tags=["artifacts"])
 api_router.include_router(activities.router, prefix="/activities", tags=["activities"])

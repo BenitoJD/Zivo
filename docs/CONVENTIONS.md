@@ -85,7 +85,9 @@ from another project and is stale; fix it to match the proof above.
 
 - **Rule.** Anything slow or off the request path (generation, embedding, triage) is
   an enqueued job in `app/eta/`, not inline work in a route. Request handlers
-  *enqueue*; workers *execute*.
+  *enqueue*; workers *execute*. The worker Helm releases are the jobs process
+  ([ADR 0009](adr/0009-jobs-workers-are-the-process.md)); do not add a second
+  FastAPI that also writes `qb.jobs`.
 - **Why.** Keeps request latency bounded and gives crash-safe, reclaimable jobs.
 - **Proof.** Worker reserve/reclaim/mark loop at `app/eta/worker.py:55-127`; enqueue
   helpers in `app/services/jobs.py` used from `app/services/question_pool.py`.

@@ -93,3 +93,10 @@ Re-apply to cluster:
 
 cert-manager ClusterIssuer: `infra/k8s/cert-manager/cluster-issuer.yaml`  
 Install: `scripts/install-cert-manager.sh`
+
+`auth.zivo.fyi` and `storage.zivo.fyi` need A records to `103.194.228.47` before
+Let's Encrypt will issue. Until those records exist, Docker build must leave
+`NEXT_PUBLIC_AUTH_URL` and `NEXT_PUBLIC_STORAGE_URL` **empty** so the browser
+stays on `zivo.fyi` and Next rewrites `/api/auth` and `/api/storage` to
+in-cluster `zivo-auth` / `zivo-storage`. Do not bake `https://auth.zivo.fyi` or
+`https://storage.zivo.fyi` into the web image until DNS answers.

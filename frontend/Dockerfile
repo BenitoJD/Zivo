@@ -2,8 +2,8 @@ FROM node:22-alpine AS build
 WORKDIR /app
 
 ARG NEXT_PUBLIC_API_URL=
-ARG NEXT_PUBLIC_AUTH_URL=https://auth.zivo.fyi
-ARG NEXT_PUBLIC_STORAGE_URL=https://storage.zivo.fyi
+ARG NEXT_PUBLIC_AUTH_URL=
+ARG NEXT_PUBLIC_STORAGE_URL=
 ARG API_PROXY_URL=http://zivo-api:8000
 ARG AUTH_PROXY_URL=http://zivo-auth:8000
 ARG STORAGE_PROXY_URL=http://zivo-storage:8000
