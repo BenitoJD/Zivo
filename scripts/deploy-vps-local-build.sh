@@ -51,6 +51,9 @@ helm_record() {
   local release=$1
   local rev
   rev=$(helm history "$release" -n "$NS" --max 1 -o json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['revision'])" 2>/dev/null || echo "0")
+  if [[ "$rev" == "0" ]]; then
+    return 0
+  fi
   ROLLBACK_RELEASES+=("${release}:${rev}")
 }
 

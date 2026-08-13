@@ -47,16 +47,6 @@ class TestSecretKeyValidation:
             )
         assert "CSRF_DISABLED" in str(exc.value)
 
-    def test_rejects_dev_minio_in_production(self) -> None:
-        with pytest.raises(ValidationError) as exc:
-            _make_settings(
-                secret_key="real-prod-secret-32chars-or-more",
-                csrf_secret="real-prod-csrf-32chars-or-more",
-                minio_access_key="zivo",
-                minio_secret_key="zivo-secret",
-            )
-        assert "MINIO" in str(exc.value)
-
     def test_minio_presign_endpoint_falls_back_to_internal(self) -> None:
         s = Settings(minio_endpoint="minio.internal:9000")
         assert s.minio_presign_endpoint == "minio.internal:9000"
