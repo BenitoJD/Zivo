@@ -36,6 +36,16 @@ def test_worker_profile_drops_api_keeps_entrypoints(tmp_path: Path) -> None:
     assert not (tmp_path / "tests").exists()
 
 
+def test_practice_profile_drops_product_alembic(tmp_path: Path) -> None:
+    _tree(tmp_path)
+    subprocess.check_call([sys.executable, str(SCRIPT), "practice", "--root", str(tmp_path)])
+    assert not (tmp_path / "alembic.ini").exists()
+    assert not (tmp_path / "alembic").exists()
+    assert (tmp_path / "app" / "api" / "health.py").exists()
+    assert not (tmp_path / "app" / "api" / "sources.py").exists()
+    assert not (tmp_path / "run_eta_worker_async.py").exists()
+
+
 def test_api_profile_keeps_health_drops_workers(tmp_path: Path) -> None:
     _tree(tmp_path)
     subprocess.check_call([sys.executable, str(SCRIPT), "api", "--root", str(tmp_path)])
@@ -44,3 +54,4 @@ def test_api_profile_keeps_health_drops_workers(tmp_path: Path) -> None:
     assert not (tmp_path / "app" / "api" / "sources.py").exists()
     assert (tmp_path / "app" / "main.py").exists()
     assert not (tmp_path / "run_eta_worker_async.py").exists()
+    assert (tmp_path / "alembic.ini").exists()

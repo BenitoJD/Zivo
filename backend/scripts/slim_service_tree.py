@@ -84,16 +84,12 @@ def slim(root: Path, profile: str) -> None:
 
     if profile != "api":
         _rm(root / "app" / "main.py")
+        _rm(root / "alembic")
+        _rm(root / "alembic.ini")
 
     if profile != "worker":
         for name in WORKER_ENTRYPOINTS:
             _rm(root / name)
-    else:
-        _rm(root / "app" / "main.py")
-
-    if profile == "worker":
-        _rm(root / "alembic")
-        _rm(root / "alembic.ini")
 
     for name in DROP_DIRS:
         _rm(root / name)
