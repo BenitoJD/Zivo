@@ -59,6 +59,33 @@ rollout_wait() {
   kubectl -n "$NS" rollout status "$kind/$name" --timeout="$timeout"
 }
 
+wait_job() {
+  local name=$1
+  local timeout=${2:-15m}
+  echo "Waiting for job/${name} to complete"
+  if ! kubectl -n "$NS" wait --for=condition=complete "job/${name}" --timeout="${timeout}"; then
+    echo "Job ${name} did not complete" >&2
+    kubectl -n "$NS" logs "job/${name}" --tail=200 || true
+    kubectl -n "$NS" describe "job/${name}" || true
+    exit 1
+  fi
+}
+
+ensure_ghcr_pull_secret() {
+  PULL_SECRET_SET=()
+  if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+    echo "No GITHUB_TOKEN; k3s must pull public GHCR images"
+    PULL_SECRET_SET=()
+    return 0
+  fi
+  kubectl -n "$NS" create secret docker-registry ghcr-pull \
+    --docker-server=ghcr.io \
+    --docker-username="${GITHUB_ACTOR:-${OWNER}}" \
+    --docker-password="${GITHUB_TOKEN}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  PULL_SECRET_SET=(--set "imagePullSecrets[0].name=ghcr-pull")
+}
+
 # --- Preflight: disk-space gates ---------------------------------------------
 # 2026-08-09 outage: the prod node hit kubelet disk-pressure MID-ROLLOUT (orphaned
 # Docker stores had filled the disk); pods were evicted, postgres included, and the
@@ -124,6 +151,8 @@ else
   echo "PREBUILT=1 — ${API_IMAGE}, ${AUTH_IMAGE}, ${STORAGE_IMAGE}, and ${WEB_IMAGE} assumed already in GHCR"
 fi
 
+ensure_ghcr_pull_secret
+
 helm_record pgbouncer
 if [[ -d ./infra/k8s/charts/pgbouncer ]]; then
   helm upgrade --install pgbouncer ./infra/k8s/charts/pgbouncer -n "$NS" \
@@ -148,7 +177,9 @@ helm upgrade --install auth-schema ./infra/k8s/charts/db-schema -n "$NS" \
   --set image.repository="ghcr.io/${OWNER}/zivo-auth" \
   --set namespace="$NS" \
   --set jobName=auth-alembic-migrate \
-  --wait --timeout 10m
+  "${PULL_SECRET_SET[@]}" \
+  --wait --wait-for-jobs --timeout 15m
+wait_job auth-alembic-migrate 15m
 
 kubectl -n "$NS" delete job storage-alembic-migrate --ignore-not-found=true
 helm upgrade --install storage-schema ./infra/k8s/charts/db-schema -n "$NS" \
@@ -157,7 +188,9 @@ helm upgrade --install storage-schema ./infra/k8s/charts/db-schema -n "$NS" \
   --set image.repository="ghcr.io/${OWNER}/zivo-storage" \
   --set namespace="$NS" \
   --set jobName=storage-alembic-migrate \
-  --wait --timeout 10m
+  "${PULL_SECRET_SET[@]}" \
+  --wait --wait-for-jobs --timeout 15m
+wait_job storage-alembic-migrate 15m
 
 kubectl -n "$NS" delete job alembic-migrate --ignore-not-found=true
 helm upgrade --install db-schema ./infra/k8s/charts/db-schema -n "$NS" \
@@ -166,7 +199,9 @@ helm upgrade --install db-schema ./infra/k8s/charts/db-schema -n "$NS" \
   --set image.repository="ghcr.io/${OWNER}/zivo-api" \
   --set namespace="$NS" \
   --set jobName=alembic-migrate \
-  --wait --timeout 15m
+  "${PULL_SECRET_SET[@]}" \
+  --wait --wait-for-jobs --timeout 15m
+wait_job alembic-migrate 15m
 
 # Note: code execution (Judge0) runs on a dedicated box, not in this cluster — see
 # infra/judge0/. The API reaches it via JUDGE0_URL (set in the api chart values).
@@ -187,34 +222,43 @@ for release in zivo-worker-io zivo-worker-cpu; do
     --set "workloads.io.enabled=${io}" \
     --set "workloads.cpu.enabled=${cpu}" \
     --set "workloads.newspaper.enabled=${newspaper}" \
-    --wait --timeout 10m
-  rollout_wait deployment "${release#zivo-}" 10m
+    "${PULL_SECRET_SET[@]}" \
+    --wait --timeout 15m
+  rollout_wait deployment "${release#zivo-}" 15m
 done
 
 helm_record zivo-auth
 helm upgrade --install zivo-auth ./infra/k8s/charts/auth -n "$NS" \
   -f infra/k8s/environments/prod/auth-values.yaml \
-  --set image.tag="${TAG}" --wait --timeout 10m
-rollout_wait deployment zivo-auth 10m
+  --set image.tag="${TAG}" \
+  "${PULL_SECRET_SET[@]}" \
+  --wait --timeout 20m
+rollout_wait deployment zivo-auth 20m
 
 helm_record zivo-storage
 helm upgrade --install zivo-storage ./infra/k8s/charts/storage -n "$NS" \
   -f infra/k8s/environments/prod/storage-values.yaml \
-  --set image.tag="${TAG}" --wait --timeout 10m
-rollout_wait deployment zivo-storage 10m
+  --set image.tag="${TAG}" \
+  "${PULL_SECRET_SET[@]}" \
+  --wait --timeout 20m
+rollout_wait deployment zivo-storage 20m
 
 helm_record zivo-api
 helm upgrade --install zivo-api ./infra/k8s/charts/api -n "$NS" \
   -f infra/k8s/environments/prod/backend-release-values.yaml \
   -f infra/k8s/environments/prod/api-values.yaml \
-  --set image.tag="${TAG}" --wait --timeout 10m
-rollout_wait deployment zivo-api 10m
+  --set image.tag="${TAG}" \
+  "${PULL_SECRET_SET[@]}" \
+  --wait --timeout 20m
+rollout_wait deployment zivo-api 20m
 
 helm_record zivo-web
 helm upgrade --install zivo-web ./infra/k8s/charts/web -n "$NS" \
   -f infra/k8s/environments/prod/web-values.yaml \
-  --set image.tag="${TAG}" --wait --timeout 10m
-rollout_wait deployment zivo-web 10m
+  --set image.tag="${TAG}" \
+  "${PULL_SECRET_SET[@]}" \
+  --wait --timeout 20m
+rollout_wait deployment zivo-web 20m
 
 kubectl -n "$NS" get pods -o wide
 echo "Done: ${TAG}"

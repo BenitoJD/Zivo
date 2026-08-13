@@ -11,8 +11,9 @@ ingress:
   enabled: true
   className: traefik
   host: storage.zivo.fyi
-  tls: true
-  entrypoint: websecure
+  # HTTP only until storage.zivo.fyi has an A record; same ACME trap as auth.
+  tls: false
+  entrypoint: web
   tlsSecret: zivo-storage-tls
 resources:
   requests:

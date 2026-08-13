@@ -11,8 +11,10 @@ ingress:
   enabled: true
   className: traefik
   host: auth.zivo.fyi
-  tls: true
-  entrypoint: websecure
+  # HTTP only until auth.zivo.fyi has an A record; cert-manager cannot issue TLS
+  # while DNS is NXDOMAIN, and the ACME solver pod fights the auth rollout.
+  tls: false
+  entrypoint: web
   tlsSecret: zivo-auth-tls
 resources:
   requests:
