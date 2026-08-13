@@ -30,9 +30,23 @@ export function serverProxyFor(path: string): string {
     path.startsWith("/api/assertions") ||
     path.startsWith("/api/chat") ||
     path.startsWith("/api/mcq") ||
-    path.startsWith("/api/progress")
+    path.startsWith("/api/progress") ||
+    path.startsWith("/api/guest") ||
+    path.startsWith("/api/offline") ||
+    path.startsWith("/api/reference")
   ) {
     return envOr("STUDY_PROXY_URL", "http://127.0.0.1:8205");
+  }
+  if (
+    path.startsWith("/api/sources") ||
+    path.startsWith("/api/documents") ||
+    path.startsWith("/api/activities") ||
+    path.startsWith("/api/audiobook")
+  ) {
+    return envOr("LIBRARY_PROXY_URL", "http://127.0.0.1:8206");
+  }
+  if (path.startsWith("/api/models") || path.startsWith("/api/debug")) {
+    return envOr("ADMIN_PROXY_URL", "http://127.0.0.1:8207");
   }
   if (path.startsWith("/api/auth")) {
     return envOr("AUTH_PROXY_URL", "http://127.0.0.1:8201");

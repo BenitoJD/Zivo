@@ -1,4 +1,4 @@
-"""Product API no longer serves routes that moved to practice/content/study."""
+"""Product API is health + scheduler only; other HTTP left for other processes."""
 
 from app.main import app
 
@@ -27,10 +27,27 @@ def test_study_routes_left_the_product_api() -> None:
     assert not any(p.startswith("/api/chat") for p in paths)
     assert not any(p.startswith("/api/progress") for p in paths)
     assert not any(p.startswith("/api/assertions") for p in paths)
+    assert not any(p.startswith("/api/guest") for p in paths)
+    assert not any(p.startswith("/api/offline") for p in paths)
+    assert not any(p.startswith("/api/reference") for p in paths)
 
 
-def test_product_api_keeps_sources_and_guest() -> None:
+def test_library_and_admin_routes_left_the_product_api() -> None:
     paths = _paths()
-    assert any(p.startswith("/api/sources") for p in paths)
-    assert any(p == "/api/guest" or p.startswith("/api/guest") for p in paths)
-    assert any(p.startswith("/api/documents") for p in paths)
+    assert not any(p.startswith("/api/sources") for p in paths)
+    assert not any(p.startswith("/api/documents") for p in paths)
+    assert not any(p.startswith("/api/activities") for p in paths)
+    assert not any(p.startswith("/api/audiobook") for p in paths)
+    assert not any(p.startswith("/api/models") for p in paths)
+    assert not any(p.startswith("/api/debug") for p in paths)
+
+
+def test_product_api_keeps_health_only() -> None:
+    paths = _paths()
+    assert "/api/health" in paths
+    extra = {
+        p
+        for p in paths
+        if p.startswith("/api/") and p not in {"/api/health", "/api/health/ready"}
+    }
+    assert extra == set()

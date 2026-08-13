@@ -24,6 +24,8 @@ const nextConfig: NextConfig = {
     const practiceProxy = process.env.PRACTICE_PROXY_URL ?? "http://127.0.0.1:8203";
     const contentProxy = process.env.CONTENT_PROXY_URL ?? "http://127.0.0.1:8204";
     const studyProxy = process.env.STUDY_PROXY_URL ?? "http://127.0.0.1:8205";
+    const libraryProxy = process.env.LIBRARY_PROXY_URL ?? "http://127.0.0.1:8206";
+    const adminProxy = process.env.ADMIN_PROXY_URL ?? "http://127.0.0.1:8207";
     return [
       { source: "/api/auth/:path*", destination: `${authProxy}/api/auth/:path*` },
       { source: "/api/storage/:path*", destination: `${storageProxy}/api/storage/:path*` },
@@ -42,6 +44,20 @@ const nextConfig: NextConfig = {
       { source: "/api/mcq/:path*", destination: `${studyProxy}/api/mcq/:path*` },
       { source: "/api/progress/:path*", destination: `${studyProxy}/api/progress/:path*` },
       { source: "/api/progress", destination: `${studyProxy}/api/progress` },
+      { source: "/api/guest/:path*", destination: `${studyProxy}/api/guest/:path*` },
+      { source: "/api/guest", destination: `${studyProxy}/api/guest` },
+      { source: "/api/offline/:path*", destination: `${studyProxy}/api/offline/:path*` },
+      { source: "/api/reference/:path*", destination: `${studyProxy}/api/reference/:path*` },
+      { source: "/api/sources/:path*", destination: `${libraryProxy}/api/sources/:path*` },
+      { source: "/api/sources", destination: `${libraryProxy}/api/sources` },
+      { source: "/api/documents/:path*", destination: `${libraryProxy}/api/documents/:path*` },
+      { source: "/api/documents", destination: `${libraryProxy}/api/documents` },
+      { source: "/api/activities/:path*", destination: `${libraryProxy}/api/activities/:path*` },
+      { source: "/api/audiobook/:path*", destination: `${libraryProxy}/api/audiobook/:path*` },
+      { source: "/api/models/:path*", destination: `${adminProxy}/api/models/:path*` },
+      { source: "/api/models", destination: `${adminProxy}/api/models` },
+      { source: "/api/debug/:path*", destination: `${adminProxy}/api/debug/:path*` },
+      { source: "/api/debug", destination: `${adminProxy}/api/debug` },
       { source: "/api/:path*", destination: `${API_PROXY_URL}/api/:path*` },
       { source: "/health", destination: `${API_PROXY_URL}/health` },
     ];

@@ -17,7 +17,7 @@ Product API stops serving those routes so there is one HTTP writer for them.
 writers (this process plus workers). Workers stay workers.
 
 **Cookie.** JWT + `auth.account.session_version`, same as storage. Guest mint
-stays on the product API.
+lives on study.
 
 **Not in practice.** Newspaper admin (channel / brands) is content.
 Learn/grade/chat is study. Job lease stays on workers ([ADR 0009](0009-jobs-workers-are-the-process.md)).

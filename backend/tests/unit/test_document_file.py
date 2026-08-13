@@ -5,13 +5,21 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from pathlib import Path
+import sys
+
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+_REPO = Path(__file__).resolve().parents[3]
+_LIB = str(_REPO / "library")
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+
 from app.db import SessionLocal
-from app.main import app
 from app.models import Document
 from app.services.guest_session import GUEST_ID_HEADER
+from library_main import app
 
 PUBLIC_URL = (
     "https://s3.zivo.example/zivo/demo/test/file.pdf"

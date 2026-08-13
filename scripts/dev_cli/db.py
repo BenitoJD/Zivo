@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .env import AUTH_DIR, BACKEND_DIR, CONTENT_DIR, PRACTICE_DIR, STORAGE_DIR, STUDY_DIR, resolve_env
+from .env import AUTH_DIR, BACKEND_DIR, CONTENT_DIR, LIBRARY_DIR, ADMIN_DIR, PRACTICE_DIR, STORAGE_DIR, STUDY_DIR, resolve_env
 
 VENV = Path.home() / ".venv" / "zivo"
 
@@ -110,6 +110,22 @@ def run_study_alembic(*args: str, env: dict[str, str] | None = None) -> None:
         raise RuntimeError(f"study alembic {' '.join(args)} failed")
 
 
+def run_library_alembic(*args: str, env: dict[str, str] | None = None) -> None:
+    cmd = [python_bin(), "-m", "alembic", *args]
+    print("+", " ".join(cmd), "(library)")
+    proc = subprocess.run(cmd, cwd=LIBRARY_DIR, env=_product_service_env(LIBRARY_DIR, env), text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"library alembic {' '.join(args)} failed")
+
+
+def run_admin_alembic(*args: str, env: dict[str, str] | None = None) -> None:
+    cmd = [python_bin(), "-m", "alembic", *args]
+    print("+", " ".join(cmd), "(admin)")
+    proc = subprocess.run(cmd, cwd=ADMIN_DIR, env=_product_service_env(ADMIN_DIR, env), text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"admin alembic {' '.join(args)} failed")
+
+
 def apply_schema(env: dict[str, str] | None = None) -> None:
     """Apply auth then storage then product schema migrations via Alembic."""
     run_auth_alembic("upgrade", "head", env=env)
@@ -117,6 +133,8 @@ def apply_schema(env: dict[str, str] | None = None) -> None:
     run_practice_alembic("upgrade", "head", env=env)
     run_content_alembic("upgrade", "head", env=env)
     run_study_alembic("upgrade", "head", env=env)
+    run_library_alembic("upgrade", "head", env=env)
+    run_admin_alembic("upgrade", "head", env=env)
     run_alembic("upgrade", "head", env=env)
 
 

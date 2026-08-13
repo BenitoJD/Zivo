@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -8,44 +7,17 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 
-import app.eta  # noqa: F401 — register ETA handlers
+import app.eta  # noqa: F401  register scheduler definitions
 from app.api.router import api_router
 from app.config import get_settings
-from app.db import SessionLocal
 from app.eta.scheduler_runtime import eta_scheduler_service
-from app.services.embed import set_active_embed_model
-from app.services.llm_registry import bootstrap_llm_registry_from_env, resolve_embedding_model
-from app.services.storage import ensure_bucket
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-def _warmup_retrieval_models() -> None:
-    """Load the embedding model before serving chat (reranker stays lazy to save RAM)."""
-    from app.services.embed import embed_query
-
-    embed_query("warmup")
-
-
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    try:
-        ensure_bucket()
-    except Exception as exc:
-        logger.exception("startup: object-storage bucket check failed: %s", exc)
-    try:
-        with SessionLocal() as db:
-            bootstrap_llm_registry_from_env(db)
-            try:
-                embed = resolve_embedding_model(db)
-                set_active_embed_model(embed.record.litellm_model)
-                await asyncio.to_thread(_warmup_retrieval_models)
-                logger.info("startup: retrieval models warmed up")
-            except Exception as exc:
-                logger.exception("startup: embedding model resolution failed: %s", exc)
-    except Exception as exc:
-        logger.exception("startup: LLM registry bootstrap failed: %s", exc)
     eta_scheduler_service.start()
     yield
     eta_scheduler_service.stop()

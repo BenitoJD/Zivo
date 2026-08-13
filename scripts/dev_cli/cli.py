@@ -17,6 +17,8 @@ from .env import (
     BACKEND_DIR,
     CONTENT_DIR,
     FRONTEND_DIR,
+    LIBRARY_DIR,
+    ADMIN_DIR,
     PRACTICE_DIR,
     ROOT,
     STORAGE_DIR,
@@ -27,6 +29,8 @@ from .ports import (
     allocate_auth_port,
     allocate_backend_port,
     allocate_content_port,
+    allocate_library_port,
+    allocate_admin_port,
     allocate_practice_port,
     allocate_storage_port,
     allocate_study_port,
@@ -142,7 +146,7 @@ def start(args: argparse.Namespace) -> int:
         raise RuntimeError("Run ./scripts/dev.sh setup first.")
 
     state = load_state()
-    if pid_running(state.get("api_pid")) or pid_running(state.get("auth_pid")) or pid_running(state.get("storage_pid")) or pid_running(state.get("practice_pid")) or pid_running(state.get("content_pid")) or pid_running(state.get("study_pid")) or pid_running(state.get("frontend_pid")):
+    if pid_running(state.get("api_pid")) or pid_running(state.get("auth_pid")) or pid_running(state.get("storage_pid")) or pid_running(state.get("practice_pid")) or pid_running(state.get("content_pid")) or pid_running(state.get("study_pid")) or pid_running(state.get("library_pid")) or pid_running(state.get("admin_pid")) or pid_running(state.get("frontend_pid")):
         raise RuntimeError("Dev stack already running. Use ./scripts/dev.sh stop first.")
 
     port = allocate_backend_port(args.port)
@@ -151,6 +155,8 @@ def start(args: argparse.Namespace) -> int:
     practice_port = allocate_practice_port()
     content_port = allocate_content_port()
     study_port = allocate_study_port()
+    library_port = allocate_library_port()
+    admin_port = allocate_admin_port()
     start_deps()
     benv = backend_env()
     benv["STORAGE_URL"] = f"http://127.0.0.1:{storage_port}"
@@ -161,6 +167,8 @@ def start(args: argparse.Namespace) -> int:
         run_practice_alembic,
         run_storage_alembic,
         run_study_alembic,
+        run_library_alembic,
+        run_admin_alembic,
     )
 
     run_auth_alembic("upgrade", "head", env=benv)
@@ -168,6 +176,8 @@ def start(args: argparse.Namespace) -> int:
     run_practice_alembic("upgrade", "head", env=benv)
     run_content_alembic("upgrade", "head", env=benv)
     run_study_alembic("upgrade", "head", env=benv)
+    run_library_alembic("upgrade", "head", env=benv)
+    run_admin_alembic("upgrade", "head", env=benv)
     run_alembic("upgrade", "head", env=benv)
     subprocess.run(
         [python_bin(), "scripts/seed_question_vocab.py"],
@@ -263,6 +273,34 @@ def start(args: argparse.Namespace) -> int:
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
+    library_log = LOG_ROOT / "library.log"
+    with library_log.open("ab") as library_out:
+        library_proc = subprocess.Popen(
+            [
+                py, "-m", "uvicorn", "library_main:app",
+                "--host", "127.0.0.1", "--port", str(library_port),
+                "--reload", "--reload-dir", str(LIBRARY_DIR), "--reload-dir", str(BACKEND_DIR),
+            ],
+            cwd=LIBRARY_DIR,
+            env=product_env,
+            stdout=library_out,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    admin_log = LOG_ROOT / "admin.log"
+    with admin_log.open("ab") as admin_out:
+        admin_proc = subprocess.Popen(
+            [
+                py, "-m", "uvicorn", "admin_main:app",
+                "--host", "127.0.0.1", "--port", str(admin_port),
+                "--reload", "--reload-dir", str(ADMIN_DIR), "--reload-dir", str(BACKEND_DIR),
+            ],
+            cwd=ADMIN_DIR,
+            env=product_env,
+            stdout=admin_out,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
     io_log = LOG_ROOT / "worker-io.log"
     cpu_log = LOG_ROOT / "worker-cpu.log"
     with io_log.open("ab") as io_out:
@@ -303,6 +341,8 @@ def start(args: argparse.Namespace) -> int:
         "PRACTICE_PROXY_URL": f"http://127.0.0.1:{practice_port}",
         "CONTENT_PROXY_URL": f"http://127.0.0.1:{content_port}",
         "STUDY_PROXY_URL": f"http://127.0.0.1:{study_port}",
+        "LIBRARY_PROXY_URL": f"http://127.0.0.1:{library_port}",
+        "ADMIN_PROXY_URL": f"http://127.0.0.1:{admin_port}",
     }
     with frontend_log.open("ab") as fe_out:
         frontend_proc = subprocess.Popen(
@@ -328,6 +368,10 @@ def start(args: argparse.Namespace) -> int:
             "content_port": content_port,
             "study_pid": study_proc.pid,
             "study_port": study_port,
+            "library_pid": library_proc.pid,
+            "library_port": library_port,
+            "admin_pid": admin_proc.pid,
+            "admin_port": admin_port,
             "io_pid": io_proc.pid,
             "cpu_pid": cpu_proc.pid,
             "frontend_pid": frontend_proc.pid,
@@ -340,18 +384,21 @@ def start(args: argparse.Namespace) -> int:
     print(f"Practice running at http://127.0.0.1:{practice_port} (logs: {practice_log.relative_to(ROOT)})")
     print(f"Content running at http://127.0.0.1:{content_port} (logs: {content_log.relative_to(ROOT)})")
     print(f"Study running at http://127.0.0.1:{study_port} (logs: {study_log.relative_to(ROOT)})")
+    print(f"Library running at http://127.0.0.1:{library_port} (logs: {library_log.relative_to(ROOT)})")
+    print(f"Admin running at http://127.0.0.1:{admin_port} (logs: {admin_log.relative_to(ROOT)})")
     print(f"Workers: IO pid {io_proc.pid}, CPU pid {cpu_proc.pid}")
     print(
         f"Frontend at http://localhost:{FRONTEND_PORT} "
         f"(logs: {frontend_log.relative_to(ROOT)}, proxy → :{port} auth → :{auth_port} "
-        f"storage → :{storage_port} practice → :{practice_port} content → :{content_port} study → :{study_port})"
+        f"storage → :{storage_port} practice → :{practice_port} content → :{content_port} "
+        f"study → :{study_port} library → :{library_port} admin → :{admin_port})"
     )
     return 0
 
 
 def stop(_: argparse.Namespace) -> int:
     state = load_state()
-    for key in ("frontend_pid", "api_pid", "auth_pid", "storage_pid", "practice_pid", "content_pid", "study_pid", "io_pid", "cpu_pid"):
+    for key in ("frontend_pid", "api_pid", "auth_pid", "storage_pid", "practice_pid", "content_pid", "study_pid", "library_pid", "admin_pid", "io_pid", "cpu_pid"):
         pid = state.get(key)
         if pid_running(pid):
             os.kill(pid, signal.SIGTERM)
@@ -365,8 +412,10 @@ def db_cmd(args: argparse.Namespace) -> int:
         start_deps()
         from .db import (
             run_alembic,
+            run_admin_alembic,
             run_auth_alembic,
             run_content_alembic,
+            run_library_alembic,
             run_practice_alembic,
             run_storage_alembic,
             run_study_alembic,
@@ -377,6 +426,8 @@ def db_cmd(args: argparse.Namespace) -> int:
         run_practice_alembic("upgrade", "head")
         run_content_alembic("upgrade", "head")
         run_study_alembic("upgrade", "head")
+        run_library_alembic("upgrade", "head")
+        run_admin_alembic("upgrade", "head")
         run_alembic("upgrade", "head")
     elif args.db_command == "schema":
         start_deps()

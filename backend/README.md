@@ -59,6 +59,7 @@ Production: `alembic-migrate` K8s Job via `scripts/run-k8s-schema-migrate.sh`.
 
 ```bash
 docker build -t zivo-api ./backend
+docker build -t zivo-worker -f workers/Dockerfile .
 ```
 
 Image target: `runtime` (used by CI → GHCR → K3s).

@@ -16,7 +16,7 @@ commit or trigger **Deploy Zivo**.
 | Before `gh workflow run deploy.yml` | **Yes** |
 | After fixing a CI failure | **Yes** (re-run full gates) |
 
-Agents: if you touched `backend/`, `auth/`, `storage/`, `practice/`, `content/`, `study/`, or `frontend/`, run ship gates before telling
+Agents: if you touched `backend/`, `auth/`, `storage/`, `practice/`, `content/`, `study/`, `library/`, `admin/`, or `frontend/`, run ship gates before telling
 the user the work is done. Do not offer deploy until gates pass.
 
 ## One command
@@ -36,6 +36,8 @@ Optional: pass a scope when you only changed one side:
 ./scripts/ship-gates.sh practice   # ruff + import check + unit tests
 ./scripts/ship-gates.sh content    # ruff + import check + unit tests
 ./scripts/ship-gates.sh study      # ruff + import check + unit tests
+./scripts/ship-gates.sh library    # ruff + import check + unit tests
+./scripts/ship-gates.sh admin      # ruff + import check + unit tests
 ./scripts/ship-gates.sh frontend   # eslint + next build
 ```
 
@@ -45,7 +47,8 @@ Optional: pass a scope when you only changed one side:
 
 1. `python -m ruff check .` — unused imports, undefined names (`E9`, `F`)
 2. Import smoke: `from app.main import app`
-3. `python -m pytest tests/unit/ -q --tb=no`
+3. Worker import smoke: `from app.eta.worker import run_eta_worker` must not load `app.api`
+4. `python -m pytest tests/unit/ -q --tb=no`
 
 ### Auth
 
@@ -59,10 +62,10 @@ Optional: pass a scope when you only changed one side:
 2. Import smoke: `from app.main import app` (`Zivo Storage`)
 3. `python -m pytest tests/unit/ -q --tb=no`
 
-### Practice / content / study
+### Practice / content / study / library / admin
 
 Same three checks, with `PYTHONPATH=../backend:.` and import smoke on
-`practice_main` / `content_main` / `study_main`.
+`practice_main` / `content_main` / `study_main` / `library_main` / `admin_main`.
 
 ### Frontend
 

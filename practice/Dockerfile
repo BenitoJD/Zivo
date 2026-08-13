@@ -1,3 +1,5 @@
+# HTTP microservice image: product library (slimmed) + this process's entrypoint.
+# Build from repo root: docker build -f practice/Dockerfile .
 FROM python:3.12-slim AS builder
 
 WORKDIR /build
@@ -33,12 +35,14 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app
 
-COPY --chown=appuser:appuser backend/ /app/
-RUN rm -rf /app/alembic /app/alembic.ini
+COPY backend/ /app/
+COPY backend/scripts/slim_service_tree.py /tmp/slim_service_tree.py
+RUN python /tmp/slim_service_tree.py practice
 COPY --chown=appuser:appuser practice/practice_main.py /app/practice_main.py
 COPY --chown=appuser:appuser practice/alembic.ini /app/alembic.ini
 COPY --chown=appuser:appuser practice/alembic /app/alembic
 COPY --chown=appuser:appuser practice/scripts/run_alembic_with_lock.py /app/scripts/run_alembic_with_lock.py
+RUN chown -R appuser:appuser /app
 
 USER appuser
 

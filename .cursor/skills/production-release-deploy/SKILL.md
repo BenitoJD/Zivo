@@ -101,18 +101,14 @@ gh run watch <run-id> --exit-status
 
 Expected deploy behavior:
 
-- `build` job (ubuntu-latest): Docker Buildx builds and pushes
-  `ghcr.io/<owner>/zivo-api` and `ghcr.io/<owner>/zivo-web`, tagged
-  `Zivo_0.1.<run>`, with GHA layer cache per image.
-- `deploy` job (self-hosted `zivo` runner on the VPS): `helm upgrade --install`
-  for postgres + minio, then a one-off Kubernetes **Job** `alembic-migrate`
-  (`alembic upgrade head` under an advisory lock) using the new API image and
-  `zivo-secrets`, **before** rolling out api/web/workers.
-- After migration: `helm upgrade --install` for api, web, worker-eta-cpu,
-  worker-eta-io.
-- The deploy job updates all prod image tags via
-  `scripts/promote-prod-image-tags.sh` and commits them to `main` after a
-  successful rollout (no side branch or promotion PR).
+- Deploy job (self-hosted `zivo` runner): `scripts/deploy-vps-local-build.sh`
+  builds and pushes `zivo-api`, `zivo-auth`, `zivo-storage`, `zivo-practice`,
+  `zivo-content`, `zivo-study`, `zivo-library`, `zivo-admin`, `zivo-worker`,
+  and `zivo-web`, tagged `Zivo_0.1.<run>`.
+- Alembic Jobs run per service image before rolling HTTP deployments.
+- Workers use `ghcr.io/<owner>/zivo-worker`, not `zivo-api`.
+- After rollout, `scripts/promote-prod-image-tags.sh` commits prod tags to
+  `main`.
 
 ## Prod VPS / Kubernetes monitoring
 

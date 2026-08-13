@@ -3,7 +3,7 @@
 **Date:** 2026-08-13 · **Status:** accepted
 
 Zivo already runs jobs as a separate process: Helm releases `zivo-worker-io` and
-`zivo-worker-cpu` (same `zivo-api` image, `run_eta_worker_*.py`). Lease,
+`zivo-worker-cpu` (`zivo-worker` image, `run_eta_worker_*.py`). Lease,
 heartbeat, reclaim, and handler execution of `qb.jobs` live in those pods. That
 process is the jobs microservice. There is no extra FastAPI that shares the
 table.

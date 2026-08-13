@@ -13,10 +13,13 @@ from app.api import (
     artifacts,
     assertions,
     chat,
+    guest,
     health,
     learn,
     mcq,
+    offline,
     progress,
+    reference,
     study,
     topics,
 )
@@ -115,6 +118,9 @@ else:
 
 api_router = APIRouter()
 api_router.include_router(health.router, tags=["health"])
+api_router.include_router(guest.router, tags=["guest"])
+api_router.include_router(offline.router, prefix="/offline", tags=["offline"])
+api_router.include_router(reference.router, prefix="/reference", tags=["reference"])
 api_router.include_router(artifacts.router, prefix="/artifacts", tags=["artifacts"])
 api_router.include_router(assertions.router, prefix="/assertions", tags=["assertions"])
 api_router.include_router(learn.router, prefix="/artifacts", tags=["learn"])

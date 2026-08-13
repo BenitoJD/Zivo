@@ -31,6 +31,9 @@ STORAGE_IMAGE="ghcr.io/${OWNER}/zivo-storage:${TAG}"
 PRACTICE_IMAGE="ghcr.io/${OWNER}/zivo-practice:${TAG}"
 CONTENT_IMAGE="ghcr.io/${OWNER}/zivo-content:${TAG}"
 STUDY_IMAGE="ghcr.io/${OWNER}/zivo-study:${TAG}"
+LIBRARY_IMAGE="ghcr.io/${OWNER}/zivo-library:${TAG}"
+ADMIN_IMAGE="ghcr.io/${OWNER}/zivo-admin:${TAG}"
+WORKER_IMAGE="ghcr.io/${OWNER}/zivo-worker:${TAG}"
 WEB_IMAGE="ghcr.io/${OWNER}/zivo-web:${TAG}"
 NS=zivo
 ROLLBACK_RELEASES=()
@@ -160,6 +163,9 @@ if [[ "${PREBUILT:-0}" != "1" ]]; then
   docker build --pull -t "${PRACTICE_IMAGE}" -f practice/Dockerfile --target runtime .
   docker build --pull -t "${CONTENT_IMAGE}" -f content/Dockerfile --target runtime .
   docker build --pull -t "${STUDY_IMAGE}" -f study/Dockerfile --target runtime .
+  docker build --pull -t "${LIBRARY_IMAGE}" -f library/Dockerfile --target runtime .
+  docker build --pull -t "${ADMIN_IMAGE}" -f admin/Dockerfile --target runtime .
+  docker build --pull -t "${WORKER_IMAGE}" -f workers/Dockerfile --target runtime .
   docker build --pull -t "${WEB_IMAGE}" -f frontend/Dockerfile --target runtime \
     --build-arg NEXT_PUBLIC_API_URL= \
     --build-arg NEXT_PUBLIC_AUTH_URL= \
@@ -170,6 +176,8 @@ if [[ "${PREBUILT:-0}" != "1" ]]; then
     --build-arg PRACTICE_PROXY_URL=http://zivo-practice:8000 \
     --build-arg CONTENT_PROXY_URL=http://zivo-content:8000 \
     --build-arg STUDY_PROXY_URL=http://zivo-study:8000 \
+    --build-arg LIBRARY_PROXY_URL=http://zivo-library:8000 \
+    --build-arg ADMIN_PROXY_URL=http://zivo-admin:8000 \
     frontend/
   # Push to GHCR; prod k3s pulls these (images are public, unique tag per deploy).
   docker push "${API_IMAGE}"
@@ -178,9 +186,12 @@ if [[ "${PREBUILT:-0}" != "1" ]]; then
   docker push "${PRACTICE_IMAGE}"
   docker push "${CONTENT_IMAGE}"
   docker push "${STUDY_IMAGE}"
+  docker push "${LIBRARY_IMAGE}"
+  docker push "${ADMIN_IMAGE}"
+  docker push "${WORKER_IMAGE}"
   docker push "${WEB_IMAGE}"
 else
-  echo "PREBUILT=1 — ${API_IMAGE}, ${AUTH_IMAGE}, ${STORAGE_IMAGE}, ${PRACTICE_IMAGE}, ${CONTENT_IMAGE}, ${STUDY_IMAGE}, and ${WEB_IMAGE} assumed already in GHCR"
+  echo "PREBUILT=1 - ${API_IMAGE}, ${AUTH_IMAGE}, ${STORAGE_IMAGE}, ${PRACTICE_IMAGE}, ${CONTENT_IMAGE}, ${STUDY_IMAGE}, ${LIBRARY_IMAGE}, ${ADMIN_IMAGE}, ${WORKER_IMAGE}, and ${WEB_IMAGE} assumed already in GHCR"
 fi
 
 ensure_ghcr_pull_secret
@@ -257,6 +268,28 @@ helm upgrade --install study-schema ./infra/k8s/charts/db-schema -n "$NS" \
   --wait --wait-for-jobs --timeout 15m
 wait_job study-alembic-migrate 15m
 
+kubectl -n "$NS" delete job library-alembic-migrate --ignore-not-found=true
+helm upgrade --install library-schema ./infra/k8s/charts/db-schema -n "$NS" \
+  -f infra/k8s/environments/prod/backend-release-values.yaml \
+  --set image.tag="${TAG}" \
+  --set image.repository="ghcr.io/${OWNER}/zivo-library" \
+  --set namespace="$NS" \
+  --set jobName=library-alembic-migrate \
+  "${PULL_SECRET_SET[@]}" \
+  --wait --wait-for-jobs --timeout 15m
+wait_job library-alembic-migrate 15m
+
+kubectl -n "$NS" delete job admin-alembic-migrate --ignore-not-found=true
+helm upgrade --install admin-schema ./infra/k8s/charts/db-schema -n "$NS" \
+  -f infra/k8s/environments/prod/backend-release-values.yaml \
+  --set image.tag="${TAG}" \
+  --set image.repository="ghcr.io/${OWNER}/zivo-admin" \
+  --set namespace="$NS" \
+  --set jobName=admin-alembic-migrate \
+  "${PULL_SECRET_SET[@]}" \
+  --wait --wait-for-jobs --timeout 15m
+wait_job admin-alembic-migrate 15m
+
 kubectl -n "$NS" delete job alembic-migrate --ignore-not-found=true
 helm upgrade --install db-schema ./infra/k8s/charts/db-schema -n "$NS" \
   -f infra/k8s/environments/prod/backend-release-values.yaml \
@@ -284,6 +317,7 @@ for release in zivo-worker-io zivo-worker-cpu; do
   helm upgrade --install "$release" ./infra/k8s/charts/worker -n "$NS" \
     -f infra/k8s/environments/prod/worker-values.yaml \
     --set image.tag="${TAG}" \
+    --set image.repository="ghcr.io/${OWNER}/zivo-worker" \
     --set "workloads.io.enabled=${io}" \
     --set "workloads.cpu.enabled=${cpu}" \
     --set "workloads.newspaper.enabled=${newspaper}" \
@@ -331,6 +365,22 @@ helm upgrade --install zivo-study ./infra/k8s/charts/study -n "$NS" \
   "${PULL_SECRET_SET[@]}" \
   --wait --timeout 20m
 rollout_wait deployment zivo-study 20m
+
+helm_record zivo-library
+helm upgrade --install zivo-library ./infra/k8s/charts/library -n "$NS" \
+  -f infra/k8s/environments/prod/library-values.yaml \
+  --set image.tag="${TAG}" \
+  "${PULL_SECRET_SET[@]}" \
+  --wait --timeout 20m
+rollout_wait deployment zivo-library 20m
+
+helm_record zivo-admin
+helm upgrade --install zivo-admin ./infra/k8s/charts/admin -n "$NS" \
+  -f infra/k8s/environments/prod/admin-values.yaml \
+  --set image.tag="${TAG}" \
+  "${PULL_SECRET_SET[@]}" \
+  --wait --timeout 20m
+rollout_wait deployment zivo-admin 20m
 
 helm_record zivo-api
 helm upgrade --install zivo-api ./infra/k8s/charts/api -n "$NS" \

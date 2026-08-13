@@ -5,16 +5,24 @@ from __future__ import annotations
 import io
 import uuid
 
+from pathlib import Path
+import sys
+
 import pytest
 from docx import Document as DocxDocument
 from docx.enum.text import WD_BREAK
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+_REPO = Path(__file__).resolve().parents[3]
+_LIB = str(_REPO / "library")
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+
 from app.db import SessionLocal
-from app.main import app
 from app.models import Document
 from app.services.guest_session import GUEST_ID_HEADER
+from library_main import app
 
 _DOCX_CT = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 

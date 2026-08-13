@@ -26,6 +26,9 @@ run_backend() {
   echo "==> backend: import check"
   (cd backend && "$PYTHON_BIN" -c "from app.main import app; assert app.title == 'Zivo API'")
 
+  echo "==> worker: import smoke (no app.api)"
+  (cd backend && "$PYTHON_BIN" -c "from app.eta.worker import run_eta_worker; import sys; loaded = [m for m in sys.modules if m == 'app.api' or m.startswith('app.api.')]; assert not loaded, loaded; assert callable(run_eta_worker)")
+
   echo "==> backend: unit tests"
   (cd backend && "$PYTHON_BIN" -m pytest tests/unit/ -q --tb=no)
 }
@@ -78,6 +81,14 @@ run_study() {
   run_product_service study "Zivo Study" study_main
 }
 
+run_library() {
+  run_product_service library "Zivo Library" library_main
+}
+
+run_admin() {
+  run_product_service admin "Zivo Admin" admin_main
+}
+
 run_frontend() {
   echo "==> frontend: eslint"
   (cd frontend && npm run lint)
@@ -94,6 +105,8 @@ case "$SCOPE" in
     run_practice
     run_content
     run_study
+    run_library
+    run_admin
     run_frontend
     ;;
   backend)
@@ -114,11 +127,17 @@ case "$SCOPE" in
   study)
     run_study
     ;;
+  library)
+    run_library
+    ;;
+  admin)
+    run_admin
+    ;;
   frontend)
     run_frontend
     ;;
   *)
-    echo "Usage: $0 [all|backend|auth|storage|practice|content|study|frontend]" >&2
+    echo "Usage: $0 [all|backend|auth|storage|practice|content|study|library|admin|frontend]" >&2
     exit 2
     ;;
 esac

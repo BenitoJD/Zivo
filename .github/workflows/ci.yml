@@ -51,6 +51,9 @@ jobs:
       - name: Import check
         run: python -c "from app.main import app; assert app.title == 'Zivo API'"
 
+      - name: Worker import smoke
+        run: python -c "from app.eta.worker import run_eta_worker; import sys; loaded = [m for m in sys.modules if m == 'app.api' or m.startswith('app.api.')]; assert not loaded, loaded; assert callable(run_eta_worker)"
+
       - name: Alembic migrations
         run: bash scripts/test_alembic_migrations.sh
 
@@ -341,6 +344,122 @@ jobs:
 
       - name: Import check
         run: python -c "from study_main import app; assert app.title == 'Zivo Study'"
+
+      - name: Apply schema to CI database
+        run: python -m alembic upgrade head
+
+      - name: Unit tests
+        run: python -m pytest tests/unit/ -q --tb=no
+
+      - name: Stop Postgres
+        if: always()
+        run: docker rm -f "$CI_POSTGRES_CONTAINER" 2>/dev/null || true
+
+  library:
+    runs-on: [self-hosted, zivo]
+    defaults:
+      run:
+        working-directory: library
+    env:
+      DATABASE_URL: postgresql+psycopg://zivo:zivo@localhost:5461/zivo
+      CI_POSTGRES_CONTAINER: ci-postgres-library-${{ github.run_id }}
+      ENVIRONMENT: development
+      SECRET_KEY: dev-secret-change-me
+      CSRF_SECRET: dev-csrf-change-me
+      PYTHONPATH: ${{ github.workspace }}/backend:${{ github.workspace }}/library
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Start Postgres
+        run: |
+          docker rm -f "$CI_POSTGRES_CONTAINER" 2>/dev/null || true
+          docker run -d --name "$CI_POSTGRES_CONTAINER" \
+            -e POSTGRES_USER=zivo \
+            -e POSTGRES_PASSWORD=zivo \
+            -e POSTGRES_DB=zivo \
+            -p 5461:5432 \
+            pgvector/pgvector:pg16
+          for i in $(seq 1 30); do
+            if docker exec "$CI_POSTGRES_CONTAINER" pg_isready -U zivo >/dev/null 2>&1; then
+              echo "Postgres ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Postgres failed to start" >&2
+          docker logs "$CI_POSTGRES_CONTAINER" || true
+          exit 1
+
+      - name: Install dependencies
+        run: pip install -r ../backend/requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: python -m ruff check .
+
+      - name: Import check
+        run: python -c "from library_main import app; assert app.title == 'Zivo Library'"
+
+      - name: Apply schema to CI database
+        run: python -m alembic upgrade head
+
+      - name: Unit tests
+        run: python -m pytest tests/unit/ -q --tb=no
+
+      - name: Stop Postgres
+        if: always()
+        run: docker rm -f "$CI_POSTGRES_CONTAINER" 2>/dev/null || true
+
+  admin:
+    runs-on: [self-hosted, zivo]
+    defaults:
+      run:
+        working-directory: admin
+    env:
+      DATABASE_URL: postgresql+psycopg://zivo:zivo@localhost:5462/zivo
+      CI_POSTGRES_CONTAINER: ci-postgres-admin-${{ github.run_id }}
+      ENVIRONMENT: development
+      SECRET_KEY: dev-secret-change-me
+      CSRF_SECRET: dev-csrf-change-me
+      PYTHONPATH: ${{ github.workspace }}/backend:${{ github.workspace }}/admin
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Start Postgres
+        run: |
+          docker rm -f "$CI_POSTGRES_CONTAINER" 2>/dev/null || true
+          docker run -d --name "$CI_POSTGRES_CONTAINER" \
+            -e POSTGRES_USER=zivo \
+            -e POSTGRES_PASSWORD=zivo \
+            -e POSTGRES_DB=zivo \
+            -p 5462:5432 \
+            pgvector/pgvector:pg16
+          for i in $(seq 1 30); do
+            if docker exec "$CI_POSTGRES_CONTAINER" pg_isready -U zivo >/dev/null 2>&1; then
+              echo "Postgres ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Postgres failed to start" >&2
+          docker logs "$CI_POSTGRES_CONTAINER" || true
+          exit 1
+
+      - name: Install dependencies
+        run: pip install -r ../backend/requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: python -m ruff check .
+
+      - name: Import check
+        run: python -c "from admin_main import app; assert app.title == 'Zivo Admin'"
 
       - name: Apply schema to CI database
         run: python -m alembic upgrade head

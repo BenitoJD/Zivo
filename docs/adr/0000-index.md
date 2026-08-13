@@ -22,5 +22,8 @@ behind the shape those rules describe.
 | [0010](0010-practice-microservice.md) | Practice banks HTTP leave the product API (`practice/`, `:8203`) | 2026-08-13 |
 | [0011](0011-content-microservice.md) | SEO /learn + newspaper admin HTTP leave the product API (`content/`, `:8204`) | 2026-08-13 |
 | [0012](0012-study-microservice.md) | Learn/grade/chat HTTP leave the product API (`study/`, `:8205`) | 2026-08-13 |
+| [0013](0013-library-microservice.md) | Sources/documents HTTP leave the product API (`library/`, `:8206`) | 2026-08-13 |
+| [0014](0014-admin-microservice.md) | Models/debug HTTP leave the product API (`admin/`, `:8207`) | 2026-08-13 |
+| [0015](0015-slim-process-images.md) | Each process image contains only that process's code | 2026-08-13 |
 
 To add one: scan for the highest number, increment, keep it short.

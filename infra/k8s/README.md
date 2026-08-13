@@ -18,13 +18,16 @@ Helm charts and prod values. Deploy model matches [zivo](https://github.com/Beni
 |-------|---------|---------|
 | `charts/postgres` | `zivo-postgres` | pgvector Postgres |
 | `charts/minio` | `zivo-minio` | artifact object storage |
-| `charts/db-schema` | `auth-schema`, `storage-schema`, `practice-schema`, `content-schema`, `study-schema`, `db-schema` | Alembic jobs |
+| `charts/db-schema` | `auth-schema`, `storage-schema`, `practice-schema`, `content-schema`, `study-schema`, `library-schema`, `admin-schema`, `db-schema` | Alembic jobs |
 | `charts/auth` | `zivo-auth` | identity FastAPI (`auth.zivo.fyi`) |
 | `charts/storage` | `zivo-storage` | object FastAPI (`storage.zivo.fyi`) |
 | `charts/practice` | `zivo-practice` | coding / system-design / newspaper practice (`practice.zivo.fyi`) |
 | `charts/content` | `zivo-content` | SEO /learn + newspaper admin (`content.zivo.fyi`) |
 | `charts/study` | `zivo-study` | learn/grade/chat (`study.zivo.fyi`) |
-| `charts/api` | `zivo-api` | product FastAPI (sources, documents, guest) |
+| `charts/library` | `zivo-library` | sources/documents (`library.zivo.fyi`) |
+| `charts/admin` | `zivo-admin` | models/debug (`admin.zivo.fyi`) |
+| `charts/api` | `zivo-api` | health + ETA scheduler |
+| `charts/worker` | `zivo-worker-io`, `zivo-worker-cpu` | slim `zivo-worker` image |
 | `charts/web` | `zivo-web` | Next.js frontend |
 
 Prod values: `environments/prod/*.yaml`
@@ -41,11 +44,13 @@ Prod values: `environments/prod/*.yaml`
 | `practice.zivo.fyi` | `103.194.228.47` |
 | `content.zivo.fyi` | `103.194.228.47` |
 | `study.zivo.fyi` | `103.194.228.47` |
+| `library.zivo.fyi` | `103.194.228.47` |
+| `admin.zivo.fyi` | `103.194.228.47` |
 | `s3.zivo.fyi` | `103.194.228.47` |
 
 ## Deploy
 
-**Normal path:** GitHub Actions → **Deploy Zivo** (builds API + auth + storage + practice + content + study + web images, Helm upgrade on VPS).
+**Normal path:** GitHub Actions → **Deploy Zivo** (builds API + auth + storage + practice + content + study + library + admin + worker + web images, Helm upgrade on VPS).
 
 **Manual** (on VPS with repo checked out):
 

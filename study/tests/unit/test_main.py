@@ -23,3 +23,6 @@ def test_study_routes_mounted() -> None:
     assert any(p.startswith("/api/chat") for p in paths)
     assert any(p.startswith("/api/progress") for p in paths)
     assert any(p.startswith("/api/assertions") for p in paths)
+    assert any(p == "/api/guest" or p.startswith("/api/guest") for p in paths)
+    assert any(p.startswith("/api/offline") for p in paths)
+    assert any(p.startswith("/api/reference") for p in paths)

@@ -2,7 +2,7 @@ replicaCount: 1
 namespace: zivo
 
 image:
-  repository: ghcr.io/benitojd/zivo-api
+  repository: ghcr.io/benitojd/zivo-worker
   tag: latest
   pullPolicy: IfNotPresent
 

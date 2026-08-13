@@ -1,3 +1,5 @@
+# Study HTTP image: slimmed product library + retrieval models for chat.
+# Build from repo root: docker build -f study/Dockerfile .
 FROM python:3.12-slim AS builder
 
 WORKDIR /build
@@ -33,8 +35,9 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app
 
-COPY --chown=appuser:appuser backend/ /app/
-RUN rm -rf /app/alembic /app/alembic.ini
+COPY backend/ /app/
+COPY backend/scripts/slim_service_tree.py /tmp/slim_service_tree.py
+RUN python /tmp/slim_service_tree.py study
 COPY --chown=appuser:appuser study/study_main.py /app/study_main.py
 COPY --chown=appuser:appuser study/alembic.ini /app/alembic.ini
 COPY --chown=appuser:appuser study/alembic /app/alembic
@@ -43,7 +46,7 @@ COPY --chown=appuser:appuser study/scripts/run_alembic_with_lock.py /app/scripts
 ENV HF_HOME=/app/.cache/huggingface
 RUN mkdir -p /app/.cache/huggingface \
     && python -c "from fastembed import TextEmbedding; from fastembed.rerank.cross_encoder import TextCrossEncoder; TextEmbedding(model_name='BAAI/bge-small-en-v1.5'); TextCrossEncoder(model_name='Xenova/ms-marco-MiniLM-L-6-v2')" \
-    && chown -R appuser:appuser /app/.cache /tmp/fastembed_cache
+    && chown -R appuser:appuser /app /tmp/fastembed_cache
 
 USER appuser
 

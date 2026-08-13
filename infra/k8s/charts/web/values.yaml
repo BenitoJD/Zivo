@@ -25,6 +25,10 @@ env:
     value: http://zivo-content:8000
   - name: STUDY_PROXY_URL
     value: http://zivo-study:8000
+  - name: LIBRARY_PROXY_URL
+    value: http://zivo-library:8000
+  - name: ADMIN_PROXY_URL
+    value: http://zivo-admin:8000
   - name: NEXT_PUBLIC_API_URL
     value: https://api.zivo.fyi
 

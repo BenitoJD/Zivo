@@ -22,23 +22,25 @@ Decisions (rank, metric, gate, schedule, next-step) live behind named engine fac
 
 | Area | Status | Notes |
 |------|--------|-------|
-| **Repo structure** | Ready | `backend/`, `auth/`, `storage/`, `practice/`, `content/`, `study/`, `frontend/`, `infra/k8s/`, `scripts/` |
+| **Repo structure** | Ready | `backend/`, `auth/`, `storage/`, `practice/`, `content/`, `study/`, `library/`, `admin/`, `frontend/`, `infra/k8s/`, `scripts/` |
 | **DB + extensions** | Ready | Postgres 16, pgvector — foundation for question graph |
 | **Legacy `intel` schema** | Present | `intel_foundation.sql` unchanged; product data in `intel.*` |
 | **QB app schema** | Ready | `qb_app.sql` + `qb_infra.sql` via Alembic (`./scripts/dev.sh db migrate`) |
-| **API** | Ready | FastAPI product API: sources, documents, guest, models, offline, audiobook |
+| **API** | Ready | FastAPI health + ETA scheduler only (`backend/`). [ADR 0015](docs/adr/0015-slim-process-images.md) |
 | **Auth service** | Ready | Identity FastAPI (`auth/`): signup, login, logout, session, Google OAuth. [ADR 0007](docs/adr/0007-auth-microservice.md) |
 | **Storage service** | Ready | Object FastAPI (`storage/`): MinIO writes, chunked upload, `storage.*`. [ADR 0008](docs/adr/0008-storage-microservice.md) |
 | **Practice service** | Ready | Coding / system-design / newspaper practice HTTP (`practice/`). [ADR 0010](docs/adr/0010-practice-microservice.md) |
 | **Content service** | Ready | SEO `/learn` + newspaper admin HTTP (`content/`). [ADR 0011](docs/adr/0011-content-microservice.md) |
-| **Study service** | Ready | Learn queue, MCQ, chat, artifacts workspace (`study/`). [ADR 0012](docs/adr/0012-study-microservice.md) |
-| **Workers (jobs)** | Ready | ETA IO+CPU Helm is the jobs process (`qb.jobs` lease). [ADR 0009](docs/adr/0009-jobs-workers-are-the-process.md) |
+| **Study service** | Ready | Learn queue, MCQ, chat, guest, offline (`study/`). [ADR 0012](docs/adr/0012-study-microservice.md) |
+| **Library service** | Ready | Sources, documents, activities, audiobook (`library/`). [ADR 0013](docs/adr/0013-library-microservice.md) |
+| **Admin service** | Ready | Models + debug HTTP (`admin/`). [ADR 0014](docs/adr/0014-admin-microservice.md) |
+| **Workers (jobs)** | Ready | Slim `zivo-worker` image; ETA IO+CPU lease `qb.jobs`. [ADR 0009](docs/adr/0009-jobs-workers-are-the-process.md) |
 | **Workspace UI** | Ready | `/workspace` — Mantine `AppShell`, Learn/Test layout in `app/` routes |
-| **Helm / K8s** | Ready | postgres, minio, api, auth, storage, practice, content, study, web, worker, db-schema charts |
+| **Helm / K8s** | Ready | postgres, minio, api, auth, storage, practice, content, study, library, admin, web, worker, db-schema charts |
 | **CI** | Ready | `.github/workflows/ci.yml` — self-hosted `zivo` runner on VPS |
 | **Deploy workflow** | Ready | `.github/workflows/deploy.yml` (needs push + workflow run) |
 | **VPS base** | Ready | K3s, Traefik, cert-manager, GH runner at `103.194.228.47` |
-| **VPS app stack** | Auth live | Storage/practice/content/study roll out this deploy. Add A records for `auth.zivo.fyi`, `storage.zivo.fyi`, `practice.zivo.fyi`, `content.zivo.fyi`, and `study.zivo.fyi` → `103.194.228.47` before TLS. |
+| **VPS app stack** | Auth live | Storage/practice/content/study/library/admin/worker roll out this deploy. Add A records for `auth.zivo.fyi`, `storage.zivo.fyi`, `practice.zivo.fyi`, `content.zivo.fyi`, `study.zivo.fyi`, `library.zivo.fyi`, and `admin.zivo.fyi` → `103.194.228.47` before TLS. |
 | **Question generation** | Ready | Upload source → MCQs; Budget + Quality + Graph + priors |
 | **Question evaluation** | Ready (engine) | `docs/QUALITY_EVALUATION_ENGINE.md` + `quality_evaluation.py` |
 | **Adaptive selection** | Ready (engine) | `docs/ADAPTIVE_SELECTION_ENGINE.md` + `adaptive_selection.py` |
@@ -68,7 +70,10 @@ zivo/
 ├── storage/              # object FastAPI: MinIO writes, chunked upload, storage.*
 ├── practice/             # coding / system-design / newspaper practice HTTP
 ├── content/              # SEO /learn + newspaper admin HTTP
-├── study/                # learn queue, MCQ, chat, artifacts workspace
+├── study/                # learn queue, MCQ, chat, guest, offline
+├── library/              # sources, documents, activities, audiobook HTTP
+├── admin/                # models + debug HTTP
+├── workers/              # slim ETA worker image
 ├── frontend/             # Next.js App Router UI — Mantine-only UI in app/
 ├── infra/k8s/            # Helm charts + prod values
 ├── scripts/              # dev.sh, bootstrap-vps.sh, deploy helpers
@@ -97,8 +102,8 @@ Python 3.12+, Node.js 22+, Docker (for Postgres + MinIO).
 
 ```bash
 ./scripts/dev.sh setup
-./scripts/dev.sh start              # API + auth + storage + practice + content + study + workers + Next.js (:8200-:8205, :3000)
-./scripts/dev.sh db migrate        # auth, storage, practice, content, study Alembic, then product Alembic
+./scripts/dev.sh start              # API + auth + storage + practice + content + study + library + admin + workers + Next.js (:8200-:8207, :3000)
+./scripts/dev.sh db migrate        # auth, storage, practice, content, study, library, admin Alembic, then product Alembic
 ./scripts/dev.sh db seed           # question vocab seeds
 ./scripts/dev.sh doctor
 ./scripts/dev.sh stop
@@ -117,6 +122,8 @@ cd frontend && npm run build && npm run lint
 | Practice | `8203` |
 | Content | `8204` |
 | Study | `8205` |
+| Library | `8206` |
+| Admin | `8207` |
 | Next.js | `3000` |
 | Postgres | `5455` |
 | MinIO API / console | `9020` / `9021` |
@@ -126,11 +133,11 @@ cd frontend && npm run build && npm run lint
 - `backend/.env.example` : defaults (shared `SECRET_KEY` / `DATABASE_URL` with auth)
 - `backend/.env.local` : your overrides (gitignored)
 - `auth/.env.example` : identity-service defaults (same Postgres)
-- `frontend/.env.local` : `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_AUTH_URL` / `NEXT_PUBLIC_STORAGE_URL` if needed (empty locally so Next rewrites `/api/auth` to `:8201`, `/api/storage` to `:8202`, practice/content/study to `:8203`/`:8204`/`:8205`)
+- `frontend/.env.local` : `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_AUTH_URL` / `NEXT_PUBLIC_STORAGE_URL` if needed (empty locally so Next rewrites `/api/auth` to `:8201`, `/api/storage` to `:8202`, and the other HTTP slices to `:8203`-`:8207`)
 
 ## Schema
 
-DDL source files live in `backend/schema/`, `auth/schema/`, `storage/schema/`, `practice/schema/`, `content/schema/`, and `study/schema/`. **Alembic** applies them (`./scripts/dev.sh db migrate` runs auth, storage, practice, content, study, then product):
+DDL source files live in `backend/schema/`, `auth/schema/`, `storage/schema/`, `practice/schema/`, `content/schema/`, `study/schema/`, `library/schema/`, and `admin/schema/`. **Alembic** applies them (`./scripts/dev.sh db migrate` runs auth, storage, practice, content, study, library, admin, then product):
 
 ```bash
 ./scripts/dev.sh db migrate
@@ -139,7 +146,7 @@ DDL source files live in `backend/schema/`, `auth/schema/`, `storage/schema/`, `
 
 Product migrations: `backend/alembic/versions/` (`001_intel_foundation` → `002_qb_schema`, …). New product schema changes: add a revision with `cd backend && alembic revision --autogenerate -m "message"`, then run `backend/scripts/test_alembic_migrations.sh`.
 
-Identity migrations: `auth/alembic/versions/` with version table `alembic_version_auth` (only `auth.*`). Storage migrations: `storage/alembic/versions/` with `alembic_version_storage` (only `storage.*`). Practice / content / study each have `alembic_version_*` and an exclusive schema marker; shared `qb.*` / `intel.*` stay on product Alembic. Product FKs stay on `qb.account`; credentials live in `auth.account`. See [ADR 0007](docs/adr/0007-auth-microservice.md), [ADR 0008](docs/adr/0008-storage-microservice.md), [ADR 0010](docs/adr/0010-practice-microservice.md), [ADR 0011](docs/adr/0011-content-microservice.md), [ADR 0012](docs/adr/0012-study-microservice.md).
+Identity migrations: `auth/alembic/versions/` with version table `alembic_version_auth` (only `auth.*`). Storage migrations: `storage/alembic/versions/` with `alembic_version_storage` (only `storage.*`). Practice / content / study / library / admin each have `alembic_version_*` and an exclusive schema marker; shared `qb.*` / `intel.*` stay on product Alembic. Product FKs stay on `qb.account`; credentials live in `auth.account`. See [ADR 0007](docs/adr/0007-auth-microservice.md), [ADR 0008](docs/adr/0008-storage-microservice.md), [ADR 0010](docs/adr/0010-practice-microservice.md), [ADR 0011](docs/adr/0011-content-microservice.md), [ADR 0012](docs/adr/0012-study-microservice.md), [ADR 0013](docs/adr/0013-library-microservice.md), [ADR 0014](docs/adr/0014-admin-microservice.md), [ADR 0015](docs/adr/0015-slim-process-images.md).
 
 Product tables: `intel.*` (unchanged DDL) + additive `qb.*` — see [docs/WORKSPACE.md](docs/WORKSPACE.md) and [ADR 0002](docs/adr/0002-intel-frozen-qb-additive.md).
 
@@ -148,7 +155,7 @@ Product tables: `intel.*` (unchanged DDL) + additive `qb.*` — see [docs/WORKSP
 | | |
 |---|---|
 | **Host** | `103.194.228.47` (`ssh zivo-vps`) |
-| **DNS** | `zivo.fyi`, `www.zivo.fyi`, `api.zivo.fyi`, `auth.zivo.fyi`, `storage.zivo.fyi`, `practice.zivo.fyi`, `content.zivo.fyi`, `study.zivo.fyi`, `s3.zivo.fyi` → VPS IP |
+| **DNS** | `zivo.fyi`, `www.zivo.fyi`, `api.zivo.fyi`, `auth.zivo.fyi`, `storage.zivo.fyi`, `practice.zivo.fyi`, `content.zivo.fyi`, `study.zivo.fyi`, `library.zivo.fyi`, `admin.zivo.fyi`, `s3.zivo.fyi` → VPS IP |
 | **Namespace** | `zivo` |
 | **Runner labels** | `self-hosted`, `zivo` |
 
@@ -161,7 +168,7 @@ ssh zivo-vps "RUNNER_TOKEN=$RUNNER_TOKEN bash -s" < scripts/bootstrap-vps.sh
 
 Deploy: GitHub → Actions → **Deploy Zivo** → Run workflow.
 
-Google OAuth redirect URI in production is `https://auth.zivo.fyi/api/auth/google/callback` (Google Cloud Console + `GOOGLE_REDIRECT_URI` in `zivo-secrets`). Add A records for `auth.zivo.fyi`, `storage.zivo.fyi`, `practice.zivo.fyi`, `content.zivo.fyi`, and `study.zivo.fyi` to the VPS before TLS will issue. Until then, keep those Ingresses HTTP-only and leave `NEXT_PUBLIC_*` empty so apex rewrites hit in-cluster services.
+Google OAuth redirect URI in production is `https://auth.zivo.fyi/api/auth/google/callback` (Google Cloud Console + `GOOGLE_REDIRECT_URI` in `zivo-secrets`). Add A records for `auth.zivo.fyi`, `storage.zivo.fyi`, `practice.zivo.fyi`, `content.zivo.fyi`, `study.zivo.fyi`, `library.zivo.fyi`, and `admin.zivo.fyi` to the VPS before TLS will issue. Until then, keep those Ingresses HTTP-only and leave `NEXT_PUBLIC_*` empty so apex rewrites hit in-cluster services.
 
 ## Frontend UI
 

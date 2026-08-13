@@ -8,6 +8,8 @@ DEFAULT_STORAGE_PORT = 8202
 DEFAULT_PRACTICE_PORT = 8203
 DEFAULT_CONTENT_PORT = 8204
 DEFAULT_STUDY_PORT = 8205
+DEFAULT_LIBRARY_PORT = 8206
+DEFAULT_ADMIN_PORT = 8207
 
 
 def port_available(port: int, host: str = "127.0.0.1") -> bool:
@@ -53,3 +55,11 @@ def allocate_content_port() -> int:
 
 def allocate_study_port() -> int:
     return find_available_port(DEFAULT_STUDY_PORT)
+
+
+def allocate_library_port() -> int:
+    return find_available_port(DEFAULT_LIBRARY_PORT)
+
+
+def allocate_admin_port() -> int:
+    return find_available_port(DEFAULT_ADMIN_PORT)

@@ -23,12 +23,16 @@ env:
     value: http://zivo-content:8000
   - name: STUDY_PROXY_URL
     value: http://zivo-study:8000
+  - name: LIBRARY_PROXY_URL
+    value: http://zivo-library:8000
+  - name: ADMIN_PROXY_URL
+    value: http://zivo-admin:8000
   - name: NEXT_PUBLIC_API_URL
     value: https://api.zivo.fyi
   # Empty until auth.zivo.fyi and storage.zivo.fyi A records exist. Next bakes
   # NEXT_PUBLIC_* at image build; empty keeps /api/auth and /api/storage on
   # zivo.fyi rewrites to in-cluster zivo-auth / zivo-storage. Practice/content/study
-  # hostnames are NXDOMAIN too, so they stay on apex rewrites as well.
+  # / library / admin hostnames are NXDOMAIN too, so they stay on apex rewrites.
   - name: NEXT_PUBLIC_AUTH_URL
     value: ""
   - name: NEXT_PUBLIC_STORAGE_URL
