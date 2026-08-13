@@ -148,8 +148,8 @@ def _make_account(db, account_id: uuid.UUID | None = None) -> uuid.UUID:
     account_id = account_id or uuid.uuid4()
     db.execute(
         text(
-            "INSERT INTO qb.account (id, username, password_hash) "
-            "VALUES (:id, :username, 'x')"
+            "INSERT INTO qb.account (id, username) "
+            "VALUES (:id, :username)"
         ),
         {"id": account_id, "username": f"u_{account_id.hex[:10]}"},
     )
@@ -214,11 +214,11 @@ def _seed_guest_measurement(db) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
     from app.models import Account
 
     guest_id = f"guest_{uuid.uuid4().hex[:8]}"
-    guest_user = Account(id=uuid.uuid4(), username=guest_id, password_hash="x")
+    guest_user = Account(id=uuid.uuid4(), username=guest_id)
     db.execute(
         text(
-            "INSERT INTO qb.account (id, username, password_hash) "
-            "VALUES (:id, :username, 'x')"
+            "INSERT INTO qb.account (id, username) "
+            "VALUES (:id, :username)"
         ),
         {"id": guest_user.id, "username": guest_id},
     )
@@ -241,12 +241,12 @@ def _account_entity(db, account_id: uuid.UUID, username: str) -> uuid.UUID:
 
     db.execute(
         text(
-            "INSERT INTO qb.account (id, username, password_hash) "
-            "VALUES (:id, :username, 'x')"
+            "INSERT INTO qb.account (id, username) "
+            "VALUES (:id, :username)"
         ),
         {"id": account_id, "username": username},
     )
-    return resolve_subject_entity(db, Account(id=account_id, username=username, password_hash="x"), None)
+    return resolve_subject_entity(db, Account(id=account_id, username=username), None)
 
 
 def _count_measurements(db, entity_id: uuid.UUID) -> int:

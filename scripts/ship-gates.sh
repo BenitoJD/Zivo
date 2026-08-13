@@ -30,6 +30,17 @@ run_backend() {
   (cd backend && "$PYTHON_BIN" -m pytest tests/unit/ -q --tb=no)
 }
 
+run_auth() {
+  echo "==> auth: ruff"
+  (cd auth && "$PYTHON_BIN" -m ruff check .)
+
+  echo "==> auth: import check"
+  (cd auth && "$PYTHON_BIN" -c "from app.main import app; assert app.title == 'Zivo Auth'")
+
+  echo "==> auth: unit tests"
+  (cd auth && "$PYTHON_BIN" -m pytest tests/unit/ -q --tb=no)
+}
+
 run_frontend() {
   echo "==> frontend: eslint"
   (cd frontend && npm run lint)
@@ -41,16 +52,20 @@ run_frontend() {
 case "$SCOPE" in
   all)
     run_backend
+    run_auth
     run_frontend
     ;;
   backend)
     run_backend
     ;;
+  auth)
+    run_auth
+    ;;
   frontend)
     run_frontend
     ;;
   *)
-    echo "Usage: $0 [all|backend|frontend]" >&2
+    echo "Usage: $0 [all|backend|auth|frontend]" >&2
     exit 2
     ;;
 esac

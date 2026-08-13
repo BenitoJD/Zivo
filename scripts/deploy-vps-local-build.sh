@@ -26,6 +26,7 @@ TAG="${1:-Zivo_0.1.$(date +%Y%m%d%H%M)}"
 REPO="${REPO:-/opt/zivo}"
 OWNER="${OWNER:-benitojd}"
 API_IMAGE="ghcr.io/${OWNER}/zivo-api:${TAG}"
+AUTH_IMAGE="ghcr.io/${OWNER}/zivo-auth:${TAG}"
 WEB_IMAGE="ghcr.io/${OWNER}/zivo-web:${TAG}"
 NS=zivo
 ROLLBACK_RELEASES=()
@@ -103,15 +104,19 @@ echo "Deploying $(git rev-parse --short HEAD) as ${TAG}"
 
 if [[ "${PREBUILT:-0}" != "1" ]]; then
   docker build --pull -t "${API_IMAGE}" -f backend/Dockerfile --target runtime backend/
+  docker build --pull -t "${AUTH_IMAGE}" -f auth/Dockerfile --target runtime auth/
   docker build --pull -t "${WEB_IMAGE}" -f frontend/Dockerfile --target runtime \
     --build-arg NEXT_PUBLIC_API_URL= \
+    --build-arg NEXT_PUBLIC_AUTH_URL= \
     --build-arg API_PROXY_URL=http://zivo-api:8000 \
+    --build-arg AUTH_PROXY_URL=http://zivo-auth:8000 \
     frontend/
   # Push to GHCR; prod k3s pulls these (images are public, unique tag per deploy).
   docker push "${API_IMAGE}"
+  docker push "${AUTH_IMAGE}"
   docker push "${WEB_IMAGE}"
 else
-  echo "PREBUILT=1 — ${API_IMAGE} and ${WEB_IMAGE} assumed already in GHCR"
+  echo "PREBUILT=1 — ${API_IMAGE}, ${AUTH_IMAGE}, and ${WEB_IMAGE} assumed already in GHCR"
 fi
 
 helm_record pgbouncer
@@ -130,6 +135,16 @@ fi
 # is SELECTed on boot). Migrations MUST stay additive + backward-compatible: the still
 # -running old pods keep working against the new schema during the rolling update.
 # (Image was built + pushed above, so the alembic job can pull this TAG.)
+# Auth schema first (auth.account), then product schema (qb.account stub + copy).
+kubectl -n "$NS" delete job auth-alembic-migrate --ignore-not-found=true
+helm upgrade --install auth-schema ./infra/k8s/charts/db-schema -n "$NS" \
+  -f infra/k8s/environments/prod/backend-release-values.yaml \
+  --set image.tag="${TAG}" \
+  --set image.repository="ghcr.io/${OWNER}/zivo-auth" \
+  --set namespace="$NS" \
+  --set jobName=auth-alembic-migrate \
+  --wait --timeout 10m
+
 kubectl -n "$NS" delete job alembic-migrate --ignore-not-found=true
 helm upgrade --install db-schema ./infra/k8s/charts/db-schema -n "$NS" \
   -f infra/k8s/environments/prod/backend-release-values.yaml \
@@ -161,6 +176,12 @@ for release in zivo-worker-io zivo-worker-cpu; do
     --wait --timeout 10m
   rollout_wait deployment "${release#zivo-}" 10m
 done
+
+helm_record zivo-auth
+helm upgrade --install zivo-auth ./infra/k8s/charts/auth -n "$NS" \
+  -f infra/k8s/environments/prod/auth-values.yaml \
+  --set image.tag="${TAG}" --wait --timeout 10m
+rollout_wait deployment zivo-auth 10m
 
 helm_record zivo-api
 helm upgrade --install zivo-api ./infra/k8s/charts/api -n "$NS" \

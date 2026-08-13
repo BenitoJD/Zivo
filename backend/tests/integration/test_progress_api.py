@@ -97,13 +97,13 @@ def test_progress_includes_graded_answer_for_account_without_prior_entity() -> N
         db.execute(
             text(
                 """
-                INSERT INTO qb.account (id, username, password_hash)
-                VALUES (:id, :username, 'x')
+                INSERT INTO qb.account (id, username)
+                VALUES (:id, :username)
                 """
             ),
             {"id": account_id, "username": username},
         )
-        user = Account(id=account_id, username=username, password_hash="x")
+        user = Account(id=account_id, username=username)
         subject = resolve_subject_entity(db, user, None)
         assert subject is not None
 

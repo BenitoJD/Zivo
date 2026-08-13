@@ -22,14 +22,15 @@ Decisions (rank, metric, gate, schedule, next-step) live behind named engine fac
 
 | Area | Status | Notes |
 |------|--------|-------|
-| **Repo structure** | Ready | Monolith: `backend/`, `frontend/`, `infra/k8s/`, `scripts/` |
+| **Repo structure** | Ready | `backend/`, `auth/`, `frontend/`, `infra/k8s/`, `scripts/` |
 | **DB + extensions** | Ready | Postgres 16, pgvector — foundation for question graph |
 | **Legacy `intel` schema** | Present | `intel_foundation.sql` unchanged; product data in `intel.*` |
 | **QB app schema** | Ready | `qb_app.sql` + `qb_infra.sql` via Alembic (`./scripts/dev.sh db migrate`) |
-| **API** | Ready | FastAPI — auth, sources, artifacts, activities, assertions, chat, mcq |
+| **API** | Ready | FastAPI product API: sources, artifacts, activities, assertions, chat, mcq |
+| **Auth service** | Ready | Identity FastAPI (`auth/`): signup, login, logout, session, Google OAuth. [ADR 0007](docs/adr/0007-auth-microservice.md) |
 | **Workers** | Ready | Zivo ETA IO+CPU — `backend/app/eta/`, `run_eta_worker_*.py` |
 | **Workspace UI** | Ready | `/workspace` — Mantine `AppShell`, Learn/Test layout in `app/` routes |
-| **Helm / K8s** | Ready | postgres, minio, api, web, db-schema charts |
+| **Helm / K8s** | Ready | postgres, minio, api, auth, web, db-schema charts |
 | **CI** | Ready | `.github/workflows/ci.yml` — self-hosted `zivo` runner on VPS |
 | **Deploy workflow** | Ready | `.github/workflows/deploy.yml` (needs push + workflow run) |
 | **VPS base** | Ready | K3s, Traefik, cert-manager, GH runner at `103.194.228.47` |
@@ -59,6 +60,7 @@ zivo/
 │   │   └── workers/      # generation, evaluation, embedding jobs
 │   ├── schema/           # SQL DDL (question graph next)
 │   └── scripts/
+├── auth/                 # identity FastAPI: signup, login, session, Google OAuth
 ├── frontend/             # Next.js App Router — Mantine-only UI in app/
 ├── infra/k8s/            # Helm charts + prod values
 ├── scripts/              # dev.sh, bootstrap-vps.sh, deploy helpers
@@ -87,8 +89,8 @@ Python 3.12+, Node.js 22+, Docker (for Postgres + MinIO).
 
 ```bash
 ./scripts/dev.sh setup
-./scripts/dev.sh start              # API + workers + Next.js (:8200, :3000)
-./scripts/dev.sh db migrate        # alembic upgrade head
+./scripts/dev.sh start              # API + auth + workers + Next.js (:8200, :8201, :3000)
+./scripts/dev.sh db migrate        # auth Alembic then product Alembic
 ./scripts/dev.sh db seed           # question vocab seeds
 ./scripts/dev.sh doctor
 ./scripts/dev.sh stop
@@ -102,26 +104,30 @@ cd frontend && npm run build && npm run lint
 | Service | Port |
 |---------|------|
 | API | `8200` |
+| Auth | `8201` |
 | Next.js | `3000` |
 | Postgres | `5455` |
 | MinIO API / console | `9020` / `9021` |
 
 ### Environment
 
-- `backend/.env.example` — defaults
-- `backend/.env.local` — your overrides (gitignored)
-- `frontend/.env.local` — `NEXT_PUBLIC_API_URL` if needed
+- `backend/.env.example` : defaults (shared `SECRET_KEY` / `DATABASE_URL` with auth)
+- `backend/.env.local` : your overrides (gitignored)
+- `auth/.env.example` : identity-service defaults (same Postgres)
+- `frontend/.env.local` : `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_AUTH_URL` if needed (empty locally so Next rewrites `/api/auth` to `:8201`)
 
 ## Schema
 
-DDL source files live in `backend/schema/`. **Alembic** applies them:
+DDL source files live in `backend/schema/` and `auth/schema/`. **Alembic** applies them (`./scripts/dev.sh db migrate` runs auth first, then product):
 
 ```bash
 ./scripts/dev.sh db migrate
 ./scripts/dev.sh db seed
 ```
 
-Migrations: `backend/alembic/versions/` (`001_intel_foundation` → `002_qb_schema`). New schema changes: add a revision with `cd backend && alembic revision --autogenerate -m "message"`, then run `backend/scripts/test_alembic_migrations.sh`.
+Product migrations: `backend/alembic/versions/` (`001_intel_foundation` → `002_qb_schema`, …). New product schema changes: add a revision with `cd backend && alembic revision --autogenerate -m "message"`, then run `backend/scripts/test_alembic_migrations.sh`.
+
+Identity migrations: `auth/alembic/versions/` with version table `alembic_version_auth` (only `auth.*`). Product FKs stay on `qb.account`; credentials live in `auth.account`. See [ADR 0007](docs/adr/0007-auth-microservice.md).
 
 Product tables: `intel.*` (unchanged DDL) + additive `qb.*` — see [docs/WORKSPACE.md](docs/WORKSPACE.md) and [ADR 0002](docs/adr/0002-intel-frozen-qb-additive.md).
 
@@ -130,7 +136,7 @@ Product tables: `intel.*` (unchanged DDL) + additive `qb.*` — see [docs/WORKSP
 | | |
 |---|---|
 | **Host** | `103.194.228.47` (`ssh zivo-vps`) |
-| **DNS** | `zivo.fyi`, `www.zivo.fyi`, `api.zivo.fyi`, `s3.zivo.fyi` → VPS IP |
+| **DNS** | `zivo.fyi`, `www.zivo.fyi`, `api.zivo.fyi`, `auth.zivo.fyi`, `s3.zivo.fyi` → VPS IP |
 | **Namespace** | `zivo` |
 | **Runner labels** | `self-hosted`, `zivo` |
 
@@ -142,6 +148,8 @@ ssh zivo-vps "RUNNER_TOKEN=$RUNNER_TOKEN bash -s" < scripts/bootstrap-vps.sh
 ```
 
 Deploy: GitHub → Actions → **Deploy Zivo** → Run workflow.
+
+Google OAuth redirect URI in production is `https://auth.zivo.fyi/api/auth/google/callback` (Google Cloud Console + `GOOGLE_REDIRECT_URI` in `zivo-secrets`). Add an `auth.zivo.fyi` A record to the VPS before TLS will issue.
 
 ## Frontend UI
 

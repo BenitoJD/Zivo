@@ -7,12 +7,12 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.db import SessionLocal
 from app.main import app
 from app.models import Document, User
-from app.services.auth import hash_password
+from app.services.auth import create_session_token, hash_password
 from app.services.guest_session import GUEST_ID_HEADER
 
 
@@ -123,21 +123,31 @@ def test_guest_upload_claimed_on_login(client: TestClient) -> None:
         guest_id = upload.headers[GUEST_ID_HEADER]
 
         db = SessionLocal()
-        user = User(username=username, password_hash=hash_password("testpass123"))
+        password_hash = hash_password("testpass123")
+        user = User(username=username)
         db.add(user)
+        db.flush()
+        db.execute(
+            text(
+                """
+                INSERT INTO auth.account (id, username, password_hash, is_admin)
+                VALUES (:id, :username, :password_hash, false)
+                """
+            ),
+            {
+                "id": user.id,
+                "username": username,
+                "password_hash": password_hash,
+            },
+        )
         db.commit()
         db.refresh(user)
         user_id = user.id
+        token, _csrf = create_session_token(user.id, 0)
         db.close()
 
-        login = client.post(
-            "/api/auth/login",
-            json={"username": username, "password": "testpass123", "remember_me": False},
-            headers={GUEST_ID_HEADER: guest_id},
-        )
-        assert login.status_code == 200, login.text
-
-        listed = client.get("/api/documents")
+        client.cookies.set("zivo_session", token)
+        listed = client.get("/api/documents", headers={GUEST_ID_HEADER: guest_id})
         assert listed.status_code == 200
         ids = [d["id"] for d in listed.json()]
         assert doc_id in ids
@@ -155,6 +165,7 @@ def test_guest_upload_claimed_on_login(client: TestClient) -> None:
             if doc:
                 db.delete(doc)
         if user_id:
+            db.execute(text("DELETE FROM auth.account WHERE id = :id"), {"id": user_id})
             user = db.get(User, user_id)
             if user:
                 db.delete(user)

@@ -2,7 +2,7 @@
 # End-to-end API smoke — exercises all major backend flows.
 set -euo pipefail
 
-API="${API_BASE:-http://127.0.0.1:8201}"
+API="${API_BASE:-http://127.0.0.1:3000}"
 COOKIE_JAR="$(mktemp)"
 TMPDIR="${TMPDIR:-/tmp}"
 PDF="$TMPDIR/zivo-e2e-test.pdf"
@@ -41,7 +41,7 @@ echo "=== Health ==="
 curl -fsS "$API/api/health" | grep -q '"status":"ok"' && pass health || fail health
 
 echo "=== Guest session ==="
-GUEST_JSON=$(curl -fsS -c "$COOKIE_JAR" -X POST "$API/api/auth/guest" -H 'Content-Type: application/json' -d '{}')
+GUEST_JSON=$(curl -fsS -c "$COOKIE_JAR" -X POST "$API/api/guest" -H 'Content-Type: application/json' -d '{}')
 echo "$GUEST_JSON" | grep -q guest_id && pass guest || fail guest
 
 echo "=== Signup (multi-doc tests) ==="

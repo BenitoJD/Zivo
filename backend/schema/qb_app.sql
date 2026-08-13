@@ -3,6 +3,9 @@ CREATE SCHEMA IF NOT EXISTS qb;
 
 -- -----------------------------------------------------------------------------
 -- Auth
+-- 002 reapplies this file on a blank DB, so identity columns stay here so
+-- revisions 006/030 can run. 045 copies them into auth.account and drops the
+-- secrets from qb.account (HEAD stub: id, username, is_admin, created_at).
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS qb.account (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),

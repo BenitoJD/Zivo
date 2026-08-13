@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .env import BACKEND_DIR, resolve_env
+from .env import AUTH_DIR, BACKEND_DIR, resolve_env
 
 VENV = Path.home() / ".venv" / "zivo"
 
@@ -59,8 +59,17 @@ def run_alembic(*args: str, env: dict[str, str] | None = None) -> None:
         raise RuntimeError(f"alembic {' '.join(args)} failed")
 
 
+def run_auth_alembic(*args: str, env: dict[str, str] | None = None) -> None:
+    cmd = [python_bin(), "-m", "alembic", *args]
+    print("+", " ".join(cmd), "(auth)")
+    proc = subprocess.run(cmd, cwd=AUTH_DIR, env=env or backend_env(), text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"auth alembic {' '.join(args)} failed")
+
+
 def apply_schema(env: dict[str, str] | None = None) -> None:
-    """Apply all schema migrations via Alembic."""
+    """Apply auth then product schema migrations via Alembic."""
+    run_auth_alembic("upgrade", "head", env=env)
     run_alembic("upgrade", "head", env=env)
 
 

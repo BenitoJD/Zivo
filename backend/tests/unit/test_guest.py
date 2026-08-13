@@ -43,7 +43,7 @@ def test_demo_document_is_public() -> None:
 def test_user_document_requires_owner() -> None:
     account_id = uuid.uuid4()
     doc = _doc(account_id=account_id, meta={})
-    user = User(id=account_id, username="dev", password_hash="x")
+    user = User(id=account_id, username="dev")
     assert can_access_document(doc, user, None)
     assert not can_access_document(doc, None, "guest")
 

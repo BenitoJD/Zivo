@@ -70,14 +70,10 @@ def test_google_callback_new_user_sets_pending(monkeypatch) -> None:
             {"query": lambda self, _model: type("Chain", (), {"filter": lambda self, *_a, **_k: empty})()},
         )()
 
-        with (
-            patch(
-                "app.api.auth.exchange_code_for_userinfo",
-                return_value={"google_sub": "google-sub-1", "email": "ada@example.com"},
-            ),
-            patch("app.api.auth.get_db", return_value=iter([fake_db])),
+        with patch(
+            "app.api.auth.exchange_code_for_userinfo",
+            return_value={"google_sub": "google-sub-1", "email": "ada@example.com"},
         ):
-            # Override dependency properly
             from app.db import get_db
 
             def _override_db():

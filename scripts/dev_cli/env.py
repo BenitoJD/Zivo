@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND_DIR = ROOT / "backend"
+AUTH_DIR = ROOT / "auth"
 FRONTEND_DIR = ROOT / "frontend"
 BACKEND_DEFAULTS = BACKEND_DIR / ".env.example"
 

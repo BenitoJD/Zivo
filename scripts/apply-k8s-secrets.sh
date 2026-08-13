@@ -30,7 +30,7 @@ kubectl -n zivo create secret generic zivo-secrets \
   --from-literal=MINIO_BUCKET="$MINIO_BUCKET" \
   --from-literal=MINIO_SECURE="${MINIO_SECURE:-false}" \
   --from-literal=APP_ENV="${APP_ENV:-production}" \
-  --from-literal=CORS_ORIGINS="${CORS_ORIGINS:-}" \
+  --from-literal=CORS_ORIGINS="${CORS_ORIGINS:-https://zivo.fyi,https://www.zivo.fyi}" \
   --from-literal=TRUSTED_PROXY_IPS="${TRUSTED_PROXY_IPS:-}" \
   --from-literal=SECRET_KEY="${SECRET_KEY:-}" \
   --from-literal=CSRF_SECRET="${CSRF_SECRET:-}" \
@@ -55,7 +55,9 @@ kubectl -n zivo create secret generic zivo-secrets \
   --from-literal=TELEGRAM_SESSION="${TELEGRAM_SESSION:-}" \
   --from-literal=GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-}" \
   --from-literal=GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:-}" \
-  --from-literal=GOOGLE_REDIRECT_URI="${GOOGLE_REDIRECT_URI:-https://zivo.fyi/api/auth/google/callback}"
+  --from-literal=GOOGLE_REDIRECT_URI="${GOOGLE_REDIRECT_URI:-https://auth.zivo.fyi/api/auth/google/callback}" \
+  --from-literal=FRONTEND_URL="${FRONTEND_URL:-https://zivo.fyi}" \
+  --from-literal=COOKIE_DOMAIN="${COOKIE_DOMAIN:-zivo.fyi}"
 echo "zivo-secrets updated"
 
 if [ -z "${GOOGLE_CLIENT_ID:-}" ] || [ -z "${GOOGLE_CLIENT_SECRET:-}" ]; then

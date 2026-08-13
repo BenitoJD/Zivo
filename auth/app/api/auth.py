@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
-from app.models import Account as User
+from app.models import Account
 from app.services.auth import (
     authenticate_user,
     clear_session_cookie,
@@ -37,10 +37,7 @@ from app.services.google_oauth import (
     read_pending_token,
     require_google_oauth,
 )
-from app.services.guest import claim_guest_documents, claim_guest_progress
-from app.services.guest_session import publish_guest_id, read_guest_id_from_cookie
 from app.services.rate_limit import rate_limit_dependency
-from app.services.usage import DEMO_COOKIE, ensure_demo_cookie
 
 router = APIRouter()
 
@@ -70,7 +67,7 @@ class AuthResponse(BaseModel):
 
 
 class SessionResponse(BaseModel):
-    """Session probe result. Anonymous/guest visitors get a 200 with
+    """Session probe result. Anonymous visitors get a 200 with
     `authenticated: false` (not a 401), so the browser console stays clean."""
 
     authenticated: bool = False
@@ -95,23 +92,11 @@ def _clear_oauth_cookies(response: Response) -> None:
     response.delete_cookie(PENDING_COOKIE, **kwargs)
 
 
-@router.post("/guest")
-def mint_guest_session(
-    response: Response,
-    zivo_demo_id: str | None = Cookie(default=None, alias=DEMO_COOKIE),
-) -> dict[str, str]:
-    """Mint or refresh the anonymous guest cookie without listing sources."""
-    guest_id = ensure_demo_cookie(response, read_guest_id_from_cookie(zivo_demo_id))
-    publish_guest_id(response, guest_id)
-    return {"guest_id": guest_id}
-
-
 @router.post("/signup", response_model=AuthResponse, dependencies=[Depends(rate_limit_dependency)])
 def signup(
     body: SignUpRequest,
     response: Response,
     db: Session = Depends(get_db),
-    zivo_demo_id: str | None = Cookie(default=None, alias=DEMO_COOKIE),
 ) -> AuthResponse:
     if not body.accept_terms:
         raise HTTPException(status_code=400, detail="Terms must be accepted")
@@ -120,10 +105,10 @@ def signup(
     validate_username(body.username)
     validate_password(body.password)
 
-    if db.query(User).filter(User.username == body.username).first():
+    if db.query(Account).filter(Account.username == body.username).first():
         raise HTTPException(status_code=409, detail="Username taken")
 
-    user = User(username=body.username, password_hash=hash_password(body.password))
+    user = Account(username=body.username, password_hash=hash_password(body.password))
     try:
         db.add(user)
         db.commit()
@@ -131,10 +116,6 @@ def signup(
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="Username taken") from None
-
-    guest_id = read_guest_id_from_cookie(zivo_demo_id)
-    claim_guest_documents(db, user.id, guest_id)
-    claim_guest_progress(db, user.id, user.username, guest_id)
 
     token, csrf = create_session_token(
         user.id, int(getattr(user, "session_version", 0) or 0), remember=True
@@ -148,15 +129,10 @@ def login(
     body: LoginRequest,
     response: Response,
     db: Session = Depends(get_db),
-    zivo_demo_id: str | None = Cookie(default=None, alias=DEMO_COOKIE),
 ) -> AuthResponse:
     user = authenticate_user(db, body.username, body.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    guest_id = read_guest_id_from_cookie(zivo_demo_id)
-    claim_guest_documents(db, user.id, guest_id)
-    claim_guest_progress(db, user.id, user.username, guest_id)
 
     token, csrf = create_session_token(
         user.id, int(getattr(user, "session_version", 0) or 0), remember=body.remember_me
@@ -192,7 +168,6 @@ def google_callback(
     state: str | None = None,
     error: str | None = None,
     zivo_google_oauth_state: str | None = Cookie(default=None, alias=STATE_COOKIE),
-    zivo_demo_id: str | None = Cookie(default=None, alias=DEMO_COOKIE),
 ) -> RedirectResponse:
     settings = get_settings()
     if error:
@@ -209,11 +184,8 @@ def google_callback(
     google_sub = info["google_sub"]
     email = info["email"]
 
-    existing = db.query(User).filter(User.google_sub == google_sub).first()
+    existing = db.query(Account).filter(Account.google_sub == google_sub).first()
     if existing:
-        guest_id = read_guest_id_from_cookie(zivo_demo_id)
-        claim_guest_documents(db, existing.id, guest_id)
-        claim_guest_progress(db, existing.id, existing.username, guest_id)
         token, _csrf = create_session_token(
             existing.id,
             int(getattr(existing, "session_version", 0) or 0),
@@ -224,8 +196,7 @@ def google_callback(
         _clear_oauth_cookies(redirect)
         return redirect
 
-    # Email already used by a password account — do not auto-link (takeover risk).
-    email_owner = db.query(User).filter(User.email == email).first()
+    email_owner = db.query(Account).filter(Account.email == email).first()
     if email_owner and not email_owner.google_sub:
         return _oauth_error_redirect("Email already registered — sign in with password")
 
@@ -265,7 +236,6 @@ def google_complete(
     response: Response,
     db: Session = Depends(get_db),
     zivo_google_pending: str | None = Cookie(default=None, alias=PENDING_COOKIE),
-    zivo_demo_id: str | None = Cookie(default=None, alias=DEMO_COOKIE),
 ) -> AuthResponse:
     settings = get_settings()
     if not zivo_google_pending:
@@ -276,14 +246,14 @@ def google_complete(
 
     google_sub, email = read_pending_token(settings, zivo_google_pending)
 
-    if db.query(User).filter(User.google_sub == google_sub).first():
+    if db.query(Account).filter(Account.google_sub == google_sub).first():
         raise HTTPException(status_code=409, detail="Google account already linked")
-    if db.query(User).filter(User.username == body.username).first():
+    if db.query(Account).filter(Account.username == body.username).first():
         raise HTTPException(status_code=409, detail="Username taken")
-    if db.query(User).filter(User.email == email).first():
+    if db.query(Account).filter(Account.email == email).first():
         raise HTTPException(status_code=409, detail="Email already registered — sign in with password")
 
-    user = User(
+    user = Account(
         username=body.username,
         password_hash=None,
         email=email,
@@ -297,10 +267,6 @@ def google_complete(
         db.rollback()
         raise HTTPException(status_code=409, detail="Username or email taken") from None
 
-    guest_id = read_guest_id_from_cookie(zivo_demo_id)
-    claim_guest_documents(db, user.id, guest_id)
-    claim_guest_progress(db, user.id, user.username, guest_id)
-
     token, csrf = create_session_token(
         user.id, int(getattr(user, "session_version", 0) or 0), remember=True
     )
@@ -311,11 +277,9 @@ def google_complete(
 
 @router.get("/session", response_model=SessionResponse)
 def get_session(
-    user: User | None = Depends(get_optional_user),
+    user: Account | None = Depends(get_optional_user),
     zivo_session: str | None = Cookie(default=None),
 ) -> SessionResponse:
-    # Not being signed in is the normal case (guests), not an error — return an
-    # empty 200 session instead of a 401 so the browser doesn't log a failed request.
     if not zivo_session or user is None:
         return SessionResponse(authenticated=False)
     return SessionResponse(
@@ -330,12 +294,9 @@ def get_session(
 def logout(
     response: Response,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: Account = Depends(get_current_user),
     _: None = Depends(require_csrf),
 ) -> Response:
-    # Injected Response starts with status_code=None; returning it without setting
-    # 204 yields an incomplete ASGI response (empty reply from uvicorn). Set the
-    # status explicitly, then return the same instance so Set-Cookie is kept.
     user.session_version = int(getattr(user, "session_version", 0) or 0) + 1
     db.commit()
     response.status_code = status.HTTP_204_NO_CONTENT

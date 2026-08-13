@@ -24,11 +24,13 @@ The monorepo layout and the local-dev commands are in
 [AGENTS.md → Layout](../AGENTS.md#layout) and
 [AGENTS.md → Local development](../AGENTS.md#local-development). Do not duplicate them.
 
-The one thing to internalize: **backend is `backend/`, frontend is `frontend/`, and
-the package manager is `npm`** — proof: [frontend/package-lock.json](../frontend/package-lock.json),
-CI `npm ci` ([.github/workflows/ci.yml](../.github/workflows/ci.yml)). If a skill or
+The one thing to internalize: **product API is `backend/`, identity is `auth/`,
+frontend is `frontend/`, and the package manager is `npm`** (proof:
+[frontend/package-lock.json](../frontend/package-lock.json),
+CI `npm ci` ([.github/workflows/ci.yml](../.github/workflows/ci.yml)),
+auth import check in the same workflow). If a skill or
 doc names a different frontend directory or a different package manager, it was ported
-from another project and is stale — fix it to match the proof above.
+from another project and is stale; fix it to match the proof above.
 
 ## 2. Backend (FastAPI + SQLAlchemy + raw SQL)
 
@@ -116,13 +118,20 @@ from another project and is stale — fix it to match the proof above.
 
 ### 2.8 Schema changes go through Alembic
 
-- **Rule.** DDL lives in `backend/schema/*.sql`; **Alembic** applies it. A schema
-  change is a new numbered revision in `backend/alembic/versions/`, verified by
-  `backend/scripts/test_alembic_migrations.sh`. `intel.*` DDL is frozen; product
-  tables are additive in `qb.*`. See [ADR 0002](adr/0002-intel-frozen-qb-additive.md).
-- **Why.** Reproducible, ordered, CI-verified migrations; an untouched legacy schema.
-- **Proof.** `backend/alembic/versions/001_intel_foundation.py` … `010_*`; CI step
-  "Alembic migrations" in [.github/workflows/ci.yml](../.github/workflows/ci.yml).
+- **Rule.** Product DDL lives in `backend/schema/*.sql`; **Alembic** applies it.
+  A product schema change is a new numbered revision in `backend/alembic/versions/`,
+  verified by `backend/scripts/test_alembic_migrations.sh`. `intel.*` DDL is frozen;
+  product tables are additive in `qb.*`. See [ADR 0002](adr/0002-intel-frozen-qb-additive.md).
+  Identity DDL lives in `auth/schema/auth.sql` and is applied by a **separate**
+  Alembic chain (`auth/alembic/`, version table `alembic_version_auth`) that only
+  touches `auth.*`. Credentials are not written from the product API.
+  See [ADR 0007](adr/0007-auth-microservice.md).
+- **Why.** Reproducible, ordered, CI-verified migrations; an untouched legacy schema;
+  identity write-ownership stays in one service.
+- **Proof.** `backend/alembic/versions/001_intel_foundation.py` …
+  `045_auth_account_split.py`; `auth/alembic/versions/001_auth_schema.py`;
+  CI steps "Alembic migrations" and auth "Apply schema" in
+  [.github/workflows/ci.yml](../.github/workflows/ci.yml).
 
 ## 3. Frontend (Next.js App Router + Mantine)
 
@@ -140,20 +149,22 @@ truth for UI; this file does not restate it.
 
 ## 4. Testing
 
-- **Rule.** All tests live under a single `backend/tests/` tree: `unit/` (DB-free,
-  CI-gated), `integration/` (DB-gated, self-skipping), and `services/`. Pure logic
-  goes in `unit/` and must run without a database; tests that need Postgres go in
-  `integration/` and self-skip when the dev DB is unreachable.
+- **Rule.** Product tests live under `backend/tests/`: `unit/` (DB-free, CI-gated),
+  `integration/` (DB-gated, self-skipping), and `services/`. Identity tests live
+  under `auth/tests/unit/`. Pure logic goes in `unit/` and must run without a
+  database; tests that need Postgres go in `integration/` (or skip when the table
+  is missing) and self-skip when the dev DB is unreachable.
 - **Why.** Fast, DB-free unit tests gate every PR; DB-bound tests stay opt-in.
-- **Proof.** CI "Unit tests" step runs `tests/unit/`
+- **Proof.** CI "Unit tests" steps run `backend/tests/unit/` and `auth/tests/unit/`
   ([.github/workflows/ci.yml](../.github/workflows/ci.yml)); the skip pattern is in
-  `tests/integration/test_learn_queue_api.py:19-29`.
+  `tests/integration/test_learn_queue_api.py:19-29` and
+  `auth/tests/unit/test_auth_session.py` (`pytest.skip` when `auth.account` is missing).
 
 ## 5. What is enforced, and what is not (yet)
 
 | Rule area | Enforcement today | Gap |
 |-----------|-------------------|-----|
-| Import health, migrations, unit tests | CI (`ci.yml`) | — |
+| Import health, migrations, unit tests | CI (`ci.yml` backend + auth) | — |
 | Dead code, unused imports, undefined names | **`ruff check` (E9, F) in CI** ([backend/ruff.toml](../backend/ruff.toml)) | ruleset is conservative |
 | Frontend build + lint | CI (`npm run build`, `npm run lint`) | warnings only in eslint today |
 | Python format + broader lint (`I`/`B`) | none | `ruff format`, import sorting not on yet |

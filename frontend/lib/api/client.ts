@@ -1,7 +1,12 @@
 /** Same-origin in dev (Next rewrites → API). Set NEXT_PUBLIC_API_URL in production. */
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
+/** Auth service origin. Empty in dev so /api/auth/* stays same-origin via Next rewrite. */
+const AUTH_BASE = process.env.NEXT_PUBLIC_AUTH_URL ?? "";
 
 export function apiUrl(path: string): string {
+  if (path.startsWith("/api/auth")) {
+    return `${AUTH_BASE}${path}`;
+  }
   return `${API_BASE}${path}`;
 }
 
@@ -125,7 +130,7 @@ export async function ensureGuestSession(): Promise<void> {
   if (csrfToken) return;
   if (guestSessionPromise) return guestSessionPromise;
   guestSessionPromise = (async () => {
-    const sessionRes = await fetch(`${API_BASE}/api/auth/session`, {
+    const sessionRes = await fetch(apiUrl("/api/auth/session"), {
       credentials: "include",
       headers: buildHeaders(),
     });
@@ -141,7 +146,7 @@ export async function ensureGuestSession(): Promise<void> {
 
     if (guestId) return;
 
-    const res = await fetch(`${API_BASE}/api/auth/guest`, {
+    const res = await fetch(apiUrl("/api/guest"), {
       method: "POST",
       credentials: "include",
       headers: buildHeaders({ "Content-Type": "application/json" }),
@@ -217,7 +222,7 @@ async function maybeClearSessionOnAuthFailure(res: Response): Promise<void> {
 }
 
 export async function apiFetchBytes(path: string): Promise<ArrayBuffer> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(apiUrl(path), {
     credentials: "include",
     headers: buildHeaders(),
   });
@@ -228,7 +233,7 @@ export async function apiFetchBytes(path: string): Promise<ArrayBuffer> {
 }
 
 export async function apiPostBytes(path: string, body: unknown): Promise<ArrayBuffer> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(apiUrl(path), {
     method: "POST",
     credentials: "include",
     headers: buildHeaders({ "Content-Type": "application/json" }),
@@ -241,7 +246,7 @@ export async function apiPostBytes(path: string, body: unknown): Promise<ArrayBu
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(apiUrl(path), {
     credentials: "include",
     headers: buildHeaders(),
   });
@@ -252,7 +257,7 @@ export async function apiGet<T>(path: string): Promise<T> {
 }
 
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(apiUrl(path), {
     method: "POST",
     credentials: "include",
     headers: buildHeaders({ "Content-Type": "application/json" }),
@@ -266,7 +271,7 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
 
 /** POST that succeeds with 204 No Content (e.g. logout). */
 export async function apiPostNoContent(path: string, body: unknown): Promise<void> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(apiUrl(path), {
     method: "POST",
     credentials: "include",
     headers: buildHeaders({ "Content-Type": "application/json" }),
@@ -278,7 +283,7 @@ export async function apiPostNoContent(path: string, body: unknown): Promise<voi
 }
 
 export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(apiUrl(path), {
     method: "PATCH",
     credentials: "include",
     headers: buildHeaders({ "Content-Type": "application/json" }),
@@ -314,7 +319,7 @@ export async function apiPostForm<T>(
 
     return new Promise<T>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open("POST", `${API_BASE}${path}`);
+      xhr.open("POST", apiUrl(path));
       xhr.withCredentials = true;
       xhr.timeout = timeoutMs;
       const headers = buildHeaders();
@@ -374,7 +379,7 @@ export async function apiPostForm<T>(
   }
 
   const res = await fetchWithTimeout(
-    `${API_BASE}${path}`,
+    apiUrl(path),
     {
       method: "POST",
       credentials: "include",
@@ -496,7 +501,7 @@ export async function apiUploadChunked<T extends { id: string }>(
     const start = (part - 1) * chunkSize;
     const end = Math.min(start + chunkSize, file.size);
     const blob = file.slice(start, end);
-    const res = await fetch(`${API_BASE}/api/sources/chunked/${sessionId}/parts/${part}`, {
+    const res = await fetch(apiUrl(`/api/sources/chunked/${sessionId}/parts/${part}`), {
       method: "PUT",
       credentials: "include",
       headers: buildHeaders({ "Content-Type": "application/octet-stream" }),
@@ -559,7 +564,7 @@ export async function apiUploadFiles<T extends { id: string }>(
 }
 
 export async function apiDelete(path: string): Promise<void> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(apiUrl(path), {
     method: "DELETE",
     credentials: "include",
     headers: buildHeaders(),
@@ -610,7 +615,7 @@ export async function apiPostSSE(
       : onChunkOrHandlers;
   const { onChunk, onStatus, onEvent } = handlers;
   const res = await fetchWithTimeout(
-    `${API_BASE}${path}`,
+    apiUrl(path),
     {
       method: "POST",
       credentials: "include",

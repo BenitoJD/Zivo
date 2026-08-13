@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import uuid
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import text
 
 from app.config import get_settings
 from app.models import Account as User
@@ -52,15 +54,80 @@ def assert_local_dev_seed_allowed() -> None:
 
 
 def upsert_seed_user(db: Session, spec: SeedUserSpec) -> tuple[User, bool]:
-    """Insert or update a seed user. Returns ``(user, created)``."""
-    user = db.query(User).filter(User.username == spec.username).first()
+    """Insert or update a seed user in auth.account + qb.account stub."""
     password_hash = hash_password(spec.password)
-    if user:
-        user.password_hash = password_hash
-        user.is_admin = spec.is_admin
+    existing = db.execute(
+        text("SELECT id FROM auth.account WHERE username = :username"),
+        {"username": spec.username},
+    ).first()
+    if existing:
+        account_id = existing[0]
+        db.execute(
+            text(
+                """
+                UPDATE auth.account
+                SET password_hash = :password_hash, is_admin = :is_admin
+                WHERE id = :id
+                """
+            ),
+            {
+                "password_hash": password_hash,
+                "is_admin": spec.is_admin,
+                "id": account_id,
+            },
+        )
+        db.execute(
+            text(
+                """
+                INSERT INTO qb.account (id, username, is_admin)
+                VALUES (:id, :username, :is_admin)
+                ON CONFLICT (id) DO UPDATE SET
+                  username = EXCLUDED.username,
+                  is_admin = EXCLUDED.is_admin
+                """
+            ),
+            {
+                "id": account_id,
+                "username": spec.username,
+                "is_admin": spec.is_admin,
+            },
+        )
+        db.flush()
+        user = db.get(User, account_id)
+        assert user is not None
         return user, False
-    user = User(username=spec.username, password_hash=password_hash, is_admin=spec.is_admin)
-    db.add(user)
+
+    account_id = uuid.uuid4()
+    db.execute(
+        text(
+            """
+            INSERT INTO auth.account (id, username, password_hash, is_admin)
+            VALUES (:id, :username, :password_hash, :is_admin)
+            """
+        ),
+        {
+            "id": account_id,
+            "username": spec.username,
+            "password_hash": password_hash,
+            "is_admin": spec.is_admin,
+        },
+    )
+    db.execute(
+        text(
+            """
+            INSERT INTO qb.account (id, username, is_admin)
+            VALUES (:id, :username, :is_admin)
+            """
+        ),
+        {
+            "id": account_id,
+            "username": spec.username,
+            "is_admin": spec.is_admin,
+        },
+    )
+    db.flush()
+    user = db.get(User, account_id)
+    assert user is not None
     return user, True
 
 

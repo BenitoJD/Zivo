@@ -1,5 +1,6 @@
 """Local dev user seeding guards and upsert behavior."""
 
+import uuid
 from unittest.mock import MagicMock
 
 import pytest
@@ -42,18 +43,30 @@ def test_upsert_seed_user_creates_then_updates() -> None:
     spec = SeedUserSpec("dev", "devpass1", False)
     admin_spec = SeedUserSpec("admin", "adminpass1", True)
 
-    db.query.return_value.filter.return_value.first.return_value = None
+    db.execute.return_value.first.return_value = None
+    created_user = MagicMock()
+    created_user.username = "dev"
+    created_user.is_admin = False
+    db.get.return_value = created_user
+
     user, created = upsert_seed_user(db, spec)
     assert created is True
     assert user.username == "dev"
     assert user.is_admin is False
-    db.add.assert_called_once_with(user)
+    assert db.execute.call_count == 3
+    db.flush.assert_called()
 
-    existing = user
+    existing_id = uuid.uuid4()
     db.reset_mock()
-    db.query.return_value.filter.return_value.first.return_value = existing
+    db.execute.return_value.first.return_value = (existing_id,)
+    existing_user = MagicMock()
+    existing_user.username = "admin"
+    existing_user.is_admin = True
+    db.get.return_value = existing_user
+
     user, created = upsert_seed_user(db, admin_spec)
     assert created is False
-    assert user is existing
+    assert user is existing_user
     assert user.is_admin is True
-    db.add.assert_not_called()
+    assert db.execute.call_count == 3
+    db.flush.assert_called()

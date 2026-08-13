@@ -1,0 +1,182 @@
+from __future__ import annotations
+
+import hashlib
+import re
+import secrets
+import uuid
+from datetime import datetime, timedelta, timezone
+
+from fastapi import Cookie, Depends, Header, HTTPException, Response
+from jose import JWTError, jwt
+import bcrypt
+from sqlalchemy.orm import Session
+
+from app.config import get_settings
+from app.db import get_db
+from app.models import Account
+
+settings = get_settings()
+
+USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{2,31}$")
+
+
+def validate_username(username: str) -> None:
+    if not USERNAME_RE.match(username):
+        raise HTTPException(status_code=400, detail="Invalid username format")
+
+
+def validate_password(password: str) -> None:
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password too short")
+    if not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
+        raise HTTPException(status_code=400, detail="Password must include a letter and a number")
+
+
+def _password_bytes(password: str) -> bytes:
+    raw = password.encode("utf-8")
+    if len(raw) > 72:
+        return hashlib.sha256(raw).digest()
+    return raw
+
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(_password_bytes(password), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    return bcrypt.checkpw(_password_bytes(password), password_hash.encode("utf-8"))
+
+
+_DUMMY_HASH = bcrypt.hashpw(b"timing-oracle-guard", bcrypt.gensalt()).decode("utf-8")
+
+
+def create_session_token(
+    account_id: uuid.UUID,
+    session_version: int = 0,
+    *,
+    remember: bool = False,
+) -> tuple[str, str]:
+    days = settings.session_remember_days if remember else settings.session_days
+    exp = datetime.now(timezone.utc) + timedelta(days=days)
+    csrf = secrets.token_urlsafe(32)
+    payload = {"sub": str(account_id), "exp": exp, "csrf": csrf, "sv": int(session_version)}
+    token = jwt.encode(payload, settings.secret_key, algorithm="HS256")
+    return token, csrf
+
+
+def _session_version_matches(user: Account, payload: dict) -> bool:
+    token_sv = payload.get("sv", 0)
+    try:
+        token_sv = int(token_sv)
+    except (TypeError, ValueError):
+        token_sv = 0
+    user_sv = int(getattr(user, "session_version", 0) or 0)
+    return token_sv == user_sv
+
+
+def cookie_set_kwargs(*, max_age: int | None = None) -> dict:
+    """Shared cookie flags so set + delete agree (Domain especially)."""
+    kwargs: dict = {
+        "httponly": True,
+        "secure": settings.is_production,
+        "samesite": "lax",
+        "path": "/",
+    }
+    if max_age is not None:
+        kwargs["max_age"] = max_age
+    domain = settings.resolved_cookie_domain
+    if domain:
+        kwargs["domain"] = domain
+    return kwargs
+
+
+def cookie_delete_kwargs() -> dict:
+    """delete_cookie rejects max_age; keep Domain/Path/Secure/SameSite aligned."""
+    kwargs = cookie_set_kwargs()
+    kwargs.pop("max_age", None)
+    return kwargs
+
+
+def set_session_cookie(response: Response, token: str, remember: bool) -> None:
+    max_age = (settings.session_remember_days if remember else settings.session_days) * 86400
+    response.set_cookie(key="zivo_session", value=token, **cookie_set_kwargs(max_age=max_age))
+
+
+def clear_session_cookie(response: Response) -> None:
+    response.delete_cookie("zivo_session", **cookie_delete_kwargs())
+
+
+def get_current_user(
+    db: Session = Depends(get_db),
+    zivo_session: str | None = Cookie(default=None),
+) -> Account:
+    if not zivo_session:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(zivo_session, settings.secret_key, algorithms=["HS256"])
+        account_id = uuid.UUID(payload["sub"])
+    except (JWTError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid session") from exc
+
+    user = db.get(Account, account_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    if not _session_version_matches(user, payload):
+        raise HTTPException(status_code=401, detail="Session revoked")
+    return user
+
+
+def get_optional_user(
+    db: Session = Depends(get_db),
+    zivo_session: str | None = Cookie(default=None),
+) -> Account | None:
+    if not zivo_session:
+        return None
+    try:
+        payload = jwt.decode(zivo_session, settings.secret_key, algorithms=["HS256"])
+        account_id = uuid.UUID(payload["sub"])
+    except (JWTError, ValueError):
+        return None
+    user = db.get(Account, account_id)
+    if not user:
+        return None
+    if not _session_version_matches(user, payload):
+        return None
+    return user
+
+
+def csrf_from_session_token(zivo_session: str) -> str:
+    try:
+        payload = jwt.decode(zivo_session, settings.secret_key, algorithms=["HS256"])
+    except JWTError as exc:
+        raise HTTPException(status_code=401, detail="Invalid session") from exc
+    csrf = payload.get("csrf")
+    if not isinstance(csrf, str) or not csrf:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    return csrf
+
+
+def require_csrf(
+    x_csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
+    zivo_session: str | None = Cookie(default=None),
+) -> None:
+    if settings.csrf_disabled:
+        return
+    if not zivo_session or not x_csrf_token:
+        raise HTTPException(status_code=403, detail="CSRF token required")
+    try:
+        payload = jwt.decode(zivo_session, settings.secret_key, algorithms=["HS256"])
+        if payload.get("csrf") != x_csrf_token:
+            raise HTTPException(status_code=403, detail="CSRF mismatch")
+    except JWTError as exc:
+        raise HTTPException(status_code=403, detail="Invalid CSRF") from exc
+
+
+def authenticate_user(db: Session, username: str, password: str) -> Account | None:
+    user = db.query(Account).filter(Account.username == username).first()
+    if not user or not user.password_hash:
+        bcrypt.checkpw(b"timing-oracle-guard", _DUMMY_HASH.encode("utf-8"))
+        return None
+    if not verify_password(password, user.password_hash):
+        return None
+    return user

@@ -18,8 +18,9 @@ Helm charts and prod values. Deploy model matches [zivo](https://github.com/Beni
 |-------|---------|---------|
 | `charts/postgres` | `zivo-postgres` | pgvector Postgres |
 | `charts/minio` | `zivo-minio` | artifact object storage |
-| `charts/db-schema` | `db-schema` | one-off intel schema Job |
-| `charts/api` | `zivo-api` | FastAPI |
+| `charts/db-schema` | `auth-schema`, `db-schema` | Alembic jobs (`auth.*` then `qb.*`) |
+| `charts/auth` | `zivo-auth` | identity FastAPI (`auth.zivo.fyi`) |
+| `charts/api` | `zivo-api` | product FastAPI |
 | `charts/web` | `zivo-web` | Next.js frontend |
 
 Prod values: `environments/prod/*.yaml`
@@ -31,11 +32,12 @@ Prod values: `environments/prod/*.yaml`
 | `zivo.fyi` | `103.194.228.47` |
 | `www.zivo.fyi` | `103.194.228.47` |
 | `api.zivo.fyi` | `103.194.228.47` |
+| `auth.zivo.fyi` | `103.194.228.47` |
 | `s3.zivo.fyi` | `103.194.228.47` |
 
 ## Deploy
 
-**Normal path:** GitHub Actions → **Deploy Zivo** (builds API + web images, Helm upgrade on VPS).
+**Normal path:** GitHub Actions → **Deploy Zivo** (builds API + auth + web images, Helm upgrade on VPS).
 
 **Manual** (on VPS with repo checked out):
 
@@ -49,9 +51,18 @@ helm upgrade --install zivo-postgres ./infra/k8s/charts/postgres -n $NS --create
 helm upgrade --install zivo-minio ./infra/k8s/charts/minio -n $NS \
   -f infra/k8s/environments/prod/minio-values.yaml --wait
 
-IMAGE_REPOSITORY=ghcr.io/benitojd/zivo-api IMAGE_TAG=$TAG \
-  ./scripts/run-k8s-schema-migrate.sh
+helm upgrade --install auth-schema ./infra/k8s/charts/db-schema -n $NS \
+  -f infra/k8s/environments/prod/backend-release-values.yaml \
+  --set image.repository=ghcr.io/benitojd/zivo-auth \
+  --set image.tag=$TAG --set jobName=auth-alembic-migrate --wait
 
+helm upgrade --install db-schema ./infra/k8s/charts/db-schema -n $NS \
+  -f infra/k8s/environments/prod/backend-release-values.yaml \
+  --set image.repository=ghcr.io/benitojd/zivo-api \
+  --set image.tag=$TAG --set jobName=alembic-migrate --wait
+
+helm upgrade --install zivo-auth ./infra/k8s/charts/auth -n $NS \
+  -f infra/k8s/environments/prod/auth-values.yaml --set image.tag=$TAG --wait
 helm upgrade --install zivo-api ./infra/k8s/charts/api -n $NS \
   -f infra/k8s/environments/prod/backend-release-values.yaml \
   -f infra/k8s/environments/prod/api-values.yaml --set image.tag=$TAG --wait

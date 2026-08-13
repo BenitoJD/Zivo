@@ -11,8 +11,8 @@ from pathlib import Path
 
 from .db import apply_schema, backend_env, python_bin
 from .deps import deps_status, start_deps
-from .env import BACKEND_DEFAULTS, BACKEND_DIR, FRONTEND_DIR, ROOT, require_defaults
-from .ports import allocate_backend_port
+from .env import AUTH_DIR, BACKEND_DEFAULTS, BACKEND_DIR, FRONTEND_DIR, ROOT, require_defaults
+from .ports import allocate_auth_port, allocate_backend_port
 
 FRONTEND_PORT = 3000
 
@@ -47,6 +47,7 @@ def setup(_: argparse.Namespace) -> int:
         run([find_python(), "-m", "venv", str(VENV)])
     # Dev venv gets pytest/ruff too (requirements-dev pulls in requirements.txt).
     run([str(VENV / "bin" / "pip"), "install", "-q", "-r", str(BACKEND_DIR / "requirements-dev.txt")])
+    run([str(VENV / "bin" / "pip"), "install", "-q", "-r", str(AUTH_DIR / "requirements-dev.txt")])
     local_env = BACKEND_DIR / ".env.local"
     if not local_env.exists():
         print(f"Tip: copy overrides to {local_env.relative_to(ROOT)}")
@@ -58,6 +59,7 @@ def doctor(_: argparse.Namespace) -> int:
     status = 0
     print("zivo dev doctor")
     print(f"{'✓' if BACKEND_DEFAULTS.exists() else '✗'} {BACKEND_DEFAULTS.relative_to(ROOT)}")
+    print(f"{'✓' if (AUTH_DIR / '.env.example').exists() else '✗'} {(AUTH_DIR / '.env.example').relative_to(ROOT)}")
     print(f"{'✓' if (VENV / 'bin' / 'python').exists() else '✗'} venv: {VENV}")
     if deps_status() != 0:
         status = 1
@@ -120,14 +122,16 @@ def start(args: argparse.Namespace) -> int:
         raise RuntimeError("Run ./scripts/dev.sh setup first.")
 
     state = load_state()
-    if pid_running(state.get("api_pid")) or pid_running(state.get("frontend_pid")):
+    if pid_running(state.get("api_pid")) or pid_running(state.get("auth_pid")) or pid_running(state.get("frontend_pid")):
         raise RuntimeError("Dev stack already running. Use ./scripts/dev.sh stop first.")
 
     port = allocate_backend_port(args.port)
+    auth_port = allocate_auth_port()
     start_deps()
     benv = backend_env()
-    from .db import run_alembic
+    from .db import run_alembic, run_auth_alembic
 
+    run_auth_alembic("upgrade", "head", env=benv)
     run_alembic("upgrade", "head", env=benv)
     subprocess.run(
         [python_bin(), "scripts/seed_question_vocab.py"],
@@ -160,34 +164,44 @@ def start(args: argparse.Namespace) -> int:
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-        io_log = LOG_ROOT / "worker-io.log"
-        cpu_log = LOG_ROOT / "worker-cpu.log"
-        with io_log.open("ab") as io_out:
-            io_proc = subprocess.Popen(
-                [py, "run_eta_worker_async.py"],
-                cwd=BACKEND_DIR,
-                env={
-                    **benv,
-                    "ETA_WORKER_WORKLOADS": "io",
-                    "ETA_IO_CONCURRENCY": os.getenv("ETA_IO_CONCURRENCY", "16"),
-                },
-                stdout=io_out,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-        with cpu_log.open("ab") as cpu_out:
-            cpu_proc = subprocess.Popen(
-                [py, "run_eta_worker_cpu.py"],
-                cwd=BACKEND_DIR,
-                env={
-                    **benv,
-                    "ETA_WORKER_WORKLOADS": "cpu",
-                    "ETA_CPU_WORKER_MAX_CONCURRENCY": os.getenv("ETA_CPU_WORKER_MAX_CONCURRENCY", "4"),
-                },
-                stdout=cpu_out,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
+    auth_log = LOG_ROOT / "auth.log"
+    with auth_log.open("ab") as auth_out:
+        auth_proc = subprocess.Popen(
+            [py, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(auth_port), "--reload"],
+            cwd=AUTH_DIR,
+            env=benv,
+            stdout=auth_out,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    io_log = LOG_ROOT / "worker-io.log"
+    cpu_log = LOG_ROOT / "worker-cpu.log"
+    with io_log.open("ab") as io_out:
+        io_proc = subprocess.Popen(
+            [py, "run_eta_worker_async.py"],
+            cwd=BACKEND_DIR,
+            env={
+                **benv,
+                "ETA_WORKER_WORKLOADS": "io",
+                "ETA_IO_CONCURRENCY": os.getenv("ETA_IO_CONCURRENCY", "16"),
+            },
+            stdout=io_out,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    with cpu_log.open("ab") as cpu_out:
+        cpu_proc = subprocess.Popen(
+            [py, "run_eta_worker_cpu.py"],
+            cwd=BACKEND_DIR,
+            env={
+                **benv,
+                "ETA_WORKER_WORKLOADS": "cpu",
+                "ETA_CPU_WORKER_MAX_CONCURRENCY": os.getenv("ETA_CPU_WORKER_MAX_CONCURRENCY", "4"),
+            },
+            stdout=cpu_out,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
 
     npm = _require_npm()
     _ensure_frontend_deps(npm)
@@ -195,6 +209,7 @@ def start(args: argparse.Namespace) -> int:
     frontend_env = {
         **os.environ,
         "API_PROXY_URL": f"http://127.0.0.1:{port}",
+        "AUTH_PROXY_URL": f"http://127.0.0.1:{auth_port}",
     }
     with frontend_log.open("ab") as fe_out:
         frontend_proc = subprocess.Popen(
@@ -210,6 +225,8 @@ def start(args: argparse.Namespace) -> int:
         {
             "api_pid": api_proc.pid,
             "api_port": port,
+            "auth_pid": auth_proc.pid,
+            "auth_port": auth_port,
             "io_pid": io_proc.pid,
             "cpu_pid": cpu_proc.pid,
             "frontend_pid": frontend_proc.pid,
@@ -217,17 +234,18 @@ def start(args: argparse.Namespace) -> int:
         }
     )
     print(f"API running at http://127.0.0.1:{port} (logs: {log_path.relative_to(ROOT)})")
+    print(f"Auth running at http://127.0.0.1:{auth_port} (logs: {auth_log.relative_to(ROOT)})")
     print(f"Workers: IO pid {io_proc.pid}, CPU pid {cpu_proc.pid}")
     print(
         f"Frontend at http://localhost:{FRONTEND_PORT} "
-        f"(logs: {frontend_log.relative_to(ROOT)}, proxy → :{port})"
+        f"(logs: {frontend_log.relative_to(ROOT)}, proxy → :{port} auth → :{auth_port})"
     )
     return 0
 
 
 def stop(_: argparse.Namespace) -> int:
     state = load_state()
-    for key in ("frontend_pid", "api_pid", "io_pid", "cpu_pid"):
+    for key in ("frontend_pid", "api_pid", "auth_pid", "io_pid", "cpu_pid"):
         pid = state.get(key)
         if pid_running(pid):
             os.kill(pid, signal.SIGTERM)
@@ -239,8 +257,9 @@ def stop(_: argparse.Namespace) -> int:
 def db_cmd(args: argparse.Namespace) -> int:
     if args.db_command == "migrate":
         start_deps()
-        from .db import run_alembic
+        from .db import run_alembic, run_auth_alembic
 
+        run_auth_alembic("upgrade", "head")
         run_alembic("upgrade", "head")
     elif args.db_command == "schema":
         start_deps()

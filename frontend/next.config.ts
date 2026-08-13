@@ -19,7 +19,9 @@ const nextConfig: NextConfig = {
     proxyClientMaxBodySize: "1024mb",
   },
   async rewrites() {
+    const authProxy = process.env.AUTH_PROXY_URL ?? "http://127.0.0.1:8201";
     return [
+      { source: "/api/auth/:path*", destination: `${authProxy}/api/auth/:path*` },
       { source: "/api/:path*", destination: `${API_PROXY_URL}/api/:path*` },
       { source: "/health", destination: `${API_PROXY_URL}/health` },
     ];
