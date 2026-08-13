@@ -74,15 +74,32 @@ wait_job() {
 ensure_ghcr_pull_secret() {
   PULL_SECRET_SET=()
   if [[ -z "${GITHUB_TOKEN:-}" ]]; then
-    echo "No GITHUB_TOKEN; k3s must pull public GHCR images"
-    PULL_SECRET_SET=()
-    return 0
+    # Self-hosted jobs often omit GITHUB_TOKEN from the script env; docker login
+    # already stored the Actions token in ~/.docker/config.json.
+    GITHUB_TOKEN="$(python3 - <<'PY'
+import json, base64, pathlib, sys
+path = pathlib.Path.home() / ".docker" / "config.json"
+try:
+    cfg = json.loads(path.read_text())
+except Exception:
+    sys.exit(0)
+auth = (cfg.get("auths") or {}).get("ghcr.io", {}).get("auth")
+if not auth:
+    sys.exit(0)
+print(base64.b64decode(auth).decode().split(":", 1)[-1], end="")
+PY
+)"
+  fi
+  if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+    echo "GITHUB_TOKEN is required: k3s anonymous GHCR pull returns 401 for new tags" >&2
+    exit 1
   fi
   kubectl -n "$NS" create secret docker-registry ghcr-pull \
     --docker-server=ghcr.io \
     --docker-username="${GITHUB_ACTOR:-${OWNER}}" \
     --docker-password="${GITHUB_TOKEN}" \
     --dry-run=client -o yaml | kubectl apply -f -
+  echo "Applied ghcr-pull secret for k3s image pulls"
   PULL_SECRET_SET=(--set "imagePullSecrets[0].name=ghcr-pull")
 }
 
