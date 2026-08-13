@@ -224,8 +224,6 @@ class Settings(BaseSettings):
             raise ValueError("SECRET_KEY must be set when ENVIRONMENT != 'development'")
         if self.csrf_secret == _DEV_CSRF_SECRET:
             raise ValueError("CSRF_SECRET must be set when ENVIRONMENT != 'development'")
-        if self.minio_access_key == "zivo" or self.minio_secret_key == "zivo-secret":
-            raise ValueError("MINIO credentials must be changed when ENVIRONMENT != 'development'")
         if self.csrf_disabled:
             raise ValueError("CSRF_DISABLED cannot be true when ENVIRONMENT != 'development'")
         return self

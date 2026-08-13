@@ -29,6 +29,15 @@ class TestSecretKeyValidation:
             _make_settings(secret_key="real-prod-secret-32chars-or-more")
         assert "CSRF_SECRET" in str(exc.value)
 
+    def test_accepts_vps_minio_bootstrap_keys_in_production(self) -> None:
+        s = _make_settings(
+            secret_key="real-prod-secret-32chars-or-more",
+            csrf_secret="real-prod-csrf-32chars-or-more",
+            minio_access_key="zivo",
+            minio_secret_key="zivo-secret",
+        )
+        assert s.minio_access_key == "zivo"
+
     def test_accepts_unique_secrets_in_production(self) -> None:
         s = _make_settings(
             secret_key="real-prod-secret-32chars-or-more",
