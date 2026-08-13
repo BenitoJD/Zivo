@@ -2,7 +2,7 @@ replicaCount: 2
 namespace: zivo
 image:
   repository: ghcr.io/benitojd/zivo-storage
-  tag: Zivo_0.1.351
+  tag: Zivo_0.1.357
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 service:
