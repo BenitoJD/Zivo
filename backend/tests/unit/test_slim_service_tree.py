@@ -83,6 +83,7 @@ def test_migrate_profile_keeps_alembic_drops_http(tmp_path: Path) -> None:
     _tree(tmp_path)
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "run_alembic_with_lock.py").write_text("x\n")
+    (tmp_path / "scripts" / "seed_question_vocab.py").write_text("x\n")
     (tmp_path / "scripts" / "other.py").write_text("x\n")
     subprocess.check_call([sys.executable, str(SCRIPT), "migrate", "--root", str(tmp_path)])
     assert not (tmp_path / "app" / "api").exists()
@@ -91,6 +92,7 @@ def test_migrate_profile_keeps_alembic_drops_http(tmp_path: Path) -> None:
     assert (tmp_path / "alembic.ini").exists()
     assert (tmp_path / "alembic" / "env.py").exists()
     assert (tmp_path / "scripts" / "run_alembic_with_lock.py").exists()
+    assert (tmp_path / "scripts" / "seed_question_vocab.py").exists()
     assert not (tmp_path / "scripts" / "other.py").exists()
     assert not (tmp_path / "frontend").exists()
     assert not (tmp_path / "practice_api").exists()
@@ -195,6 +197,7 @@ def test_migrate_image_has_no_uvicorn_and_no_whole_tree_copy() -> None:
     assert "COPY backend/ /app/" not in text
     assert "uvicorn" not in text
     assert "run_alembic_with_lock.py" in text
+    assert "seed_question_vocab.py" in text
     assert "slim_service_tree.py migrate" in text
 
 

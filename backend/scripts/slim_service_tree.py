@@ -119,6 +119,8 @@ ALWAYS_DROP_ROOT_FILES = (
     "README.md",
 )
 
+MIGRATE_KEEP_SCRIPTS = {"run_alembic_with_lock.py", "seed_question_vocab.py"}
+
 LOCAL_ROOTS = ("app",) + HTTP_PACKAGES
 
 
@@ -336,7 +338,7 @@ def slim(root: Path, profile: str) -> None:
     if scripts.is_dir():
         if profile == "migrate":
             for child in scripts.iterdir():
-                if child.name != "run_alembic_with_lock.py":
+                if child.name not in MIGRATE_KEEP_SCRIPTS:
                     _rm(child)
         else:
             _rm(scripts)

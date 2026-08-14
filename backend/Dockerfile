@@ -39,6 +39,7 @@ COPY --chown=appuser:appuser alembic /app/alembic
 COPY --chown=appuser:appuser alembic.ini /app/alembic.ini
 COPY --chown=appuser:appuser schema /app/schema
 COPY --chown=appuser:appuser scripts/run_alembic_with_lock.py /app/scripts/run_alembic_with_lock.py
+COPY --chown=appuser:appuser scripts/seed_question_vocab.py /app/scripts/seed_question_vocab.py
 COPY scripts/slim_service_tree.py /tmp/slim_service_tree.py
 RUN python /tmp/slim_service_tree.py migrate \
     && chown -R appuser:appuser /app
