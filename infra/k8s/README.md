@@ -26,9 +26,10 @@ Helm charts and prod values. Deploy model matches [zivo](https://github.com/Beni
 | `charts/study` | `zivo-study` | learn/grade/chat (`study.zivo.fyi`) |
 | `charts/library` | `zivo-library` | sources/documents (`library.zivo.fyi`) |
 | `charts/admin` | `zivo-admin` | models/debug (`admin.zivo.fyi`) |
-| `charts/api` | `zivo-api` | health (Next catch-all); scheduler is on IO workers |
 | `charts/worker` | `zivo-worker-io`, `zivo-worker-cpu` | slim `zivo-worker` image |
 | `charts/web` | `zivo-web` | Next.js frontend |
+
+Product Alembic image: `zivo-migrate` (backend Dockerfile), used by the `db-schema` Job. There is no `zivo-api` release.
 
 Prod values: `environments/prod/*.yaml`
 
@@ -76,16 +77,13 @@ helm upgrade --install storage-schema ./infra/k8s/charts/db-schema -n $NS \
 
 helm upgrade --install db-schema ./infra/k8s/charts/db-schema -n $NS \
   -f infra/k8s/environments/prod/backend-release-values.yaml \
-  --set image.repository=ghcr.io/benitojd/zivo-api \
+  --set image.repository=ghcr.io/benitojd/zivo-migrate \
   --set image.tag=$TAG --set jobName=alembic-migrate --wait
 
 helm upgrade --install zivo-auth ./infra/k8s/charts/auth -n $NS \
   -f infra/k8s/environments/prod/auth-values.yaml --set image.tag=$TAG --wait
 helm upgrade --install zivo-storage ./infra/k8s/charts/storage -n $NS \
   -f infra/k8s/environments/prod/storage-values.yaml --set image.tag=$TAG --wait
-helm upgrade --install zivo-api ./infra/k8s/charts/api -n $NS \
-  -f infra/k8s/environments/prod/backend-release-values.yaml \
-  -f infra/k8s/environments/prod/api-values.yaml --set image.tag=$TAG --wait
 helm upgrade --install zivo-web ./infra/k8s/charts/web -n $NS \
   -f infra/k8s/environments/prod/web-values.yaml --set image.tag=$TAG --wait
 ```

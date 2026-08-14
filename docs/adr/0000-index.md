@@ -26,5 +26,6 @@ behind the shape those rules describe.
 | [0014](0014-admin-microservice.md) | Models/debug HTTP leave the product API (`admin/`, `:8207`) | 2026-08-13 |
 | [0015](0015-slim-process-images.md) | Each process image contains only that process's code | 2026-08-13 |
 | [0016](0016-owned-http-packages.md) | Route modules live with their HTTP process; scheduler lives with IO workers | 2026-08-14 |
+| [0017](0017-owned-copy-no-api-shell.md) | Images COPY owned packages plus `backend/app`; drop the zivo-api health shell | 2026-08-14 |
 
 To add one: scan for the highest number, increment, keep it short.

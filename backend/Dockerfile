@@ -1,3 +1,5 @@
+# Product Alembic migrate image. Not an HTTP process.
+# Build: docker build -t zivo-migrate -f backend/Dockerfile --target runtime backend/
 FROM python:3.12-slim AS builder
 
 WORKDIR /build
@@ -24,7 +26,6 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
-    procps \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 1000 appuser
 
@@ -33,12 +34,15 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-COPY --chown=appuser:appuser . .
-RUN python scripts/slim_service_tree.py api \
+COPY --chown=appuser:appuser app /app/app
+COPY --chown=appuser:appuser alembic /app/alembic
+COPY --chown=appuser:appuser alembic.ini /app/alembic.ini
+COPY --chown=appuser:appuser schema /app/schema
+COPY --chown=appuser:appuser scripts/run_alembic_with_lock.py /app/scripts/run_alembic_with_lock.py
+COPY scripts/slim_service_tree.py /tmp/slim_service_tree.py
+RUN python /tmp/slim_service_tree.py migrate \
     && chown -R appuser:appuser /app
 
 USER appuser
 
-EXPOSE 8000
-
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "scripts/run_alembic_with_lock.py", "--revision", "head"]

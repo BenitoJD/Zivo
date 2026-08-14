@@ -24,7 +24,14 @@ run_backend() {
   (cd backend && "$PYTHON_BIN" -m ruff check .)
 
   echo "==> backend: import check"
-  (cd backend && "$PYTHON_BIN" -c "from app.main import app; assert app.title == 'Zivo API'")
+  (cd backend && "$PYTHON_BIN" -c "
+from pathlib import Path
+assert not Path('app/main.py').exists()
+from app.config import get_settings
+from app.db import is_db_outage
+assert get_settings() is not None
+assert callable(is_db_outage)
+")
 
   echo "==> worker: import smoke (no app.api or HTTP service packages)"
   (cd backend && "$PYTHON_BIN" -c "

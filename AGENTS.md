@@ -26,7 +26,7 @@ Decisions (rank, metric, gate, schedule, next-step) live behind named engine fac
 | **DB + extensions** | Ready | Postgres 16, pgvector — foundation for question graph |
 | **Legacy `intel` schema** | Present | `intel_foundation.sql` unchanged; product data in `intel.*` |
 | **QB app schema** | Ready | `qb_app.sql` + `qb_infra.sql` via Alembic (`./scripts/dev.sh db migrate`) |
-| **API** | Ready | FastAPI health only (`backend/`). ETA scheduler on IO workers. [ADR 0016](docs/adr/0016-owned-http-packages.md) |
+| **API** | Retired | No health-only `zivo-api`. Product HTTP is owned services; product Alembic is `zivo-migrate`. [ADR 0017](docs/adr/0017-owned-copy-no-api-shell.md) |
 | **Auth service** | Ready | Identity FastAPI (`auth/`): signup, login, logout, session, Google OAuth. [ADR 0007](docs/adr/0007-auth-microservice.md) |
 | **Storage service** | Ready | Object FastAPI (`storage/`): MinIO writes, chunked upload, `storage.*`. [ADR 0008](docs/adr/0008-storage-microservice.md) |
 | **Practice service** | Ready | Coding / system-design / newspaper practice HTTP (`practice/`). [ADR 0010](docs/adr/0010-practice-microservice.md) |
@@ -36,7 +36,7 @@ Decisions (rank, metric, gate, schedule, next-step) live behind named engine fac
 | **Admin service** | Ready | Models + debug HTTP (`admin/`). [ADR 0014](docs/adr/0014-admin-microservice.md) |
 | **Workers (jobs)** | Ready | Slim `zivo-worker` image; ETA IO+CPU lease `qb.jobs`. [ADR 0009](docs/adr/0009-jobs-workers-are-the-process.md) |
 | **Workspace UI** | Ready | `/workspace` — Mantine `AppShell`, Learn/Test layout in `app/` routes |
-| **Helm / K8s** | Ready | postgres, minio, api, auth, storage, practice, content, study, library, admin, web, worker, db-schema charts |
+| **Helm / K8s** | Ready | postgres, minio, auth, storage, practice, content, study, library, admin, web, worker, db-schema charts |
 | **CI** | Ready | `.github/workflows/ci.yml` — self-hosted `zivo` runner on VPS |
 | **Deploy workflow** | Ready | `.github/workflows/deploy.yml` (needs push + workflow run) |
 | **VPS base** | Ready | K3s, Traefik, cert-manager, GH runner at `103.194.228.47` |
@@ -62,7 +62,7 @@ zivo/
 ├── agents/               # prod-safety, testing notes
 ├── backend/
 │   ├── app/
-│   │   ├── api/          # health only; product routers live in *_api packages
+│   │   ├── api/          # shared health helper; product routers live in *_api packages
 │   │   └── workers/      # generation, evaluation, embedding jobs
 │   ├── schema/           # SQL DDL (question graph next)
 │   └── scripts/
@@ -102,7 +102,7 @@ Python 3.12+, Node.js 22+, Docker (for Postgres + MinIO).
 
 ```bash
 ./scripts/dev.sh setup
-./scripts/dev.sh start              # API + auth + storage + practice + content + study + library + admin + workers + Next.js (:8200-:8207, :3000)
+./scripts/dev.sh start              # auth + storage + practice + content + study + library + admin + workers + Next.js (:8201-:8207, :3000)
 ./scripts/dev.sh db migrate        # auth, storage, practice, content, study, library, admin Alembic, then product Alembic
 ./scripts/dev.sh db seed           # question vocab seeds
 ./scripts/dev.sh doctor
@@ -116,7 +116,6 @@ cd frontend && npm run build && npm run lint
 
 | Service | Port |
 |---------|------|
-| API | `8200` |
 | Auth | `8201` |
 | Storage | `8202` |
 | Practice | `8203` |
@@ -146,7 +145,7 @@ DDL source files live in `backend/schema/`, `auth/schema/`, `storage/schema/`, `
 
 Product migrations: `backend/alembic/versions/` (`001_intel_foundation` → `002_qb_schema`, …). New product schema changes: add a revision with `cd backend && alembic revision --autogenerate -m "message"`, then run `backend/scripts/test_alembic_migrations.sh`.
 
-Identity migrations: `auth/alembic/versions/` with version table `alembic_version_auth` (only `auth.*`). Storage migrations: `storage/alembic/versions/` with `alembic_version_storage` (only `storage.*`). Practice / content / study / library / admin each have `alembic_version_*` and an exclusive schema marker; shared `qb.*` / `intel.*` stay on product Alembic. Product FKs stay on `qb.account`; credentials live in `auth.account`. See [ADR 0007](docs/adr/0007-auth-microservice.md), [ADR 0008](docs/adr/0008-storage-microservice.md), [ADR 0010](docs/adr/0010-practice-microservice.md), [ADR 0011](docs/adr/0011-content-microservice.md), [ADR 0012](docs/adr/0012-study-microservice.md), [ADR 0013](docs/adr/0013-library-microservice.md), [ADR 0014](docs/adr/0014-admin-microservice.md), [ADR 0015](docs/adr/0015-slim-process-images.md).
+Identity migrations: `auth/alembic/versions/` with version table `alembic_version_auth` (only `auth.*`). Storage migrations: `storage/alembic/versions/` with `alembic_version_storage` (only `storage.*`). Practice / content / study / library / admin each have `alembic_version_*` and an exclusive schema marker; shared `qb.*` / `intel.*` stay on product Alembic. Product FKs stay on `qb.account`; credentials live in `auth.account`. See [ADR 0007](docs/adr/0007-auth-microservice.md), [ADR 0008](docs/adr/0008-storage-microservice.md), [ADR 0010](docs/adr/0010-practice-microservice.md), [ADR 0011](docs/adr/0011-content-microservice.md), [ADR 0012](docs/adr/0012-study-microservice.md), [ADR 0013](docs/adr/0013-library-microservice.md), [ADR 0014](docs/adr/0014-admin-microservice.md), [ADR 0015](docs/adr/0015-slim-process-images.md), [ADR 0016](docs/adr/0016-owned-http-packages.md), [ADR 0017](docs/adr/0017-owned-copy-no-api-shell.md).
 
 Product tables: `intel.*` (unchanged DDL) + additive `qb.*` — see [docs/WORKSPACE.md](docs/WORKSPACE.md) and [ADR 0002](docs/adr/0002-intel-frozen-qb-additive.md).
 

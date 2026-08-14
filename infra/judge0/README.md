@@ -4,7 +4,7 @@ Self-hosted [Judge0](https://github.com/judge0/judge0) for the interview coding 
 on **its own box**, not the app cluster — untrusted user code must be isolated away from prod data,
 and isolate needs cgroup v1 + privileged (which our cgroup-v2 k3s node refuses).
 
-The app reaches it via `JUDGE0_URL` (set in `infra/k8s/charts/api/values.yaml`). Client code:
+The app reaches it via `JUDGE0_URL` (set in `infra/k8s/charts/practice/values.yaml`). Client code:
 `backend/app/services/code_execution.py`.
 
 **If code execution breaks, read [TROUBLESHOOTING.md](TROUBLESHOOTING.md) first** — it documents

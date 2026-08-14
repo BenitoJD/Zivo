@@ -1,36 +1,32 @@
 # Question Better. — backend
 
-FastAPI service and workers for the question engine.
+Shared product library (engines, models, services) and Alembic for `intel.*` /
+`qb.*`. HTTP lives in `practice/`, `content/`, `study/`, `library/`, and `admin/`.
 
 ## Status
 
 | Piece | Ready? |
 |-------|--------|
-| Health endpoints | Yes |
+| Shared health helper | Yes (`app/api/health.py`) |
 | Config / DB session | Yes |
 | Postgres + pgvector | Yes |
-| Source upload storage (MinIO) | Infra ready |
-| Question generation | **Next** |
-| Question evaluation | Planned |
-| Answer capture + calibration | Planned |
-| Question graph schema | Planned |
+| Product Alembic | Yes (`zivo-migrate` image) |
 
 ## Layout
 
 ```
 backend/
 ├── app/
-│   ├── api/              # HTTP routes — generation, quiz, analytics
-│   ├── workers/          # async generation, embedding, eval jobs
+│   ├── api/              # shared health helper (not a process)
+│   ├── workers/          # ingest / normalize job helpers
 │   ├── config.py
-│   ├── db.py
-│   └── main.py
+│   └── db.py
 ├── schema/
-│   ├── intel_foundation.sql   # intel DDL (Alembic 001)
-│   ├── qb_app.sql             # qb app DDL (Alembic 002)
-│   └── qb_infra.sql           # qb infra DDL (Alembic 002)
+│   ├── intel_foundation.sql
+│   ├── qb_app.sql
+│   └── qb_infra.sql
 ├── alembic/
-│   └── versions/              # migration chain
+│   └── versions/
 └── scripts/
     ├── run_alembic_with_lock.py
     └── test_alembic_migrations.sh
@@ -43,7 +39,7 @@ From repo root:
 ```bash
 ./scripts/dev.sh setup
 ./scripts/dev.sh start
-curl http://127.0.0.1:8200/health/ready
+curl http://127.0.0.1:8201/health
 ```
 
 ## Schema
@@ -53,12 +49,12 @@ curl http://127.0.0.1:8200/health/ready
 ./scripts/dev.sh db seed
 ```
 
-Production: `alembic-migrate` K8s Job via `scripts/run-k8s-schema-migrate.sh`.
+Production: `alembic-migrate` K8s Job via `zivo-migrate` (`scripts/deploy-vps-local-build.sh`).
 
 ## Docker
 
 ```bash
-docker build -t zivo-api ./backend
+docker build -t zivo-migrate -f backend/Dockerfile --target runtime backend/
 docker build -t zivo-worker -f workers/Dockerfile .
 ```
 

@@ -54,16 +54,10 @@ export function serverProxyFor(path: string): string {
   if (path.startsWith("/api/storage")) {
     return envOr("STORAGE_PROXY_URL", "http://127.0.0.1:8202");
   }
-  const proxy = process.env.API_PROXY_URL?.trim();
-  if (proxy) return trimSlash(proxy);
-  const publicUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
-  if (publicUrl) return trimSlash(publicUrl);
-  return "http://127.0.0.1:8200";
-}
-
-/** @deprecated Prefer serverApiUrl(path) so learn/practice/study hit the right process. */
-export function serverApiBase(): string {
-  return serverProxyFor("/api/");
+  if (path.startsWith("/api/health") || path === "/health") {
+    return envOr("AUTH_PROXY_URL", "http://127.0.0.1:8201");
+  }
+  throw new Error(`No owning microservice for ${path}`);
 }
 
 export function serverApiUrl(path: string): string {

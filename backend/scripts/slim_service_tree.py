@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Strip a copied backend tree down to one process's code.
 
-Used by Dockerfiles after COPY. Profiles drop FastAPI route modules the process
-does not serve, sibling HTTP packages, worker/API entrypoints it does not run,
-and ``app.*`` modules the process never imports (AST reachability from the
-process entrypoints).
+Used by Dockerfiles after COPY of that process's files plus ``backend/app``.
+Profiles drop FastAPI route modules the process does not serve, sibling HTTP
+packages, worker/migrate entrypoints it does not run, and ``app.*`` modules the
+process never imports (AST reachability from the process entrypoints).
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from pathlib import Path
 
 API_KEEP: dict[str, set[str]] = {
     "worker": set(),
-    "api": {"__init__.py", "health.py", "router.py"},
+    "migrate": set(),
     "practice": {"__init__.py", "health.py"},
     "content": {"__init__.py", "health.py"},
     "study": {"__init__.py", "health.py"},
@@ -38,7 +38,7 @@ ENTRYPOINTS = {
         "run_eta_worker_cpu.py",
         "run_newspaper_ingest.py",
     ),
-    "api": ("app/main.py", "alembic/env.py"),
+    "migrate": ("alembic/env.py",),
     "practice": ("practice_main.py",),
     "content": ("content_main.py",),
     "study": ("study_main.py",),
@@ -243,7 +243,7 @@ def forbidden_leftovers(root: Path, profile: str) -> list[str]:
     own_main = f"{profile}_main.py" if profile in OWN_HTTP_PACKAGE else None
 
     for name in FORBIDDEN_DIRS:
-        if name == "tests" and profile == "api":
+        if name == "tests" and profile == "migrate":
             # dropped structurally; still forbidden if present
             pass
         if (root / name).exists():
@@ -267,9 +267,9 @@ def forbidden_leftovers(root: Path, profile: str) -> list[str]:
             if child.name in PRODUCT_ROUTER_FILES:
                 leftovers.append(f"app/api/{child.name}")
 
-    if profile == "worker" and (root / "app" / "api").exists():
+    if profile in {"worker", "migrate"} and (root / "app" / "api").exists():
         leftovers.append("app/api")
-    if profile == "worker" and (root / "app" / "main.py").exists():
+    if (root / "app" / "main.py").exists():
         leftovers.append("app/main.py")
 
     return leftovers
@@ -303,8 +303,8 @@ def slim(root: Path, profile: str) -> None:
                 if child.name not in keep:
                     _rm(child)
 
-    if profile != "api":
-        _rm(root / "app" / "main.py")
+    _rm(root / "app" / "main.py")
+    if profile != "migrate":
         _rm(root / "alembic")
         _rm(root / "alembic.ini")
         _rm(root / "schema")
@@ -334,7 +334,7 @@ def slim(root: Path, profile: str) -> None:
 
     scripts = root / "scripts"
     if scripts.is_dir():
-        if profile == "api":
+        if profile == "migrate":
             for child in scripts.iterdir():
                 if child.name != "run_alembic_with_lock.py":
                     _rm(child)
@@ -342,6 +342,14 @@ def slim(root: Path, profile: str) -> None:
             _rm(scripts)
 
     entrypoints = ENTRYPOINTS[profile]
+    if profile == "migrate":
+        versions = root / "alembic" / "versions"
+        extra = tuple(
+            str(path.relative_to(root))
+            for path in sorted(versions.glob("*.py"))
+            if path.is_file()
+        ) if versions.is_dir() else ()
+        entrypoints = entrypoints + extra
     keep_files = reachable_modules(root, entrypoints)
     _drop_unreached_app_modules(root, keep_files)
 

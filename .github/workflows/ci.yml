@@ -49,7 +49,15 @@ jobs:
         run: python -m ruff check .
 
       - name: Import check
-        run: python -c "from app.main import app; assert app.title == 'Zivo API'"
+        run: |
+          python -c "
+          from pathlib import Path
+          assert not Path('app/main.py').exists()
+          from app.config import get_settings
+          from app.db import is_db_outage
+          assert get_settings() is not None
+          assert callable(is_db_outage)
+          "
 
       - name: Worker import smoke
         run: |

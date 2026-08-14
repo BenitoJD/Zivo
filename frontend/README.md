@@ -37,7 +37,8 @@ npm run dev
 
 Open http://localhost:3000.
 
-Set `NEXT_PUBLIC_API_URL=http://127.0.0.1:8200` in `.env.local` when calling the API from the browser.
+Leave `NEXT_PUBLIC_*` empty so the browser uses same-origin Next rewrites to
+auth, storage, and the other HTTP services.
 
 ```bash
 npm run build

@@ -1,61 +1,25 @@
-"""Product API is health + scheduler only; other HTTP left for other processes."""
+"""Product HTTP lives in owned packages; backend/app is a library, not a process."""
 
-from app.main import app
+from pathlib import Path
 
-
-def _paths() -> set[str]:
-    return set(app.openapi()["paths"])
-
-
-def test_practice_routes_left_the_product_api() -> None:
-    paths = _paths()
-    assert not any(p.startswith("/api/coding") for p in paths)
-    assert not any(p.startswith("/api/system-design") for p in paths)
-    assert not any(p.startswith("/api/practice") for p in paths)
-    assert not any(p.startswith("/api/newspaper") for p in paths)
+BACKEND = Path(__file__).resolve().parents[2]
+API_DIR = BACKEND / "app" / "api"
 
 
-def test_content_routes_left_the_product_api() -> None:
-    paths = _paths()
-    assert not any(p.startswith("/api/learn") for p in paths)
+def test_product_api_entrypoint_is_gone() -> None:
+    assert not (BACKEND / "app" / "main.py").exists()
+    assert not (API_DIR / "router.py").exists()
 
 
-def test_study_routes_left_the_product_api() -> None:
-    paths = _paths()
-    assert not any(p.startswith("/api/artifacts") for p in paths)
-    assert not any(p.startswith("/api/mcq") for p in paths)
-    assert not any(p.startswith("/api/chat") for p in paths)
-    assert not any(p.startswith("/api/progress") for p in paths)
-    assert not any(p.startswith("/api/assertions") for p in paths)
-    assert not any(p.startswith("/api/guest") for p in paths)
-    assert not any(p.startswith("/api/offline") for p in paths)
-    assert not any(p.startswith("/api/reference") for p in paths)
+def test_backend_api_package_is_shared_health_only() -> None:
+    names = {p.name for p in API_DIR.iterdir() if p.suffix == ".py"}
+    assert names == {"__init__.py", "health.py"}
 
 
-def test_library_and_admin_routes_left_the_product_api() -> None:
-    paths = _paths()
-    assert not any(p.startswith("/api/sources") for p in paths)
-    assert not any(p.startswith("/api/documents") for p in paths)
-    assert not any(p.startswith("/api/activities") for p in paths)
-    assert not any(p.startswith("/api/audiobook") for p in paths)
-    assert not any(p.startswith("/api/models") for p in paths)
-    assert not any(p.startswith("/api/debug") for p in paths)
-
-
-def test_product_api_keeps_health_only() -> None:
-    paths = _paths()
-    assert "/api/health" in paths
-    extra = {
-        p
-        for p in paths
-        if p.startswith("/api/") and p not in {"/api/health", "/api/health/ready"}
-    }
-    assert extra == set()
-
-
-def test_backend_api_package_has_no_product_routers() -> None:
-    from pathlib import Path
-
-    api_dir = Path(__file__).resolve().parents[2] / "app" / "api"
-    names = {p.name for p in api_dir.iterdir() if p.suffix == ".py"}
-    assert names == {"__init__.py", "health.py", "router.py"}
+def test_owned_route_packages_exist() -> None:
+    repo = BACKEND.parent
+    assert (repo / "practice" / "practice_api" / "coding.py").is_file()
+    assert (repo / "content" / "content_api" / "seo_learn.py").is_file()
+    assert (repo / "study" / "study_api" / "mcq.py").is_file()
+    assert (repo / "library" / "library_api" / "documents.py").is_file()
+    assert (repo / "admin" / "admin_api" / "models.py").is_file()

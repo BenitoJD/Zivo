@@ -10,10 +10,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select, text
 
 from app.db import SessionLocal
-from app.main import app
 from app.models import Document, User
 from app.services.auth import create_session_token, hash_password
 from app.services.guest_session import GUEST_ID_HEADER
+from library_main import app
 
 
 def _db_reachable() -> bool:

@@ -14,9 +14,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.main import app
 from app.models import Document
 from app.services.guest_session import GUEST_ID_HEADER
+from study_main import app
 
 GUEST_ID = "c" * 32
 

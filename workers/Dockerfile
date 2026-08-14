@@ -45,8 +45,11 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app
 
-COPY backend/ /app/
+COPY backend/app /app/app
 COPY backend/scripts/slim_service_tree.py /tmp/slim_service_tree.py
+COPY workers/run_eta_worker_async.py /app/run_eta_worker_async.py
+COPY workers/run_eta_worker_cpu.py /app/run_eta_worker_cpu.py
+COPY workers/run_newspaper_ingest.py /app/run_newspaper_ingest.py
 RUN python /tmp/slim_service_tree.py worker
 
 ENV HF_HOME=/app/.cache/huggingface

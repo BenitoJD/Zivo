@@ -23,11 +23,11 @@ from .env import (
     ROOT,
     STORAGE_DIR,
     STUDY_DIR,
+    WORKERS_DIR,
     require_defaults,
 )
 from .ports import (
     allocate_auth_port,
-    allocate_backend_port,
     allocate_content_port,
     allocate_library_port,
     allocate_admin_port,
@@ -149,7 +149,6 @@ def start(args: argparse.Namespace) -> int:
     if pid_running(state.get("api_pid")) or pid_running(state.get("auth_pid")) or pid_running(state.get("storage_pid")) or pid_running(state.get("practice_pid")) or pid_running(state.get("content_pid")) or pid_running(state.get("study_pid")) or pid_running(state.get("library_pid")) or pid_running(state.get("admin_pid")) or pid_running(state.get("frontend_pid")):
         raise RuntimeError("Dev stack already running. Use ./scripts/dev.sh stop first.")
 
-    port = allocate_backend_port(args.port)
     auth_port = allocate_auth_port()
     storage_port = allocate_storage_port()
     practice_port = allocate_practice_port()
@@ -198,19 +197,9 @@ def start(args: argparse.Namespace) -> int:
         check=False,
     )
 
-    log_path = LOG_ROOT / "api.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
     py = python_bin()
-    with log_path.open("ab") as log:
-        api_proc = subprocess.Popen(
-            [py, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port), "--reload"],
-            cwd=BACKEND_DIR,
-            env=benv,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
     auth_log = LOG_ROOT / "auth.log"
+    auth_log.parent.mkdir(parents=True, exist_ok=True)
     with auth_log.open("ab") as auth_out:
         auth_proc = subprocess.Popen(
             [py, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(auth_port), "--reload"],
@@ -306,9 +295,10 @@ def start(args: argparse.Namespace) -> int:
     with io_log.open("ab") as io_out:
         io_proc = subprocess.Popen(
             [py, "run_eta_worker_async.py"],
-            cwd=BACKEND_DIR,
+            cwd=WORKERS_DIR,
             env={
                 **benv,
+                "PYTHONPATH": str(BACKEND_DIR),
                 "ETA_WORKER_WORKLOADS": "io",
                 "ETA_IO_CONCURRENCY": os.getenv("ETA_IO_CONCURRENCY", "16"),
             },
@@ -319,9 +309,10 @@ def start(args: argparse.Namespace) -> int:
     with cpu_log.open("ab") as cpu_out:
         cpu_proc = subprocess.Popen(
             [py, "run_eta_worker_cpu.py"],
-            cwd=BACKEND_DIR,
+            cwd=WORKERS_DIR,
             env={
                 **benv,
+                "PYTHONPATH": str(BACKEND_DIR),
                 "ETA_WORKER_WORKLOADS": "cpu",
                 "ETA_CPU_WORKER_MAX_CONCURRENCY": os.getenv("ETA_CPU_WORKER_MAX_CONCURRENCY", "4"),
             },
@@ -335,7 +326,6 @@ def start(args: argparse.Namespace) -> int:
     frontend_log = LOG_ROOT / "frontend.log"
     frontend_env = {
         **os.environ,
-        "API_PROXY_URL": f"http://127.0.0.1:{port}",
         "AUTH_PROXY_URL": f"http://127.0.0.1:{auth_port}",
         "STORAGE_PROXY_URL": f"http://127.0.0.1:{storage_port}",
         "PRACTICE_PROXY_URL": f"http://127.0.0.1:{practice_port}",
@@ -356,8 +346,6 @@ def start(args: argparse.Namespace) -> int:
 
     save_state(
         {
-            "api_pid": api_proc.pid,
-            "api_port": port,
             "auth_pid": auth_proc.pid,
             "auth_port": auth_port,
             "storage_pid": storage_proc.pid,
@@ -378,7 +366,6 @@ def start(args: argparse.Namespace) -> int:
             "frontend_port": FRONTEND_PORT,
         }
     )
-    print(f"API running at http://127.0.0.1:{port} (logs: {log_path.relative_to(ROOT)})")
     print(f"Auth running at http://127.0.0.1:{auth_port} (logs: {auth_log.relative_to(ROOT)})")
     print(f"Storage running at http://127.0.0.1:{storage_port} (logs: {storage_log.relative_to(ROOT)})")
     print(f"Practice running at http://127.0.0.1:{practice_port} (logs: {practice_log.relative_to(ROOT)})")
@@ -389,7 +376,7 @@ def start(args: argparse.Namespace) -> int:
     print(f"Workers: IO pid {io_proc.pid}, CPU pid {cpu_proc.pid}")
     print(
         f"Frontend at http://localhost:{FRONTEND_PORT} "
-        f"(logs: {frontend_log.relative_to(ROOT)}, proxy → :{port} auth → :{auth_port} "
+        f"(logs: {frontend_log.relative_to(ROOT)}, proxy auth → :{auth_port} "
         f"storage → :{storage_port} practice → :{practice_port} content → :{content_port} "
         f"study → :{study_port} library → :{library_port} admin → :{admin_port})"
     )

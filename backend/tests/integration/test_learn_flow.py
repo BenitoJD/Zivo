@@ -18,7 +18,7 @@ from app.services.question_pool import (
     save_progress,
 )
 
-pytest.importorskip("app.main")
+pytest.importorskip("app.config")
 
 
 def _db_reachable() -> bool:

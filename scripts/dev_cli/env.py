@@ -15,6 +15,7 @@ CONTENT_DIR = ROOT / "content"
 STUDY_DIR = ROOT / "study"
 LIBRARY_DIR = ROOT / "library"
 ADMIN_DIR = ROOT / "admin"
+WORKERS_DIR = ROOT / "workers"
 FRONTEND_DIR = ROOT / "frontend"
 BACKEND_DEFAULTS = BACKEND_DIR / ".env.example"
 

@@ -102,11 +102,12 @@ gh run watch <run-id> --exit-status
 Expected deploy behavior:
 
 - Deploy job (self-hosted `zivo` runner): `scripts/deploy-vps-local-build.sh`
-  builds and pushes `zivo-api`, `zivo-auth`, `zivo-storage`, `zivo-practice`,
+  builds and pushes `zivo-migrate`, `zivo-auth`, `zivo-storage`, `zivo-practice`,
   `zivo-content`, `zivo-study`, `zivo-library`, `zivo-admin`, `zivo-worker`,
   and `zivo-web`, tagged `Zivo_0.1.<run>`.
 - Alembic Jobs run per service image before rolling HTTP deployments.
-- Workers use `ghcr.io/<owner>/zivo-worker`, not `zivo-api`.
+- Product schema uses `ghcr.io/<owner>/zivo-migrate`. Workers use
+  `ghcr.io/<owner>/zivo-worker`. There is no `zivo-api` Deployment.
 - After rollout, `scripts/promote-prod-image-tags.sh` commits prod tags to
   `main`.
 
@@ -149,8 +150,8 @@ For each rollout, verify:
 
 - Deployments are available.
 - The `alembic-migrate` Job completed successfully.
-- Old api/worker pods are gone or terminating.
-- New api, web, worker-eta-cpu, worker-eta-io pods are running.
+- Old zivo-api pods are gone (that release is uninstalled).
+- New auth/storage/practice/content/study/library/admin, web, worker-eta-cpu, worker-eta-io pods are running.
 - Running pod images use the new `Zivo_0.1.<run>` tag.
 - No relevant pods are in `CrashLoopBackOff`, `ImagePullBackOff`, `ErrImagePull`,
   `Pending`, or repeatedly restarting.
@@ -158,7 +159,7 @@ For each rollout, verify:
 Useful waits, still read-only:
 
 ```bash
-ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo rollout status deployment/zivo-api --timeout=10m'
+ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo rollout status deployment/zivo-auth --timeout=10m'
 ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo rollout status deployment/worker-eta-cpu --timeout=10m'
 ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo rollout status deployment/worker-eta-io --timeout=10m'
 ```

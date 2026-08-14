@@ -35,7 +35,7 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app
 
-COPY backend/ /app/
+COPY backend/app /app/app
 COPY backend/scripts/slim_service_tree.py /tmp/slim_service_tree.py
 COPY --chown=appuser:appuser study/study_main.py /app/study_main.py
 COPY --chown=appuser:appuser study/study_api /app/study_api

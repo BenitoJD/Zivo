@@ -5,7 +5,7 @@ backoffLimit: 2
 activeDeadlineSeconds: 900
 
 image:
-  repository: ghcr.io/benitojd/zivo-api
+  repository: ghcr.io/benitojd/zivo-migrate
   tag: latest
   pullPolicy: IfNotPresent
 

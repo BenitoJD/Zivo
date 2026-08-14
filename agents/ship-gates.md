@@ -46,7 +46,7 @@ Optional: pass a scope when you only changed one side:
 ### Backend
 
 1. `python -m ruff check .` — unused imports, undefined names (`E9`, `F`)
-2. Import smoke: `from app.main import app`
+2. Import smoke: no `app/main.py`; `from app.db import is_db_outage`
 3. Worker import smoke: `from app.eta.worker import run_eta_worker` (and the IO
    worker) must not load `app.api` or a sibling `*_api` package
 4. `python -m pytest tests/unit/ -q --tb=no`

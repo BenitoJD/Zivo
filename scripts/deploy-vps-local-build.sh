@@ -25,7 +25,7 @@ fi
 TAG="${1:-Zivo_0.1.$(date +%Y%m%d%H%M)}"
 REPO="${REPO:-/opt/zivo}"
 OWNER="${OWNER:-benitojd}"
-API_IMAGE="ghcr.io/${OWNER}/zivo-api:${TAG}"
+MIGRATE_IMAGE="ghcr.io/${OWNER}/zivo-migrate:${TAG}"
 AUTH_IMAGE="ghcr.io/${OWNER}/zivo-auth:${TAG}"
 STORAGE_IMAGE="ghcr.io/${OWNER}/zivo-storage:${TAG}"
 PRACTICE_IMAGE="ghcr.io/${OWNER}/zivo-practice:${TAG}"
@@ -157,7 +157,7 @@ git reset --hard origin/main
 echo "Deploying $(git rev-parse --short HEAD) as ${TAG}"
 
 if [[ "${PREBUILT:-0}" != "1" ]]; then
-  docker build --pull -t "${API_IMAGE}" -f backend/Dockerfile --target runtime backend/
+  docker build --pull -t "${MIGRATE_IMAGE}" -f backend/Dockerfile --target runtime backend/
   docker build --pull -t "${AUTH_IMAGE}" -f auth/Dockerfile --target runtime auth/
   docker build --pull -t "${STORAGE_IMAGE}" -f storage/Dockerfile --target runtime storage/
   docker build --pull -t "${PRACTICE_IMAGE}" -f practice/Dockerfile --target runtime .
@@ -170,7 +170,6 @@ if [[ "${PREBUILT:-0}" != "1" ]]; then
     --build-arg NEXT_PUBLIC_API_URL= \
     --build-arg NEXT_PUBLIC_AUTH_URL= \
     --build-arg NEXT_PUBLIC_STORAGE_URL= \
-    --build-arg API_PROXY_URL=http://zivo-api:8000 \
     --build-arg AUTH_PROXY_URL=http://zivo-auth:8000 \
     --build-arg STORAGE_PROXY_URL=http://zivo-storage:8000 \
     --build-arg PRACTICE_PROXY_URL=http://zivo-practice:8000 \
@@ -180,7 +179,7 @@ if [[ "${PREBUILT:-0}" != "1" ]]; then
     --build-arg ADMIN_PROXY_URL=http://zivo-admin:8000 \
     frontend/
   # Push to GHCR; prod k3s pulls these (images are public, unique tag per deploy).
-  docker push "${API_IMAGE}"
+  docker push "${MIGRATE_IMAGE}"
   docker push "${AUTH_IMAGE}"
   docker push "${STORAGE_IMAGE}"
   docker push "${PRACTICE_IMAGE}"
@@ -191,7 +190,7 @@ if [[ "${PREBUILT:-0}" != "1" ]]; then
   docker push "${WORKER_IMAGE}"
   docker push "${WEB_IMAGE}"
 else
-  echo "PREBUILT=1 - ${API_IMAGE}, ${AUTH_IMAGE}, ${STORAGE_IMAGE}, ${PRACTICE_IMAGE}, ${CONTENT_IMAGE}, ${STUDY_IMAGE}, ${LIBRARY_IMAGE}, ${ADMIN_IMAGE}, ${WORKER_IMAGE}, and ${WEB_IMAGE} assumed already in GHCR"
+  echo "PREBUILT=1 - ${MIGRATE_IMAGE}, ${AUTH_IMAGE}, ${STORAGE_IMAGE}, ${PRACTICE_IMAGE}, ${CONTENT_IMAGE}, ${STUDY_IMAGE}, ${LIBRARY_IMAGE}, ${ADMIN_IMAGE}, ${WORKER_IMAGE}, and ${WEB_IMAGE} assumed already in GHCR"
 fi
 
 ensure_ghcr_pull_secret
@@ -294,15 +293,15 @@ kubectl -n "$NS" delete job alembic-migrate --ignore-not-found=true
 helm upgrade --install db-schema ./infra/k8s/charts/db-schema -n "$NS" \
   -f infra/k8s/environments/prod/backend-release-values.yaml \
   --set image.tag="${TAG}" \
-  --set image.repository="ghcr.io/${OWNER}/zivo-api" \
+  --set image.repository="ghcr.io/${OWNER}/zivo-migrate" \
   --set namespace="$NS" \
   --set jobName=alembic-migrate \
   "${PULL_SECRET_SET[@]}" \
   --wait --wait-for-jobs --timeout 15m
 wait_job alembic-migrate 15m
 
-# Note: code execution (Judge0) runs on a dedicated box, not in this cluster — see
-# infra/judge0/. The API reaches it via JUDGE0_URL (set in the api chart values).
+# Note: code execution (Judge0) runs on a dedicated box, not in this cluster (see
+# infra/judge0/). Practice reaches it via JUDGE0_URL (set in the practice chart).
 
 for release in zivo-worker-io zivo-worker-cpu; do
   helm_record "$release"
@@ -382,14 +381,11 @@ helm upgrade --install zivo-admin ./infra/k8s/charts/admin -n "$NS" \
   --wait --timeout 20m
 rollout_wait deployment zivo-admin 20m
 
-helm_record zivo-api
-helm upgrade --install zivo-api ./infra/k8s/charts/api -n "$NS" \
-  -f infra/k8s/environments/prod/backend-release-values.yaml \
-  -f infra/k8s/environments/prod/api-values.yaml \
-  --set image.tag="${TAG}" \
-  "${PULL_SECRET_SET[@]}" \
-  --wait --timeout 20m
-rollout_wait deployment zivo-api 20m
+echo "Removing health-only zivo-api if present"
+helm uninstall zivo-api -n "$NS" || true
+kubectl -n "$NS" delete ingress zivo-api --ignore-not-found=true
+kubectl -n "$NS" delete deployment zivo-api --ignore-not-found=true
+kubectl -n "$NS" delete service zivo-api --ignore-not-found=true
 
 helm_record zivo-web
 helm upgrade --install zivo-web ./infra/k8s/charts/web -n "$NS" \

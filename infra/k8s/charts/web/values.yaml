@@ -13,8 +13,6 @@ service:
 
 # Server-side /api fetches from RSC (learn blog, sitemap). Override in prod.
 env:
-  - name: API_PROXY_URL
-    value: http://zivo-api:8000
   - name: AUTH_PROXY_URL
     value: http://zivo-auth:8000
   - name: STORAGE_PROXY_URL
@@ -30,7 +28,7 @@ env:
   - name: ADMIN_PROXY_URL
     value: http://zivo-admin:8000
   - name: NEXT_PUBLIC_API_URL
-    value: https://api.zivo.fyi
+    value: ""
 
 ingress:
   enabled: false

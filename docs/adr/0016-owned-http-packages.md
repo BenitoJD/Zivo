@@ -4,10 +4,10 @@
 
 Product HTTP routers leave `backend/app/api/` and live in the owning service
 package (`practice_api`, `content_api`, `study_api`, `library_api`, `admin_api`).
-The ETA scheduler loop runs on the IO worker process. `zivo-api` is health plus
-the Next catch-all, not a BFF and not a product router host. Docker images COPY
-that process's entrypoint, then `slim_service_tree.py` drops sibling packages,
+The ETA scheduler loop runs on the IO worker process. Docker images COPY
+that process's entrypoint plus `backend/app`, then `slim_service_tree.py` drops sibling packages,
 product routers, frontend, and `app.*` modules the process never imports.
+There is no health-only `zivo-api` process ([ADR 0017](0017-owned-copy-no-api-shell.md)).
 
 **Why.** Mounting another process's routes from a shared `app.api` tree meant
 every HTTP image still *contained* the monolith even after the process split.
@@ -26,8 +26,7 @@ workers (`FOR UPDATE SKIP LOCKED` already allows more than one IO replica).
 - Auth/storage: their own package only. They do not COPY `backend/`.
 
 **Not a BFF.** Next rewrites each `/api/...` prefix to the owning in-cluster
-service. `zivo-api` remains so `/api/health` and the catch-all have a target.
-It does not aggregate product payloads.
+service. Unmatched `/api/*` 404s at Next. `/health` rewrites to auth.
 
 **Considered and rejected.**
 

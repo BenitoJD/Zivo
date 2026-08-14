@@ -11,7 +11,7 @@ Use for local development on the Zivo monorepo.
 
 ```bash
 ./scripts/dev.sh setup          # ~/.venv/zivo + pip install
-./scripts/dev.sh start          # deps + migrate + API :8200 + auth :8201 + storage :8202 + practice :8203 + content :8204 + study :8205 + library :8206 + admin :8207 + Next.js :3000
+./scripts/dev.sh start          # deps + migrate + auth :8201 + storage :8202 + practice :8203 + content :8204 + study :8205 + library :8206 + admin :8207 + Next.js :3000
 ./scripts/dev.sh stop
 ./scripts/dev.sh doctor
 ./scripts/dev.sh db migrate     # alembic upgrade head
@@ -22,7 +22,8 @@ Use for local development on the Zivo monorepo.
 
 | Path | Purpose |
 |------|---------|
-| `backend/app/api/` | Health-only FastAPI (`zivo-api`) |
+| `backend/app/` | Shared product library (engines, models, services). Not an HTTP process |
+| `backend/app/api/` | Shared health helper imported by HTTP services |
 | `backend/app/workers/` | Ingest / normalize jobs (add here) |
 | `backend/schema/*.sql` | DDL source for baseline Alembic revisions |
 | `backend/alembic/versions/` | Alembic migration chain |

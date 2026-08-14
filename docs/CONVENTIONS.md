@@ -24,11 +24,11 @@ The monorepo layout and the local-dev commands are in
 [AGENTS.md → Layout](../AGENTS.md#layout) and
 [AGENTS.md → Local development](../AGENTS.md#local-development). Do not duplicate them.
 
-The one thing to internalize: **product API is `backend/` (health only; ETA
-scheduler runs on IO workers), identity is `auth/`, object storage is `storage/`,
-practice/content/study/library/admin own their HTTP route packages (`practice_api/`
-and siblings), workers ship `workers/Dockerfile`, frontend is `frontend/`, and the
-package manager is
+The one thing to internalize: **product HTTP is owned FastAPI packages
+(`practice/`, `content/`, `study/`, `library/`, `admin/`), identity is `auth/`,
+object storage is `storage/`, shared engines/models live in `backend/app`,
+workers ship `workers/Dockerfile`, product Alembic ships `zivo-migrate`,
+frontend is `frontend/`, and the package manager is
 `npm`** (proof:
 [frontend/package-lock.json](../frontend/package-lock.json),
 CI `npm ci` ([.github/workflows/ci.yml](../.github/workflows/ci.yml)),
@@ -44,7 +44,7 @@ from another project and is stale; fix it to match the proof above.
   route packages) stay thin: validate input, resolve auth/access, call a service,
   shape the response. Business logic lives in `app/services/`. Persistence and
   raw SQL live in `app/repositories/` and the services that own a table.
-  `backend/app/api/` is health only.
+  `backend/app/api/` is a shared health helper, not a product HTTP process.
 - **Why.** Thin routes keep request handling testable and let the same logic run from
   a worker as from an endpoint.
 - **Proof.** `study/study_api/mcq.py:173` (`grade`) validates + delegates to

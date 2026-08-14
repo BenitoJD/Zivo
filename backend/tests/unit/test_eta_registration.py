@@ -51,9 +51,9 @@ def test_build_job_resolves_workload_from_registry() -> None:
     assert str(io_job.workload) == "io", f"fetch_file must be io, got {io_job.workload}"
 
 
-def test_importing_main_registers_handlers() -> None:
-    """The real API import path: importing app.main must register all handlers."""
-    import app.main  # noqa: F401
+def test_importing_eta_package_registers_handlers() -> None:
+    """HTTP and worker processes register handlers by importing ``app.eta``."""
+    import app.eta  # noqa: F401
 
     assert get_handler("ingest.parse_document") is not None
     assert get_handler("summarize.generate") is not None

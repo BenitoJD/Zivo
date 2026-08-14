@@ -1,7 +1,5 @@
 import type { NextConfig } from "next";
 
-const API_PROXY_URL = process.env.API_PROXY_URL ?? "http://127.0.0.1:8200";
-
 const nextConfig: NextConfig = {
   output: "standalone",
   // Strict Mode double-invokes effects in dev, which leaves framer-motion's
@@ -37,6 +35,7 @@ const nextConfig: NextConfig = {
       { source: "/api/newspaper/admin/:path*", destination: `${contentProxy}/api/newspaper/admin/:path*` },
       { source: "/api/newspaper/:path*", destination: `${practiceProxy}/api/newspaper/:path*` },
       { source: "/api/learn/:path*", destination: `${contentProxy}/api/learn/:path*` },
+      { source: "/api/learn", destination: `${contentProxy}/api/learn` },
       { source: "/api/artifacts/:path*", destination: `${studyProxy}/api/artifacts/:path*` },
       { source: "/api/assertions/:path*", destination: `${studyProxy}/api/assertions/:path*` },
       { source: "/api/chat/:path*", destination: `${studyProxy}/api/chat/:path*` },
@@ -58,8 +57,9 @@ const nextConfig: NextConfig = {
       { source: "/api/models", destination: `${adminProxy}/api/models` },
       { source: "/api/debug/:path*", destination: `${adminProxy}/api/debug/:path*` },
       { source: "/api/debug", destination: `${adminProxy}/api/debug` },
-      { source: "/api/:path*", destination: `${API_PROXY_URL}/api/:path*` },
-      { source: "/health", destination: `${API_PROXY_URL}/health` },
+      { source: "/api/health/:path*", destination: `${authProxy}/api/health/:path*` },
+      { source: "/api/health", destination: `${authProxy}/api/health` },
+      { source: "/health", destination: `${authProxy}/health` },
     ];
   },
 };

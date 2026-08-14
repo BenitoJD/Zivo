@@ -2,6 +2,7 @@ import os
 from collections.abc import Generator
 
 from sqlalchemy import MetaData, create_engine, text
+from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import get_settings
@@ -43,3 +44,31 @@ def get_db() -> Generator[Session, None, None]:
 def check_database() -> None:
     with engine.connect() as conn:
         conn.execute(text("SELECT 1"))
+
+
+# SQLSTATE class prefixes for transient outage / infra conditions. Anything here
+# is genuinely "the DB is unreachable or refusing the operation right now" and
+# deserves a 503 with a retry hint. See https://www.postgresql.org/docs/current/errcodes-appendix.html
+_OUTAGE_SQLSTATE_CLASSES = {"08", "53", "57"}  # connection / insufficient_resources / operator_intervention
+
+
+def is_db_outage(exc: SQLAlchemyError) -> bool:
+    """True only for connection / infra failures, not for SQL or data bugs.
+
+    A blanket ``except SQLAlchemyError -> 503`` (the old handler) turned every
+    DB error into "Database unavailable" — so a typo in a query (ProgrammingError)
+    or a violated constraint (IntegrityError) reported itself as an outage. That
+    is how two unrelated bugs (AmbiguousParameter on document open, and the
+    immutable-measurement trigger on signup) hid behind one misleading message.
+
+    We classify by SQLAlchemy subclass first (OperationalError/InterfaceError are
+    always connection-layer), then fall back to the driver's SQLSTATE class for
+    cases SQLAlchemy doesn't subsume (e.g. a server-side admin shutdown, 57P01,
+    still arrives as OperationalError but some clustered/proxy setups raise a
+    bare DBAPIError with the state set).
+    """
+    if isinstance(exc, (OperationalError, InterfaceError)):
+        return True
+    orig = getattr(exc, "orig", None)
+    sqlstate = getattr(orig, "sqlstate", None)
+    return bool(sqlstate) and sqlstate[:2] in _OUTAGE_SQLSTATE_CLASSES

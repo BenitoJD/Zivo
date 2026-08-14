@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parents[2]
+REPO = BACKEND.parent
 
 
 def _walk_imports(path: Path) -> list[str]:
@@ -61,13 +62,14 @@ def test_eta_package_does_not_import_app_api() -> None:
 
 
 def test_worker_entrypoints_do_not_import_app_api() -> None:
-    for name in (
-        "run_eta_worker_async.py",
-        "run_eta_worker_cpu.py",
-        "run_newspaper_ingest.py",
-        "app/eta/worker.py",
-    ):
-        path = BACKEND / name
+    workers = REPO / "workers"
+    paths = [
+        workers / "run_eta_worker_async.py",
+        workers / "run_eta_worker_cpu.py",
+        workers / "run_newspaper_ingest.py",
+        BACKEND / "app" / "eta" / "worker.py",
+    ]
+    for path in paths:
         for imported in _walk_imports(path):
             assert imported != "app.api"
             assert not imported.startswith("app.api.")
