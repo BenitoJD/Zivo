@@ -16,7 +16,7 @@ from app.services import saved_notes as saved_notes_service
 from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.services.guest_session import guest_session_for_read
 from app.services.rate_limit import rate_limit_dependency
-from app.api.access import require_document, require_ready_document
+from app.services.document_access import require_document, require_ready_document
 from app.services import interview as interview_service
 from app.services import mains as mains_service
 from app.services.memory_palace import ensure_palace

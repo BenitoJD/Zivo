@@ -6,7 +6,7 @@ conversational follow-ups ("go deeper", "thanks") that need the live model.
 
 from __future__ import annotations
 
-from app.api.chat import _cache_eligible
+from study_api.chat import _cache_eligible
 
 
 def _base(**overrides: object) -> bool:

@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.api.access import require_document
+from app.services.document_access import require_document
 from app.config import get_settings
 from app.db import get_db
 from app.models import Account

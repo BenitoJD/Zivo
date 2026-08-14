@@ -22,7 +22,7 @@ Use for local development on the Zivo monorepo.
 
 | Path | Purpose |
 |------|---------|
-| `backend/app/api/` | FastAPI routes |
+| `backend/app/api/` | Health-only FastAPI (`zivo-api`) |
 | `backend/app/workers/` | Ingest / normalize jobs (add here) |
 | `backend/schema/*.sql` | DDL source for baseline Alembic revisions |
 | `backend/alembic/versions/` | Alembic migration chain |

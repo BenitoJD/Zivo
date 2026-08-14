@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from app.api.access import forbid_newspaper_source, require_document_source
+from app.services.document_access import forbid_newspaper_source, require_document_source
 from app.models import Document
 
 

@@ -27,7 +27,7 @@ from app.services.embed import embed_query
 from app.services.llm_router import is_failover_eligible, stream_chat_completion
 from app.services.prompts import get_prompt
 from app.services.guest import can_access_document
-from app.api.access import require_document
+from app.services.document_access import require_document
 from app.services.guest_session import guest_session_for_read, optional_guest_session
 from app.services.response_cache import get_cached_response, store_response
 from app.services.rate_limit import rate_limit_dependency

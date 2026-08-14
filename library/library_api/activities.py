@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sse_starlette.sse import EventSourceResponse
 from sqlalchemy.orm import Session
 
-from app.api.access import require_document
+from app.services.document_access import require_document
 from app.db import SessionLocal, get_db
 from app.models import Account
 from app.repositories.intel import get_activity

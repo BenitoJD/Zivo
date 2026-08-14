@@ -1,5 +1,4 @@
 import logging
-from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,29 +6,20 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 
-import app.eta  # noqa: F401  register scheduler definitions
 from app.api.router import api_router
 from app.config import get_settings
-from app.eta.scheduler_runtime import eta_scheduler_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-@asynccontextmanager
-async def lifespan(_: FastAPI):
-    eta_scheduler_service.start()
-    yield
-    eta_scheduler_service.stop()
-
-
-# Hide /docs, /redoc, /openapi.json in production — the ingress routes "/" with
-# Prefix, so without this the full API surface (including admin paths) would be
-# publicly discoverable at api.zivo.fyi. Dev keeps the docs for local iteration.
+# Hide /docs, /redoc, /openapi.json in production. The ingress routes "/" with
+# Prefix, so without this the health surface would be publicly discoverable at
+# api.zivo.fyi. Dev keeps the docs for local iteration. ETA scheduler runs on
+# the IO worker process, not this health-only API.
 app = FastAPI(
     title="Zivo API",
     version="0.1.0",
-    lifespan=lifespan,
     docs_url=None if settings.is_production else "/docs",
     redoc_url=None if settings.is_production else "/redoc",
     openapi_url=None if settings.is_production else "/openapi.json",

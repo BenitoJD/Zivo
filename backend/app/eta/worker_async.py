@@ -18,6 +18,7 @@ from app.db_search_path import (
     attach_search_path,
 )
 from app.eta import context as eta_context
+from app.eta.scheduler_runtime import eta_scheduler_service
 from app.eta.execution_state import cancel_descendants_async, update_execution_state_async
 from app.eta.handlers import io as _io_handlers  # noqa: F401
 from app.eta.lease import HEARTBEAT_INTERVAL_SECONDS, job_duration_exceeded, lease_deadline_from, renew_lease_async
@@ -359,61 +360,65 @@ async def run_eta_worker_async(should_stop: Callable[[], bool] | None = None) ->
     stop_requested = should_stop or (lambda: False)
     semaphore = asyncio.Semaphore(CONCURRENCY)
     in_flight: set[asyncio.Task] = set()  # job handler tasks only (drain set)
+    eta_scheduler_service.start()
     _spawn(_listen_for_job_notifications())
     _spawn(_periodic_stale_reaper())
     try:
-        async with AsyncSessionLocal() as session, session.begin():
-            reclaimed = await _reclaim_stale_jobs(session)
-        if reclaimed:
-            logger.info("Reclaimed stale running job(s) on startup", extra={"count": reclaimed})
-    except Exception:
-        logger.exception("Failed to reclaim stale jobs on startup")
-    logger.info(
-        "IO ETA worker starting",
-        extra={
-            "workloads": [w.value for w in WORKLOADS],
-            "concurrency": CONCURRENCY,
-            "llm_max_concurrent": LLM_MAX_CONCURRENT,
-        },
-    )
-    while True:
-        # Graceful drain: stop reserving new jobs; once in-flight handlers finish,
-        # exit cleanly so a SIGTERM during deploy/eviction doesn't orphan work.
-        if stop_requested():
-            if not in_flight:
-                logger.info("IO ETA worker drained — exiting")
-                break
-            await asyncio.sleep(POLL_INTERVAL)
-            continue
-
-        await semaphore.acquire()
         try:
             async with AsyncSessionLocal() as session, session.begin():
-                reserved = await _reserve_next_job(session)
-        except Exception as exc:
-            semaphore.release()
-            logger.exception("ETA async worker loop error", extra={"error": str(exc)})
-            await asyncio.sleep(POLL_INTERVAL)
-            continue
+                reclaimed = await _reclaim_stale_jobs(session)
+            if reclaimed:
+                logger.info("Reclaimed stale running job(s) on startup", extra={"count": reclaimed})
+        except Exception:
+            logger.exception("Failed to reclaim stale jobs on startup")
+        logger.info(
+            "IO ETA worker starting",
+            extra={
+                "workloads": [w.value for w in WORKLOADS],
+                "concurrency": CONCURRENCY,
+                "llm_max_concurrent": LLM_MAX_CONCURRENT,
+            },
+        )
+        while True:
+            # Graceful drain: stop reserving new jobs; once in-flight handlers finish,
+            # exit cleanly so a SIGTERM during deploy/eviction doesn't orphan work.
+            if stop_requested():
+                if not in_flight:
+                    logger.info("IO ETA worker drained — exiting")
+                    break
+                await asyncio.sleep(POLL_INTERVAL)
+                continue
 
-        if not reserved:
-            semaphore.release()
+            await semaphore.acquire()
             try:
-                await asyncio.wait_for(_job_wake.wait(), timeout=POLL_INTERVAL)
-            except TimeoutError:
-                pass
-            _job_wake.clear()
-            continue
+                async with AsyncSessionLocal() as session, session.begin():
+                    reserved = await _reserve_next_job(session)
+            except Exception as exc:
+                semaphore.release()
+                logger.exception("ETA async worker loop error", extra={"error": str(exc)})
+                await asyncio.sleep(POLL_INTERVAL)
+                continue
 
-        job_id, execution_id = reserved
-        if execution_id:
-            async with AsyncSessionLocal() as session, session.begin():
-                await update_execution_state_async(session, execution_id)
+            if not reserved:
+                semaphore.release()
+                try:
+                    await asyncio.wait_for(_job_wake.wait(), timeout=POLL_INTERVAL)
+                except TimeoutError:
+                    pass
+                _job_wake.clear()
+                continue
 
-        logger.info("ETA async job reserved", extra={"job_id": str(job_id)})
-        task = asyncio.create_task(_handle_job(job_id, execution_id, semaphore))
-        in_flight.add(task)
-        task.add_done_callback(in_flight.discard)
+            job_id, execution_id = reserved
+            if execution_id:
+                async with AsyncSessionLocal() as session, session.begin():
+                    await update_execution_state_async(session, execution_id)
+
+            logger.info("ETA async job reserved", extra={"job_id": str(job_id)})
+            task = asyncio.create_task(_handle_job(job_id, execution_id, semaphore))
+            in_flight.add(task)
+            task.add_done_callback(in_flight.discard)
+    finally:
+        eta_scheduler_service.stop()
 
 
 def run_eta_worker_async_entrypoint() -> None:

@@ -26,3 +26,14 @@ def test_study_routes_mounted() -> None:
     assert any(p == "/api/guest" or p.startswith("/api/guest") for p in paths)
     assert any(p.startswith("/api/offline") for p in paths)
     assert any(p.startswith("/api/reference") for p in paths)
+
+
+def test_does_not_load_sibling_api_packages() -> None:
+    import sys
+
+    loaded = [
+        m
+        for m in sys.modules
+        if m.split(".")[0] in {"practice_api", "content_api", "library_api", "admin_api"}
+    ]
+    assert loaded == []

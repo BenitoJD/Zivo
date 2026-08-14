@@ -26,8 +26,16 @@ run_backend() {
   echo "==> backend: import check"
   (cd backend && "$PYTHON_BIN" -c "from app.main import app; assert app.title == 'Zivo API'")
 
-  echo "==> worker: import smoke (no app.api)"
-  (cd backend && "$PYTHON_BIN" -c "from app.eta.worker import run_eta_worker; import sys; loaded = [m for m in sys.modules if m == 'app.api' or m.startswith('app.api.')]; assert not loaded, loaded; assert callable(run_eta_worker)")
+  echo "==> worker: import smoke (no app.api or HTTP service packages)"
+  (cd backend && "$PYTHON_BIN" -c "
+from app.eta.worker import run_eta_worker
+from app.eta.worker_async import run_eta_worker_async
+import sys
+pkgs = {'practice_api', 'content_api', 'study_api', 'library_api', 'admin_api'}
+loaded = [m for m in sys.modules if m == 'app.api' or m.startswith('app.api.') or m.split('.')[0] in pkgs]
+assert not loaded, loaded
+assert callable(run_eta_worker) and callable(run_eta_worker_async)
+")
 
   echo "==> backend: unit tests"
   (cd backend && "$PYTHON_BIN" -m pytest tests/unit/ -q --tb=no)
@@ -59,11 +67,12 @@ run_product_service() {
   local name="$1"
   local title="$2"
   local module="$3"
+  local own_pkg="${name}_api"
   echo "==> ${name}: ruff"
   (cd "$name" && "$PYTHON_BIN" -m ruff check .)
 
   echo "==> ${name}: import check"
-  (cd "$name" && PYTHONPATH="../backend:." "$PYTHON_BIN" -c "from ${module} import app; assert app.title == '${title}'")
+  (cd "$name" && PYTHONPATH="../backend:." "$PYTHON_BIN" -c "from ${module} import app; import sys; siblings=[m for m in sys.modules if m.split('.')[0] in {'practice_api','content_api','study_api','library_api','admin_api'} - {'${own_pkg}'}]; assert not siblings, siblings; assert app.title == '${title}'")
 
   echo "==> ${name}: unit tests"
   (cd "$name" && PYTHONPATH="../backend:." "$PYTHON_BIN" -m pytest tests/unit/ -q --tb=no)

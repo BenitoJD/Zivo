@@ -51,3 +51,11 @@ def test_product_api_keeps_health_only() -> None:
         if p.startswith("/api/") and p not in {"/api/health", "/api/health/ready"}
     }
     assert extra == set()
+
+
+def test_backend_api_package_has_no_product_routers() -> None:
+    from pathlib import Path
+
+    api_dir = Path(__file__).resolve().parents[2] / "app" / "api"
+    names = {p.name for p in api_dir.iterdir() if p.suffix == ".py"}
+    assert names == {"__init__.py", "health.py", "router.py"}

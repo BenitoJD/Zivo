@@ -750,7 +750,7 @@ def test_learn_api_blocks_test_until_learn_complete() -> None:
     from unittest.mock import MagicMock, patch
     from uuid import uuid4
 
-    from app.api.learn import _learn_queue_payload
+    from study_api.learn import _learn_queue_payload
     from app.models import Document
 
     doc = Document(
@@ -766,18 +766,18 @@ def test_learn_api_blocks_test_until_learn_complete() -> None:
     db = MagicMock()
 
     with (
-        patch("app.api.learn.require_document", return_value=doc),
-        patch("app.api.learn.newspaper_learn_pool_complete", return_value=False),
-        patch("app.api.learn.set_serve_budget_mode") as set_mode,
-        patch("app.api.learn.get_progress", return_value={"answered_ids": []}),
+        patch("study_api.learn.require_document", return_value=doc),
+        patch("study_api.learn.newspaper_learn_pool_complete", return_value=False),
+        patch("study_api.learn.set_serve_budget_mode") as set_mode,
+        patch("study_api.learn.get_progress", return_value={"answered_ids": []}),
         patch(
-            "app.api.learn.build_learn_queue_state",
+            "study_api.learn.build_learn_queue_state",
             return_value={"budget_mode": "learn", "page_complete": False},
         ),
-        patch("app.api.learn._workspace_state", return_value={}),
-        patch("app.api.learn._artifact_concepts", return_value=[]),
+        patch("study_api.learn._workspace_state", return_value={}),
+        patch("study_api.learn._artifact_concepts", return_value=[]),
         patch("app.services.newspaper.is_newspaper_document", return_value=True),
-        patch("app.api.learn.is_page_complete", return_value=False),
+        patch("study_api.learn.is_page_complete", return_value=False),
     ):
         out = _learn_queue_payload(db, doc.id, doc, None, mode="test")
 

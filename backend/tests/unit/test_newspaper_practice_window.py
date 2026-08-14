@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from app.api.access import forbid_stale_newspaper_practice
+from app.services.document_access import forbid_stale_newspaper_practice
 from app.models import Document
 from app.repositories import newspaper as newspaper_repo
 from app.services.newspaper import edition_in_practice_window, window_start

@@ -2,9 +2,9 @@
 
 The worker-internal stale reaper only runs inside worker pods. If *all* worker
 pods are down (node failure, bad rollout), nothing reaps until a replacement
-starts. This schedule runs on the API pod's scheduler and reclaims orphaned
-``running`` jobs across **all** workloads, so recovery no longer depends on a
-worker being alive. See :mod:`app.eta.stale_jobs` for the orphan definition.
+starts. This schedule runs on the IO worker's in-process scheduler and reclaims
+orphaned ``running`` jobs across **all** workloads. See :mod:`app.eta.stale_jobs`
+for the orphan definition.
 """
 
 from __future__ import annotations

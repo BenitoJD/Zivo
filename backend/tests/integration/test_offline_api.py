@@ -107,7 +107,7 @@ def test_offline_pack_create_and_poll(client: TestClient) -> None:
     try:
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr("app.services.offline_pack.get_settings", lambda: _settings(True))
-            mp.setattr("app.api.offline.get_settings", lambda: _settings(True))
+            mp.setattr("study_api.offline.get_settings", lambda: _settings(True))
             # Build synchronously instead of via the ETA job (which isn't running
             # in the test process) — patch the enqueue to call build_pack inline.
             from app.services.offline_pack import build_pack
@@ -116,7 +116,7 @@ def test_offline_pack_create_and_poll(client: TestClient) -> None:
                 build_pack(db, pack_id)
                 return None
 
-            mp.setattr("app.api.offline.enqueue_offline_pack", _inline_build)
+            mp.setattr("study_api.offline.enqueue_offline_pack", _inline_build)
             # No assertions on the deck -> empty pool is fine; we test the lifecycle.
 
             res = client.post(
@@ -144,14 +144,14 @@ def test_offline_pack_ownership_isolation(client: TestClient) -> None:
     try:
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr("app.services.offline_pack.get_settings", lambda: _settings(True))
-            mp.setattr("app.api.offline.get_settings", lambda: _settings(True))
+            mp.setattr("study_api.offline.get_settings", lambda: _settings(True))
             from app.services.offline_pack import build_pack
 
             def _inline_build(db, pack_id):
                 build_pack(db, pack_id)
                 return None
 
-            mp.setattr("app.api.offline.enqueue_offline_pack", _inline_build)
+            mp.setattr("study_api.offline.enqueue_offline_pack", _inline_build)
 
             res = client.post(
                 "/api/offline/packs",

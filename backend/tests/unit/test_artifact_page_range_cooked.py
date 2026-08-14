@@ -17,7 +17,7 @@ def _make_doc(*, status: str, meta: dict | None = None) -> MagicMock:
 
 def test_cooked_doc_keeps_ready_on_page_confirm() -> None:
     """A ready+prep_complete doc must not flip to indexing or re-enqueue ingest."""
-    from app.api.artifacts import confirm_page_range
+    from study_api.artifacts import confirm_page_range
 
     doc = _make_doc(status="ready", meta={"prep_complete": True, "prep_mode": "background", "prep_phase": "complete"})
     db = MagicMock()
@@ -29,13 +29,13 @@ def test_cooked_doc_keeps_ready_on_page_confirm() -> None:
     body.prep_mode = "now"  # default — the dangerous path
 
     with (
-        patch("app.api.artifacts.require_document_source", return_value=doc),
-        patch("app.api.artifacts.refresh_document_page_count", return_value=3),
-        patch("app.api.artifacts.reset_for_new_page_range"),
-        patch("app.api.artifacts.apply_prep_meta") as apply,
-        patch("app.api.artifacts.workspace_repo.upsert_workspace") as upsert,
-        patch("app.api.artifacts.enqueue_rag_window") as enqueue,
-        patch("app.api.artifacts.enqueue_full_range_ingest") as enqueue_full,
+        patch("study_api.artifacts.require_document_source", return_value=doc),
+        patch("study_api.artifacts.refresh_document_page_count", return_value=3),
+        patch("study_api.artifacts.reset_for_new_page_range"),
+        patch("study_api.artifacts.apply_prep_meta") as apply,
+        patch("study_api.artifacts.workspace_repo.upsert_workspace") as upsert,
+        patch("study_api.artifacts.enqueue_rag_window") as enqueue,
+        patch("study_api.artifacts.enqueue_full_range_ingest") as enqueue_full,
     ):
         out = confirm_page_range("00000000-0000-4000-8000-000000000001", body, db=db, user=None, guest_id=None)
 
@@ -54,7 +54,7 @@ def test_cooked_doc_keeps_ready_on_page_confirm() -> None:
 
 def test_uncooked_doc_still_reindexes() -> None:
     """A normal (not cooked) doc keeps the existing re-index behavior."""
-    from app.api.artifacts import confirm_page_range
+    from study_api.artifacts import confirm_page_range
 
     doc = _make_doc(status="indexing", meta={"prep_mode": "background"})
     db = MagicMock()
@@ -66,13 +66,13 @@ def test_uncooked_doc_still_reindexes() -> None:
     body.prep_mode = "background"
 
     with (
-        patch("app.api.artifacts.require_document_source", return_value=doc),
-        patch("app.api.artifacts.refresh_document_page_count", return_value=3),
-        patch("app.api.artifacts.reset_for_new_page_range"),
-        patch("app.api.artifacts.apply_prep_meta") as apply,
-        patch("app.api.artifacts.workspace_repo.upsert_workspace"),
-        patch("app.api.artifacts.enqueue_rag_window"),
-        patch("app.api.artifacts.enqueue_full_range_ingest") as enqueue_full,
+        patch("study_api.artifacts.require_document_source", return_value=doc),
+        patch("study_api.artifacts.refresh_document_page_count", return_value=3),
+        patch("study_api.artifacts.reset_for_new_page_range"),
+        patch("study_api.artifacts.apply_prep_meta") as apply,
+        patch("study_api.artifacts.workspace_repo.upsert_workspace"),
+        patch("study_api.artifacts.enqueue_rag_window"),
+        patch("study_api.artifacts.enqueue_full_range_ingest") as enqueue_full,
     ):
         confirm_page_range("00000000-0000-4000-8000-000000000001", body, db=db, user=None, guest_id=None)
 

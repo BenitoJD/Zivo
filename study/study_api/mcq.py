@@ -19,7 +19,7 @@ from app.graphs.mcq_graph import grade_feedback, grade_mcq, grade_verdict, load_
 from app.models import Account, Document
 from app.services.answer_signal import record_answer_signal, resolve_subject_entity
 from app.services.auth import get_optional_user, require_csrf_or_guest
-from app.api.access import require_document
+from app.services.document_access import require_document
 from app.services.guest_session import guest_session_for_read
 from app.services.offline_pack import get_pack, is_expired, verify_pack
 from app.services.question_pool import (

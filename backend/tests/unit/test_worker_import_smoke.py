@@ -21,6 +21,35 @@ def _walk_imports(path: Path) -> list[str]:
     return names
 
 
+_HTTP_PACKAGES = (
+    "practice_api",
+    "content_api",
+    "study_api",
+    "library_api",
+    "admin_api",
+)
+
+
+def _loaded_http_modules() -> list[str]:
+    script = (
+        "from app.eta.worker import run_eta_worker\n"
+        "import sys\n"
+        "loaded = [m for m in sys.modules if m == 'app.api' or m.startswith('app.api.') "
+        "or m.split('.')[0] in "
+        f"{_HTTP_PACKAGES!r}]\n"
+        "print('\\n'.join(loaded), end='')\n"
+        "assert callable(run_eta_worker)\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=BACKEND,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return [line for line in proc.stdout.splitlines() if line]
+
+
 def test_eta_package_does_not_import_app_api() -> None:
     eta = BACKEND / "app" / "eta"
     offenders: list[str] = []
@@ -45,11 +74,23 @@ def test_worker_entrypoints_do_not_import_app_api() -> None:
 
 
 def test_importing_worker_does_not_load_app_api() -> None:
+    assert _loaded_http_modules() == []
+
+
+def test_importing_io_worker_does_not_load_http_packages() -> None:
     script = (
-        "from app.eta.worker import run_eta_worker\n"
+        "from app.eta.worker_async import run_eta_worker_async\n"
         "import sys\n"
-        "loaded = [m for m in sys.modules if m == 'app.api' or m.startswith('app.api.')]\n"
+        "loaded = [m for m in sys.modules if m == 'app.api' or m.startswith('app.api.') "
+        "or m.split('.')[0] in "
+        f"{_HTTP_PACKAGES!r}]\n"
         "assert not loaded, loaded\n"
-        "assert callable(run_eta_worker)\n"
+        "assert callable(run_eta_worker_async)\n"
     )
     subprocess.check_call([sys.executable, "-c", script], cwd=BACKEND)
+
+
+def test_io_worker_starts_scheduler() -> None:
+    text = (BACKEND / "app" / "eta" / "worker_async.py").read_text()
+    assert "eta_scheduler_service.start()" in text
+    assert "eta_scheduler_service.stop()" in text

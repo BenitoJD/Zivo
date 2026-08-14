@@ -47,7 +47,8 @@ Optional: pass a scope when you only changed one side:
 
 1. `python -m ruff check .` — unused imports, undefined names (`E9`, `F`)
 2. Import smoke: `from app.main import app`
-3. Worker import smoke: `from app.eta.worker import run_eta_worker` must not load `app.api`
+3. Worker import smoke: `from app.eta.worker import run_eta_worker` (and the IO
+   worker) must not load `app.api` or a sibling `*_api` package
 4. `python -m pytest tests/unit/ -q --tb=no`
 
 ### Auth
@@ -65,7 +66,8 @@ Optional: pass a scope when you only changed one side:
 ### Practice / content / study / library / admin
 
 Same three checks, with `PYTHONPATH=../backend:.` and import smoke on
-`practice_main` / `content_main` / `study_main` / `library_main` / `admin_main`.
+`practice_main` / `content_main` / `study_main` / `library_main` / `admin_main`
+that fails if the process loaded a sibling `*_api` package.
 
 ### Frontend
 

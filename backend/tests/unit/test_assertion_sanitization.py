@@ -8,7 +8,7 @@ devtools open see the answer before grading. The grade endpoint
 
 from __future__ import annotations
 
-from app.api.assertions import _sanitize_assertion_payload
+from study_api.assertions import _sanitize_assertion_payload
 
 
 def test_strips_single_answer_key() -> None:

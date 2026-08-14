@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.api.chat import (
+from study_api.chat import (
     _is_prefetched_reference,
     _learn_context_has_active_question,
     _message_has_prefetched_reference,

@@ -292,7 +292,7 @@ def test_grade_stream_yields_verdict_before_bookkeeping() -> None:
     import uuid
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    from app.api import mcq as mcq_api
+    from study_api import mcq as mcq_api
 
     assertion_id = uuid.uuid4()
     artifact_id = uuid.uuid4()

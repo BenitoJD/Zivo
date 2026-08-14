@@ -24,3 +24,14 @@ def test_library_routes_mounted() -> None:
     assert any(p.startswith("/api/audiobook") for p in paths)
     assert not any(p.startswith("/api/models") for p in paths)
     assert not any(p.startswith("/api/mcq") for p in paths)
+
+
+def test_does_not_load_sibling_api_packages() -> None:
+    import sys
+
+    loaded = [
+        m
+        for m in sys.modules
+        if m.split(".")[0] in {"practice_api", "content_api", "study_api", "admin_api"}
+    ]
+    assert loaded == []

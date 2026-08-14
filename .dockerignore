@@ -14,6 +14,8 @@ logs
 graphify-out
 landing
 output
+backend/tests
+backend/requirements-dev.txt
 **/.venv
 **/node_modules
 **/__pycache__

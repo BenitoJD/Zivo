@@ -13,7 +13,7 @@ from app.db import get_db
 from app.models import Account, User
 from app.repositories.intel import create_activity
 from app.services.auth import get_current_user, get_optional_user, require_csrf, require_csrf_or_guest
-from app.api.access import require_document
+from app.services.document_access import require_document
 from app.services.guest_session import guest_session_for_read
 from app.services.jobs import enqueue_generate
 from app.services.mcq_dedup import (

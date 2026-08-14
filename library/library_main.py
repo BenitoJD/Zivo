@@ -8,7 +8,8 @@ from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import app.eta  # noqa: F401  register ETA handlers before source imports
-from app.api import activities, audiobook, documents, health, sources
+from app.api import health
+from library_api import activities, audiobook, documents, sources
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)

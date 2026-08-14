@@ -44,7 +44,7 @@ pytestmark = pytest.mark.skipif(not _db_reachable(), reason="dev DB not reachabl
 def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr("app.services.document_create.save_upload", lambda *_a, **_k: "demo/test/file.pdf")
     monkeypatch.setattr("app.services.document_create.enqueue_ingest", lambda _db, _doc_id: None)
-    monkeypatch.setattr("app.api.documents.presigned_get_url", lambda _key: PUBLIC_URL)
+    monkeypatch.setattr("library_api.documents.presigned_get_url", lambda _key: PUBLIC_URL)
     return TestClient(app)
 
 

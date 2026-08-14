@@ -26,7 +26,7 @@ Decisions (rank, metric, gate, schedule, next-step) live behind named engine fac
 | **DB + extensions** | Ready | Postgres 16, pgvector — foundation for question graph |
 | **Legacy `intel` schema** | Present | `intel_foundation.sql` unchanged; product data in `intel.*` |
 | **QB app schema** | Ready | `qb_app.sql` + `qb_infra.sql` via Alembic (`./scripts/dev.sh db migrate`) |
-| **API** | Ready | FastAPI health + ETA scheduler only (`backend/`). [ADR 0015](docs/adr/0015-slim-process-images.md) |
+| **API** | Ready | FastAPI health only (`backend/`). ETA scheduler on IO workers. [ADR 0016](docs/adr/0016-owned-http-packages.md) |
 | **Auth service** | Ready | Identity FastAPI (`auth/`): signup, login, logout, session, Google OAuth. [ADR 0007](docs/adr/0007-auth-microservice.md) |
 | **Storage service** | Ready | Object FastAPI (`storage/`): MinIO writes, chunked upload, `storage.*`. [ADR 0008](docs/adr/0008-storage-microservice.md) |
 | **Practice service** | Ready | Coding / system-design / newspaper practice HTTP (`practice/`). [ADR 0010](docs/adr/0010-practice-microservice.md) |
@@ -62,7 +62,7 @@ zivo/
 ├── agents/               # prod-safety, testing notes
 ├── backend/
 │   ├── app/
-│   │   ├── api/          # HTTP routes — question endpoints here
+│   │   ├── api/          # health only; product routers live in *_api packages
 │   │   └── workers/      # generation, evaluation, embedding jobs
 │   ├── schema/           # SQL DDL (question graph next)
 │   └── scripts/

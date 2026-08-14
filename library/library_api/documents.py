@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.api.access import require_document, require_document_source
+from app.services.document_access import require_document, require_document_source
 from app.db import get_db
 from app.models import Account, Document, DocumentChunk, User
 from app.services.auth import get_current_user, get_optional_user, require_csrf, require_csrf_or_guest

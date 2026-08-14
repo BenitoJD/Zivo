@@ -37,8 +37,9 @@ ENV PATH="/opt/venv/bin:$PATH" \
 
 COPY backend/ /app/
 COPY backend/scripts/slim_service_tree.py /tmp/slim_service_tree.py
-RUN python /tmp/slim_service_tree.py practice
 COPY --chown=appuser:appuser practice/practice_main.py /app/practice_main.py
+COPY --chown=appuser:appuser practice/practice_api /app/practice_api
+RUN python /tmp/slim_service_tree.py practice
 COPY --chown=appuser:appuser practice/alembic.ini /app/alembic.ini
 COPY --chown=appuser:appuser practice/alembic /app/alembic
 COPY --chown=appuser:appuser practice/scripts/run_alembic_with_lock.py /app/scripts/run_alembic_with_lock.py

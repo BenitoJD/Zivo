@@ -9,7 +9,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api import coding as coding_api
+from practice_api import coding as coding_api
 from app.db import get_db
 from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.services.guest_session import guest_session_for_read

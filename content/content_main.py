@@ -6,7 +6,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.api import health, newspaper_admin, seo_learn
+from app.api import health
+from content_api import newspaper_admin, seo_learn
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)

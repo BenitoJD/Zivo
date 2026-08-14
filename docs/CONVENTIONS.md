@@ -24,10 +24,11 @@ The monorepo layout and the local-dev commands are in
 [AGENTS.md → Layout](../AGENTS.md#layout) and
 [AGENTS.md → Local development](../AGENTS.md#local-development). Do not duplicate them.
 
-The one thing to internalize: **product API is `backend/` (health + scheduler),
-identity is `auth/`, object storage is `storage/`, practice/content/study/library/admin
-are HTTP slices that import backend engines as libraries, workers ship
-`workers/Dockerfile`, frontend is `frontend/`, and the package manager is
+The one thing to internalize: **product API is `backend/` (health only; ETA
+scheduler runs on IO workers), identity is `auth/`, object storage is `storage/`,
+practice/content/study/library/admin own their HTTP route packages (`practice_api/`
+and siblings), workers ship `workers/Dockerfile`, frontend is `frontend/`, and the
+package manager is
 `npm`** (proof:
 [frontend/package-lock.json](../frontend/package-lock.json),
 CI `npm ci` ([.github/workflows/ci.yml](../.github/workflows/ci.yml)),
@@ -39,13 +40,14 @@ from another project and is stale; fix it to match the proof above.
 
 ### 2.1 Three layers: route → service → repository
 
-- **Rule.** HTTP routes (`app/api/`) stay thin: validate input, resolve auth/access,
-  call a service, shape the response. Business logic lives in `app/services/`.
-  Persistence and raw SQL live in `app/repositories/` and the services that own a
-  table.
+- **Rule.** HTTP routes (`practice_api/`, `study_api/`, and the other service
+  route packages) stay thin: validate input, resolve auth/access, call a service,
+  shape the response. Business logic lives in `app/services/`. Persistence and
+  raw SQL live in `app/repositories/` and the services that own a table.
+  `backend/app/api/` is health only.
 - **Why.** Thin routes keep request handling testable and let the same logic run from
   a worker as from an endpoint.
-- **Proof.** `app/api/mcq.py:76` (`grade`) validates + delegates to
+- **Proof.** `study/study_api/mcq.py:173` (`grade`) validates + delegates to
   `grade_mcq` and `app/services/question_pool.py`; `app/repositories/intel.py:23`
   holds the raw SQL it stands on.
 

@@ -20,3 +20,14 @@ def test_content_routes_mounted() -> None:
     paths = _paths()
     assert any(p.startswith("/api/learn") for p in paths)
     assert any("/newspaper/admin" in p for p in paths)
+
+
+def test_does_not_load_sibling_api_packages() -> None:
+    import sys
+
+    loaded = [
+        m
+        for m in sys.modules
+        if m.split(".")[0] in {"practice_api", "study_api", "library_api", "admin_api"}
+    ]
+    assert loaded == []

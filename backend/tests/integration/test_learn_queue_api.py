@@ -97,7 +97,7 @@ def test_learn_queue_returns_first_question(client: TestClient) -> None:
     assertion_id = str(uuid.uuid4())
     try:
         with pytest.MonkeyPatch.context() as mp:
-            mp.setattr("app.api.learn.ensure_question_pool", lambda *_a, **_k: None)
+            mp.setattr("study_api.learn.ensure_question_pool", lambda *_a, **_k: None)
             mp.setattr(
                 "app.services.question_pool.page_assertion_ids",
                 lambda *_a, **_k: [assertion_id],

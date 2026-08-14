@@ -1,9 +1,9 @@
 """ETA job queue subsystem.
 
 Importing this package registers all built-in handlers (cpu + io workloads)
-and exposes the in-process scheduler registry. Both the API process and worker
-processes import `app.eta` so `get_handler(name)` and scheduler definitions
-resolve correctly wherever jobs are built or submitted.
+and exposes the in-process scheduler registry. Worker processes import `app.eta`
+so `get_handler(name)` and scheduler definitions resolve where jobs run. The IO
+worker also starts the scheduler loop.
 """
 
 from app.eta import handlers as _handlers  # noqa: F401

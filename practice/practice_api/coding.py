@@ -23,7 +23,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
-from app.api.access import require_document
+from app.services.document_access import require_document
 from app.db import get_db
 from app.models import Account
 from app.services.answer_signal import resolve_subject_entity

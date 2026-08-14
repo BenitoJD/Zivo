@@ -11,7 +11,7 @@ from app.db import get_db
 from app.models import Account
 from app.services.auth import get_optional_user
 from app.services.guest_session import guest_session_for_read
-from app.api.access import require_document
+from app.services.document_access import require_document
 from app.services.rate_limit import rate_limit_dependency
 from app.services.topics import (
     ensure_explanation,

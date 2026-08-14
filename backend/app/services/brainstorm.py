@@ -1,7 +1,7 @@
 """Brainstorm mode — the ideas a learner kept from a brainstorming conversation.
 
 Brainstorm has no generated artifact and no worker: the conversation itself runs on
-the shared chat surface (see ``app.api.chat``). The only thing persisted is what the
+the shared chat surface (see ``study_api.chat``). The only thing persisted is what the
 learner explicitly saves, on qb.document_brainstorm_ideas.
 
 ``parent_id`` is the whole design. The idea board and the mind map are not two

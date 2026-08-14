@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pytest
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+for _svc in ("practice", "content", "study", "library", "admin"):
+    _path = str(_REPO_ROOT / _svc)
+    if _path not in sys.path:
+        sys.path.append(_path)
+
 # Register ETA handlers before any test module imports question_pool → jobs.
+import app.eta  # noqa: F401
 from app.main import app as _app  # noqa: F401
 from app.repositories import intel as _intel
 from app.services import prompts as _prompts

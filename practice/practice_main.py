@@ -7,7 +7,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.api import coding, health, newspaper, practice, system_design
+from app.api import health
+from practice_api import coding, newspaper, practice, system_design
 from app.config import get_settings
 from app.db import SessionLocal
 from app.services.llm_registry import bootstrap_llm_registry_from_env

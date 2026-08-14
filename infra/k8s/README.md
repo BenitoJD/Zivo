@@ -26,7 +26,7 @@ Helm charts and prod values. Deploy model matches [zivo](https://github.com/Beni
 | `charts/study` | `zivo-study` | learn/grade/chat (`study.zivo.fyi`) |
 | `charts/library` | `zivo-library` | sources/documents (`library.zivo.fyi`) |
 | `charts/admin` | `zivo-admin` | models/debug (`admin.zivo.fyi`) |
-| `charts/api` | `zivo-api` | health + ETA scheduler |
+| `charts/api` | `zivo-api` | health (Next catch-all); scheduler is on IO workers |
 | `charts/worker` | `zivo-worker-io`, `zivo-worker-cpu` | slim `zivo-worker` image |
 | `charts/web` | `zivo-web` | Next.js frontend |
 

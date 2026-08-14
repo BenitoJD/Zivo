@@ -17,7 +17,7 @@ from app.db import SessionLocal, get_db
 from app.models import Account, Document
 from app.repositories import workspace as workspace_repo
 from app.services.auth import get_optional_user, require_csrf_or_guest
-from app.api.access import require_document
+from app.services.document_access import require_document
 from app.repositories.intel import concept_id
 from app.services.answer_signal import ANSWER_CORRECT_METRIC_URI, resolve_subject_entity
 from app.services.guest_session import guest_session_for_read

@@ -9,12 +9,12 @@ from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import app.eta  # noqa: F401  register ETA handlers before artifact imports
-from app.api import (
+from app.api import health
+from study_api import (
     artifacts,
     assertions,
     chat,
     guest,
-    health,
     learn,
     mcq,
     offline,

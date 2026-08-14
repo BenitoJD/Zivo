@@ -52,7 +52,16 @@ jobs:
         run: python -c "from app.main import app; assert app.title == 'Zivo API'"
 
       - name: Worker import smoke
-        run: python -c "from app.eta.worker import run_eta_worker; import sys; loaded = [m for m in sys.modules if m == 'app.api' or m.startswith('app.api.')]; assert not loaded, loaded; assert callable(run_eta_worker)"
+        run: |
+          python -c "
+          from app.eta.worker import run_eta_worker
+          from app.eta.worker_async import run_eta_worker_async
+          import sys
+          pkgs = {'practice_api', 'content_api', 'study_api', 'library_api', 'admin_api'}
+          loaded = [m for m in sys.modules if m == 'app.api' or m.startswith('app.api.') or m.split('.')[0] in pkgs]
+          assert not loaded, loaded
+          assert callable(run_eta_worker) and callable(run_eta_worker_async)
+          "
 
       - name: Alembic migrations
         run: bash scripts/test_alembic_migrations.sh
@@ -227,7 +236,7 @@ jobs:
         run: python -m ruff check .
 
       - name: Import check
-        run: python -c "from practice_main import app; assert app.title == 'Zivo Practice'"
+        run: python -c "from practice_main import app; import sys; siblings=[m for m in sys.modules if m.split('.')[0] in {'content_api','study_api','library_api','admin_api'}]; assert not siblings, siblings; assert app.title == 'Zivo Practice'"
 
       - name: Apply schema to CI database
         run: python -m alembic upgrade head
@@ -285,7 +294,7 @@ jobs:
         run: python -m ruff check .
 
       - name: Import check
-        run: python -c "from content_main import app; assert app.title == 'Zivo Content'"
+        run: python -c "from content_main import app; import sys; siblings=[m for m in sys.modules if m.split('.')[0] in {'practice_api','study_api','library_api','admin_api'}]; assert not siblings, siblings; assert app.title == 'Zivo Content'"
 
       - name: Apply schema to CI database
         run: python -m alembic upgrade head
@@ -343,7 +352,7 @@ jobs:
         run: python -m ruff check .
 
       - name: Import check
-        run: python -c "from study_main import app; assert app.title == 'Zivo Study'"
+        run: python -c "from study_main import app; import sys; siblings=[m for m in sys.modules if m.split('.')[0] in {'practice_api','content_api','library_api','admin_api'}]; assert not siblings, siblings; assert app.title == 'Zivo Study'"
 
       - name: Apply schema to CI database
         run: python -m alembic upgrade head
@@ -401,7 +410,7 @@ jobs:
         run: python -m ruff check .
 
       - name: Import check
-        run: python -c "from library_main import app; assert app.title == 'Zivo Library'"
+        run: python -c "from library_main import app; import sys; siblings=[m for m in sys.modules if m.split('.')[0] in {'practice_api','content_api','study_api','admin_api'}]; assert not siblings, siblings; assert app.title == 'Zivo Library'"
 
       - name: Apply schema to CI database
         run: python -m alembic upgrade head
@@ -459,7 +468,7 @@ jobs:
         run: python -m ruff check .
 
       - name: Import check
-        run: python -c "from admin_main import app; assert app.title == 'Zivo Admin'"
+        run: python -c "from admin_main import app; import sys; siblings=[m for m in sys.modules if m.split('.')[0] in {'practice_api','content_api','study_api','library_api'}]; assert not siblings, siblings; assert app.title == 'Zivo Admin'"
 
       - name: Apply schema to CI database
         run: python -m alembic upgrade head
