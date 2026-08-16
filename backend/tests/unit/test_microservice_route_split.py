@@ -12,7 +12,7 @@ def test_product_api_entrypoint_is_gone() -> None:
 
 
 def test_backend_api_package_is_shared_health_only() -> None:
-    names = {p.name for p in API_DIR.iterdir() if p.suffix == ".py"}
+    names = {p.name for p in filter(lambda p: p.suffix == ".py", API_DIR.iterdir())}
     assert names == {"__init__.py", "health.py"}
 
 

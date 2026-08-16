@@ -31,6 +31,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
 from app.eta import context as eta_context
 from app.models import Job
 
@@ -54,14 +55,16 @@ class WorkCheckpoint:
 
     @property
     def remaining(self) -> tuple[str, ...]:
-        return tuple(k for k in self.items if k not in self.done)
+        return tuple(filter(lambda k: k not in self.done, self.items))
 
     @property
     def progress(self) -> int:
         """0..100 — pure policy: share of completed items."""
-        if not self.items:
-            return 100
-        return max(0, min(100, int(100 * len(self.done) / len(self.items))))
+        return pick(
+            not self.items,
+            lambda: 100,
+            lambda: max(0, min(100, int(100 * len(self.done) / len(self.items)))),
+        )
 
 
 def plan(items: Sequence[str]) -> WorkCheckpoint:
@@ -91,46 +94,62 @@ def to_dict(checkpoint: WorkCheckpoint) -> dict[str, Any]:
 
 
 def from_dict(raw: Any) -> WorkCheckpoint:
-    if not isinstance(raw, dict):
-        return WorkCheckpoint()
-    raw_items = raw.get("items")
-    if not isinstance(raw_items, list):
-        return WorkCheckpoint()
-    items = tuple(str(k) for k in raw_items if k)
-    raw_done = raw.get("done")
-    done_set = frozenset(str(k) for k in raw_done) if isinstance(raw_done, list) else frozenset()
-    return WorkCheckpoint(items=items, done=done_set, version=str(raw.get("version") or CHECKPOINT_VERSION))
+    def _parse() -> WorkCheckpoint:
+        raw_items = raw.get("items")
+        return pick(
+            not isinstance(raw_items, list),
+            WorkCheckpoint,
+            lambda: WorkCheckpoint(
+                items=tuple(str(k) for k in filter(None, raw_items)),
+                done=pick(
+                    isinstance(raw.get("done"), list),
+                    lambda: frozenset(str(k) for k in raw.get("done")),
+                    frozenset,
+                ),
+                version=str(raw.get("version") or CHECKPOINT_VERSION),
+            ),
+        )
+
+    return pick(not isinstance(raw, dict), WorkCheckpoint, _parse)
 
 
 def current_job_id() -> uuid.UUID | None:
     """The ETA job id this code is running under (None off the job path)."""
     jid = eta_context.get_current_job_id()
-    return uuid.UUID(str(jid)) if jid is not None else None
+    return pick(jid is not None, lambda: uuid.UUID(str(jid)), lambda: None)
 
 
 def load(db: Session, job_id: uuid.UUID | None = None) -> WorkCheckpoint:
     """Load the checkpoint for a job (empty plan when none exists)."""
     jid = job_id or current_job_id()
-    if jid is None:
-        return WorkCheckpoint()
-    row = db.get(Job, jid)
-    if not row or not row.result:
-        return WorkCheckpoint()
-    return from_dict((row.result or {}).get(_RESULT_KEY))
+
+    def _row() -> WorkCheckpoint:
+        row = db.get(Job, jid)
+        return pick(
+            not row or not row.result,
+            WorkCheckpoint,
+            lambda: from_dict((row.result or {}).get(_RESULT_KEY)),
+        )
+
+    return pick(jid is None, WorkCheckpoint, _row)
 
 
 def save(db: Session, checkpoint: WorkCheckpoint, job_id: uuid.UUID | None = None) -> None:
     """Persist the checkpoint on the job row (survives restart/reclaim)."""
     jid = job_id or current_job_id()
-    if jid is None:
-        return
-    row = db.get(Job, jid)
-    if not row:
-        return
-    result = dict(row.result or {})
-    result[_RESULT_KEY] = to_dict(checkpoint)
-    row.result = result
-    db.commit()
+
+    def _save() -> None:
+        row = db.get(Job, jid)
+
+        def _write() -> None:
+            result = dict(row.result or {})
+            result[_RESULT_KEY] = to_dict(checkpoint)
+            row.result = result
+            db.commit()
+
+        pick(not row, lambda: None, _write)
+
+    pick(jid is None, lambda: None, _save)
 
 
 def resume_work(
@@ -149,13 +168,18 @@ def resume_work(
     """
     ckpt = load(db, job_id=job_id)
     new_items = tuple(str(k) for k in items)
-    if not ckpt.items:
-        return plan(new_items)
-    # Item plan changed (source edited) → keep only done keys still in the new plan.
-    new_set = set(new_items)
-    kept_done = frozenset(k for k in ckpt.done if k in new_set)
-    ckpt = WorkCheckpoint(items=new_items, done=kept_done)
-    if is_done is not None:
-        still_done = frozenset(k for k in ckpt.done if is_done(k))
-        ckpt = WorkCheckpoint(items=ckpt.items, done=still_done)
-    return ckpt
+
+    def _merge() -> WorkCheckpoint:
+        new_set = set(new_items)
+        kept_done = frozenset(filter(lambda k: k in new_set, ckpt.done))
+        merged = WorkCheckpoint(items=new_items, done=kept_done)
+        return pick(
+            is_done is not None,
+            lambda: WorkCheckpoint(
+                items=merged.items,
+                done=frozenset(filter(is_done, merged.done)),
+            ),
+            lambda: merged,
+        )
+
+    return pick(not ckpt.items, lambda: plan(new_items), _merge)

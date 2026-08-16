@@ -5,6 +5,7 @@ from functools import lru_cache
 from fastembed import TextEmbedding
 
 from app.config import get_settings
+from app.engine_runtime import choose, pick
 
 settings = get_settings()
 
@@ -30,10 +31,14 @@ def clear_query_cache() -> None:
 
 def set_active_embed_model(model_name: str) -> None:
     global _active_embed_model
-    if _active_embed_model != model_name:
+
+    def _switch() -> None:
+        global _active_embed_model
         _active_embed_model = model_name
         get_embedder.cache_clear()
         clear_query_cache()
+
+    pick(_active_embed_model != model_name, _switch, lambda: None)
 
 
 def active_embed_model() -> str:
@@ -58,18 +63,14 @@ def _parallel_workers() -> int | None:
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    if not texts:
-        return []
-    # Heuristic pool selection: large batches are ingest (bulk re-embed),
-    # small lists are query/generation (interactive). Keeps a big doc's
-    # embedding pass from blocking chat.
-    is_ingest = len(texts) >= 8
-    semaphore = _embed_ingest_semaphore if is_ingest else _embed_query_semaphore
-    with semaphore:
-        embedder = get_embedder()
-        # Single text -> skip data-parallel overhead; batches benefit from it.
-        parallel = 1 if len(texts) <= 1 else _parallel_workers()
-        return [vec.tolist() for vec in embedder.embed(texts, parallel=parallel)]
+    def _embed() -> list[list[float]]:
+        semaphore = choose(len(texts) >= 8, _embed_ingest_semaphore, _embed_query_semaphore)
+        with semaphore:
+            embedder = get_embedder()
+            parallel = choose(len(texts) <= 1, 1, _parallel_workers())
+            return [vec.tolist() for vec in embedder.embed(texts, parallel=parallel)]
+
+    return pick(not texts, lambda: [], _embed)
 
 
 # Bounded query cache: chat messages tend to repeat (greetings, follow-ups
@@ -84,5 +85,5 @@ def _embed_query_cached(text: str) -> tuple[float, ...]:
 
 def embed_query(text: str) -> list[float]:
     # Match passage: prefix used at index time so query vectors share the same space.
-    prefixed = f"query: {text}" if text and not text.startswith("query:") else text
+    prefixed = choose(bool(text) and not text.startswith("query:"), f"query: {text}", text)
     return list(_embed_query_cached(prefixed))

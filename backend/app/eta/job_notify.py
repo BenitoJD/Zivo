@@ -7,6 +7,7 @@ import threading
 import time
 
 from app.config import get_settings
+from app.engine_runtime import pick
 
 logger = logging.getLogger(__name__)
 
@@ -16,13 +17,21 @@ _wake = threading.Event()
 _listener_started = False
 _listener_lock = threading.Lock()
 
+_DSN_PREFIXES = (
+    "postgresql+psycopg://",
+    "postgresql+asyncpg://",
+    "postgresql://",
+)
+
 
 def _conninfo() -> str:
     url = get_settings().database_url
-    for prefix in ("postgresql+psycopg://", "postgresql+asyncpg://", "postgresql://"):
-        if url.startswith(prefix):
-            return "postgresql://" + url[len(prefix) :]
-    return url
+    matched = next(filter(url.startswith, _DSN_PREFIXES), None)
+    return pick(
+        matched is None,
+        lambda: url,
+        lambda: "postgresql://" + url[len(matched) :],
+    )
 
 
 def wake_eta_workers() -> None:
@@ -32,8 +41,7 @@ def wake_eta_workers() -> None:
 def wait_eta_job_notify(timeout: float) -> bool:
     """Block up to *timeout* seconds for a job NOTIFY; returns True if woken."""
     signaled = _wake.wait(timeout=timeout)
-    if signaled:
-        _wake.clear()
+    pick(signaled, _wake.clear, lambda: None)
     return signaled
 
 
@@ -57,9 +65,12 @@ def _listen_loop() -> None:
 
 def ensure_eta_notify_listener() -> None:
     global _listener_started
-    with _listener_lock:
-        if _listener_started:
-            return
+
+    def _start() -> None:
+        global _listener_started
         thread = threading.Thread(target=_listen_loop, name="eta-notify-listener", daemon=True)
         thread.start()
         _listener_started = True
+
+    with _listener_lock:
+        pick(_listener_started, lambda: None, _start)

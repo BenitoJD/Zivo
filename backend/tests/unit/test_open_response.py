@@ -301,7 +301,7 @@ def test_merge_sd_grade_and_coding_solve_record() -> None:
     )
     assert merged.result["mentor_summary"] == "LLM note"
     assert merged.result["weak_concepts"] == fallback["weak_concepts"]
-    api = next(d for d in merged.result["dimensions"] if d["key"] == "api")
+    api = next(filter(lambda d: d["key"] == "api", merged.result["dimensions"]))
     assert api["score"] == 4
     assert should_record_coding_solve(has_subject=True, passed=True)
     assert not should_record_coding_solve(has_subject=True, passed=False)
@@ -324,3 +324,30 @@ def test_resume_ats_checks_and_blend() -> None:
     bad = "i am a hard working person and i want a job. my email is missing."
     assert sum(c["pass"] for c in evaluate_resume_deterministic_checks(bad)) <= 4
     assert plan_resume_ats_score(det_score=80, content_score=60) == 70
+
+
+def test_mcq_grade_kind_and_correctness() -> None:
+    from app.services.open_response import evaluate_mcq_correct, evaluate_mcq_grade_kind
+
+    assert evaluate_mcq_grade_kind(is_multi=False) == "single"
+    assert evaluate_mcq_grade_kind(is_multi=True) == "multi"
+    assert evaluate_mcq_correct(
+        is_multi=False, choice_index=1, correct_index=1
+    )
+    assert not evaluate_mcq_correct(
+        is_multi=False, choice_index=0, correct_index=1
+    )
+    assert evaluate_mcq_correct(
+        is_multi=True,
+        choice_index=0,
+        correct_index=0,
+        choice_indices=[0, 2],
+        correct_indices=[0, 2],
+    )
+    assert not evaluate_mcq_correct(
+        is_multi=True,
+        choice_index=0,
+        correct_index=0,
+        choice_indices=[0],
+        correct_indices=[0, 2],
+    )

@@ -26,6 +26,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
+
 DEFAULT_TTL_SECONDS = 24 * 60 * 60
 # Sweep at most this many expired rows per write to bound write latency.
 SWEEP_BATCH = 50
@@ -59,11 +61,7 @@ def get(
         ),
         {"key": cache_key, "kind": kind, "cutoff": _expired_expr(ttl_seconds)},
     ).first()
-    if not row:
-        return None
-    # psycopg decodes JSONB to native Python (list/dict/str/int/bool) already,
-    # so no json.loads needed here — just hand back whatever JSONB gave us.
-    return row[0]
+    return pick(not row, lambda: None, lambda: row[0])
 
 
 def put(
@@ -156,13 +154,16 @@ def batch_drafts_key(
     h.update((content_type or "").encode("utf-8", "ignore"))
     h.update(b"\x1f")
     h.update((prompt_version or "v1").encode("ascii"))
-    if prior_mcqs:
+
+    def _with_prior() -> str:
         prior_digest = hashlib.sha256(
             json.dumps(prior_mcqs, sort_keys=True, default=str).encode("utf-8")
         ).hexdigest()
         h.update(b"\x1f")
         h.update(prior_digest.encode("ascii"))
-    return h.hexdigest()
+        return h.hexdigest()
+
+    return pick(bool(prior_mcqs), _with_prior, h.hexdigest)
 
 
 def page_context_key(document_id: uuid.UUID, page_number: int) -> str:

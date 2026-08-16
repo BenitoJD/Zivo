@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
+from app.engine_runtime import pick
 from app.services.document_access import forbid_stale_newspaper_practice
 from app.models import Document
 from app.repositories import newspaper as newspaper_repo
@@ -40,8 +41,11 @@ def _news_doc(edition_date: str | None) -> Document:
         "paper_slug": "the-hindu",
         "paper_title": "The Hindu",
     }
-    if edition_date is not None:
-        meta["edition_date"] = edition_date
+    pick(
+        edition_date is not None,
+        lambda: meta.__setitem__("edition_date", edition_date),
+        lambda: None,
+    )
     d = Document(
         slug="news-win",
         filename="paper.pdf",

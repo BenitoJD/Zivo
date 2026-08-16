@@ -76,7 +76,7 @@ def test_worker_uses_structured_logging(caplog) -> None:
         extra={"job_id": "abc-123", "job_name": "test.job", "attempt": 1, "max_attempts": 3},
     )
 
-    record = next(r for r in caplog.records if r.message == "ETA job started")
+    record = next(filter(lambda r: r.message == "ETA job started", caplog.records))
     assert record.job_id == "abc-123"
     assert record.job_name == "test.job"
     assert record.attempt == 1
@@ -92,7 +92,7 @@ def test_async_worker_uses_structured_logging(caplog) -> None:
         "ETA async job succeeded",
         extra={"job_id": "xyz-789"},
     )
-    record = next(r for r in caplog.records if r.message == "ETA async job succeeded")
+    record = next(filter(lambda r: r.message == "ETA async job succeeded", caplog.records))
     assert record.job_id == "xyz-789"
 
 

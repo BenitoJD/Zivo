@@ -15,6 +15,7 @@ import os as _os
 from dataclasses import dataclass, field
 from typing import Any, Literal, Sequence
 
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 from app.services.mcq_heuristics import (
     FATAL_FLAW_CODES,
     has_fatal_heuristic_flaws,
@@ -84,6 +85,96 @@ EMPIRICAL_MIN_RPBIS = 0.20
 EMPIRICAL_EASY_P = 0.95
 EMPIRICAL_HARD_P = 0.10
 
+_STRUCTURE_FATAL = FATAL_FLAW_CODES & {
+    "invalid_structure",
+    "none_or_all_of_above",
+    "negative_wording",
+    "longest_option_correct",
+    "unfocused_stem",
+    "not_self_contained",
+    "meta_page_reference",
+    "too_similar_to_prior",
+}
+_KEY_BAD = {"wrong_answer_key", "more_than_one_correct", "not_grounded"}
+
+_DECIDE_RULES = (
+    Rule(when=(Pred("too_similar", "truthy"),), action="fail", extras={"reason": "too_similar"}),
+    Rule(when=(Pred("has_verify_flaw", "truthy"),), action="fail", extras={"reason": "verify"}),
+    Rule(
+        when=(
+            Pred("fatal", "truthy"),
+            Pred("can_rewrite_cook", "truthy"),
+            Pred("hard_no_rewrite", "falsey"),
+        ),
+        action="revise",
+        extras={"reason": "fatal"},
+    ),
+    Rule(when=(Pred("fatal", "truthy"),), action="fail", extras={"reason": "fatal"}),
+    Rule(
+        when=(Pred("critic_reject", "truthy"), Pred("can_rewrite_cook", "truthy")),
+        action="revise",
+        extras={"reason": "critic"},
+    ),
+    Rule(when=(Pred("critic_reject", "truthy"),), action="fail", extras={"reason": "critic"}),
+    Rule(when=(), action="pass", extras={"reason": "none"}),
+)
+
+_EMPIRICAL_DECISION_RULES = (
+    Rule(
+        when=(Pred("exposed", "truthy"), Pred("broken", "truthy")),
+        action="fail",
+        extras={"code": "empirical_likely_broken"},
+    ),
+    Rule(
+        when=(Pred("exposed", "truthy"), Pred("neg_rpbis", "truthy")),
+        action="fail",
+        extras={"code": "empirical_non_discriminating"},
+    ),
+    Rule(
+        when=(Pred("exposed", "truthy"), Pred("weak_rpbis", "truthy")),
+        action="revise",
+        extras={"code": "empirical_non_discriminating"},
+    ),
+    Rule(when=(), action="pass"),
+)
+
+_EMPIRICAL_P_RULES = (
+    Rule(
+        when=(Pred("exposed", "truthy"), Pred("too_easy", "truthy")),
+        action="tag",
+        extras={"code": "empirical_too_easy"},
+    ),
+    Rule(
+        when=(
+            Pred("exposed", "truthy"),
+            Pred("too_hard", "truthy"),
+            Pred("not_broken", "truthy"),
+        ),
+        action="tag",
+        extras={"code": "empirical_too_hard"},
+    ),
+    Rule(when=(), action="skip"),
+)
+
+_REWRITE_STEP_RULES = (
+    Rule(when=(Pred("first", "truthy"),), action="draft"),
+    Rule(when=(Pred("can_rewrite", "truthy"),), action="rewrite"),
+    Rule(when=(), action="regenerate"),
+)
+
+_PREFILTER_RULES = (
+    Rule(when=(Pred("fatal", "truthy"),), action="fatal"),
+    Rule(when=(Pred("too_similar", "truthy"),), action="too_similar"),
+    Rule(when=(), action="keep"),
+)
+
+_HARD_BUNDLE_RULES = (
+    Rule(when=(Pred("skip", "truthy"),), action="none"),
+    Rule(when=(Pred("too_similar", "truthy"),), action="similar"),
+    Rule(when=(Pred("has_verify", "truthy"),), action="verify"),
+    Rule(when=(), action="heuristics"),
+)
+
 
 @dataclass(frozen=True)
 class QualityScores:
@@ -132,6 +223,33 @@ class SimilarityVerdict:
     policy_version: str = QUALITY_VERSION
 
 
+def _empty_similarity(threshold: float, pol: str) -> SimilarityVerdict:
+    return SimilarityVerdict(
+        too_similar=False,
+        max_similarity=0.0,
+        threshold=threshold,
+        policy=pol,
+    )
+
+
+def _max_sim_verdict(
+    candidate_vec: list[float],
+    prior_vecs: list[list[float]],
+    threshold: float,
+    pol: str,
+    cosine_similarity: Any,
+) -> SimilarityVerdict:
+    max_sim = 0.0
+    for prior_vec in prior_vecs:
+        max_sim = max(max_sim, cosine_similarity(candidate_vec, prior_vec))
+    return SimilarityVerdict(
+        too_similar=max_sim >= threshold,
+        max_similarity=max_sim,
+        threshold=threshold,
+        policy=pol,
+    )
+
+
 def judge_mcq_similarity(
     mcq: dict[str, Any],
     prior_mcqs: list[dict[str, Any]] | None,
@@ -149,46 +267,40 @@ def judge_mcq_similarity(
     )
 
     pol = (policy or DEFAULT_QUALITY_POLICY).strip().lower() or DEFAULT_QUALITY_POLICY
-    if not prior_mcqs and not prior_embeddings:
-        return SimilarityVerdict(
-            too_similar=False,
-            max_similarity=0.0,
-            threshold=threshold,
-            policy=pol,
+
+    def with_priors() -> SimilarityVerdict:
+        candidate_vec = embed_signature_cached(mcq_signature(mcq))
+        prior_vecs = pick(
+            prior_embeddings is not None,
+            lambda: prior_embeddings,
+            lambda: prior_mcq_embeddings(prior_mcqs or []),
+        )
+        return pick(
+            not prior_vecs,
+            lambda: _empty_similarity(threshold, pol),
+            lambda: _max_sim_verdict(
+                candidate_vec, prior_vecs, threshold, pol, cosine_similarity
+            ),
         )
 
-    candidate_vec = embed_signature_cached(mcq_signature(mcq))
-    prior_vecs = (
-        prior_embeddings
-        if prior_embeddings is not None
-        else prior_mcq_embeddings(prior_mcqs or [])
-    )
-    if not prior_vecs:
-        return SimilarityVerdict(
-            too_similar=False,
-            max_similarity=0.0,
-            threshold=threshold,
-            policy=pol,
-        )
-
-    max_sim = 0.0
-    for prior_vec in prior_vecs:
-        max_sim = max(max_sim, cosine_similarity(candidate_vec, prior_vec))
-    return SimilarityVerdict(
-        too_similar=max_sim >= threshold,
-        max_similarity=max_sim,
-        threshold=threshold,
-        policy=pol,
+    return pick(
+        not prior_mcqs and not prior_embeddings,
+        lambda: _empty_similarity(threshold, pol),
+        with_priors,
     )
 
 
 def _codes_from_flaws(flaws: Sequence[dict[str, str]] | None) -> list[str]:
-    out: list[str] = []
-    for f in flaws or []:
-        code = str(f.get("code") or "").strip()
-        if code:
-            out.append(code)
-    return out
+    codes = (str(f.get("code") or "").strip() for f in (flaws or []))
+    return list(filter(None, codes))
+
+
+def _code_from_critic_item(item: object) -> str:
+    return pick(
+        isinstance(item, dict),
+        lambda: str(item.get("code") or ""),
+        lambda: pick(isinstance(item, str), lambda: str(item), lambda: ""),
+    )
 
 
 def collect_flaw_codes(signals: QualitySignals) -> list[str]:
@@ -197,36 +309,40 @@ def collect_flaw_codes(signals: QualitySignals) -> list[str]:
     ordered: list[str] = []
 
     def add(code: str) -> None:
-        if code and code not in seen:
+        def record() -> None:
             seen.add(code)
             ordered.append(code)
 
+        pick(bool(code) and code not in seen, record, lambda: None)
+
     for code in _codes_from_flaws(signals.heuristic_flaws):
         add(code)
-    if signals.too_similar:
-        add("too_similar_to_prior")
-    if signals.verify_flaw:
-        add(str(signals.verify_flaw.get("code") or "verify_failed"))
-    if signals.critic:
-        for code in signals.critic.get("fatal_flaws") or []:
-            add(str(code))
-        for f in signals.critic.get("flaws") or []:
-            if isinstance(f, dict):
-                add(str(f.get("code") or ""))
-            elif isinstance(f, str):
-                add(f)
+    add(choose(signals.too_similar, "too_similar_to_prior", ""))
+    add(
+        pick(
+            bool(signals.verify_flaw),
+            lambda: str(signals.verify_flaw.get("code") or "verify_failed"),
+            lambda: "",
+        )
+    )
+    critic = signals.critic or {}
+    for code in critic.get("fatal_flaws") or []:
+        add(str(code))
+    for item in critic.get("flaws") or []:
+        add(_code_from_critic_item(item))
     return ordered
 
 
 def critique_passes(critique: dict[str, Any] | None) -> bool:
     """Product rule: pass flag, no fatal codes, at most one soft flaw."""
-    if not critique or not critique.get("pass"):
-        return False
-    fatal = critique.get("fatal_flaws") or []
-    if any(code in FATAL_FLAW_CODES for code in fatal):
-        return False
-    flaw_count = int(critique.get("flaw_count") or 0)
-    return flaw_count <= 1
+    return pick(
+        not critique or not critique.get("pass"),
+        lambda: False,
+        lambda: (
+            not any(code in FATAL_FLAW_CODES for code in (critique.get("fatal_flaws") or []))
+            and int(critique.get("flaw_count") or 0) <= 1
+        ),
+    )
 
 
 def _clamp01(x: float) -> float:
@@ -241,31 +357,16 @@ def score_from_codes(
 ) -> QualityScores:
     """Informational 0–1 scores; pass-fail stays code-driven (no overall threshold)."""
     code_set = set(codes)
-    structure = 0.0 if (code_set & FATAL_FLAW_CODES & {
-        "invalid_structure",
-        "none_or_all_of_above",
-        "negative_wording",
-        "longest_option_correct",
-        "unfocused_stem",
-        "not_self_contained",
-        "meta_page_reference",
-        "too_similar_to_prior",
-    }) else 1.0
-
-    key_bad = {"wrong_answer_key", "more_than_one_correct", "not_grounded"}
-    if verify_flaw or (code_set & key_bad):
-        key = 0.0
-    elif verify_ran:
-        key = 1.0
-    else:
-        key = 0.7
-
+    structure = choose(bool(code_set & _STRUCTURE_FATAL), 0.0, 1.0)
+    key = choose(
+        bool(verify_flaw or (code_set & _KEY_BAD)),
+        0.0,
+        choose(verify_ran, 1.0, 0.7),
+    )
     d_hits = len(code_set & SOFT_DISTRACTOR_CODES)
     distractors = _clamp01(1.0 - 0.25 * d_hits)
-
     c_hits = len(code_set & SOFT_CLARITY_CODES)
     clarity = _clamp01(1.0 - 0.25 * c_hits)
-
     overall = _clamp01(min(structure, key) * 0.5 + 0.25 * distractors + 0.25 * clarity)
     return QualityScores(
         structure=structure,
@@ -281,19 +382,25 @@ def build_rewrite_brief(
     critic: dict[str, Any] | None,
     verify_flaw: dict[str, str] | None = None,
 ) -> str:
-    hints: list[str] = []
-    if critic:
-        hint = str(critic.get("rewrite_hints") or "").strip()
-        if hint:
-            hints.append(hint)
-    for f in heuristic_flaws or []:
-        code = f.get("code") or "?"
-        msg = f.get("message") or code
-        hints.append(f"{code}: {msg}")
-    if verify_flaw:
-        code = verify_flaw.get("code") or "verify_failed"
-        msg = verify_flaw.get("message") or code
-        hints.append(f"{code}: {msg}")
+    critic_hint = pick(
+        bool(critic),
+        lambda: str(critic.get("rewrite_hints") or "").strip(),
+        lambda: "",
+    )
+    hints = list(filter(None, (critic_hint,)))
+    hints.extend(
+        f"{f.get('code') or '?'}: {f.get('message') or f.get('code') or '?'}"
+        for f in (heuristic_flaws or [])
+    )
+    verify_hint = pick(
+        bool(verify_flaw),
+        lambda: (
+            f"{verify_flaw.get('code') or 'verify_failed'}: "
+            f"{verify_flaw.get('message') or verify_flaw.get('code') or 'verify_failed'}"
+        ),
+        lambda: "",
+    )
+    hints.extend(filter(None, (verify_hint,)))
     return " ".join(hints[:8]).strip()
 
 
@@ -302,15 +409,23 @@ def merge_critique_for_rewrite(
     critique: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Bundle flaws + hints for the rewrite prompt (cook path)."""
-    flaws = list(heuristic_flaws)
-    if critique:
-        flaws.extend(critique.get("flaws") or [])
-        for code in critique.get("fatal_flaws") or []:
-            flaws.append({"code": code, "message": str(code).replace("_", " ")})
+    extra = pick(
+        bool(critique),
+        lambda: list(critique.get("flaws") or [])
+        + [
+            {"code": code, "message": str(code).replace("_", " ")}
+            for code in (critique.get("fatal_flaws") or [])
+        ],
+        lambda: [],
+    )
+    flaws = list(heuristic_flaws) + extra
     return {
         "flaws": flaws,
         "rewrite_hints": build_rewrite_brief(heuristic_flaws, critique),
-        "fatal_flaws": [f.get("code") for f in flaws if f.get("code") in FATAL_FLAW_CODES],
+        "fatal_flaws": [
+            f.get("code")
+            for f in filter(lambda row: row.get("code") in FATAL_FLAW_CODES, flaws)
+        ],
     }
 
 
@@ -327,7 +442,7 @@ def decide_verdict(
     """
     _ = policy  # reserved for future score_threshold / ensemble policies
     codes = collect_flaw_codes(signals)
-    fatal_codes = [c for c in codes if c in FATAL_FLAW_CODES]
+    fatal_codes = list(filter(FATAL_FLAW_CODES.__contains__, codes))
     fatal = bool(fatal_codes)
     scores = score_from_codes(
         codes,
@@ -339,51 +454,45 @@ def decide_verdict(
         signals.critic,
         signals.verify_flaw,
     )
-
-    def _verdict(
-        decision: Decision,
-        *,
-        reason: str | None = None,
-    ) -> QualityVerdict:
-        return QualityVerdict(
-            decision=decision,
-            flaw_codes=tuple(codes),
-            scores=scores,
-            rewrite_brief=brief,
-            fatal=fatal,
-            stage=signals.stage,
-            reject_reason=reason,
-            details={
-                "fatal_codes": fatal_codes,
-                "policy": DEFAULT_QUALITY_POLICY,
-            },
-        )
-
-    # 1. Hard similarity / verify / fatal heuristics
-    if signals.too_similar:
-        return _verdict("fail", reason="too_similar_to_prior")
-
-    if signals.verify_flaw is not None:
-        reason = str(signals.verify_flaw.get("code") or "verify_failed")
-        return _verdict("fail", reason=reason)
-
-    if fatal:
-        hard = any(c in NO_REWRITE_CODES for c in fatal_codes)
-        if (
-            signals.stage == "cook"
-            and signals.rewrite_budget_remaining > 0
-            and not hard
-        ):
-            return _verdict("revise", reason=fatal_codes[0])
-        return _verdict("fail", reason=fatal_codes[0] if fatal_codes else "heuristic")
-
-    # 2. Critic soft path
-    if signals.critic is not None and not critique_passes(signals.critic):
-        if signals.rewrite_budget_remaining > 0 and signals.stage == "cook":
-            return _verdict("revise", reason="critic_rejected")
-        return _verdict("fail", reason="critic_rejected")
-
-    return _verdict("pass")
+    hit = first_match(
+        _DECIDE_RULES,
+        {
+            "too_similar": signals.too_similar,
+            "has_verify_flaw": signals.verify_flaw is not None,
+            "fatal": fatal,
+            "can_rewrite_cook": (
+                signals.stage == "cook" and signals.rewrite_budget_remaining > 0
+            ),
+            "hard_no_rewrite": any(c in NO_REWRITE_CODES for c in fatal_codes),
+            "critic_reject": signals.critic is not None
+            and not critique_passes(signals.critic),
+        },
+    )
+    reason = apply(
+        hit.extras["reason"],
+        {
+            "too_similar": lambda: "too_similar_to_prior",
+            "verify": lambda: str(signals.verify_flaw.get("code") or "verify_failed"),
+            "fatal": lambda: pick(
+                bool(fatal_codes), lambda: fatal_codes[0], lambda: "heuristic"
+            ),
+            "critic": lambda: "critic_rejected",
+            "none": lambda: None,
+        },
+    )
+    return QualityVerdict(
+        decision=hit.action,  # type: ignore[arg-type]
+        flaw_codes=tuple(codes),
+        scores=scores,
+        rewrite_brief=brief,
+        fatal=fatal,
+        stage=signals.stage,
+        reject_reason=reason,
+        details={
+            "fatal_codes": fatal_codes,
+            "policy": DEFAULT_QUALITY_POLICY,
+        },
+    )
 
 
 def evaluate_empirical(
@@ -396,48 +505,42 @@ def evaluate_empirical(
     max_broken_rate: float = EMPIRICAL_MAX_BROKEN_RATE,
 ) -> QualityVerdict:
     """CTT post-serve flags. Auto-fail only for likely-broken near-zero first-try."""
-    codes: list[str] = []
-    decision: Decision = "pass"
-    reason: str | None = None
-
-    if n_exposure >= min_exposure and p_correct <= max_broken_rate:
-        codes.append("empirical_likely_broken")
-        decision = "fail"
-        reason = "empirical_likely_broken"
-    elif r_pbis is not None and n_exposure >= min_exposure and r_pbis < 0:
-        codes.append("empirical_non_discriminating")
-        decision = "fail"
-        reason = "empirical_non_discriminating"
-    elif (
-        r_pbis is not None
-        and n_exposure >= min_exposure
-        and r_pbis < EMPIRICAL_MIN_RPBIS
-    ):
-        codes.append("empirical_non_discriminating")
-        decision = "revise"
-        reason = "empirical_non_discriminating"
-
+    exposed = n_exposure >= min_exposure
     guess_floor = 1.0 / max(2, n_options)
-    if n_exposure >= min_exposure:
-        if p_correct >= EMPIRICAL_EASY_P:
-            codes.append("empirical_too_easy")
-        elif p_correct <= max(EMPIRICAL_HARD_P, guess_floor - 0.02):
-            if "empirical_likely_broken" not in codes:
-                codes.append("empirical_too_hard")
-
+    hit = first_match(
+        _EMPIRICAL_DECISION_RULES,
+        {
+            "exposed": exposed,
+            "broken": p_correct <= max_broken_rate,
+            "neg_rpbis": r_pbis is not None and r_pbis < 0,
+            "weak_rpbis": r_pbis is not None and r_pbis < EMPIRICAL_MIN_RPBIS,
+        },
+    )
+    codes: list[str] = list(filter(None, (hit.extras.get("code"),)))
+    p_hit = first_match(
+        _EMPIRICAL_P_RULES,
+        {
+            "exposed": exposed,
+            "too_easy": p_correct >= EMPIRICAL_EASY_P,
+            "too_hard": p_correct <= max(EMPIRICAL_HARD_P, guess_floor - 0.02),
+            "not_broken": "empirical_likely_broken" not in codes,
+        },
+    )
+    codes.extend(filter(None, (p_hit.extras.get("code"),)))
+    decision: Decision = hit.action  # type: ignore[assignment]
+    reason = hit.extras.get("code")
     fatal = decision == "fail"
-    # Empirical scores: key/structure unknown; encode discrimination in overall.
-    disc = 1.0
-    if r_pbis is not None:
-        disc = _clamp01((r_pbis + 0.2) / 0.6)
-    elif "empirical_likely_broken" in codes:
-        disc = 0.0
+    disc = pick(
+        r_pbis is not None,
+        lambda: _clamp01((float(r_pbis) + 0.2) / 0.6),
+        lambda: choose("empirical_likely_broken" in codes, 0.0, 1.0),
+    )
     scores = QualityScores(
         structure=1.0,
-        key=0.0 if "empirical_likely_broken" in codes else 0.7,
+        key=choose("empirical_likely_broken" in codes, 0.0, 0.7),
         distractors=disc,
         clarity=1.0,
-        overall=_clamp01(0.5 * (0.0 if fatal else 0.7) + 0.5 * disc),
+        overall=_clamp01(0.5 * choose(fatal, 0.0, 0.7) + 0.5 * disc),
     )
     return QualityVerdict(
         decision=decision,
@@ -464,11 +567,7 @@ def should_run_critic(
     sample_rate: float,
 ) -> bool:
     """When to spend a critic call. sample_roll in [0, 1)."""
-    if force_critic:
-        return True
-    if heuristic_flaws:
-        return True
-    return sample_roll < sample_rate
+    return bool(force_critic) or bool(heuristic_flaws) or sample_roll < sample_rate
 
 
 def evaluate_pre_critic_reject(signals: QualitySignals) -> QualityVerdict | None:
@@ -479,35 +578,51 @@ def evaluate_pre_critic_reject(signals: QualitySignals) -> QualityVerdict | None
         or signals.verify_flaw is not None
         or has_fatal_heuristic_flaws(list(signals.heuristic_flaws))
     )
-    if verdict.decision == "fail" and hard:
-        return verdict
-    return None
+    return pick(verdict.decision == "fail" and hard, lambda: verdict, lambda: None)
+
+
+def _similar_rewrite_bundle(signals: QualitySignals) -> dict[str, Any]:
+    return {
+        "flaws": [
+            {
+                "code": "too_similar_to_prior",
+                "message": (
+                    f"Embedding similarity {signals.max_similarity:.2f} "
+                    "to a prior question"
+                ),
+            }
+        ],
+        "rewrite_hints": (
+            "Test a different fact and use a clearly different stem "
+            "from all prior questions."
+        ),
+        "fatal_flaws": ["too_similar_to_prior"],
+    }
 
 
 def hard_fail_rewrite_bundle(signals: QualitySignals) -> dict[str, Any] | None:
     """Rewrite hints when the serial cook skips critic after a hard fail."""
-    if evaluate_pre_critic_reject(signals) is None:
-        return None
-    if signals.too_similar:
-        return {
-            "flaws": [
-                {
-                    "code": "too_similar_to_prior",
-                    "message": (
-                        f"Embedding similarity {signals.max_similarity:.2f} "
-                        "to a prior question"
-                    ),
-                }
-            ],
-            "rewrite_hints": (
-                "Test a different fact and use a clearly different stem "
-                "from all prior questions."
+    hit = first_match(
+        _HARD_BUNDLE_RULES,
+        {
+            "skip": evaluate_pre_critic_reject(signals) is None,
+            "too_similar": signals.too_similar,
+            "has_verify": signals.verify_flaw is not None,
+        },
+    )
+    return apply(
+        hit.action,
+        {
+            "none": lambda: None,
+            "similar": lambda: _similar_rewrite_bundle(signals),
+            "verify": lambda: merge_critique_for_rewrite(
+                [dict(signals.verify_flaw)], None
             ),
-            "fatal_flaws": ["too_similar_to_prior"],
-        }
-    if signals.verify_flaw is not None:
-        return merge_critique_for_rewrite([dict(signals.verify_flaw)], None)
-    return merge_critique_for_rewrite(list(signals.heuristic_flaws), None)
+            "heuristics": lambda: merge_critique_for_rewrite(
+                list(signals.heuristic_flaws), None
+            ),
+        },
+    )
 
 
 def evaluate_clone_template(draft: dict[str, Any]) -> QualityVerdict:
@@ -532,11 +647,14 @@ def plan_rewrite_step(
     has_rewrite_brief: bool,
 ) -> RewriteStep:
     """First try drafts; later tries rewrite when a brief exists, else regenerate."""
-    if int(attempt) <= 0:
-        return "draft"
-    if has_draft and has_rewrite_brief:
-        return "rewrite"
-    return "regenerate"
+    hit = first_match(
+        _REWRITE_STEP_RULES,
+        {
+            "first": int(attempt) <= 0,
+            "can_rewrite": has_draft and has_rewrite_brief,
+        },
+    )
+    return hit.action  # type: ignore[return-value]
 
 
 NEWSPAPER_CONTENT_TYPE = "newspaper_upsc"
@@ -548,9 +666,7 @@ def resolve_cook_content_type(
     coverage_type: str | None,
 ) -> str | None:
     """Newspaper cooks always use the exam style; others keep triage content_type."""
-    if newspaper:
-        return NEWSPAPER_CONTENT_TYPE
-    return coverage_type
+    return choose(newspaper, NEWSPAPER_CONTENT_TYPE, coverage_type)
 
 
 def should_inject_mcq_content_style(
@@ -560,9 +676,7 @@ def should_inject_mcq_content_style(
 ) -> bool:
     """Newspaper always injects; other types follow the content-aware flag."""
     ct = (content_type or "").strip().lower()
-    if ct == NEWSPAPER_CONTENT_TYPE:
-        return True
-    return bool(content_aware)
+    return ct == NEWSPAPER_CONTENT_TYPE or bool(content_aware)
 
 
 def should_fast_path_accept(signals: QualitySignals) -> bool:
@@ -574,6 +688,20 @@ def should_fast_path_accept(signals: QualitySignals) -> bool:
     )
 
 
+_ANSWER_KEY_VERIFY_RULES = (
+    Rule(when=(Pred("enabled", "falsey"),), action="skip"),
+    Rule(when=(Pred("fatal", "truthy"),), action="skip"),
+    Rule(when=(Pred("too_similar", "truthy"),), action="skip"),
+    Rule(when=(), action="run"),
+)
+
+_SIMILARITY_GATE_RULES = (
+    Rule(when=(Pred("fatal", "truthy"),), action="skip"),
+    Rule(when=(Pred("verify_failed", "truthy"),), action="skip"),
+    Rule(when=(), action="run"),
+)
+
+
 def should_run_answer_key_verify(
     *,
     verify_enabled: bool,
@@ -581,7 +709,17 @@ def should_run_answer_key_verify(
     too_similar: bool = False,
 ) -> bool:
     """Skip the verifier when structure already failed or the draft is a near-dupe."""
-    return bool(verify_enabled) and not has_fatal_heuristics and not too_similar
+    return (
+        first_match(
+            _ANSWER_KEY_VERIFY_RULES,
+            {
+                "enabled": bool(verify_enabled),
+                "fatal": has_fatal_heuristics,
+                "too_similar": too_similar,
+            },
+        ).action
+        == "run"
+    )
 
 
 def should_run_similarity_gate(
@@ -590,7 +728,16 @@ def should_run_similarity_gate(
     verify_flaw: dict[str, Any] | None = None,
 ) -> bool:
     """Skip embed when heuristics or the answer-key check already failed."""
-    return not has_fatal_heuristics and verify_flaw is None
+    return (
+        first_match(
+            _SIMILARITY_GATE_RULES,
+            {
+                "fatal": has_fatal_heuristics,
+                "verify_failed": verify_flaw is not None,
+            },
+        ).action
+        == "run"
+    )
 
 
 def should_positional_best_of_n(*, selected_count: int) -> bool:
@@ -607,11 +754,14 @@ def evaluate_parallel_gate_prefilter(
     too_similar: bool,
 ) -> ParallelPrefilter:
     """Drop fatal / near-dupe drafts before spending parallel critic slots."""
-    if has_fatal_heuristic_flaws(list(heuristic_flaws)):
-        return "fatal"
-    if too_similar:
-        return "too_similar"
-    return "keep"
+    hit = first_match(
+        _PREFILTER_RULES,
+        {
+            "fatal": has_fatal_heuristic_flaws(list(heuristic_flaws)),
+            "too_similar": too_similar,
+        },
+    )
+    return hit.action  # type: ignore[return-value]
 
 
 # Batch cook: cap + serial Q1 critic + parallel rest. Env knobs stay at cook plumbing.
@@ -666,23 +816,41 @@ def plan_cook_gate_knobs(
 ) -> CookGateKnobs:
     """Resolve cook-gate concurrency, pipeline split, and critic sample rate."""
     return CookGateKnobs(
-        GENERATION_CONCURRENCY
-        if generation_concurrency is None
-        else max(1, int(generation_concurrency)),
-        PIPELINE_DRAFT_SPLIT if pipeline_split is None else bool(pipeline_split),
-        CRITIC_SAMPLE_RATE if critic_sample_rate is None else float(critic_sample_rate),
+        pick(
+            generation_concurrency is None,
+            lambda: GENERATION_CONCURRENCY,
+            lambda: max(1, int(generation_concurrency)),
+        ),
+        pick(
+            pipeline_split is None,
+            lambda: PIPELINE_DRAFT_SPLIT,
+            lambda: bool(pipeline_split),
+        ),
+        pick(
+            critic_sample_rate is None,
+            lambda: CRITIC_SAMPLE_RATE,
+            lambda: float(critic_sample_rate),
+        ),
     )
 
 
 def plan_best_of_n_candidates(requested: int | None = None) -> int:
     """How many draft candidates to write per aspect before structural pick."""
-    n = DEFAULT_CANDIDATES_PER_ASPECT if requested is None else int(requested)
+    n = pick(
+        requested is None,
+        lambda: DEFAULT_CANDIDATES_PER_ASPECT,
+        lambda: int(requested),
+    )
     return max(1, n)
 
 
 def plan_prior_mcq_prompt_items(requested: int | None = None) -> int:
     """How many already-cooked stems to paste so the next draft does not repeat them."""
-    n = PRIOR_MCQ_PROMPT_ITEMS if requested is None else int(requested)
+    n = pick(
+        requested is None,
+        lambda: PRIOR_MCQ_PROMPT_ITEMS,
+        lambda: int(requested),
+    )
     return max(1, n)
 
 
@@ -693,14 +861,22 @@ def draft_structural_score(draft: dict[str, Any]) -> tuple[int, int, float]:
     length gap vs other options (guards longest-answer giveaway).
     """
     flaws = run_heuristic_checks(draft)
-    fatal = sum(1 for f in flaws if f.get("code") in FATAL_FLAW_CODES)
+    fatal = sum(
+        1 for f in filter(lambda row: row.get("code") in FATAL_FLAW_CODES, flaws)
+    )
     options = [str(o) for o in (draft.get("options") or [])]
     gap = 0.0
     try:
         ci = int(draft.get("correct_index"))
-        others = [len(o) for i, o in enumerate(options) if i != ci]
-        if others:
-            gap = abs(len(options[ci]) - sum(others) / len(others))
+        others = [
+            len(o)
+            for _i, o in filter(lambda pair: pair[0] != ci, enumerate(options))
+        ]
+        gap = pick(
+            bool(others),
+            lambda: abs(len(options[ci]) - sum(others) / len(others)),
+            lambda: 0.0,
+        )
     except (TypeError, ValueError, IndexError):
         gap = 0.0
     return (fatal, len(flaws), gap)
@@ -708,9 +884,11 @@ def draft_structural_score(draft: dict[str, Any]) -> tuple[int, int, float]:
 
 def pick_best_draft(candidates: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
     """Pick structurally best draft among LLM alternatives (no LLM)."""
-    if not candidates:
-        return None
-    return min(candidates, key=draft_structural_score)
+    return pick(
+        not candidates,
+        lambda: None,
+        lambda: min(candidates, key=draft_structural_score),
+    )
 
 
 # Re-export leaf helpers so cook/admin can import one engine module.
@@ -762,4 +940,5 @@ __all__ = [
     "pick_best_draft",
     "run_heuristic_checks",
     "has_fatal_heuristic_flaws",
+    "FATAL_FLAW_CODES",
 ]

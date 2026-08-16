@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from app.db import SessionLocal
+from app.engine_runtime import choose, pick
 from app.models import Account, ChatMessage, ChatThread
 from app.services.code_execution import LANGUAGES
 from app.services.llm_router import stream_chat_completion
@@ -47,9 +48,7 @@ Rules:
 
 
 def _thread_surface(*, account_id: uuid.UUID | None, guest_id: str | None) -> str:
-    if account_id is None and guest_id:
-        return f"g:{guest_id}:{_SURFACE}"
-    return _SURFACE
+    return choose(account_id is None and bool(guest_id), f"g:{guest_id}:{_SURFACE}", _SURFACE)
 
 
 def get_or_create_coding_thread(
@@ -72,8 +71,23 @@ def get_or_create_coding_thread(
         .order_by(ChatThread.version.desc())
         .first()
     )
-    if thread:
-        return thread
+    return pick(bool(thread), lambda: thread, lambda: _create_thread(
+        db,
+        account_id=account_id,
+        assertion_id=assertion_id,
+        recorded_at=recorded_at,
+        thread_surface=thread_surface,
+    ))
+
+
+def _create_thread(
+    db: Session,
+    *,
+    account_id: uuid.UUID | None,
+    assertion_id: uuid.UUID,
+    recorded_at: datetime,
+    thread_surface: str,
+) -> ChatThread:
     thread = ChatThread(
         account_id=account_id,
         artifact_id=assertion_id,
@@ -86,7 +100,7 @@ def get_or_create_coding_thread(
         db.commit()
         db.refresh(thread)
         return thread
-    except IntegrityError:
+    except IntegrityError as exc:
         db.rollback()
         existing = (
             db.query(ChatThread)
@@ -99,9 +113,15 @@ def get_or_create_coding_thread(
             )
             .first()
         )
-        if existing:
-            return existing
-        raise
+        return _existing_thread_or_reraise(existing, exc)
+
+
+def _existing_thread_or_reraise(existing: ChatThread | None, exc: IntegrityError) -> ChatThread:
+    return pick(bool(existing), lambda: existing, lambda: _raise_integrity(exc))
+
+
+def _raise_integrity(exc: IntegrityError) -> ChatThread:
+    raise exc
 
 
 def list_assist_messages(
@@ -113,8 +133,11 @@ def list_assist_messages(
     guest_id: str | None,
     offset: int = 0,
 ) -> list[ChatMessage]:
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="offset must be >= 0")
+    pick(
+        offset < 0,
+        lambda: _raise_offset(),
+        lambda: None,
+    )
     thread = get_or_create_coding_thread(
         db,
         account_id=account_id,
@@ -130,6 +153,10 @@ def list_assist_messages(
         .limit(_LIST_MESSAGES_LIMIT)
         .all()
     )
+
+
+def _raise_offset() -> None:
+    raise HTTPException(status_code=400, detail="offset must be >= 0")
 
 
 def clear_assist_thread(
@@ -172,7 +199,7 @@ def _problem_context_block(public: dict[str, Any]) -> str:
         [
             f"Title: {public.get('title') or 'Untitled'}",
             f"Difficulty: {public.get('difficulty') or 'medium'}",
-            f"Tags: {', '.join(str(t) for t in tags) if tags else '(none)'}",
+            f"Tags: {choose(bool(tags), ', '.join(str(t) for t in tags), '(none)')}",
             "",
             "Statement:",
             str(public.get("statement") or "").strip() or "(empty)",
@@ -190,17 +217,26 @@ def _editor_context_block(
     last_status: str | None,
 ) -> str:
     parts: list[str] = []
-    if language_id is not None:
-        label = LANGUAGES.get(int(language_id), f"language_id={language_id}")
-        parts.append(f"Language: {label} (id {language_id})")
-    if last_status:
-        parts.append(f"Last run/submit status: {last_status}")
-    if stdin is not None and str(stdin).strip():
-        parts.append(f"Custom stdin:\n{stdin}")
-    if code is not None and str(code).strip():
-        # Cap so a huge paste cannot blow the prompt.
-        clipped = str(code)[: plan_coding_assist_code_chars()]
-        parts.append(f"Learner's current code:\n```\n{clipped}\n```")
+    pick(
+        language_id is not None,
+        lambda: parts.append(
+            f"Language: {LANGUAGES.get(int(language_id), f'language_id={language_id}')} (id {language_id})"
+        ),
+        lambda: None,
+    )
+    pick(bool(last_status), lambda: parts.append(f"Last run/submit status: {last_status}"), lambda: None)
+    pick(
+        stdin is not None and bool(str(stdin).strip()),
+        lambda: parts.append(f"Custom stdin:\n{stdin}"),
+        lambda: None,
+    )
+    pick(
+        code is not None and bool(str(code).strip()),
+        lambda: parts.append(
+            f"Learner's current code:\n```\n{str(code)[: plan_coding_assist_code_chars()]}\n```"
+        ),
+        lambda: None,
+    )
     return "\n\n".join(parts)
 
 
@@ -221,7 +257,7 @@ def prepare_assist_stream(
     """Sync setup: reserve slot, persist user turn, return stream args."""
     with SessionLocal() as db:
         reserve_message_slot(db, user=user, request=request, demo_cookie=guest_id)
-        account_id = user.id if user else None
+        account_id = pick(bool(user), lambda: user.id, lambda: None)
         thread = get_or_create_coding_thread(
             db,
             account_id=account_id,
@@ -239,8 +275,7 @@ def prepare_assist_stream(
         history = list(reversed(history))
         prior = [
             {"role": m.role, "content": m.content}
-            for m in history
-            if (m.content or "").strip()
+            for m in filter(lambda m: bool((m.content or "").strip()), history)
         ]
         db.add(ChatMessage(thread_id=thread.id, role="user", content=message))
         db.commit()
@@ -276,11 +311,12 @@ async def assist_event_stream(setup: dict[str, Any]) -> EventSourceResponse:
             try:
                 messages: list[dict[str, str]] = [{"role": "system", "content": _ASSIST_SYSTEM}]
                 messages.extend(prior_messages)
-                user_parts = [
-                    "Problem context:\n" + problem_block,
-                ]
-                if editor_block.strip():
-                    user_parts.append("Editor context:\n" + editor_block)
+                user_parts = ["Problem context:\n" + problem_block]
+                pick(
+                    bool(editor_block.strip()),
+                    lambda: user_parts.append("Editor context:\n" + editor_block),
+                    lambda: None,
+                )
                 user_parts.append("Learner question:\n" + request_message)
                 messages.append({"role": "user", "content": "\n\n".join(user_parts)})
 
@@ -290,8 +326,7 @@ async def assist_event_stream(setup: dict[str, Any]) -> EventSourceResponse:
                 ):
                     full += token
                     yield {"event": "token", "data": json.dumps({"text": token})}
-                if not full.strip():
-                    raise RuntimeError("empty model response")
+                pick(not full.strip(), lambda: _raise_empty(), lambda: None)
                 stream_db.add(
                     ChatMessage(thread_id=thread_id, role="assistant", content=full)
                 )
@@ -306,3 +341,7 @@ async def assist_event_stream(setup: dict[str, Any]) -> EventSourceResponse:
             stream_db.close()
 
     return EventSourceResponse(event_generator())
+
+
+def _raise_empty() -> None:
+    raise RuntimeError("empty model response")

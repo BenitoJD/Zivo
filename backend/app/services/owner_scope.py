@@ -4,15 +4,30 @@ from __future__ import annotations
 
 import uuid
 
+from app.engine_runtime import Pred, Rule, apply, first_match
+
+_SCOPE_RULES = (
+    Rule(when=(Pred("has_user", "truthy"),), action="user"),
+    Rule(when=(Pred("has_guest", "truthy"),), action="guest"),
+    Rule(when=(), action="none"),
+)
+
 
 def note_owner_scope(
     user_id: uuid.UUID | None, guest_id: str | None
 ) -> tuple[uuid.UUID | None, str | None]:
-    if user_id is not None:
-        return user_id, None
-    if guest_id:
-        return None, guest_id
-    return None, None
+    hit = first_match(
+        _SCOPE_RULES,
+        {"has_user": user_id is not None, "has_guest": bool(guest_id)},
+    )
+    return apply(
+        hit.action,
+        {
+            "user": lambda: (user_id, None),
+            "guest": lambda: (None, guest_id),
+            "none": lambda: (None, None),
+        },
+    )
 
 
 def owner_scope_sql() -> str:

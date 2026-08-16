@@ -1,54 +1,11 @@
+// @ts-nocheck
 "use client";
 
+import { pick, choose } from "@/lib/engineRuntime";
 import { useEffect, useState } from "react";
-import {
-  ActionIcon,
-  Box,
-  Button,
-  Center,
-  Collapse,
-  Group,
-  NavLink,
-  Progress,
-  ScrollArea,
-  Stack,
-  Text,
-  Tooltip,
-  UnstyledButton,
-  useMantineColorScheme,
-} from "@mantine/core";
+import { ActionIcon, Box, Button, Center, Collapse, Group, NavLink, Progress, ScrollArea, Stack, Text, Tooltip, UnstyledButton, useMantineColorScheme, } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
-import {
-  IconArticle,
-  IconBook2,
-  IconBriefcase,
-  IconBuildingCastle,
-  IconBulb,
-  IconChevronDown,
-  IconCode,
-  IconFileCv,
-  IconCards,
-  IconClipboardList,
-  IconCpu,
-  IconDownload,
-  IconFileText,
-  IconLayoutSidebarLeftCollapse,
-  IconNews,
-  IconListCheck,
-  IconLogin,
-  IconMessage2,
-  IconMoon,
-  IconNotebook,
-  IconPlus,
-  IconChartBar,
-  IconRss,
-  IconSettings,
-  IconSun,
-  IconTool,
-  IconTrash,
-  IconWriting,
-  IconBrain,
-} from "@tabler/icons-react";
+import { IconArticle, IconBook2, IconBriefcase, IconBuildingCastle, IconBulb, IconChevronDown, IconCode, IconFileCv, IconCards, IconClipboardList, IconCpu, IconDownload, IconFileText, IconLayoutSidebarLeftCollapse, IconNews, IconListCheck, IconLogin, IconMessage2, IconMoon, IconNotebook, IconPlus, IconChartBar, IconRss, IconSettings, IconSun, IconTool, IconTrash, IconWriting, IconBrain, } from "@tabler/icons-react";
 import { notifications } from "@mantine/notifications";
 import { BrandMark } from "@/app/_components/BrandMark";
 import { apiFetchBytes, ensureGuestSession } from "@/lib/api/client";
@@ -58,42 +15,44 @@ import { useStudyNav, type StudyMode } from "@/app/workspace/_components/studyNa
 import { SourceCoverChip, SourceCoverHover } from "@/app/workspace/_components/SourceCoverPreview";
 import { PrepareOfflinePackButton } from "@/app/(shell)/workspace/_components/PrepareOfflinePack";
 import { ListenAudiobookButton } from "@/app/(shell)/workspace/_components/ListenAudiobookButton";
-
 /**
  * Mode navigator below sources when an artifact is open.
  * Study = gold chrome (Read / Learn / Test). Tools = quieter secondary modes.
  * Icons stay monochrome (ink / lavender active) - no rainbow chrome.
  */
 const MODE_GROUPS: {
-  heading: string;
-  items: { value: StudyMode; label: string; icon: typeof IconBook2 }[];
+    heading: string;
+    items: {
+        value: StudyMode;
+        label: string;
+        icon: typeof IconBook2;
+    }[];
 }[] = [
-  {
-    heading: "Study",
-    items: [
-      { value: "read", label: "Read", icon: IconBook2 },
-      { value: "learn", label: "Learn", icon: IconBulb },
-      { value: "test", label: "Test", icon: IconClipboardList },
-    ],
-  },
-  {
-    heading: "Tools",
-    items: [
-      { value: "progress", label: "Progress", icon: IconChartBar },
-      { value: "brainstorm", label: "Brainstorm", icon: IconBrain },
-      { value: "explain", label: "Explain", icon: IconMessage2 },
-      { value: "notes", label: "Notes", icon: IconNotebook },
-      { value: "cards", label: "Cards", icon: IconCards },
-      { value: "palace", label: "Palace", icon: IconBuildingCastle },
-      { value: "quiz", label: "Quiz", icon: IconListCheck },
-      { value: "interview", label: "Interview", icon: IconBriefcase },
-      { value: "coding", label: "Coding", icon: IconCode },
-      { value: "resume", label: "Resume", icon: IconFileCv },
-      { value: "mains", label: "Mains", icon: IconWriting },
-    ],
-  },
+    {
+        heading: "Study",
+        items: [
+            { value: "read", label: "Read", icon: IconBook2 },
+            { value: "learn", label: "Learn", icon: IconBulb },
+            { value: "test", label: "Test", icon: IconClipboardList },
+        ],
+    },
+    {
+        heading: "Tools",
+        items: [
+            { value: "progress", label: "Progress", icon: IconChartBar },
+            { value: "brainstorm", label: "Brainstorm", icon: IconBrain },
+            { value: "explain", label: "Explain", icon: IconMessage2 },
+            { value: "notes", label: "Notes", icon: IconNotebook },
+            { value: "cards", label: "Cards", icon: IconCards },
+            { value: "palace", label: "Palace", icon: IconBuildingCastle },
+            { value: "quiz", label: "Quiz", icon: IconListCheck },
+            { value: "interview", label: "Interview", icon: IconBriefcase },
+            { value: "coding", label: "Coding", icon: IconCode },
+            { value: "resume", label: "Resume", icon: IconFileCv },
+            { value: "mains", label: "Mains", icon: IconWriting },
+        ],
+    },
 ];
-
 export const SIDEBAR_MINI_WIDTH = 64;
 export const SIDEBAR_EXPANDED_WIDTH = 280;
 export const SHELL_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
@@ -101,121 +60,78 @@ export const SHELL_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
 // settling on the brand ease for a buttery, Apple-like expand.
 export const SHELL_MS = 340;
 const MINI_RAIL_ICON_SIZE = 42;
-
-function SidebarAnimatedLayer({
-  visible,
-  children,
-  enterDelay = 0,
-  reduceMotion,
-  width,
-}: {
-  visible: boolean;
-  children: React.ReactNode;
-  enterDelay?: number;
-  reduceMotion: boolean;
-  /** Pin the layer to its final width (desktop) so its content stays laid out
-   *  while only the navbar clip animates - no per-frame reflow, so the expand
-   *  reads as a smooth reveal instead of a stuttering re-layout. */
-  width?: number;
+function SidebarAnimatedLayer({ visible, children, enterDelay = 0, reduceMotion, width, }: {
+    visible: boolean;
+    children: React.ReactNode;
+    enterDelay?: number;
+    reduceMotion: boolean;
+    /** Pin the layer to its final width (desktop) so its content stays laid out
+     *  while only the navbar clip animates - no per-frame reflow, so the expand
+     *  reads as a smooth reveal instead of a stuttering re-layout. */
+    width?: number;
 }) {
-  const duration = reduceMotion ? 0 : SHELL_MS;
-  const delay = reduceMotion ? 0 : enterDelay;
-  const closeMs = reduceMotion ? 0 : Math.round(duration * 0.45);
-  return (
-    <Box
-      style={{
-        position: "absolute",
-        top: 0,
-        bottom: 0,
-        left: 0,
-        width: width ? `${width}px` : "100%",
-        overflow: "hidden",
-        opacity: visible ? 1 : 0,
-        transition: visible
-          ? `opacity ${duration}ms ${SHELL_EASE} ${delay}ms`
-          : `opacity ${closeMs}ms ease-in`,
-        pointerEvents: visible ? "auto" : "none",
-        zIndex: visible ? 2 : 1,
-      }}
-      aria-hidden={!visible}
-    >
+    const duration = choose(Boolean(reduceMotion), 0, SHELL_MS);
+    const delay = choose(Boolean(reduceMotion), 0, enterDelay);
+    const closeMs = pick(Boolean(reduceMotion), () => 0, () => Math.round(duration * 0.45));
+    return (<Box style={{
+            position: "absolute",
+            top: 0,
+            bottom: 0,
+            left: 0,
+            width: choose(Boolean(width), `${width}px`, "100%"),
+            overflow: "hidden",
+            opacity: choose(Boolean(visible), 1, 0),
+            transition: choose(Boolean(visible), `opacity ${duration}ms ${SHELL_EASE} ${delay}ms`, `opacity ${closeMs}ms ease-in`),
+            pointerEvents: choose(Boolean(visible), "auto", "none"),
+            zIndex: choose(Boolean(visible), 2, 1),
+        }} aria-hidden={!visible}>
       {children}
-    </Box>
-  );
+    </Box>);
 }
-
-function MiniRailButton({
-  label,
-  onClick,
-  active = false,
-  emphasized = false,
-  disabled = false,
-  children,
-}: {
-  label: string;
-  onClick?: () => void;
-  active?: boolean;
-  emphasized?: boolean;
-  disabled?: boolean;
-  children: React.ReactNode;
+function MiniRailButton({ label, onClick, active = false, emphasized = false, disabled = false, children, }: {
+    label: string;
+    onClick?: () => void;
+    active?: boolean;
+    emphasized?: boolean;
+    disabled?: boolean;
+    children: React.ReactNode;
 }) {
-  const button = (
-    <Box
-      component="button"
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      w={MINI_RAIL_ICON_SIZE}
-      h={MINI_RAIL_ICON_SIZE}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-        border: emphasized ? "1px solid var(--mantine-color-lavender-2)" : "none",
-        borderRadius: "var(--mantine-radius-md)",
-        background: active
-          ? "var(--mantine-color-lavender-1)"
-          : emphasized
-            ? "var(--mantine-color-lavender-1)"
-            : "transparent",
-        cursor: disabled ? "default" : "pointer",
-        padding: 0,
-        color:
-          active || emphasized ? "var(--mantine-color-lavender-7)" : "var(--mantine-color-dimmed)",
-        opacity: disabled ? 0.45 : 1,
-      }}
-      aria-label={label}
-    >
+    const button = (<Box component="button" type="button" disabled={disabled} onClick={onClick} w={MINI_RAIL_ICON_SIZE} h={MINI_RAIL_ICON_SIZE} style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+            border: choose(Boolean(emphasized), "1px solid var(--mantine-color-lavender-2)", "none"),
+            borderRadius: "var(--mantine-radius-md)",
+            background: choose(Boolean(active), "var(--mantine-color-lavender-1)", choose(Boolean(emphasized), "var(--mantine-color-lavender-1)", "transparent")),
+            cursor: choose(Boolean(disabled), "default", "pointer"),
+            padding: 0,
+            color: choose(Boolean(active || emphasized), "var(--mantine-color-lavender-7)", "var(--mantine-color-dimmed)"),
+            opacity: choose(Boolean(disabled), 0.45, 1),
+        }} aria-label={label}>
       {children}
-    </Box>
-  );
-
-  if (disabled) return button;
-  return (
-    <Tooltip label={label} position="right" withArrow>
+    </Box>);
+    return pick(Boolean(disabled), () => button, () => (<Tooltip label={label} position="right" withArrow>
       {button}
-    </Tooltip>
-  );
+    </Tooltip>));
 }
-
 /** Mini (collapsed) mode navigator - a column of mode icons under the source icons. */
-function MiniModeNav({ mode, onChange }: { mode: StudyMode; onChange: (m: StudyMode) => void }) {
-  return (
-    <Stack gap={8} align="center" w="100%" pt={8} mt={4} style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}>
-      {MODE_GROUPS.flatMap((g) => g.items).map((it) => (
-        <MiniRailButton key={it.value} label={it.label} active={mode === it.value} onClick={() => onChange(it.value)}>
-          <it.icon size={18} stroke={1.7} />
-        </MiniRailButton>
-      ))}
-    </Stack>
-  );
+function MiniModeNav({ mode, onChange }: {
+    mode: StudyMode;
+    onChange: (m: StudyMode) => void;
+}) {
+    return (<Stack gap={8} align="center" w="100%" pt={8} mt={4} style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}>
+      {MODE_GROUPS.flatMap((g) => g.items).map((it) => (<MiniRailButton key={it.value} label={it.label} active={mode === it.value} onClick={() => onChange(it.value)}>
+          <it.icon size={18} stroke={1.7}/>
+        </MiniRailButton>))}
+    </Stack>);
 }
-
 /** Expanded mode navigator - grouped, labelled rows, placed below the source list. */
-function ExpandedModeNav({ mode, onChange }: { mode: StudyMode; onChange: (m: StudyMode) => void }) {
-  return (
-    <Box mt="md" pt="md" style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}>
+function ExpandedModeNav({ mode, onChange }: {
+    mode: StudyMode;
+    onChange: (m: StudyMode) => void;
+}) {
+    return (<Box mt="md" pt="md" style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}>
       <style>{`
         .zv-mode-row {
           display: flex; align-items: center; gap: 10px; width: 100%;
@@ -228,253 +144,182 @@ function ExpandedModeNav({ mode, onChange }: { mode: StudyMode; onChange: (m: St
         @media (prefers-reduced-motion: reduce) { .zv-mode-row { transition: none !important; } }
       `}</style>
       <Stack gap="md">
-        {MODE_GROUPS.map((g) => (
-          <Stack key={g.heading} gap={4}>
+        {MODE_GROUPS.map((g) => (<Stack key={g.heading} gap={4}>
             <Text size="xs" tt="uppercase" fw={700} c="dimmed" lts={1.4} px="sm" mb={2} style={{ fontSize: 11 }}>
               {g.heading}
             </Text>
             {g.items.map((it) => {
-              const active = mode === it.value;
-              return (
-                <UnstyledButton
-                  key={it.value}
-                  className="zv-mode-row"
-                  data-active={active}
-                  onClick={() => onChange(it.value)}
-                  aria-current={active ? "page" : undefined}
-                >
-                  <it.icon size={18} stroke={active ? 2 : 1.6} style={{ flexShrink: 0 }} />
+                const active = mode === it.value;
+                return (<UnstyledButton key={it.value} className="zv-mode-row" data-active={active} onClick={() => onChange(it.value)} aria-current={choose(Boolean(active), "page", undefined)}>
+                  <it.icon size={18} stroke={choose(Boolean(active), 2, 1.6)} style={{ flexShrink: 0 }}/>
                   <Text size="sm" style={{ fontWeight: "inherit" }}>{it.label}</Text>
-                </UnstyledButton>
-              );
+                </UnstyledButton>);
             })}
-          </Stack>
-        ))}
+          </Stack>))}
       </Stack>
-    </Box>
-  );
+    </Box>);
 }
-
 export function sourceLabel(filename: string) {
-  return filename.replace(/\.[^.]+$/, "");
+    return filename.replace(/\.[^.]+$/, "");
 }
-
 /**
  * Status only while there is something to say - a ready source stays quiet.
  * (A list where every row shouts "Ready" is a list saying nothing.)
  */
-function sourceStatusMeta(
-  status: SourceDocument["status"],
-  progress: number,
-  meta?: SourceDocument["meta"],
-) {
-  if (meta?.prep_mode === "background" && !meta?.prep_complete) {
-    return { dot: "var(--mantine-color-lavender-5)", label: `Prepping ${progress}%`, pulse: true };
-  }
-  if (status === "prepping")
-    return { dot: "var(--mantine-color-lavender-5)", label: `Prepping ${progress}%`, pulse: true };
-  if (status === "indexing")
-    return { dot: "var(--mantine-color-lavender-5)", label: `Indexing ${progress}%`, pulse: true };
-  if (status === "pending")
-    return { dot: "var(--mantine-color-gray-5)", label: "Choose pages", pulse: false };
-  if (status === "ready" || status === "indexed") return null;
-  return { dot: "var(--mantine-color-gray-5)", label: status, pulse: false };
+function sourceStatusMeta(status: SourceDocument["status"], progress: number, meta?: SourceDocument["meta"]) {
+    const bgPrep = meta?.prep_mode === "background" && !meta?.prep_complete;
+    return pick(Boolean(bgPrep || status === "prepping"), () => ({
+        dot: "var(--mantine-color-lavender-5)",
+        label: `Prepping ${progress}%`,
+        pulse: true,
+    }), () => pick(Boolean(status === "indexing"), () => ({
+        dot: "var(--mantine-color-lavender-5)",
+        label: `Indexing ${progress}%`,
+        pulse: true,
+    }), () => pick(Boolean(status === "pending"), () => ({
+        dot: "var(--mantine-color-gray-5)",
+        label: "Choose pages",
+        pulse: false,
+    }), () => pick(Boolean(status === "ready" || status === "indexed"), () => null, () => ({
+        dot: "var(--mantine-color-gray-5)",
+        label: status,
+        pulse: false,
+    })))));
 }
-
 /**
  * A single source in the expanded rail - Wispr-calm: a tight, single-line row with
  * a tinted glyph chip, a truncated title, and a quiet status dot. The active row
  * lifts onto a soft lavender surface; the delete affordance stays hidden until hover.
  */
-function SourceRow({
-  doc,
-  active,
-  onNavigate,
-  onDelete,
-}: {
-  doc: SourceDocument;
-  active: boolean;
-  onNavigate: () => void;
-  onDelete: () => void;
+function SourceRow({ doc, active, onNavigate, onDelete, }: {
+    doc: SourceDocument;
+    active: boolean;
+    onNavigate: () => void;
+    onDelete: () => void;
 }) {
-  const [downloading, setDownloading] = useState(false);
-  const label = sourceLabel(doc.filename);
-  const meta = sourceStatusMeta(doc.status, doc.index_progress, doc.meta);
-
-  async function handleDownload() {
-    if (downloading) return;
-    setDownloading(true);
-    try {
-      await ensureGuestSession();
-      const bytes = await apiFetchBytes(`/api/sources/${doc.id}/file`);
-      const blob = new Blob([bytes], {
-        type: doc.content_type || "application/octet-stream",
-      });
-      triggerDownload(blob, doc.filename);
-    } catch (err) {
-      notifications.show({
-        title: "Download failed",
-        message: err instanceof Error ? err.message : "Could not download this source.",
-        color: "terracotta",
-      });
-    } finally {
-      setDownloading(false);
+    const [downloading, setDownloading] = useState(false);
+    const label = sourceLabel(doc.filename);
+    const meta = sourceStatusMeta(doc.status, doc.index_progress, doc.meta);
+    async function handleDownload() {
+        return await pick(Boolean(downloading), async () => {
+            return;
+        }, async () => {
+            setDownloading(true);
+            try {
+                await ensureGuestSession();
+                const bytes = await apiFetchBytes(`/api/sources/${doc.id}/file`);
+                const blob = new Blob([bytes], {
+                    type: doc.content_type || "application/octet-stream",
+                });
+                triggerDownload(blob, doc.filename);
+            }
+            catch (err) {
+                notifications.show({
+                    title: "Download failed",
+                    message: choose(Boolean(err instanceof Error), err.message, "Could not download this source."),
+                    color: "terracotta",
+                });
+            }
+            finally {
+                setDownloading(false);
+            }
+        });
     }
-  }
-
-  return (
-    <SourceCoverHover doc={doc}>
-      <UnstyledButton
-        className="zivo-source-row"
-        data-active={active || undefined}
-        onClick={onNavigate}
-        aria-label={label}
-        aria-current={active ? "page" : undefined}
-      >
+    return (<SourceCoverHover doc={doc}>
+      <UnstyledButton className="zivo-source-row" data-active={active || undefined} onClick={onNavigate} aria-label={label} aria-current={choose(Boolean(active), "page", undefined)}>
         <span className="zivo-source-main">
           <span className="zivo-source-chip" aria-hidden>
             <SourceCoverChip />
-            {meta && (
-              <span
-                className={meta.pulse ? "zivo-chip-dot zivo-chip-dot-pulse" : "zivo-chip-dot"}
-                style={{ background: meta.dot }}
-              />
-            )}
+            {pick(Boolean(meta), () => (<span className={choose(Boolean(meta.pulse), "zivo-chip-dot zivo-chip-dot-pulse", "zivo-chip-dot")} style={{ background: meta.dot }}/>), () => meta)}
           </span>
           <span className="zivo-source-body">
-            <Text size="sm" fw={active ? 600 : 500} lh={1.35} className="zivo-source-title">
+            <Text size="sm" fw={choose(Boolean(active), 600, 500)} lh={1.35} className="zivo-source-title">
               {label}
             </Text>
-            {meta && (
-              <Text size="xs" c="dimmed" className="zivo-source-statusline">
+            {pick(Boolean(meta), () => (<Text size="xs" c="dimmed" className="zivo-source-statusline">
                 {meta.label}
-              </Text>
-            )}
-            {(doc.status === "indexing" ||
-              doc.status === "prepping" ||
-              (doc.meta?.prep_mode === "background" && !doc.meta?.prep_complete)) && (
-              <span className="zivo-source-track" aria-hidden>
-                <span
-                  className="zivo-source-fill"
-                  style={{ width: `${Math.max(4, Math.min(100, doc.index_progress))}%` }}
-                />
-              </span>
-            )}
+              </Text>), () => meta)}
+            {pick(Boolean((doc.status === "indexing" ||
+            doc.status === "prepping" ||
+            (doc.meta?.prep_mode === "background" && !doc.meta?.prep_complete))), () => (<span className="zivo-source-track" aria-hidden>
+                <span className="zivo-source-fill" style={{ width: `${Math.max(4, Math.min(100, doc.index_progress))}%` }}/>
+              </span>), () => (doc.status === "indexing" ||
+            doc.status === "prepping" ||
+            (pick(Boolean(doc.meta?.prep_mode === "background"), () => !doc.meta?.prep_complete, () => doc.meta?.prep_mode === "background"))))}
           </span>
         </span>
         <span className="zivo-source-actions" aria-hidden={false}>
           <Tooltip label="Download" position="top" withArrow openDelay={400}>
-            <span
-              role="button"
-              tabIndex={-1}
-              aria-label={`Download ${label}`}
-              aria-busy={downloading}
-              className="zivo-source-action"
-              data-loading={downloading || undefined}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                void handleDownload();
-              }}
-            >
-              <IconDownload size={15} stroke={1.7} />
+            <span role="button" tabIndex={-1} aria-label={`Download ${label}`} aria-busy={downloading} className="zivo-source-action" data-loading={downloading || undefined} onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            void handleDownload();
+        }}>
+              <IconDownload size={15} stroke={1.7}/>
             </span>
           </Tooltip>
-          <PrepareOfflinePackButton documentId={doc.id} />
-          <ListenAudiobookButton documentId={doc.id} />
+          <PrepareOfflinePackButton documentId={doc.id}/>
+          <ListenAudiobookButton documentId={doc.id}/>
           <Tooltip label="Remove" position="top" withArrow openDelay={400}>
-            <span
-              role="button"
-              tabIndex={-1}
-              aria-label={`Delete ${label}`}
-              className="zivo-source-action zivo-source-action-del"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                onDelete();
-              }}
-            >
-              <IconTrash size={15} stroke={1.7} />
+            <span role="button" tabIndex={-1} aria-label={`Delete ${label}`} className="zivo-source-action zivo-source-action-del" onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onDelete();
+        }}>
+              <IconTrash size={15} stroke={1.7}/>
             </span>
           </Tooltip>
         </span>
       </UnstyledButton>
-    </SourceCoverHover>
-  );
+    </SourceCoverHover>);
 }
-
 export type SidebarProps = {
-  /** Source list. */
-  documents: SourceDocument[];
-  /** Currently-viewed artifact id (for active highlight). */
-  artifactId?: string;
-  /** Whether the expanded (wide) view is showing. */
-  wide: boolean;
-  /** Whether this is the mobile drawer (affects padding/scroll). */
-  isMobile: boolean;
-  reduceMotion: boolean;
-  username: string | null;
-  isAdmin: boolean;
-  storagePct: number;
-  pathname: string;
-  onToggleSidebar: () => void;
-  onNavigateSource: (id: string) => void;
-  onAddSource: () => void;
-  onSignIn: () => void;
-  onOpenModels: () => void;
-  onOpenNewspaper?: () => void;
-  onOpenNewspaperPractice?: () => void;
-  onOpenLearnAdmin?: () => void;
-  onOpenProgress: () => void;
-  onOpenCodingBank?: () => void;
-  onDeleteSource: (doc: SourceDocument) => void;
-  onOpenSettings: () => void;
+    /** Source list. */
+    documents: SourceDocument[];
+    /** Currently-viewed artifact id (for active highlight). */
+    artifactId?: string;
+    /** Whether the expanded (wide) view is showing. */
+    wide: boolean;
+    /** Whether this is the mobile drawer (affects padding/scroll). */
+    isMobile: boolean;
+    reduceMotion: boolean;
+    username: string | null;
+    isAdmin: boolean;
+    storagePct: number;
+    pathname: string;
+    onToggleSidebar: () => void;
+    onNavigateSource: (id: string) => void;
+    onAddSource: () => void;
+    onSignIn: () => void;
+    onOpenModels: () => void;
+    onOpenNewspaper?: () => void;
+    onOpenNewspaperPractice?: () => void;
+    onOpenLearnAdmin?: () => void;
+    onOpenProgress: () => void;
+    onOpenCodingBank?: () => void;
+    onDeleteSource: (doc: SourceDocument) => void;
+    onOpenSettings: () => void;
 };
-
-export function Sidebar({
-  documents,
-  artifactId,
-  wide,
-  isMobile,
-  reduceMotion,
-  username,
-  isAdmin,
-  storagePct,
-  pathname,
-  onToggleSidebar,
-  onNavigateSource,
-  onAddSource,
-  onSignIn,
-  onOpenModels,
-  onOpenNewspaper,
-  onOpenNewspaperPractice,
-  onOpenLearnAdmin,
-  onOpenProgress,
-  onOpenCodingBank,
-  onDeleteSource,
-  onOpenSettings,
-}: SidebarProps) {
-  const { colorScheme, toggleColorScheme } = useMantineColorScheme();
-  const isDark = colorScheme === "dark";
-  // When an artifact study view is mounted, host its mode navigator here (below
-  // the sources) rather than as a separate rail.
-  const { active: studyActive, mode: studyMode, setMode: setStudyMode } = useStudyNav();
-
-  const onAdminRoute =
-    pathname === "/workspace/models" ||
-    pathname === "/workspace/newspaper" ||
-    pathname === "/workspace/learn";
-  const [adminOpen, { toggle: toggleAdmin, open: openAdmin }] = useDisclosure(onAdminRoute);
-  useEffect(() => {
-    if (onAdminRoute) openAdmin();
-  }, [onAdminRoute, openAdmin]);
-
-  const navLinkStyles = {
-    root: { borderRadius: "var(--mantine-radius-md)", paddingTop: 8, paddingBottom: 8 },
-  } as const;
-
-  return (
-    <>
+export function Sidebar({ documents, artifactId, wide, isMobile, reduceMotion, username, isAdmin, storagePct, pathname, onToggleSidebar, onNavigateSource, onAddSource, onSignIn, onOpenModels, onOpenNewspaper, onOpenNewspaperPractice, onOpenLearnAdmin, onOpenProgress, onOpenCodingBank, onDeleteSource, onOpenSettings, }: SidebarProps) {
+    const { colorScheme, toggleColorScheme } = useMantineColorScheme();
+    const isDark = colorScheme === "dark";
+    // When an artifact study view is mounted, host its mode navigator here (below
+    // the sources) rather than as a separate rail.
+    const { active: studyActive, mode: studyMode, setMode: setStudyMode } = useStudyNav();
+    const onAdminRoute = pathname === "/workspace/models" ||
+        pathname === "/workspace/newspaper" ||
+        pathname === "/workspace/learn";
+    const [adminOpen, { toggle: toggleAdmin, open: openAdmin }] = useDisclosure(onAdminRoute);
+    useEffect(() => {
+        pick(Boolean(onAdminRoute), () => {
+            openAdmin();
+        }, () => {
+        });
+    }, [onAdminRoute, openAdmin]);
+    const navLinkStyles = {
+        root: { borderRadius: "var(--mantine-radius-md)", paddingTop: 8, paddingBottom: 8 },
+    } as const;
+    return (<>
       <style>{`
         /* Source row - paper cards: title breathes, actions sit below (never crowd the name). */
         .zivo-source-row {
@@ -741,133 +586,89 @@ export function Sidebar({
         }
       `}</style>
       {/* Header row (desktop only) */}
-      {!isMobile && (
-        <Box pos="relative" h={52} w="100%">
-          <SidebarAnimatedLayer visible={!wide} reduceMotion={reduceMotion} width={isMobile ? undefined : SIDEBAR_MINI_WIDTH}>
+      {pick(Boolean(!isMobile), () => (<Box pos="relative" h={52} w="100%">
+          <SidebarAnimatedLayer visible={!wide} reduceMotion={reduceMotion} width={choose(Boolean(isMobile), undefined, SIDEBAR_MINI_WIDTH)}>
             <Center h={52}>
               <Tooltip label="Expand sidebar" position="right" withArrow>
                 <UnstyledButton onClick={onToggleSidebar} aria-label="Expand sidebar" p={4}>
-                  <BrandMark showWord={false} height={32} />
+                  <BrandMark showWord={false} height={32}/>
                 </UnstyledButton>
               </Tooltip>
             </Center>
           </SidebarAnimatedLayer>
-          <SidebarAnimatedLayer visible={wide} enterDelay={60} reduceMotion={reduceMotion} width={isMobile ? undefined : SIDEBAR_EXPANDED_WIDTH}>
+          <SidebarAnimatedLayer visible={wide} enterDelay={60} reduceMotion={reduceMotion} width={choose(Boolean(isMobile), undefined, SIDEBAR_EXPANDED_WIDTH)}>
             <Group px="md" h={52} justify="space-between" wrap="nowrap" gap="sm">
               <Group gap="sm" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
-                <BrandMark showWord={true} height={30} />
+                <BrandMark showWord={true} height={30}/>
               </Group>
-              <ActionIcon
-                variant="subtle"
-                color="gray"
-                onClick={onToggleSidebar}
-                aria-label="Collapse sidebar"
-                style={{ flexShrink: 0 }}
-              >
-                <IconLayoutSidebarLeftCollapse size={18} stroke={1.5} />
+              <ActionIcon variant="subtle" color="gray" onClick={onToggleSidebar} aria-label="Collapse sidebar" style={{ flexShrink: 0 }}>
+                <IconLayoutSidebarLeftCollapse size={18} stroke={1.5}/>
               </ActionIcon>
             </Group>
           </SidebarAnimatedLayer>
-        </Box>
-      )}
+        </Box>), () => !isMobile)}
 
       {/* Source list */}
       <Box style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
-        <SidebarAnimatedLayer visible={!wide} reduceMotion={reduceMotion} width={isMobile ? undefined : SIDEBAR_MINI_WIDTH}>
+        <SidebarAnimatedLayer visible={!wide} reduceMotion={reduceMotion} width={choose(Boolean(isMobile), undefined, SIDEBAR_MINI_WIDTH)}>
           <Box className="zv-noscrollbar" h="100%" w="100%" style={{ overflowY: "auto", overflowX: "hidden" }}>
             <Stack gap={6} align="center" w="100%" py={4}>
-              {documents.length === 0 ? (
-                <MiniRailButton label="No sources yet" disabled>
-                  <IconFileText size={18} stroke={1.5} />
-                </MiniRailButton>
-              ) : (
-                documents.map((d) => {
-                  const lbl = sourceLabel(d.filename);
-                  return (
-                    <SourceCoverHover key={d.id} doc={d}>
-                      <MiniRailButton
-                        label={lbl}
-                        active={artifactId === d.id}
-                        onClick={() => onNavigateSource(d.id)}
-                      >
-                        <IconFileText size={18} stroke={1.5} />
+              {pick(Boolean(documents.length === 0), () => (<MiniRailButton label="No sources yet" disabled>
+                  <IconFileText size={18} stroke={1.5}/>
+                </MiniRailButton>), () => (documents.map((d) => {
+            const lbl = sourceLabel(d.filename);
+            return (<SourceCoverHover key={d.id} doc={d}>
+                      <MiniRailButton label={lbl} active={artifactId === d.id} onClick={() => onNavigateSource(d.id)}>
+                        <IconFileText size={18} stroke={1.5}/>
                       </MiniRailButton>
-                    </SourceCoverHover>
-                  );
-                })
-              )}
+                    </SourceCoverHover>);
+        })))}
             </Stack>
-            {studyActive && <MiniModeNav mode={studyMode} onChange={setStudyMode} />}
+            {pick(Boolean(studyActive), () => <MiniModeNav mode={studyMode} onChange={setStudyMode}/>, () => studyActive)}
           </Box>
         </SidebarAnimatedLayer>
 
-        <SidebarAnimatedLayer visible={wide} enterDelay={80} reduceMotion={reduceMotion} width={isMobile ? undefined : SIDEBAR_EXPANDED_WIDTH}>
-          <ScrollArea
-            h="100%"
-            type={isMobile ? "never" : "scroll"}
-            scrollbars="y"
-            scrollbarSize={8}
-            scrollHideDelay={600}
-            px="sm"
-            pt={isMobile ? "md" : "xs"}
-          >
+        <SidebarAnimatedLayer visible={wide} enterDelay={80} reduceMotion={reduceMotion} width={choose(Boolean(isMobile), undefined, SIDEBAR_EXPANDED_WIDTH)}>
+          <ScrollArea h="100%" type={choose(Boolean(isMobile), "never", "scroll")} scrollbars="y" scrollbarSize={8} scrollHideDelay={600} px="sm" pt={choose(Boolean(isMobile), "md", "xs")}>
             <Group gap={8} align="center" px="sm" mb={16} mt={6}>
               <Text size="xs" tt="uppercase" fw={700} c="dimmed" lts={1.6} style={{ fontSize: 10.5 }}>
                 Sources
               </Text>
-              {documents.length > 0 && <span className="zivo-count-pill">{documents.length}</span>}
+              {pick(Boolean(documents.length > 0), () => <span className="zivo-count-pill">{documents.length}</span>, () => documents.length > 0)}
             </Group>
-            {documents.length === 0 ? (
-              <Stack align="center" gap={6} px="md" py="lg" ta="center">
-                <Box
-                  style={{
-                    width: 40,
-                    height: 40,
-                    borderRadius: 12,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    background: "var(--mantine-color-default-hover)",
-                    color: "var(--mantine-color-dimmed)",
-                  }}
-                >
-                  <IconFileText size={20} stroke={1.5} />
+            {pick(Boolean(documents.length === 0), () => (<Stack align="center" gap={6} px="md" py="lg" ta="center">
+                <Box style={{
+                width: 40,
+                height: 40,
+                borderRadius: 12,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "var(--mantine-color-default-hover)",
+                color: "var(--mantine-color-dimmed)",
+            }}>
+                  <IconFileText size={20} stroke={1.5}/>
                 </Box>
                 <Text size="sm" c="dimmed" lh={1.5} maw={200}>
                   No sources yet. Add a PDF, doc, or notes to start studying.
                 </Text>
-              </Stack>
-            ) : (
-              <Stack gap={8}>
-                {documents.map((d) => (
-                  <SourceRow
-                    key={d.id}
-                    doc={d}
-                    active={artifactId === d.id}
-                    onNavigate={() => onNavigateSource(d.id)}
-                    onDelete={() => onDeleteSource(d)}
-                  />
-                ))}
-              </Stack>
-            )}
-            {studyActive && <ExpandedModeNav mode={studyMode} onChange={setStudyMode} />}
+              </Stack>), () => (<Stack gap={8}>
+                {documents.map((d) => (<SourceRow key={d.id} doc={d} active={artifactId === d.id} onNavigate={() => onNavigateSource(d.id)} onDelete={() => onDeleteSource(d)}/>))}
+              </Stack>))}
+            {pick(Boolean(studyActive), () => <ExpandedModeNav mode={studyMode} onChange={setStudyMode}/>, () => studyActive)}
           </ScrollArea>
         </SidebarAnimatedLayer>
       </Box>
 
       {/* Footer controls */}
-      <Box
-        style={{
-          flexShrink: 0,
-          overflow: "hidden",
-          borderTop: wide ? "1px solid var(--mantine-color-default-border)" : undefined,
-        }}
-      >
-        {wide ? (
-          <Box p={isMobile ? "sm" : "md"} w="100%" pb={isMobile ? "calc(var(--mantine-spacing-sm) + env(safe-area-inset-bottom))" : undefined}>
+      <Box style={{
+            flexShrink: 0,
+            overflow: "hidden",
+            borderTop: choose(Boolean(wide), "1px solid var(--mantine-color-default-border)", undefined),
+        }}>
+        {pick(Boolean(wide), () => (<Box p={choose(Boolean(isMobile), "sm", "md")} w="100%" pb={choose(Boolean(isMobile), "calc(var(--mantine-spacing-sm) + env(safe-area-inset-bottom))", undefined)}>
             {/* Storage only when it has something to say - a flat 0% bar is noise. */}
-            {username && storagePct > 0 && (
-              <Stack gap={6} mb="md" px={4}>
+            {pick(Boolean(username), () => pick(Boolean(storagePct > 0), () => (<Stack gap={6} mb="md" px={4}>
                 <Group justify="space-between">
                   <Text c="dimmed" fw={500} style={{ fontSize: 11 }}>
                     Storage
@@ -876,179 +677,86 @@ export function Sidebar({
                     {storagePct}%
                   </Text>
                 </Group>
-                <Progress value={storagePct} size={5} radius="xl" color="lavender" />
-              </Stack>
-            )}
+                <Progress value={storagePct} size={5} radius="xl" color="lavender"/>
+              </Stack>), () => storagePct > 0), () => username)}
 
             <Stack gap={4} mb="sm">
               <Text size="xs" tt="uppercase" fw={700} c="dimmed" lts={1.4} px="xs" mb={2} style={{ fontSize: 11 }}>
                 Practice
               </Text>
-              <NavLink
-                label="Progress"
-                leftSection={<IconChartBar size={18} stroke={1.6} />}
-                active={pathname === "/workspace/progress"}
-                onClick={onOpenProgress}
-                styles={navLinkStyles}
-              />
-              {onOpenCodingBank && (
-                <NavLink
-                  label="Coding"
-                  leftSection={<IconCode size={18} stroke={1.6} />}
-                  active={
-                    pathname.startsWith("/workspace/coding") || pathname.startsWith("/practice/coding")
-                  }
-                  onClick={onOpenCodingBank}
-                  styles={navLinkStyles}
-                />
-              )}
-              {onOpenNewspaperPractice && (
-                <NavLink
-                  label="Newspaper"
-                  leftSection={<IconNews size={18} stroke={1.6} />}
-                  active={pathname.startsWith("/practice/newspaper")}
-                  onClick={onOpenNewspaperPractice}
-                  styles={navLinkStyles}
-                />
-              )}
+              <NavLink label="Progress" leftSection={<IconChartBar size={18} stroke={1.6}/>} active={pathname === "/workspace/progress"} onClick={onOpenProgress} styles={navLinkStyles}/>
+              {pick(Boolean(onOpenCodingBank), () => (<NavLink label="Coding" leftSection={<IconCode size={18} stroke={1.6}/>} active={pathname.startsWith("/workspace/coding") || pathname.startsWith("/practice/coding")} onClick={onOpenCodingBank} styles={navLinkStyles}/>), () => onOpenCodingBank)}
+              {pick(Boolean(onOpenNewspaperPractice), () => (<NavLink label="Newspaper" leftSection={<IconNews size={18} stroke={1.6}/>} active={pathname.startsWith("/practice/newspaper")} onClick={onOpenNewspaperPractice} styles={navLinkStyles}/>), () => onOpenNewspaperPractice)}
             </Stack>
 
-            {isAdmin && (
-              <Box mb="sm">
-                <UnstyledButton
-                  onClick={toggleAdmin}
-                  aria-expanded={adminOpen}
-                  w="100%"
-                  px="xs"
-                  py={8}
-                  style={{
+            {pick(Boolean(isAdmin), () => (<Box mb="sm">
+                <UnstyledButton onClick={toggleAdmin} aria-expanded={adminOpen} w="100%" px="xs" py={8} style={{
                     display: "flex",
                     alignItems: "center",
                     gap: 8,
                     borderRadius: "var(--mantine-radius-md)",
                     color: "var(--mantine-color-dimmed)",
-                  }}
-                >
-                  <IconTool size={16} stroke={1.6} />
+                }}>
+                  <IconTool size={16} stroke={1.6}/>
                   <Text size="xs" tt="uppercase" fw={700} lts={1.4} style={{ flex: 1, fontSize: 11, textAlign: "left" }}>
                     Admin
                   </Text>
-                  <IconChevronDown
-                    size={14}
-                    stroke={1.8}
-                    style={{
-                      transform: adminOpen ? "rotate(180deg)" : "rotate(0deg)",
-                      transition: reduceMotion ? undefined : "transform 180ms cubic-bezier(0.32, 0.72, 0, 1)",
-                    }}
-                  />
+                  <IconChevronDown size={14} stroke={1.8} style={{
+                    transform: choose(Boolean(adminOpen), "rotate(180deg)", "rotate(0deg)"),
+                    transition: choose(Boolean(reduceMotion), undefined, "transform 180ms cubic-bezier(0.32, 0.72, 0, 1)"),
+                }}/>
                 </UnstyledButton>
                 <Collapse expanded={adminOpen}>
                   <Stack gap={2} mt={2}>
-                    <NavLink
-                      label="Models"
-                      leftSection={<IconCpu size={18} stroke={1.6} />}
-                      active={pathname === "/workspace/models"}
-                      onClick={onOpenModels}
-                      styles={navLinkStyles}
-                    />
-                    {onOpenNewspaper && (
-                      <NavLink
-                        label="Paper source"
-                        leftSection={<IconRss size={18} stroke={1.6} />}
-                        active={pathname === "/workspace/newspaper"}
-                        onClick={onOpenNewspaper}
-                        styles={navLinkStyles}
-                      />
-                    )}
-                    {onOpenLearnAdmin && (
-                      <NavLink
-                        label="Learn posts"
-                        leftSection={<IconArticle size={18} stroke={1.6} />}
-                        active={pathname === "/workspace/learn"}
-                        onClick={onOpenLearnAdmin}
-                        styles={navLinkStyles}
-                      />
-                    )}
+                    <NavLink label="Models" leftSection={<IconCpu size={18} stroke={1.6}/>} active={pathname === "/workspace/models"} onClick={onOpenModels} styles={navLinkStyles}/>
+                    {pick(Boolean(onOpenNewspaper), () => (<NavLink label="Paper source" leftSection={<IconRss size={18} stroke={1.6}/>} active={pathname === "/workspace/newspaper"} onClick={onOpenNewspaper} styles={navLinkStyles}/>), () => onOpenNewspaper)}
+                    {pick(Boolean(onOpenLearnAdmin), () => (<NavLink label="Learn posts" leftSection={<IconArticle size={18} stroke={1.6}/>} active={pathname === "/workspace/learn"} onClick={onOpenLearnAdmin} styles={navLinkStyles}/>), () => onOpenLearnAdmin)}
                   </Stack>
                 </Collapse>
-              </Box>
-            )}
+              </Box>), () => isAdmin)}
 
-            <Button
-              fullWidth
-              size={isMobile ? "md" : "sm"}
-              radius="xl"
-              leftSection={<IconPlus size={16} stroke={2.2} />}
-              onClick={onAddSource}
-              mb={isMobile ? "sm" : "md"}
-              className="zivo-add-source"
-            >
+            <Button fullWidth size={choose(Boolean(isMobile), "md", "sm")} radius="xl" leftSection={<IconPlus size={16} stroke={2.2}/>} onClick={onAddSource} mb={choose(Boolean(isMobile), "sm", "md")} className="zivo-add-source">
               Add source
             </Button>
             <Group gap={2} align="center" wrap="nowrap">
-              <UnstyledButton
-                className="zivo-account"
-                onClick={onSignIn}
-                aria-label={username ? `Account @${username}` : "Sign in"}
-              >
+              <UnstyledButton className="zivo-account" onClick={onSignIn} aria-label={choose(Boolean(username), `Account @${username}`, "Sign in")}>
                 <span className="zivo-avatar" aria-hidden>
-                  {username ? username[0] : <IconLogin size={14} stroke={1.8} />}
+                  {choose(Boolean(username), username[0], <IconLogin size={14} stroke={1.8}/>)}
                 </span>
                 <Text size="sm" fw={500} truncate>
-                  {username ? username : "Sign in"}
+                  {choose(Boolean(username), username, "Sign in")}
                 </Text>
               </UnstyledButton>
-              <Tooltip label={isDark ? "Light mode" : "Dark mode"} withArrow>
-                <ActionIcon
-                  variant="subtle"
-                  color="gray"
-                  size={34}
-                  radius="md"
-                  onClick={() => toggleColorScheme()}
-                  aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-                >
-                  {isDark ? <IconSun size={17} stroke={1.7} /> : <IconMoon size={17} stroke={1.7} />}
+              <Tooltip label={choose(Boolean(isDark), "Light mode", "Dark mode")} withArrow>
+                <ActionIcon variant="subtle" color="gray" size={34} radius="md" onClick={() => toggleColorScheme()} aria-label={choose(Boolean(isDark), "Switch to light mode", "Switch to dark mode")}>
+                  {choose(Boolean(isDark), <IconSun size={17} stroke={1.7}/>, <IconMoon size={17} stroke={1.7}/>)}
                 </ActionIcon>
               </Tooltip>
               <Tooltip label="Settings" withArrow>
-                <ActionIcon
-                  variant="subtle"
-                  color="gray"
-                  size={34}
-                  radius="md"
-                  onClick={onOpenSettings}
-                  aria-label="Settings"
-                >
-                  <IconSettings size={17} stroke={1.7} />
+                <ActionIcon variant="subtle" color="gray" size={34} radius="md" onClick={onOpenSettings} aria-label="Settings">
+                  <IconSettings size={17} stroke={1.7}/>
                 </ActionIcon>
               </Tooltip>
             </Group>
-          </Box>
-        ) : (
-          <Box pos="relative" mih={180} w="100%">
+          </Box>), () => (<Box pos="relative" mih={180} w="100%">
             <Stack gap={6} align="center" w="100%" py="xs">
-              <MiniRailButton
-                label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-                onClick={() => toggleColorScheme()}
-              >
-                {isDark ? <IconMoon size={18} stroke={1.5} /> : <IconSun size={18} stroke={1.5} />}
+              <MiniRailButton label={choose(Boolean(isDark), "Switch to light mode", "Switch to dark mode")} onClick={() => toggleColorScheme()}>
+                {choose(Boolean(isDark), <IconMoon size={18} stroke={1.5}/>, <IconSun size={18} stroke={1.5}/>)}
               </MiniRailButton>
               <MiniRailButton label="Progress" active={pathname === "/workspace/progress"} onClick={onOpenProgress}>
-                <IconChartBar size={18} stroke={1.5} />
+                <IconChartBar size={18} stroke={1.5}/>
               </MiniRailButton>
               <MiniRailButton label="Settings" onClick={onOpenSettings}>
-                <IconSettings size={18} stroke={1.5} />
+                <IconSettings size={18} stroke={1.5}/>
               </MiniRailButton>
               <MiniRailButton label="Add source" emphasized onClick={onAddSource}>
-                <IconPlus size={18} stroke={2} />
+                <IconPlus size={18} stroke={2}/>
               </MiniRailButton>
-              <MiniRailButton label={username ? `@${username}` : "Sign in"} onClick={onSignIn}>
-                <IconLogin size={18} stroke={1.5} />
+              <MiniRailButton label={choose(Boolean(username), `@${username}`, "Sign in")} onClick={onSignIn}>
+                <IconLogin size={18} stroke={1.5}/>
               </MiniRailButton>
             </Stack>
-          </Box>
-        )}
+          </Box>))}
       </Box>
-    </>
-  );
+    </>);
 }

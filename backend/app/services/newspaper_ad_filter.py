@@ -17,6 +17,7 @@ from typing import Final
 
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
 from app.services.content_worthiness import evaluate_newspaper_cook_gate, evaluate_newspaper_structure
 
 NEWSPAPER_EXAM_CONTENT_TYPE: Final[str] = "newspaper_upsc"
@@ -44,13 +45,16 @@ def newspaper_page_verdict(db: Session | None, page_text: str) -> tuple[str, str
     when ``db`` is None (no LLM available), relevance is skipped permissively so
     the page proceeds to ``cook`` and downstream gates still filter junk.
     """
-    judged = None
-    if db is not None:
-        structure = evaluate_newspaper_structure(page_text)
-        if structure.label == "editorial":
-            from app.services.newspaper_relevance import judge_newspaper_relevance
+    def _judge() -> dict | None:
+        from app.services.newspaper_relevance import judge_newspaper_relevance
 
-            judged = judge_newspaper_relevance(db, page_text)
+        return judge_newspaper_relevance(db, page_text)
+
+    def _maybe_judge() -> dict | None:
+        structure = evaluate_newspaper_structure(page_text)
+        return pick(structure.label == "editorial", _judge, lambda: None)
+
+    judged = pick(db is not None, _maybe_judge, lambda: None)
     verdict = evaluate_newspaper_cook_gate(page_text, relevance=judged)
     return verdict.label, verdict.rationale
 

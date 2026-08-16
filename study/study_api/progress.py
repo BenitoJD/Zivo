@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.services.document_access import require_document
 from app.db import get_db
+from app.engine_runtime import pick
 from app.models import Account
 from app.services.answer_signal import resolve_subject_entity
 from app.services.auth import get_optional_user
@@ -33,13 +34,16 @@ def learner_progress(
     Sourced from immutable ``intel.measurement`` rows (same signal as the end-of-
     study report) and ``qb.chat_message`` user turns. Retries are not recounted.
     """
-    if artifact_id is not None:
-        require_document(db, artifact_id, user, guest_id)
+    pick(
+        artifact_id is not None,
+        lambda: require_document(db, artifact_id, user, guest_id),
+        lambda: None,
+    )
     subject_id = resolve_subject_entity(db, user, guest_id)
     return build_learner_progress(
         db,
         subject_entity_id=subject_id,
-        account_id=user.id if user else None,
+        account_id=pick(bool(user), lambda: user.id, lambda: None),
         guest_id=guest_id,
         artifact_id=artifact_id,
     )

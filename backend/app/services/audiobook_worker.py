@@ -24,6 +24,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.engine_runtime import pick
 from app.services.audiobook import ChunkPlan, chunk_progress, plan_audiobook
 from app.services.chunks import load_document_chunk_texts
 from app.services.storage import get_json, presigned_get_url, put_json
@@ -43,7 +44,7 @@ def _read_manifest(key: str) -> dict:
     """Read the manifest JSON, tolerating a missing object (first run)."""
     try:
         raw = get_json(key)
-        return raw if isinstance(raw, dict) else {}
+        return pick(isinstance(raw, dict), lambda: raw, lambda: {})
     except Exception:
         return {}
 
@@ -52,21 +53,22 @@ def audiobook_status(db: Session, document_id: uuid.UUID) -> dict:
     """Read-only status for the API: state, progress, per-chunk URLs."""
     manifest = _read_manifest(_storage_key(document_id, MANIFEST_KEY))
     state = manifest.get("state")
-    if state is None:
-        return {"state": "none", "progress": 0, "chunks": []}
-    chunks = [
-        {
-            "index": i,
-            "url": presigned_get_url(_storage_key(document_id, f"{i}.mp3")),
-        }
-        for i in range(int(manifest.get("count") or 0))
-    ]
-    return {
-        "state": state,
-        "progress": int(manifest.get("progress") or 0),
-        "voice": manifest.get("voice"),
-        "chunks": chunks,
-    }
+    return pick(
+        state is None,
+        lambda: {"state": "none", "progress": 0, "chunks": []},
+        lambda: {
+            "state": state,
+            "progress": int(manifest.get("progress") or 0),
+            "voice": manifest.get("voice"),
+            "chunks": [
+                {
+                    "index": i,
+                    "url": presigned_get_url(_storage_key(document_id, f"{i}.mp3")),
+                }
+                for i in range(int(manifest.get("count") or 0))
+            ],
+        },
+    )
 
 
 def build_audiobook(db: Session, document_id: uuid.UUID) -> dict:
@@ -79,98 +81,124 @@ def build_audiobook(db: Session, document_id: uuid.UUID) -> dict:
     io handler.
     """
     settings = get_settings()
-    if not settings.audiobook_enabled:
-        return {"state": "disabled", "progress": 0, "chunks": []}
 
-    manifest_key = _storage_key(document_id, MANIFEST_KEY)
-    existing = _read_manifest(manifest_key)
-    if existing.get("state") == "ready":
-        return audiobook_status(db, document_id)
+    def _build() -> dict:
+        manifest_key = _storage_key(document_id, MANIFEST_KEY)
+        existing = _read_manifest(manifest_key)
 
-    chunks_text = load_document_chunk_texts(db, document_id)
-    # LLM narration-adaptation: rewrite raw study text into flowing spoken
-    # prose (same facts, audiobook feel). Cached per chunk by content hash —
-    # a retry/crash never re-bills. Degrades to raw text on LLM failure so the
-    # audiobook still builds.
-    try:
-        from app.graphs.audiobook_graph import adapt_document_for_narration
+        def _render() -> dict:
+            chunks_text = load_document_chunk_texts(db, document_id)
+            try:
+                from app.graphs.audiobook_graph import adapt_document_for_narration
 
-        narrated = asyncio.run(adapt_document_for_narration(db, document_id))
-        text = "\n\n".join(narrated) if narrated else "\n\n".join(chunks_text)
-    except Exception:
-        logger.exception("audiobook narration step failed; using raw text")
-        text = "\n\n".join(chunks_text)
-    plan: ChunkPlan = plan_audiobook(text)
-    if not plan.chunks:
-        manifest = {"state": "failed", "progress": 0, "count": 0, "error": "empty_text"}
-        put_json(manifest_key, manifest)
-        return {"state": "failed", "progress": 0, "chunks": [], "error": "empty_text"}
+                narrated = asyncio.run(adapt_document_for_narration(db, document_id))
+                text = pick(bool(narrated), lambda: "\n\n".join(narrated), lambda: "\n\n".join(chunks_text))
+            except Exception:
+                logger.exception("audiobook narration step failed; using raw text")
+                text = "\n\n".join(chunks_text)
+            plan: ChunkPlan = plan_audiobook(text)
 
-    total = len(plan.chunks)
-    # Work Checkpoint Engine: one item per chunk. resume_work re-verifies each
-    # done chunk's MP3 still exists (torn uploads re-render) and drops items
-    # that no longer fit a changed plan.
-    from app.services.work_checkpoint import current_job_id, mark_done, resume_work, save, to_dict
-
-    item_keys = [str(i) for i in range(total)]
-    job_id = current_job_id()
-    ckpt = resume_work(
-        db,
-        items=item_keys,
-        is_done=lambda k: _object_exists(_storage_key(document_id, f"{k}.mp3")),
-        job_id=job_id,
-    )
-    if job_id is not None:
-        save(db, ckpt, job_id=job_id)
-    done = set(ckpt.done)
-    rendered = 0
-    for i, chunk_text in enumerate(plan.chunks):
-        key = _storage_key(document_id, f"{i}.mp3")
-        if str(i) in done and _object_exists(key):
-            rendered += 1
-            continue
-        try:
-            mp3 = _render_chunk(chunk_text, plan)
-            _put_mp3(key, mp3)
-            rendered += 1
-            done.add(str(i))
-            ckpt = mark_done(ckpt, str(i))
-            if job_id is not None:
-                save(db, ckpt, job_id=job_id)
-            if i % 5 == 0 or i == total - 1:
-                manifest = {
-                    "state": "building",
-                    "progress": chunk_progress(rendered, total),
-                    "count": total,
-                    "voice": plan.voice,
-                    "done": sorted(int(x) for x in done),
-                    "work_checkpoint": to_dict(ckpt),
-                }
+            def _empty() -> dict:
+                manifest = {"state": "failed", "progress": 0, "count": 0, "error": "empty_text"}
                 put_json(manifest_key, manifest)
-        except Exception:
-            logger.exception("audiobook chunk %d failed for %s", i, document_id)
-            manifest = {
-                "state": "failed",
-                "progress": chunk_progress(rendered, total),
-                "count": total,
-                "voice": plan.voice,
-                "done": sorted(int(x) for x in done),
-                "work_checkpoint": to_dict(ckpt),
-                "error": f"chunk_{i}",
-            }
-            put_json(manifest_key, manifest)
-            return {"state": "failed", "progress": chunk_progress(rendered, total), "chunks": []}
+                return {"state": "failed", "progress": 0, "chunks": [], "error": "empty_text"}
 
-    manifest = {
-        "state": "ready",
-        "progress": 100,
-        "count": total,
-        "voice": plan.voice,
-        "done": sorted(int(x) for x in done),
-        "work_checkpoint": to_dict(ckpt),
-    }
-    put_json(manifest_key, manifest)
-    return audiobook_status(db, document_id)
+            def _chunks() -> dict:
+                total = len(plan.chunks)
+                from app.services.work_checkpoint import current_job_id, mark_done, resume_work, save, to_dict
+
+                item_keys = [str(i) for i in range(total)]
+                job_id = current_job_id()
+                ckpt = resume_work(
+                    db,
+                    items=item_keys,
+                    is_done=lambda k: _object_exists(_storage_key(document_id, f"{k}.mp3")),
+                    job_id=job_id,
+                )
+                pick(job_id is not None, lambda: save(db, ckpt, job_id=job_id), lambda: None)
+                done = set(ckpt.done)
+                rendered = 0
+                failed: dict | None = None
+                for i, chunk_text in enumerate(plan.chunks):
+                    def _one() -> None:
+                        nonlocal rendered, ckpt, failed
+                        key = _storage_key(document_id, f"{i}.mp3")
+
+                        def _skip() -> None:
+                            nonlocal rendered
+                            rendered += 1
+
+                        def _render_one() -> None:
+                            nonlocal rendered, ckpt, failed
+                            try:
+                                mp3 = _render_chunk(chunk_text, plan)
+                                _put_mp3(key, mp3)
+                                rendered += 1
+                                done.add(str(i))
+                                ckpt = mark_done(ckpt, str(i))
+                                pick(job_id is not None, lambda: save(db, ckpt, job_id=job_id), lambda: None)
+                                pick(
+                                    i % 5 == 0 or i == total - 1,
+                                    lambda: put_json(
+                                        manifest_key,
+                                        {
+                                            "state": "building",
+                                            "progress": chunk_progress(rendered, total),
+                                            "count": total,
+                                            "voice": plan.voice,
+                                            "done": sorted(int(x) for x in done),
+                                            "work_checkpoint": to_dict(ckpt),
+                                        },
+                                    ),
+                                    lambda: None,
+                                )
+                            except Exception:
+                                logger.exception("audiobook chunk %d failed for %s", i, document_id)
+                                put_json(
+                                    manifest_key,
+                                    {
+                                        "state": "failed",
+                                        "progress": chunk_progress(rendered, total),
+                                        "count": total,
+                                        "voice": plan.voice,
+                                        "done": sorted(int(x) for x in done),
+                                        "work_checkpoint": to_dict(ckpt),
+                                        "error": f"chunk_{i}",
+                                    },
+                                )
+                                failed = {
+                                    "state": "failed",
+                                    "progress": chunk_progress(rendered, total),
+                                    "chunks": [],
+                                }
+
+                        pick(str(i) in done and _object_exists(key), _skip, _render_one)
+
+                    pick(failed is not None, lambda: None, _one)
+                return pick(
+                    failed is not None,
+                    lambda: failed,
+                    lambda: (
+                        put_json(
+                            manifest_key,
+                            {
+                                "state": "ready",
+                                "progress": 100,
+                                "count": total,
+                                "voice": plan.voice,
+                                "done": sorted(int(x) for x in done),
+                                "work_checkpoint": to_dict(ckpt),
+                            },
+                        ),
+                        audiobook_status(db, document_id),
+                    )[1],
+                )
+
+            return pick(not plan.chunks, _empty, _chunks)
+
+        return pick(existing.get("state") == "ready", lambda: audiobook_status(db, document_id), _render)
+
+    return pick(not settings.audiobook_enabled, lambda: {"state": "disabled", "progress": 0, "chunks": []}, _build)
 
 
 def _object_exists(key: str) -> bool:
@@ -187,8 +215,11 @@ def _render_chunk(text: str, plan: ChunkPlan) -> bytes:
     """Run Piper → WAV, then ffmpeg → MP3. Returns MP3 bytes."""
     settings = get_settings()
     model = str(Path(settings.piper_voices_dir) / f"{plan.voice}.onnx")
-    if not Path(model).exists():
+
+    def _missing() -> bytes:
         raise FileNotFoundError(f"Piper voice model missing: {model}")
+
+    pick(not Path(model).exists(), _missing, lambda: None)
 
     # piper_bin may be a bare binary or a command with args (e.g. "python -m piper").
     piper_cmd = settings.piper_bin.split()
@@ -208,17 +239,17 @@ def _render_chunk(text: str, plan: ChunkPlan) -> bytes:
         timeout=120,
     ).stdout
 
-    if not shutil.which("ffmpeg"):
-        # Fall back to WAV when ffmpeg isn't present (still playable).
-        return wav
-    mp3 = subprocess.run(
-        ["ffmpeg", "-y", "-i", "-", "-codec:a", "libmp3lame", "-qscale:a", "6", "-f", "mp3", "-"],
-        input=wav,
-        capture_output=True,
-        check=True,
-        timeout=120,
-    ).stdout
-    return mp3
+    return pick(
+        not shutil.which("ffmpeg"),
+        lambda: wav,
+        lambda: subprocess.run(
+            ["ffmpeg", "-y", "-i", "-", "-codec:a", "libmp3lame", "-qscale:a", "6", "-f", "mp3", "-"],
+            input=wav,
+            capture_output=True,
+            check=True,
+            timeout=120,
+        ).stdout,
+    )
 
 
 def _put_mp3(key: str, data: bytes) -> None:

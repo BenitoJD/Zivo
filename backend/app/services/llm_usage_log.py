@@ -9,6 +9,8 @@ import uuid
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
+
 logger = logging.getLogger(__name__)
 
 
@@ -73,7 +75,4 @@ def record_llm_usage(
         loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = None
-    if loop is not None:
-        loop.run_in_executor(None, _write)
-    else:
-        _write()
+    pick(loop is not None, lambda: loop.run_in_executor(None, _write), _write)

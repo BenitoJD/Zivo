@@ -4,6 +4,7 @@ import logging
 from uuid import UUID
 
 from app.db import SessionLocal
+from app.engine_runtime import Pred, Rule, apply, first_match, pick
 from app.eta.registry import eta
 from app.models import Document, JobPriority, JobWorkload
 from app.services.chunking import chunk_pages
@@ -23,43 +24,103 @@ from app.services.storage import delete_object, fetch_object, get_json, ingest_t
 
 logger = logging.getLogger(__name__)
 
+_DOC_KIND_RULES = (
+    Rule(when=(Pred("missing", "truthy"),), action="skip"),
+    Rule(when=(Pred("image", "truthy"),), action="image"),
+    Rule(when=(), action="parse"),
+)
+
+_RANGE_RULES = (
+    Rule(when=(Pred("no_selected", "truthy"),), action="keep"),
+    Rule(when=(Pred("has_pages", "truthy"),), action="by_list"),
+    Rule(when=(), action="by_range"),
+)
+
+
+def _doc_kind(doc) -> str:
+    hit = first_match(
+        _DOC_KIND_RULES,
+        {
+            "missing": doc is None,
+            "image": bool(doc) and str(doc.content_type).startswith("image/"),
+        },
+    )
+    return hit.action
+
+
+def _filter_selected_pages(pages: list, selected) -> list:
+    page_list = (selected or {}).get("pages")
+    hit = first_match(
+        _RANGE_RULES,
+        {
+            "no_selected": not selected,
+            "has_pages": isinstance(page_list, list) and bool(page_list),
+        },
+    )
+
+    def _by_list() -> list:
+        allowed = {int(p) for p in page_list}
+        return list(filter(lambda p: int(p.get("page", 0)) in allowed, pages))
+
+    def _by_range() -> list:
+        page_from = int(selected.get("from", 1))
+        page_to = int(selected.get("to", page_from))
+        return list(filter(lambda p: page_from <= int(p.get("page", 0)) <= page_to, pages))
+
+    return apply(hit.action, {"keep": lambda: pages, "by_list": _by_list, "by_range": _by_range})
+
+
+def _set_progress(doc, db, value: int) -> None:
+    def _write() -> None:
+        doc.index_progress = value
+        db.commit()
+
+    pick(bool(doc), _write, lambda: None)
+
+
+def _embed_passages(chunks: list) -> list:
+    texts = [f"passage: {c['text']}" for c in chunks]
+    return pick(bool(texts), lambda: embed_texts(texts), lambda: [])
+
+
+def _finalize_image(db, document_id: UUID) -> dict:
+    finalize_image_document(db, document_id)
+    return {"document_id": str(document_id), "image": True}
+
+
 @eta(name="ingest.parse_document", workload=JobWorkload.cpu, priority=JobPriority.HIGH)
 def parse_document_job(payload: dict) -> dict:
     document_id = UUID(payload["document_id"])
     with SessionLocal() as db:
         doc = db.get(Document, document_id)
-        if not doc:
-            return {"skipped": True}
-        raw = fetch_object(doc.storage_key)
-        if doc.content_type.startswith("image/"):
-            finalize_image_document(db, document_id)
-            return {"document_id": str(document_id), "image": True}
 
-        pages = parse_document(doc.content_type, raw)
-        total_pages = len(pages)
-        selected = (doc.meta or {}).get("selected_range")
-        if selected:
-            page_list = selected.get("pages")
-            if isinstance(page_list, list) and page_list:
-                allowed = {int(p) for p in page_list}
-                pages = [p for p in pages if int(p.get("page", 0)) in allowed]
-            else:
-                page_from = int(selected.get("from", 1))
-                page_to = int(selected.get("to", page_from))
-                pages = [p for p in pages if page_from <= int(p.get("page", 0)) <= page_to]
-        meta = dict(doc.meta or {})
-        meta["page_count"] = total_pages or 1
-        doc.meta = meta
-        put_json(ingest_tmp_key(document_id, "pages"), {"pages": pages})
-        doc.index_progress = 30
-        db.commit()
-        enqueue_job(
-            db,
-            name="ingest.chunk_pages",
-            workload=JobWorkload.cpu,
-            payload={"document_id": str(document_id)},
+        def _parse() -> dict:
+            raw = fetch_object(doc.storage_key)
+            pages = parse_document(doc.content_type, raw)
+            total_pages = len(pages)
+            pages = _filter_selected_pages(pages, (doc.meta or {}).get("selected_range"))
+            meta = dict(doc.meta or {})
+            meta["page_count"] = total_pages or 1
+            doc.meta = meta
+            put_json(ingest_tmp_key(document_id, "pages"), {"pages": pages})
+            doc.index_progress = 30
+            db.commit()
+            enqueue_job(
+                db,
+                name="ingest.chunk_pages",
+                workload=JobWorkload.cpu,
+                payload={"document_id": str(document_id)},
+            )
+            return {"document_id": str(document_id), "pages": len(pages)}
+
+        return apply(
+            _doc_kind(doc),
+            {
+                "skip": lambda: {"skipped": True},
+                "image": lambda: _finalize_image(db, document_id),
+                "parse": _parse,
+            },
         )
-    return {"document_id": str(document_id), "pages": len(pages)}
 
 
 @eta(name="ingest.chunk_pages", workload=JobWorkload.cpu, priority=JobPriority.HIGH)
@@ -70,9 +131,7 @@ def chunk_pages_job(payload: dict) -> dict:
     chunks = chunk_pages(pages)
     with SessionLocal() as db:
         doc = db.get(Document, document_id)
-        if doc:
-            doc.index_progress = 50
-            db.commit()
+        _set_progress(doc, db, 50)
     put_json(ingest_tmp_key(document_id, "chunks"), {"chunks": chunks})
     with SessionLocal() as db:
         enqueue_job(
@@ -89,25 +148,24 @@ def embed_chunks_job(payload: dict) -> dict:
     document_id = UUID(payload["document_id"])
     chunks_data = get_json(ingest_tmp_key(document_id, "chunks"))
     chunks = chunks_data.get("chunks", [])
-    texts = [f"passage: {c['text']}" for c in chunks]
-    vectors = embed_texts(texts) if texts else []
+    vectors = _embed_passages(chunks)
 
     with SessionLocal() as db:
         doc = db.get(Document, document_id)
-        if doc:
-            doc.index_progress = 80
-            db.commit()
+        _set_progress(doc, db, 80)
         count = persist_document_index(db, document_id, chunks, vectors)
-
         from app.services.question_generation import enqueue_generate_if_needed
 
         enqueue_generate_if_needed(db, document_id)
 
-    for suffix in ("pages", "chunks"):
+    def _cleanup(suffix: str) -> None:
         try:
             delete_object(ingest_tmp_key(document_id, suffix))
         except Exception:
             logger.debug("ingest temp-object cleanup failed", exc_info=True)
+
+    for suffix in ("pages", "chunks"):
+        _cleanup(suffix)
 
     return {"document_id": str(document_id), "chunks": count}
 
@@ -124,127 +182,148 @@ def ingest_document_job(payload: dict) -> dict:
     registered for the retry/legacy paths and existing tests.
     """
     document_id = UUID(payload["document_id"])
+    early = None
+    parsed_pages = None
+
+    def _finish(pages: list) -> dict:
+        chunks = chunk_pages(pages)
+        with SessionLocal() as db:
+            doc = db.get(Document, document_id)
+            _set_progress(doc, db, 60)
+        vectors = _embed_passages(chunks)
+        with SessionLocal() as db:
+            doc = db.get(Document, document_id)
+            _set_progress(doc, db, 90)
+            count = persist_document_index(db, document_id, chunks, vectors)
+            from app.services.question_generation import enqueue_generate_if_needed
+
+            enqueue_generate_if_needed(db, document_id)
+        return {"document_id": str(document_id), "chunks": count}
+
     with SessionLocal() as db:
         doc = db.get(Document, document_id)
-        if not doc:
-            return {"skipped": True}
-        raw = fetch_object(doc.storage_key)
-        if doc.content_type.startswith("image/"):
-            finalize_image_document(db, document_id)
-            return {"document_id": str(document_id), "image": True}
 
-        # --- parse ---
-        pages = parse_document(doc.content_type, raw)
-        total_pages = len(pages)
-        selected = (doc.meta or {}).get("selected_range")
-        if selected:
-            page_list = selected.get("pages")
-            if isinstance(page_list, list) and page_list:
-                allowed = {int(p) for p in page_list}
-                pages = [p for p in pages if int(p.get("page", 0)) in allowed]
-            else:
-                page_from = int(selected.get("from", 1))
-                page_to = int(selected.get("to", page_from))
-                pages = [p for p in pages if page_from <= int(p.get("page", 0)) <= page_to]
-        meta = dict(doc.meta or {})
-        meta["page_count"] = total_pages or 1
-        doc.meta = meta
-        doc.index_progress = 40
-        db.commit()
+        def _skip() -> None:
+            nonlocal early
+            early = {"skipped": True}
 
-    # --- chunk ---
-    chunks = chunk_pages(pages)
-    with SessionLocal() as db:
-        doc = db.get(Document, document_id)
-        if doc:
-            doc.index_progress = 60
+        def _image() -> None:
+            nonlocal early
+            early = _finalize_image(db, document_id)
+
+        def _parse() -> None:
+            nonlocal parsed_pages
+            raw = fetch_object(doc.storage_key)
+            pages = parse_document(doc.content_type, raw)
+            total_pages = len(pages)
+            pages = _filter_selected_pages(pages, (doc.meta or {}).get("selected_range"))
+            meta = dict(doc.meta or {})
+            meta["page_count"] = total_pages or 1
+            doc.meta = meta
+            doc.index_progress = 40
             db.commit()
+            parsed_pages = pages
 
-    # --- embed + persist ---
-    texts = [f"passage: {c['text']}" for c in chunks]
-    vectors = embed_texts(texts) if texts else []
-    with SessionLocal() as db:
-        doc = db.get(Document, document_id)
-        if doc:
-            doc.index_progress = 90
-            db.commit()
-        count = persist_document_index(db, document_id, chunks, vectors)
+        apply(
+            _doc_kind(doc),
+            {"skip": _skip, "image": _image, "parse": _parse},
+        )
 
-        from app.services.question_generation import enqueue_generate_if_needed
-
-        enqueue_generate_if_needed(db, document_id)
-
-    return {"document_id": str(document_id), "chunks": count}
+    return pick(early is not None, lambda: early, lambda: _finish(parsed_pages))
 
 
 @eta(name="ingest.page", workload=JobWorkload.cpu, priority=JobPriority.HIGH)
 def ingest_page_job(payload: dict) -> dict:
     document_id = UUID(payload["document_id"])
     page_number = int(payload["page_number"])
-    chunks: list[dict] = []
     with SessionLocal() as db:
         doc = db.get(Document, document_id)
-        if not doc:
-            return {"skipped": True}
-        raw = fetch_object(doc.storage_key)
-        cache_key = ingest_tmp_key(document_id, "parsed_pages")
-        content_hash = document_bytes_hash(raw)
-        cached_pages: list[dict] | None = None
-        try:
-            cached = get_json(cache_key)
-            if cached.get("content_hash") == content_hash and isinstance(cached.get("pages"), list):
-                cached_pages = cached["pages"]
-        except Exception:
-            cached_pages = None
-        if cached_pages is None and not (
-            doc.content_type.startswith("application/pdf") or raw[:4] == b"%PDF"
-        ):
-            cached_pages = parse_document(doc.content_type, raw)
-            put_json(cache_key, {"content_hash": content_hash, "pages": cached_pages})
-        page = parse_document_page(
-            doc.content_type,
-            raw,
-            page_number,
-            cached_pages=cached_pages,
-        )
-        # Vision OCR fallback: scanned/image pages with no extractable text
-        # would otherwise be lost as blank. Render the page and transcribe it
-        # with a vision LLM (cached per page, never re-bills, degrades to
-        # blank on failure). Gated so the flag controls cost.
-        from app.config import get_settings
-        from app.services.content_worthiness import is_sparse_page_text
 
-        if (
-            get_settings().vision_ocr_enabled
-            and is_sparse_page_text(page.get("text"))
-            and (doc.content_type.startswith("application/pdf") or raw[:4] == b"%PDF")
-        ):
-            from app.services.vision_ocr import transcribe_page_with_vision
+        def _ingest() -> dict:
+            raw = fetch_object(doc.storage_key)
+            cache_key = ingest_tmp_key(document_id, "parsed_pages")
+            content_hash = document_bytes_hash(raw)
+            cached_pages: list[dict] | None = None
 
-            ocr_text = transcribe_page_with_vision(db, document_id, page_number)
-            if ocr_text:
-                page["text"] = ocr_text
-        chunks = chunk_pages([page])
-        texts = [f"passage: {c['text']}" for c in chunks if c.get("text")]
-        vectors = embed_texts(texts) if texts else []
-        if chunks and vectors:
-            upsert_page_chunks(db, document_id, page_number, chunks, vectors)
-        # Always mark ingest complete — empty pages write no chunks, but triage/RAG
-        # must still treat them as ready (otherwise scans defer forever).
-        from app.services.rag_window import mark_page_ingested
+            def _from_cache() -> list[dict] | None:
+                cached = get_json(cache_key)
+                hit = cached.get("content_hash") == content_hash and isinstance(
+                    cached.get("pages"), list
+                )
+                return pick(hit, lambda: cached["pages"], lambda: None)
 
-        mark_page_ingested(db, doc, page_number)
-        db.commit()
-        from app.services.background_prep import is_background_prep, on_page_ingested_for_prep
+            try:
+                cached_pages = _from_cache()
+            except Exception:
+                cached_pages = None
+            is_pdf = doc.content_type.startswith("application/pdf") or raw[:4] == b"%PDF"
 
-        if is_background_prep(doc):
-            on_page_ingested_for_prep(db, document_id)
-        else:
-            refresh_rag_window_status(db, document_id)
-            from app.services.question_pool import maybe_enqueue_early_page_triage
+            def _parse_all() -> list[dict]:
+                pages = parse_document(doc.content_type, raw)
+                put_json(cache_key, {"content_hash": content_hash, "pages": pages})
+                return pages
 
-            maybe_enqueue_early_page_triage(db, document_id, page_number=page_number)
-    return {"document_id": str(document_id), "page_number": page_number, "chunks": len(chunks)}
+            cached_pages = pick(
+                cached_pages is None and not is_pdf,
+                _parse_all,
+                lambda: cached_pages,
+            )
+            page = parse_document_page(
+                doc.content_type,
+                raw,
+                page_number,
+                cached_pages=cached_pages,
+            )
+            from app.config import get_settings
+            from app.services.content_worthiness import is_sparse_page_text
+
+            def _maybe_ocr() -> None:
+                from app.services.vision_ocr import transcribe_page_with_vision
+
+                ocr_text = transcribe_page_with_vision(db, document_id, page_number)
+                pick(bool(ocr_text), lambda: page.__setitem__("text", ocr_text), lambda: None)
+
+            should_ocr = (
+                get_settings().vision_ocr_enabled
+                and is_sparse_page_text(page.get("text"))
+                and is_pdf
+            )
+            pick(should_ocr, _maybe_ocr, lambda: None)
+            chunks = chunk_pages([page])
+            texts = [
+                f"passage: {c['text']}"
+                for c in filter(lambda c: c.get("text"), chunks)
+            ]
+            vectors = pick(bool(texts), lambda: embed_texts(texts), lambda: [])
+            pick(
+                bool(chunks) and bool(vectors),
+                lambda: upsert_page_chunks(db, document_id, page_number, chunks, vectors),
+                lambda: None,
+            )
+            from app.services.rag_window import mark_page_ingested
+
+            mark_page_ingested(db, doc, page_number)
+            db.commit()
+            from app.services.background_prep import is_background_prep, on_page_ingested_for_prep
+
+            def _ready_path() -> None:
+                refresh_rag_window_status(db, document_id)
+                from app.services.question_pool import maybe_enqueue_early_page_triage
+
+                maybe_enqueue_early_page_triage(db, document_id, page_number=page_number)
+
+            pick(
+                is_background_prep(doc),
+                lambda: on_page_ingested_for_prep(db, document_id),
+                _ready_path,
+            )
+            return {
+                "document_id": str(document_id),
+                "page_number": page_number,
+                "chunks": len(chunks),
+            }
+
+        return pick(not doc, lambda: {"skipped": True}, _ingest)
 
 
 @eta(name="ingest.rag_window", workload=JobWorkload.cpu, priority=JobPriority.HIGH)
@@ -252,48 +331,47 @@ def ingest_rag_window_job(payload: dict) -> dict:
     document_id = UUID(payload["document_id"])
     with SessionLocal() as db:
         doc = db.get(Document, document_id)
-        if not doc:
-            return {"skipped": True}
-        progress = get_progress(doc)
-        current = int(payload.get("current_page") or progress.get("current_page") or 1)
-        study = selected_page_list(doc)
-        target = chat_rag_window(current, study)
-        save_rag_window(db, doc, target)
-        # Only take the document back to "indexing" for the INITIAL window. Once a
-        # doc is "ready" the learner is actively studying it (questions already
-        # exist), and a sliding-window re-index for chat context must not flip the
-        # whole document back to "indexing" — that makes the study UI flash its
-        # full-screen "loading N%" takeover on refresh. The window's readiness is
-        # tracked independently via meta["rag_window_ready"] (popped by
-        # save_rag_window above), which gates chat without disrupting the queue.
-        if doc.status != "ready":
-            doc.status = "indexing"
-        db.commit()
-        pages_to_ingest = sync_rag_window(db, document_id, target)
-        db.commit()
-        if pages_to_ingest:
-            batch_enqueue_jobs(
-                db,
-                [
-                    {
-                        "name": "ingest.page",
-                        "workload": JobWorkload.cpu,
-                        "payload": {
-                            "document_id": str(document_id),
-                            "page_number": page,
-                        },
-                    }
-                    for page in pages_to_ingest
-                ],
-                chunk_size=50,
+
+        def _run() -> dict:
+            progress = get_progress(doc)
+            current = int(payload.get("current_page") or progress.get("current_page") or 1)
+            study = selected_page_list(doc)
+            target = chat_rag_window(current, study)
+            save_rag_window(db, doc, target)
+            pick(
+                doc.status != "ready",
+                lambda: setattr(doc, "status", "indexing"),
+                lambda: None,
             )
-        if not pages_to_ingest:
-            refresh_rag_window_status(db, document_id)
-    return {
-        "document_id": str(document_id),
-        "pages": target,
-        "ingest_queued": pages_to_ingest,
-    }
+            db.commit()
+            pages_to_ingest = sync_rag_window(db, document_id, target)
+            db.commit()
+            pick(
+                bool(pages_to_ingest),
+                lambda: batch_enqueue_jobs(
+                    db,
+                    [
+                        {
+                            "name": "ingest.page",
+                            "workload": JobWorkload.cpu,
+                            "payload": {
+                                "document_id": str(document_id),
+                                "page_number": page,
+                            },
+                        }
+                        for page in pages_to_ingest
+                    ],
+                    chunk_size=50,
+                ),
+                lambda: refresh_rag_window_status(db, document_id),
+            )
+            return {
+                "document_id": str(document_id),
+                "pages": target,
+                "ingest_queued": pages_to_ingest,
+            }
+
+        return pick(not doc, lambda: {"skipped": True}, _run)
 
 
 @eta(name="ingest.full_range", workload=JobWorkload.cpu, priority=JobPriority.LOW)
@@ -303,17 +381,23 @@ def ingest_full_range_job(payload: dict) -> dict:
     document_id = UUID(payload["document_id"])
     with SessionLocal() as db:
         doc = db.get(Document, document_id)
-        if not doc:
-            return {"skipped": True}
-        if not is_background_prep(doc):
-            return {"skipped": True, "reason": "not_background_prep"}
-        progress = get_progress(doc)
-        current = int(payload.get("current_page") or progress.get("current_page") or 1)
-        missing = start_full_range_ingest(db, doc, current_page=current)
-    return {
-        "document_id": str(document_id),
-        "ingest_queued": missing,
-    }
+
+        def _run() -> dict:
+            def _skip_mode() -> dict:
+                return {"skipped": True, "reason": "not_background_prep"}
+
+            def _ingest() -> dict:
+                progress = get_progress(doc)
+                current = int(payload.get("current_page") or progress.get("current_page") or 1)
+                missing = start_full_range_ingest(db, doc, current_page=current)
+                return {
+                    "document_id": str(document_id),
+                    "ingest_queued": missing,
+                }
+
+            return pick(not is_background_prep(doc), _skip_mode, _ingest)
+
+        return pick(not doc, lambda: {"skipped": True}, _run)
 
 
 @eta(name="learn.transition_prep", workload=JobWorkload.cpu)
@@ -342,76 +426,94 @@ def transition_prep_job(payload: dict) -> dict:
     current_page = int(payload["current_page"])
     with SessionLocal() as db:
         doc = db.get(Document, document_id)
-        if not doc:
-            return {"skipped": True}
 
-        progress = get_progress(doc)
-        budget = effective_question_budget(doc, current_page, progress)
-        generated = count_assertions_on_page(db, document_id, current_page)
-        if not evaluate_generation_stop(
-            generated=generated, budget=budget, coverage_complete=False
-        ):
-            remaining = budget - generated
-            # Rolling refill only — never one job for the entire remaining plan.
-            enqueue_page_batch(
-                db,
-                doc,
-                page=current_page,
-                batch_size=plan_refill_batch(remaining=remaining),
-                start_sequence=generated,
-            )
+        def _run() -> dict:
+            progress = get_progress(doc)
+            budget = effective_question_budget(doc, current_page, progress)
+            generated = count_assertions_on_page(db, document_id, current_page)
 
-        study = selected_page_list(doc)
-        next_page: int | None = None
-        if current_page in study:
-            idx = study.index(current_page)
-            if idx < len(study) - 1:
-                next_page = study[idx + 1]
-
-        answered_on_page = int(progress.get("answered_on_page") or 0)
-        triage_budget = get_question_budget(doc, current_page)
-        generate_next = evaluate_serve_schedule(
-            answered_on_page=answered_on_page,
-            page_budget=triage_budget,
-        ).generate_next_page
-        next_plan = plan_transition_next(
-            has_next=next_page is not None,
-            next_has_coverage=bool(
-                get_page_coverage(doc, next_page) if next_page is not None else {}
-            ),
-            next_generated=(
-                count_assertions_on_page(db, document_id, next_page)
-                if next_page is not None
-                else 0
-            ),
-            generate_next_page=generate_next,
-            current_budget=triage_budget,
-        )
-        if next_page is not None:
-            if next_plan.triage_next:
-                enqueue_page_triage(db, doc, page=next_page)
-            elif next_plan.cook_next:
-                next_budget = effective_question_budget(doc, next_page, progress)
+            def _refill() -> None:
+                remaining = budget - generated
                 enqueue_page_batch(
                     db,
                     doc,
-                    page=next_page,
-                    batch_size=plan_first_cook_batch(
-                        budget=next_budget, first_batch=FIRST_QUESTION_BATCH_SIZE
-                    ),
-                    start_sequence=0,
+                    page=current_page,
+                    batch_size=plan_refill_batch(remaining=remaining),
+                    start_sequence=generated,
                 )
-            enqueue_job(
-                db,
-                name="ingest.rag_window",
-                workload=JobWorkload.cpu,
-                payload={"document_id": str(document_id), "current_page": next_page},
+
+            pick(
+                not evaluate_generation_stop(
+                    generated=generated, budget=budget, coverage_complete=False
+                ),
+                _refill,
+                lambda: None,
             )
 
-        mark_transition_prep_done(db, doc, current_page)
-        db.commit()
+            study = selected_page_list(doc)
 
-    return {"document_id": str(document_id), "current_page": current_page, "next_page": next_page}
+            def _next_from_study() -> int | None:
+                idx = study.index(current_page)
+                return pick(idx < len(study) - 1, lambda: study[idx + 1], lambda: None)
+
+            next_page = pick(current_page in study, _next_from_study, lambda: None)
+            answered_on_page = int(progress.get("answered_on_page") or 0)
+            triage_budget = get_question_budget(doc, current_page)
+            generate_next = evaluate_serve_schedule(
+                answered_on_page=answered_on_page,
+                page_budget=triage_budget,
+            ).generate_next_page
+            next_generated = pick(
+                next_page is not None,
+                lambda: count_assertions_on_page(db, document_id, next_page),
+                lambda: 0,
+            )
+            next_has_coverage = pick(
+                next_page is not None,
+                lambda: bool(get_page_coverage(doc, next_page)),
+                lambda: False,
+            )
+            next_plan = plan_transition_next(
+                has_next=next_page is not None,
+                next_has_coverage=next_has_coverage,
+                next_generated=next_generated,
+                generate_next_page=generate_next,
+                current_budget=triage_budget,
+            )
+
+            def _prep_next() -> None:
+                pick(next_plan.triage_next, lambda: enqueue_page_triage(db, doc, page=next_page), lambda: None)
+
+                def _cook_next() -> None:
+                    next_budget = effective_question_budget(doc, next_page, progress)
+                    enqueue_page_batch(
+                        db,
+                        doc,
+                        page=next_page,
+                        batch_size=plan_first_cook_batch(
+                            budget=next_budget, first_batch=FIRST_QUESTION_BATCH_SIZE
+                        ),
+                        start_sequence=0,
+                    )
+
+                pick(next_plan.cook_next, _cook_next, lambda: None)
+                enqueue_job(
+                    db,
+                    name="ingest.rag_window",
+                    workload=JobWorkload.cpu,
+                    payload={"document_id": str(document_id), "current_page": next_page},
+                )
+
+            pick(next_page is not None, _prep_next, lambda: None)
+            mark_transition_prep_done(db, doc, current_page)
+            db.commit()
+            return {
+                "document_id": str(document_id),
+                "current_page": current_page,
+                "next_page": next_page,
+            }
+
+        return pick(not doc, lambda: {"skipped": True}, _run)
 
 
 @eta(name="generate.questions", workload=JobWorkload.cpu, priority=JobPriority.HIGH)
@@ -436,7 +538,7 @@ def generate_coding_job(payload: dict) -> dict:
     Spawned by ``_maybe_spawn_coding`` when page triage flags a page as
     ``programmable``. Each problem is generate→verify→persist: the LLM's own
     reference solution must pass every hidden test in the sandbox, or the problem
-    is discarded and retried (then dropped) — silence beats a broken problem.
+    is discarded and retried (then dropped). Silence beats a broken problem.
     """
     from app.services.coding_generation import generate_coding_for_page
     from app.services.retrieval import fetch_chunks_for_page_range
@@ -453,18 +555,25 @@ def generate_coding_job(payload: dict) -> dict:
             page_start=page_number,
             page_end=page_number,
         )
-        page_text = "\n\n".join(c.get("text", "") for c in chunks if c.get("text")).strip()
-        if not page_text:
+        page_text = "\n\n".join(
+            c.get("text", "") for c in filter(lambda c: c.get("text"), chunks)
+        ).strip()
+
+        def _empty() -> dict:
             return {"document_id": str(document_id), "page_number": page_number, "saved": 0}
-        saved = generate_coding_for_page(
-            db, document_id, page_number=page_number, page_text=page_text, count=count
-        )
-        return {
-            "document_id": str(document_id),
-            "page_number": page_number,
-            "saved": len(saved),
-            "problems": saved,
-        }
+
+        def _generate() -> dict:
+            saved = generate_coding_for_page(
+                db, document_id, page_number=page_number, page_text=page_text, count=count
+            )
+            return {
+                "document_id": str(document_id),
+                "page_number": page_number,
+                "saved": len(saved),
+                "problems": saved,
+            }
+
+        return pick(not page_text, _empty, _generate)
 
 
 @eta(name="generate.debug", workload=JobWorkload.cpu)
@@ -473,34 +582,43 @@ def generate_debug_job(payload: dict) -> dict:
     from app.services.debug_generation import generate_debug_for_page, run_cook_job
 
     cook_job_id = payload.get("cook_job_id")
-    if cook_job_id:
+
+    def _from_cook() -> dict:
         with SessionLocal() as db:
-            result = run_cook_job(db, UUID(cook_job_id))
-            return result
+            return run_cook_job(db, UUID(cook_job_id))
 
-    document_id = UUID(payload["document_id"])
-    page_number = int(payload.get("page_number") or 0)
-    from app.services.open_response import plan_debug_cook_yield
+    def _from_page() -> dict:
+        document_id = UUID(payload["document_id"])
+        page_number = int(payload.get("page_number") or 0)
+        from app.services.open_response import plan_debug_cook_yield
 
-    count = plan_debug_cook_yield(payload.get("count"))
-    with SessionLocal() as db:
-        from app.services.retrieval import fetch_chunks_for_page_range
+        count = plan_debug_cook_yield(payload.get("count"))
+        with SessionLocal() as db:
+            from app.services.retrieval import fetch_chunks_for_page_range
 
-        chunks = fetch_chunks_for_page_range(
-            db,
-            document_ids=[document_id],
-            page_start=page_number,
-            page_end=page_number,
-        )
-        page_text = "\n\n".join(c.get("text", "") for c in chunks if c.get("text")).strip()
-        if not page_text:
-            return {"document_id": str(document_id), "page_number": page_number, "saved": 0}
-        saved = generate_debug_for_page(
-            db, document_id, page_number=page_number, page_text=page_text, count=count
-        )
-        return {
-            "document_id": str(document_id),
-            "page_number": page_number,
-            "saved": saved,
-        }
+            chunks = fetch_chunks_for_page_range(
+                db,
+                document_ids=[document_id],
+                page_start=page_number,
+                page_end=page_number,
+            )
+            page_text = "\n\n".join(
+                c.get("text", "") for c in filter(lambda c: c.get("text"), chunks)
+            ).strip()
 
+            def _empty() -> dict:
+                return {"document_id": str(document_id), "page_number": page_number, "saved": 0}
+
+            def _generate() -> dict:
+                saved = generate_debug_for_page(
+                    db, document_id, page_number=page_number, page_text=page_text, count=count
+                )
+                return {
+                    "document_id": str(document_id),
+                    "page_number": page_number,
+                    "saved": saved,
+                }
+
+            return pick(not page_text, _empty, _generate)
+
+    return pick(bool(cook_job_id), _from_cook, _from_page)

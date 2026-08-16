@@ -15,6 +15,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import choose, pick
 from app.repositories.intel import _concept_id, _source_id
 from app.services.open_response import evaluate_debug_scenario_shape
 
@@ -50,37 +51,45 @@ def _normalize_tags(tags: list[Any] | None) -> list[str]:
     seen: set[str] = set()
     for t in tags or []:
         label = str(t).strip().lower()
-        if not label or label in seen:
-            continue
-        seen.add(label)
-        out.append(label[:40])
-        if len(out) >= 12:
-            break
+
+        def _add() -> None:
+            seen.add(label)
+            out.append(label[:40])
+
+        pick(bool(label) and label not in seen and len(out) < 12, _add, lambda: None)
     return out
 
 
 def _normalize_steps(steps: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     clean: list[dict[str, Any]] = []
     for raw in steps or []:
-        if not isinstance(raw, dict):
-            continue
-        key = str(raw.get("key") or f"step_{len(clean)}").strip()[:40]
-        question = str(raw.get("question") or "").strip()
-        options = [str(o).strip() for o in (raw.get("options") or []) if str(o).strip()]
-        if not question or len(options) < 2:
-            continue
-        correct_index = int(raw.get("correct_index", 0))
-        if correct_index < 0 or correct_index >= len(options):
-            correct_index = 0
-        clean.append(
-            {
-                "key": key,
-                "question": question[:2000],
-                "options": [o[:1000] for o in options[:6]],
-                "correct_index": correct_index,
-                "explanation": str(raw.get("explanation") or "").strip()[:2000],
-            }
-        )
+        def _add() -> None:
+            key = str(raw.get("key") or f"step_{len(clean)}").strip()[:40]
+            question = str(raw.get("question") or "").strip()
+            options = list(
+                filter(None, (str(o).strip() for o in (raw.get("options") or [])))
+            )
+
+            def _step() -> None:
+                correct_index = int(raw.get("correct_index", 0))
+                correct_index = pick(
+                    correct_index < 0 or correct_index >= len(options),
+                    lambda: 0,
+                    lambda: correct_index,
+                )
+                clean.append(
+                    {
+                        "key": key,
+                        "question": question[:2000],
+                        "options": [o[:1000] for o in options[:6]],
+                        "correct_index": correct_index,
+                        "explanation": str(raw.get("explanation") or "").strip()[:2000],
+                    }
+                )
+
+            pick(not question or len(options) < 2, lambda: None, _step)
+
+        pick(isinstance(raw, dict), _add, lambda: None)
     return clean
 
 
@@ -88,14 +97,16 @@ def public_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Strip answer keys and cook QA from learner-facing payload."""
     steps_out: list[dict[str, Any]] = []
     for step in payload.get("steps") or []:
-        if not isinstance(step, dict):
-            continue
-        steps_out.append(
-            {
-                "key": step.get("key"),
-                "question": step.get("question", ""),
-                "options": step.get("options") or [],
-            }
+        pick(
+            isinstance(step, dict),
+            lambda: steps_out.append(
+                {
+                    "key": step.get("key"),
+                    "question": step.get("question", ""),
+                    "options": step.get("options") or [],
+                }
+            ),
+            lambda: None,
         )
     return {
         "format": payload.get("format", "qb.debug.v1"),
@@ -136,14 +147,21 @@ def build_full_payload(
     sequence: int = 0,
     cook_qa: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    st = scenario_type if scenario_type in _VALID_SCENARIO_TYPES else "code_reading"
-    diff = difficulty if difficulty in _VALID_DIFFICULTIES else "medium"
+    st = choose(scenario_type in _VALID_SCENARIO_TYPES, scenario_type, "code_reading")
+    diff = choose(difficulty in _VALID_DIFFICULTIES, difficulty, "medium")
     steps_clean = _normalize_steps(steps)
     shape = evaluate_debug_scenario_shape(title=title, step_count=len(steps_clean))
-    if not shape.ok:
-        if shape.reason == "no_steps":
-            raise ValueError("At least one diagnostic step is required")
-        raise ValueError("Title is required")
+
+    def _bad_shape() -> None:
+        raise ValueError(
+            pick(
+                shape.reason == "no_steps",
+                lambda: "At least one diagnostic step is required",
+                lambda: "Title is required",
+            )
+        )
+
+    pick(not shape.ok, _bad_shape, lambda: None)
     return {
         "format": "qb.debug.v1",
         "artifact_id": artifact_id,
@@ -155,7 +173,7 @@ def build_full_payload(
         "tags": _normalize_tags(tags),
         "origin": origin,
         "cook_job_id": cook_job_id,
-        "case": case if isinstance(case, dict) else {},
+        "case": choose(isinstance(case, dict), case, {}),
         "steps": steps_clean,
         "cook_provenance": {},
         "_cook_qa": cook_qa or {},
@@ -180,7 +198,7 @@ def upsert_curated_scenario(
 ) -> dict[str, Any]:
     """Create or update a curated debug scenario."""
     title_clean = title.strip()[:200]
-    review = review_status if review_status in _VALID_REVIEW else "draft"
+    review = choose(review_status in _VALID_REVIEW, review_status, "draft")
     full_payload = build_full_payload(
         title=title_clean,
         scenario_type=scenario_type,
@@ -189,15 +207,15 @@ def upsert_curated_scenario(
         difficulty=difficulty,
         tags=tags,
         origin="curated",
-        cook_job_id=str(cook_job_id) if cook_job_id else None,
+        cook_job_id=pick(bool(cook_job_id), lambda: str(cook_job_id), lambda: None),
     )
     fp_slug = slug or _slugify(title_clean)
     fingerprint = f"debug:curated:{fp_slug}"
     source_id = _source_id(db, _DEBUG_BANK_SOURCE)
     type_id = _concept_id(db, _DEBUG_TYPE_URI)
 
-    if assertion_id is None:
-        assertion_id = uuid.uuid4()
+    def _insert() -> uuid.UUID:
+        new_id = uuid.uuid4()
         db.execute(
             text(
                 """
@@ -212,17 +230,19 @@ def upsert_curated_scenario(
                 """
             ),
             {
-                "id": assertion_id,
+                "id": new_id,
                 "type_id": type_id,
                 "source_id": source_id,
-                "uri": f"qb://assertion/{assertion_id}",
+                "uri": f"qb://assertion/{new_id}",
                 "fp": fingerprint,
                 "title": title_clean,
                 "summary": str((case or {}).get("summary") or title_clean)[:500],
                 "payload": json.dumps(full_payload),
             },
         )
-    else:
+        return new_id
+
+    def _update() -> uuid.UUID:
         db.execute(
             text(
                 """
@@ -243,6 +263,9 @@ def upsert_curated_scenario(
                 "source_id": source_id,
             },
         )
+        return assertion_id
+
+    assertion_id = pick(assertion_id is None, _insert, _update)
 
     db.execute(
         text(
@@ -302,10 +325,13 @@ def set_published(db: Session, assertion_id: uuid.UUID, published: bool) -> None
         ),
         {"aid": assertion_id, "published": published},
     ).first()
-    if not row:
+    def _missing() -> None:
         raise LookupError("Not found")
-    if published:
-        db.execute(
+
+    pick(not row, _missing, lambda: None)
+    pick(
+        published,
+        lambda: db.execute(
             text(
                 """
                 UPDATE intel.assertion
@@ -314,7 +340,9 @@ def set_published(db: Session, assertion_id: uuid.UUID, published: bool) -> None
                 """
             ),
             {"id": assertion_id},
-        )
+        ),
+        lambda: None,
+    )
 
 
 def set_review_status(
@@ -324,13 +352,21 @@ def set_review_status(
     *,
     published: bool | None = None,
 ) -> None:
-    if review_status not in _VALID_REVIEW:
+    def _bad_review() -> None:
         raise ValueError("Invalid review_status")
+
+    pick(review_status not in _VALID_REVIEW, _bad_review, lambda: None)
     params: dict[str, Any] = {"aid": assertion_id, "review_status": review_status}
-    pub_clause = ""
-    if published is not None:
-        pub_clause = ", published = :published"
-        params["published"] = bool(published)
+    pub_clause = pick(
+        published is not None,
+        lambda: ", published = :published",
+        lambda: "",
+    )
+    pick(
+        published is not None,
+        lambda: params.__setitem__("published", bool(published)),
+        lambda: None,
+    )
     row = db.execute(
         text(
             f"""
@@ -342,10 +378,12 @@ def set_review_status(
         ),
         params,
     ).first()
-    if not row:
+
+    def _missing() -> None:
         raise LookupError("Not found")
-    if published:
-        set_published(db, assertion_id, True)
+
+    pick(not row, _missing, lambda: None)
+    pick(bool(published), lambda: set_published(db, assertion_id, True), lambda: None)
 
 
 def soft_delete_curated(db: Session, assertion_id: uuid.UUID) -> None:
@@ -464,8 +502,6 @@ def seed_starter_bank(db: Session) -> dict[str, Any]:
             review_status="approved",
             slug=spec["slug"],
         )
-        if before:
-            updated += 1
-        else:
-            created += 1
+        updated += int(bool(before))
+        created += int(not before)
     return {"created": created, "updated": updated, "total": len(_STARTER_SCENARIOS)}

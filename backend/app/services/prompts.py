@@ -4,6 +4,7 @@ import time
 
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
 from app.models import SystemPrompt
 
 _PROMPT_CACHE_TTL_SECONDS = 60.0
@@ -508,33 +509,36 @@ MCQ STYLES — all of mcq, mcq_negative, assertion_reason, scenario and cloze ar
 def _load_prompt_template(db: Session, key: str) -> str:
     now = time.monotonic()
     cached = _prompt_template_cache.get(key)
-    if cached and now - cached[0] < _PROMPT_CACHE_TTL_SECONDS:
-        return cached[1]
 
-    row = db.query(SystemPrompt).filter(SystemPrompt.key == key).first()
-    if row and row.content.strip():
-        text = row.content
-    else:
-        text = DEFAULTS.get(key, DEFAULTS["tutor_system"])
-    _prompt_template_cache[key] = (now, text)
-    return text
+    def _load() -> str:
+        row = db.query(SystemPrompt).filter(SystemPrompt.key == key).first()
+        text = pick(
+            bool(row and row.content.strip()),
+            lambda: row.content,
+            lambda: DEFAULTS.get(key, DEFAULTS["tutor_system"]),
+        )
+        _prompt_template_cache[key] = (now, text)
+        return text
+
+    return pick(
+        bool(cached) and now - cached[0] < _PROMPT_CACHE_TTL_SECONDS,
+        lambda: cached[1],
+        _load,
+    )
 
 
 def get_prompt(db: Session, key: str, **fmt: object) -> str:
     text = _load_prompt_template(db, key)
-    if fmt:
-        # Older DB rows may still contain {max_budget}; ignore it (no page ceiling).
-        class _Fmt(dict):
-            def __missing__(self, name: str) -> str:
-                return ""
 
-        return text.format_map(_Fmt(fmt))
-    # No str.format() pass requested: collapse any format-escaped braces so JSON
-    # examples in the template render as valid single-brace JSON. Otherwise a model
-    # that copies the example literally (e.g. GLM) emits `{{...}}`, which fails
-    # json.loads and silently yields zero questions. (Templates only ever double
-    # braces to survive .format(); when we skip format, the doubles are artifacts.)
-    return text.replace("{{", "{").replace("}}", "}")
+    class _Fmt(dict):
+        def __missing__(self, name: str) -> str:
+            return ""
+
+    return pick(
+        bool(fmt),
+        lambda: text.format_map(_Fmt(fmt)),
+        lambda: text.replace("{{", "{").replace("}}", "}"),
+    )
 
 
 # Per-content-type framing for generation. The MCQ rubric (one best answer,
@@ -569,6 +573,8 @@ _CONTENT_TYPE_STYLE: dict[str, str] = {
 
 def content_type_style(content_type: str | None) -> str:
     """One-line generation directive for a content_type, or '' for unknown/none."""
-    if not content_type:
-        return ""
-    return _CONTENT_TYPE_STYLE.get(str(content_type).strip().lower(), "")
+    return pick(
+        not content_type,
+        lambda: "",
+        lambda: _CONTENT_TYPE_STYLE.get(str(content_type).strip().lower(), ""),
+    )

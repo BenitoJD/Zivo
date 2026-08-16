@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from app.db import get_db
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 from app.models import Account
 from app.services.answer_signal import resolve_subject_entity
 from app.services.auth import get_current_user, get_optional_user, require_admin, require_csrf
@@ -39,9 +40,14 @@ from app.services.debug_curation import (
 from app.services.debug_grading import grade_step, record_debug_understood
 from app.services.guest_session import optional_guest_session, require_actor
 from app.services.llm_router import stream_chat_completion
+from app.services.presence import evaluate_presence
 from app.services.rate_limit import rate_limit_dependency
 
 router = APIRouter()
+
+
+def _raise_http(status: int, detail: str) -> None:
+    raise HTTPException(status_code=status, detail=detail)
 
 
 # ---------------------------------------------------------------- models
@@ -109,8 +115,10 @@ class ReviewPatchIn(BaseModel):
 def _load_debug_assertion(
     db: Session, assertion_id: uuid.UUID, *, include_retracted: bool = False
 ) -> dict:
-    status_clause = (
-        "a.status IN ('active', 'retracted')" if include_retracted else "a.status = 'active'"
+    status_clause = choose(
+        include_retracted,
+        "a.status IN ('active', 'retracted')",
+        "a.status = 'active'",
     )
     row = db.execute(
         text(
@@ -122,13 +130,25 @@ def _load_debug_assertion(
         ),
         {"id": assertion_id},
     ).first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Not found")
+    apply(
+        evaluate_presence(row).action,
+        {
+            "missing": lambda: _raise_http(404, "Not found"),
+            "empty": lambda: _raise_http(404, "Not found"),
+            "ok": lambda: None,
+        },
+    )
     payload = row._mapping["payload"]
-    if not isinstance(payload, dict):
-        payload = json.loads(payload) if payload else {}
-    if payload.get("format") != "qb.debug.v1":
-        raise HTTPException(status_code=404, detail="Not a debug scenario")
+    payload = pick(
+        isinstance(payload, dict),
+        lambda: payload,
+        lambda: pick(bool(payload), lambda: json.loads(payload), lambda: {}),
+    )
+    pick(
+        payload.get("format") == "qb.debug.v1",
+        lambda: None,
+        lambda: _raise_http(404, "Not a debug scenario"),
+    )
     return {
         "id": row._mapping["id"],
         "payload": payload,
@@ -154,16 +174,36 @@ def _require_playable(
         ),
         {"aid": assertion_id},
     ).first()
-    if facet is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    apply(
+        evaluate_presence(facet).action,
+        {
+            "missing": lambda: _raise_http(404, "Not found"),
+            "empty": lambda: _raise_http(404, "Not found"),
+            "ok": lambda: None,
+        },
+    )
     m = facet._mapping
-    if bool(m["published"]):
-        return problem
-    if user and user.is_admin:
-        return problem
-    if user and m["owner_user_id"] and str(m["owner_user_id"]) == str(user.id):
-        return problem
-    raise HTTPException(status_code=404, detail="Not found")
+    is_owner = bool(user) and bool(m["owner_user_id"]) and str(m["owner_user_id"]) == str(user.id)
+    is_admin = bool(user) and user.is_admin
+    return apply(
+        first_match(
+            (
+                Rule(when=(Pred("published", "truthy"),), action="allow"),
+                Rule(when=(Pred("is_admin", "truthy"),), action="allow"),
+                Rule(when=(Pred("is_owner", "truthy"),), action="allow"),
+                Rule(when=(), action="deny"),
+            ),
+            {
+                "published": bool(m["published"]),
+                "is_admin": is_admin,
+                "is_owner": is_owner,
+            },
+        ).action,
+        {
+            "allow": lambda: problem,
+            "deny": lambda: _raise_http(404, "Not found"),
+        },
+    )
 
 
 def _facet_item(row, *, include_admin: bool = False) -> dict:
@@ -177,10 +217,17 @@ def _facet_item(row, *, include_admin: bool = False) -> dict:
         "tags": list(m.get("tags") or []),
         "origin": m.get("origin") or "generated",
     }
-    if include_admin:
+
+    def _admin() -> None:
         item["published"] = bool(m.get("published"))
         item["review_status"] = m.get("review_status") or "draft"
-        item["cook_job_id"] = str(m["cook_job_id"]) if m.get("cook_job_id") else None
+        item["cook_job_id"] = pick(
+            bool(m.get("cook_job_id")),
+            lambda: str(m["cook_job_id"]),
+            lambda: None,
+        )
+
+    pick(include_admin, _admin, lambda: None)
     return item
 
 
@@ -218,8 +265,12 @@ def get_cook_status(
         job = get_cook_job(db, job_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="Not found") from exc
-    if job["owner_user_id"] and job["owner_user_id"] != str(user.id) and not user.is_admin:
-        raise HTTPException(status_code=404, detail="Not found")
+    blocked = (
+        bool(job["owner_user_id"])
+        and job["owner_user_id"] != str(user.id)
+        and not user.is_admin
+    )
+    pick(blocked, lambda: _raise_http(404, "Not found"), lambda: None)
     return job
 
 
@@ -250,12 +301,17 @@ def admin_list(
 ) -> dict:
     clauses = ["a.status IN ('active', 'retracted')"]
     params: dict = {}
-    if review_status:
+
+    def _add_review() -> None:
         clauses.append("f.review_status = :review_status")
         params["review_status"] = review_status
-    if published is not None:
+
+    def _add_published() -> None:
         clauses.append("f.published = :published")
         params["published"] = published
+
+    pick(bool(review_status), _add_review, lambda: None)
+    pick(published is not None, _add_published, lambda: None)
     where = " AND ".join(clauses)
     rows = db.execute(
         text(
@@ -313,9 +369,12 @@ def admin_get(assertion_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
         ),
         {"aid": assertion_id},
     ).first()
-    if facet:
+
+    def _merge() -> None:
         out["published"] = bool(facet._mapping["published"])
         out["review_status"] = facet._mapping["review_status"]
+
+    pick(bool(facet), _merge, lambda: None)
     return out
 
 
@@ -333,18 +392,27 @@ def admin_patch(
             db,
             title=title,
             scenario_type=body.scenario_type or payload.get("scenario_type") or "code_reading",
-            case=body.case if body.case is not None else payload.get("case") or {},
-            steps=[s.model_dump() for s in body.steps]
-            if body.steps is not None
-            else payload.get("steps") or [],
+            case=pick(
+                body.case is not None,
+                lambda: body.case,
+                lambda: payload.get("case") or {},
+            ),
+            steps=pick(
+                body.steps is not None,
+                lambda: [s.model_dump() for s in body.steps],
+                lambda: payload.get("steps") or [],
+            ),
             difficulty=body.difficulty or payload.get("difficulty") or "medium",
-            tags=body.tags if body.tags is not None else payload.get("tags"),
-            published=body.published if body.published is not None else False,
+            tags=pick(body.tags is not None, lambda: body.tags, lambda: payload.get("tags")),
+            published=pick(body.published is not None, lambda: body.published, lambda: False),
             review_status=body.review_status or "draft",
             assertion_id=assertion_id,
         )
-        if body.published is not None:
-            set_published(db, assertion_id, bool(body.published))
+        pick(
+            body.published is not None,
+            lambda: set_published(db, assertion_id, bool(body.published)),
+            lambda: None,
+        )
         db.commit()
         return pub
     except ValueError as exc:
@@ -401,15 +469,22 @@ def list_scenarios(
     del user, guest
     clauses = ["f.published = true", "a.status = 'active'"]
     params: dict = {"limit": limit, "offset": offset}
-    if difficulty:
+
+    def _add_difficulty() -> None:
         clauses.append("f.difficulty = :difficulty")
         params["difficulty"] = difficulty
-    if scenario_type:
+
+    def _add_type() -> None:
         clauses.append("f.scenario_type = :scenario_type")
         params["scenario_type"] = scenario_type
-    if tag:
+
+    def _add_tag() -> None:
         clauses.append(":tag = ANY(f.tags)")
         params["tag"] = tag.strip().lower()
+
+    pick(bool(difficulty), _add_difficulty, lambda: None)
+    pick(bool(scenario_type), _add_type, lambda: None)
+    pick(bool(tag), _add_tag, lambda: None)
     where = " AND ".join(clauses)
     rows = db.execute(
         text(
@@ -453,7 +528,8 @@ def grade_scenario_step(
 ) -> dict:
     problem = _require_playable(db, assertion_id, user, guest)
     result = grade_step(problem["payload"], body.step_key, body.choice_index)
-    if body.steps_correct is not None and body.steps_total is not None:
+
+    def _record() -> None:
         subject = resolve_subject_entity(db, user=user, guest_id=guest)
         record_debug_understood(
             db,
@@ -463,6 +539,12 @@ def grade_scenario_step(
             steps_total=body.steps_total,
         )
         db.commit()
+
+    pick(
+        body.steps_correct is not None and body.steps_total is not None,
+        _record,
+        lambda: None,
+    )
     return result
 
 
@@ -481,7 +563,8 @@ async def reflect_stream(
     case_summary = str((payload.get("case") or {}).get("summary") or "")
     steps = payload.get("steps") or []
     steps_text = "\n".join(
-        f"- {s.get('key')}: {s.get('explanation', '')}" for s in steps if isinstance(s, dict)
+        f"- {s.get('key')}: {s.get('explanation', '')}"
+        for s in filter(lambda s: isinstance(s, dict), steps)
     )
     prompt = (
         "You are a calm debugging mentor. In 3-5 short paragraphs, walk through the "
@@ -496,7 +579,11 @@ async def reflect_stream(
             db,
             log_tag="debug_reflect",
         ):
-            if chunk:
-                yield {"event": "token", "data": chunk}
+            for ev in pick(
+                bool(chunk),
+                lambda: [{"event": "token", "data": chunk}],
+                lambda: [],
+            ):
+                yield ev
 
     return EventSourceResponse(gen())

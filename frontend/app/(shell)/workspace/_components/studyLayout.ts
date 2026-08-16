@@ -4,9 +4,8 @@
  * source panel, end-of-study screens, mobile shell) can all share one source of
  * truth instead of reaching into the page module. No React, no side effects.
  */
-
 import { MOBILE_MAX_MQ, STUDY_DESKTOP_MQ } from "@/lib/responsive";
-
+import { pick, choose } from "@/lib/engineRuntime";
 // --- 3-pane panel sizing -----------------------------------------------------
 export const SOURCE_PANEL_DEFAULT = 360;
 export const SOURCE_PANEL_MIN = 280;
@@ -27,7 +26,6 @@ export const PANEL_MS = 280;
  * panel header visually clear of the strip.
  */
 export const STUDY_METABAR_TOP_INSET = 44;
-
 // --- responsive breakpoints --------------------------------------------------
 // Desktop 3-pane only ≥992px (62em); below that the clean single-column mobile
 // shell is used - the cramped 3-pane didn't fit small tablets / large phones.
@@ -35,7 +33,6 @@ export const STUDY_DESKTOP_BP = STUDY_DESKTOP_MQ;
 export const STUDY_COMPACT_BP = MOBILE_MAX_MQ;
 /** @deprecated Prefer STUDY_COMPACT_BP — same range as mobile AppShell. */
 export const STUDY_OVERLAY_BP = "(max-width: 61.99em)";
-
 // --- thumbnail grid ----------------------------------------------------------
 export const THUMB_GAP = 28;
 export const THUMB_GAP_COMPACT = 14;
@@ -44,7 +41,6 @@ export const THUMB_MIN_WIDTH_COMPACT = 148;
 export const THUMB_MAX_WIDTH = 320;
 export const THUMB_MAX_COLS = 4;
 export const THUMB_MAX_COLS_COMPACT = 2;
-
 // --- page-selection screen ---------------------------------------------------
 export const SELECTION_PAD_X = 28;
 export const SELECTION_PAD_Y = 16;
@@ -55,114 +51,104 @@ export const SELECTION_DOCK_RESERVE = 156;
 export const SELECTION_DOCK_RESERVE_COMPACT = 168;
 export const THUMB_FRAME_ASPECT = 1.414;
 export const THUMB_FRAME_ASPECT_COMPACT = 1.414;
-
 export function shellBleedPx(compact: boolean): number {
-  return compact ? 0 : 16;
+    return choose(Boolean(compact), 0, 16);
 }
-
-export function computeGridLayout(
-  gridWidth: number,
-  minThumbWidth: number,
-  gap: number,
-  maxCols: number,
-  maxThumbWidth = THUMB_MAX_WIDTH,
-) {
-  if (gridWidth < 1) return { cols: 2, thumbWidth: minThumbWidth };
-  const cols = Math.min(
-    maxCols,
-    Math.max(1, Math.floor((gridWidth + gap) / (minThumbWidth + gap))),
-  );
-  const totalGap = gap * Math.max(0, cols - 1);
-  const thumbWidth = Math.min(maxThumbWidth, Math.floor((gridWidth - totalGap) / cols));
-  return { cols, thumbWidth };
+export function computeGridLayout(gridWidth: number, minThumbWidth: number, gap: number, maxCols: number, maxThumbWidth = THUMB_MAX_WIDTH) {
+    return pick(Boolean(gridWidth < 1), () => ({ cols: 2, thumbWidth: minThumbWidth }), () => {
+        const cols = Math.min(maxCols, Math.max(1, Math.floor((gridWidth + gap) / (minThumbWidth + gap))));
+        const totalGap = gap * Math.max(0, cols - 1);
+        const thumbWidth = Math.min(maxThumbWidth, Math.floor((gridWidth - totalGap) / cols));
+        return { cols, thumbWidth };
+    });
 }
-
 export function clampPanel(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
+    return Math.min(Math.max(value, min), max);
 }
-
 /** Open floating panel footprint used to reserve horizontal lane for MCQs. */
 export type FloatingLanePanel = {
-  open: boolean;
-  minimized: boolean;
-  maximized: boolean;
-  x: number;
-  w: number;
+    open: boolean;
+    minimized: boolean;
+    maximized: boolean;
+    x: number;
+    w: number;
 };
-
 const FLOAT_LANE_GAP = 12;
-
 /** Reserve left/right padding so MCQs never sit under floating Source/Tutor windows. */
-export function computeFloatingLaneInsets(
-  panels: FloatingLanePanel[],
-  containerWidth: number,
-): { left: number; right: number } {
-  if (containerWidth <= 0) return { left: 0, right: 0 };
-  let left = 0;
-  let right = 0;
-  const mid = containerWidth / 2;
-  for (const panel of panels) {
-    if (!panel.open || panel.maximized) continue;
-    const center = panel.x + panel.w / 2;
-    if (center <= mid) {
-      left = Math.max(left, panel.x + panel.w + FLOAT_LANE_GAP);
-    } else {
-      right = Math.max(right, containerWidth - panel.x + FLOAT_LANE_GAP);
-    }
-  }
-  const maxLane = Math.max(0, containerWidth - 280);
-  left = Math.min(left, maxLane);
-  right = Math.min(right, maxLane);
-  // Source + Tutor open together can exceed the row width — never crush the MCQ
-  // column below STUDY_CENTER_MIN (one-char vertical stems).
-  const maxCombined = Math.max(0, containerWidth - STUDY_CENTER_MIN);
-  if (left + right > maxCombined) {
-    const trim = left + right - maxCombined;
-    const leftShare = left / (left + right);
-    left = Math.max(0, Math.floor(left - trim * leftShare));
-    right = Math.max(0, maxCombined - left);
-  }
-  return { left, right };
+export function computeFloatingLaneInsets(panels: FloatingLanePanel[], containerWidth: number): {
+    left: number;
+    right: number;
+} {
+    return pick(Boolean(containerWidth <= 0), () => ({ left: 0, right: 0 }), () => {
+        let left = 0;
+        let right = 0;
+        const mid = containerWidth / 2;
+        for (const panel of panels) {
+            pick(Boolean(!panel.open || panel.maximized), () => {
+            }, () => {
+                const center = panel.x + panel.w / 2;
+                pick(Boolean(center <= mid), () => {
+                    left = Math.max(left, panel.x + panel.w + FLOAT_LANE_GAP);
+                }, () => {
+                    right = Math.max(right, containerWidth - panel.x + FLOAT_LANE_GAP);
+                });
+            });
+        }
+        const maxLane = Math.max(0, containerWidth - 280);
+        left = Math.min(left, maxLane);
+        right = Math.min(right, maxLane);
+        // Source + Tutor open together can exceed the row width — never crush the MCQ
+        // column below STUDY_CENTER_MIN (one-char vertical stems).
+        const maxCombined = Math.max(0, containerWidth - STUDY_CENTER_MIN);
+        pick(Boolean(left + right > maxCombined), () => {
+            const trim = left + right - maxCombined;
+            const leftShare = left / (left + right);
+            left = Math.max(0, Math.floor(left - trim * leftShare));
+            right = Math.max(0, maxCombined - left);
+        }, () => {
+        });
+        return { left, right };
+    });
 }
-
 export function pagesInRange(from: number, to: number): number[] {
-  const lo = Math.min(from, to);
-  const hi = Math.max(from, to);
-  const pages: number[] = [];
-  for (let p = lo; p <= hi; p += 1) pages.push(p);
-  return pages;
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    const pages: number[] = [];
+    for (let p = lo; p <= hi; p += 1) {
+        pages.push(p);
+    }
+    return pages;
 }
-
 /** "1 page" / "N pages" — avoid "1 pages" in picker chrome. */
 export function formatPageCountLabel(n: number): string {
-  return `${n} ${n === 1 ? "page" : "pages"}`;
+    return `${n} ${choose(Boolean(n === 1), "page", "pages")}`;
 }
-
 export function formatSelectionSummary(selectedPages: number[], pageCount: number): string {
-  if (selectedPages.length === 0) return `No pages selected · ${pageCount} total`;
-  if (selectedPages.length === 1) return `1 page selected · page ${selectedPages[0]}`;
-  if (selectedPages.length === pageCount) return `All ${formatPageCountLabel(pageCount)} selected`;
-  const first = selectedPages[0];
-  const last = selectedPages[selectedPages.length - 1];
-  const contiguous = selectedPages.length === last - first + 1;
-  if (contiguous) return `${selectedPages.length} pages selected · ${first}-${last}`;
-  return `${selectedPages.length} pages selected`;
+    return pick(Boolean(selectedPages.length === 0), () => `No pages selected · ${pageCount} total`, () => pick(Boolean(selectedPages.length === 1), () => `1 page selected · page ${selectedPages[0]}`, () => pick(Boolean(selectedPages.length === pageCount), () => `All ${formatPageCountLabel(pageCount)} selected`, () => {
+        const first = selectedPages[0];
+        const last = selectedPages[selectedPages.length - 1];
+        const contiguous = selectedPages.length === last - first + 1;
+        return pick(Boolean(contiguous), () => `${selectedPages.length} pages selected · ${first}-${last}`, () => `${selectedPages.length} pages selected`);
+    })));
 }
-
 /** A question the learner has already answered - kept client-side so they can step
  *  back and review any prior answer (with the choice they made + the explanation). */
 export type AnsweredCard = {
-  assertionId: string;
-  stem: string;
-  options: string[];
-  selectedIndex: number;
-  /** Full chosen set for multi-select ("select all that apply") reviews. */
-  selectedIndices?: number[];
-  gradeState: { correct: boolean; correctIndex: number; correctIndices?: number[] };
-  feedback: string | null;
-  /** The concept/topic this question tested - for the end-of-study report card. */
-  concept?: string | null;
-  /** Whether the FIRST attempt was correct (Learn lets you retry; the report card
-   *  needs the first try to surface genuinely weak topics, not post-retry success). */
-  firstTryCorrect: boolean;
+    assertionId: string;
+    stem: string;
+    options: string[];
+    selectedIndex: number;
+    /** Full chosen set for multi-select ("select all that apply") reviews. */
+    selectedIndices?: number[];
+    gradeState: {
+        correct: boolean;
+        correctIndex: number;
+        correctIndices?: number[];
+    };
+    feedback: string | null;
+    /** The concept/topic this question tested - for the end-of-study report card. */
+    concept?: string | null;
+    /** Whether the FIRST attempt was correct (Learn lets you retry; the report card
+     *  needs the first try to surface genuinely weak topics, not post-retry success). */
+    firstTryCorrect: boolean;
 };

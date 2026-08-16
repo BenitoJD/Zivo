@@ -16,8 +16,11 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
+from typing import Any
+
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 from app.repositories import newspaper as newspaper_repo
 from app.services.llm_json import extract_json_obj
 
@@ -142,26 +145,28 @@ class ParsedEdition:
 
 def _normalize_blob(filename: str, caption: str) -> str:
     base = (filename or "").rsplit("/", 1)[-1]
-    if base.lower().endswith(".pdf"):
-        base = base[:-4]
+    base = choose(base.lower().endswith(".pdf"), base[:-4], base)
     return f"{base} {caption or ''}".strip()
+
+
+def _date_from_match(m: re.Match[str]) -> date | None:
+    y = int(m.group("y"))
+    y = choose(y < 100, y + 2000, y)
+    try:
+        return date(y, int(m.group("m")), int(m.group("d")))
+    except ValueError:
+        return None
 
 
 def _parse_date(blob: str) -> date | None:
     # Collapse fancy separators (‹ › / …) between digits so DD‹MM‹YYYY still parses.
     normalized = re.sub(r"(?<=\d)[^\dA-Za-z]+(?=\d)", "-", (blob or "").replace(" ", "_"))
-    for pat in _DATE_PATTERNS:
+
+    def _try_pat(pat: re.Pattern[str]) -> date | None:
         m = pat.search(normalized)
-        if not m:
-            continue
-        y = int(m.group("y"))
-        if y < 100:
-            y += 2000
-        try:
-            return date(y, int(m.group("m")), int(m.group("d")))
-        except ValueError:
-            continue
-    return None
+        return pick(not m, lambda: None, lambda: _date_from_match(m))
+
+    return next(filter(None, map(_try_pat, _DATE_PATTERNS)), None)
 
 
 def cheap_paper_slug_hint(
@@ -176,14 +181,24 @@ def cheap_paper_slug_hint(
         caption=caption,
         message_date=datetime.now(timezone.utc),
     )
-    for raw in _alias_lookup_keys(guessed_title=guessed_title, blob=blob, tokens=tokens):
-        hit = newspaper_repo.resolve_alias(db, raw)
-        if hit:
-            return hit[0]
+    hit = next(
+        filter(
+            None,
+            (
+                newspaper_repo.resolve_alias(db, raw)
+                for raw in _alias_lookup_keys(
+                    guessed_title=guessed_title, blob=blob, tokens=tokens
+                )
+            ),
+        ),
+        None,
+    )
     brands = _filename_brand_slugs(tokens, blob=blob)
-    if len(brands) == 1:
-        return next(iter(brands))
-    return None
+    return pick(
+        bool(hit),
+        lambda: hit[0],
+        lambda: pick(len(brands) == 1, lambda: next(iter(brands)), lambda: None),
+    )
 
 
 def resolve_edition_date(
@@ -194,12 +209,13 @@ def resolve_edition_date(
 ) -> date:
     """Edition calendar day: filename/caption date wins; else message.date in IST."""
     parsed = _parse_date(_normalize_blob(filename, caption))
-    if parsed is not None:
-        return parsed
-    md = message_date or datetime.now(timezone.utc)
-    if md.tzinfo is None:
-        md = md.replace(tzinfo=timezone.utc)
-    return md.astimezone(_IST).date()
+
+    def _from_message() -> date:
+        md = message_date or datetime.now(timezone.utc)
+        md = pick(md.tzinfo is None, lambda: md.replace(tzinfo=timezone.utc), lambda: md)
+        return md.astimezone(_IST).date()
+
+    return pick(parsed is not None, lambda: parsed, _from_message)
 
 
 def _guess_location(tokens: list[str]) -> str:
@@ -212,29 +228,28 @@ def _guess_location(tokens: list[str]) -> str:
         "pdf",
         "international",
     }
-    for t in tokens:
-        if t.lower() in _LOCATION_TOKENS and t.lower() not in noise:
-            return t
-    return ""
+    return next(
+        filter(
+            lambda t: t.lower() in _LOCATION_TOKENS and t.lower() not in noise,
+            tokens,
+        ),
+        "",
+    )
 
 
 def _guess_title(tokens: list[str]) -> str:
-    kept: list[str] = []
-    for t in tokens:
-        low = t.lower()
-        if low in _LOCATION_TOKENS:
-            continue
-        if re.fullmatch(r"\d{1,4}", t):
-            continue
-        if re.fullmatch(r"20\d{2}", t):
-            continue
-        kept.append(t)
-    if not kept:
-        return "Newspaper"
-    parts = []
-    for t in kept[:6]:
-        parts.append(t.upper() if len(t) <= 3 else t.title())
-    return " ".join(parts)
+    kept = list(
+        filter(
+            lambda t: (
+                t.lower() not in _LOCATION_TOKENS
+                and not re.fullmatch(r"\d{1,4}", t)
+                and not re.fullmatch(r"20\d{2}", t)
+            ),
+            tokens,
+        )
+    )
+    parts = [choose(len(t) <= 3, t.upper(), t.title()) for t in kept[:6]]
+    return pick(not kept, lambda: "Newspaper", lambda: " ".join(parts))
 
 
 def _norm_key(raw: str) -> str:
@@ -243,70 +258,79 @@ def _norm_key(raw: str) -> str:
 
 def _brand_token_from_norm(norm: str) -> str | None:
     """Map a normalized token (possibly glued city/date) onto a brand-family key."""
-    if not norm:
-        return None
-    if norm in _TOKEN_TO_BRAND:
-        return norm
-    loc_norms = {_norm_key(t) for t in _LOCATION_TOKENS}
-    # Longest brand token first so "thehindu" wins over "hindu".
-    for tok in sorted(_TOKEN_TO_BRAND, key=len, reverse=True):
-        if len(tok) < 2 or not norm.startswith(tok) or norm == tok:
-            continue
-        rest = norm[len(tok) :]
-        if rest.isdigit() or any(rest.startswith(loc) for loc in loc_norms):
-            return tok
-    return None
+
+    def _scan() -> str | None:
+        loc_norms = {_norm_key(t) for t in _LOCATION_TOKENS}
+        toks = filter(
+            lambda tok: not (len(tok) < 2 or not norm.startswith(tok) or norm == tok),
+            sorted(_TOKEN_TO_BRAND, key=len, reverse=True),
+        )
+
+        def _ok(tok: str) -> bool:
+            rest = norm[len(tok) :]
+            return rest.isdigit() or any(rest.startswith(loc) for loc in loc_norms)
+
+        return next(filter(_ok, toks), None)
+
+    return pick(
+        not norm,
+        lambda: None,
+        lambda: pick(norm in _TOKEN_TO_BRAND, lambda: norm, _scan),
+    )
 
 
 def _extracted_brand_tokens(tokens: list[str]) -> list[str]:
     """Brand-family keys present in filename tokens, including glued forms."""
-    out: list[str] = []
     seen: set[str] = set()
-    for t in tokens:
-        bt = _brand_token_from_norm(_norm_key(t))
-        if bt and bt not in seen:
-            seen.add(bt)
-            out.append(bt)
-    return out
+
+    def _unseen(bt: str) -> bool:
+        return pick(bt in seen, lambda: False, lambda: seen.add(bt) or True)
+
+    bts = filter(None, (_brand_token_from_norm(_norm_key(t)) for t in tokens))
+    return list(filter(_unseen, bts))
 
 
 def _paper_id_fingerprint(*, filename: str, caption: str) -> str:
     """City/date-stripped identity for paper-id LLM cache sharing across editions."""
     blob = _normalize_blob(filename, caption)
-    tokens = [t for t in re.split(r"[_\-\s.]+", blob) if t]
-    parts: list[str] = []
-    for t in tokens:
-        low = t.lower()
-        if low in _LOCATION_TOKENS:
-            continue
-        if re.fullmatch(r"\d{1,8}", t) or re.fullmatch(r"20\d{2}", t):
-            continue
-        brand = _brand_token_from_norm(_norm_key(t))
-        parts.append(brand or _norm_key(t))
-    parts = [p for p in parts if p and not p.isdigit()]
-    if parts:
-        return "|".join(sorted(set(parts)))
-    return _norm_key(blob)[:64] or "unknown"
+    tokens = list(filter(None, re.split(r"[_\-\s.]+", blob)))
+    raw_parts = [
+        (_brand_token_from_norm(_norm_key(t)) or _norm_key(t))
+        for t in filter(
+            lambda t: (
+                t.lower() not in _LOCATION_TOKENS
+                and not re.fullmatch(r"\d{1,8}", t)
+                and not re.fullmatch(r"20\d{2}", t)
+            ),
+            tokens,
+        )
+    ]
+    parts = list(filter(lambda p: p and not p.isdigit(), raw_parts))
+    return pick(
+        bool(parts),
+        lambda: "|".join(sorted(set(parts))),
+        lambda: _norm_key(blob)[:64] or "unknown",
+    )
 
 
 def _alias_lookup_keys(*, guessed_title: str, blob: str, tokens: list[str]) -> list[str]:
     keys = [guessed_title, blob]
-    if tokens:
-        keys.append(tokens[0])
+    keys += pick(bool(tokens), lambda: [tokens[0]], lambda: [])
     # Glued city PDFs (thdelhi24072026) must still hit a learned "th" alias.
     keys.extend(_extracted_brand_tokens(tokens))
     blob_brand = _brand_token_from_norm(_norm_key(blob))
-    if blob_brand:
-        keys.append(blob_brand)
+    keys += pick(bool(blob_brand), lambda: [blob_brand], lambda: [])
     seen: set[str] = set()
-    out: list[str] = []
-    for k in keys:
+
+    def _keep(k: str) -> bool:
         norm = _norm_key(k)
-        if not norm or norm in seen:
-            continue
-        seen.add(norm)
-        out.append(k)
-    return out
+        return pick(
+            not norm or norm in seen,
+            lambda: False,
+            lambda: seen.add(norm) or True,
+        )
+
+    return list(filter(_keep, keys))
 
 
 def _match_known_brand(db: Session, paper_title: str) -> tuple[str, str, bool]:
@@ -318,36 +342,57 @@ def _match_known_brand(db: Session, paper_title: str) -> tuple[str, str, bool]:
     title = re.sub(r"\s+", " ", (paper_title or "").strip()) or "Newspaper"
     slug, canon = newspaper_repo.make_paper_identity(title)
     title_l = title.lower()
-    for b in newspaper_repo.list_brands(db):
+
+    def _hit(b: dict) -> tuple[str, str, bool] | None:
         b_title = str(b.get("paper_title") or "")
         b_slug = str(b.get("paper_slug") or "")
-        if b_slug == slug or b_title.lower() == title_l:
-            return b_slug, b_title or canon, True
-    return slug, canon, False
+        return pick(
+            b_slug == slug or b_title.lower() == title_l,
+            lambda: (b_slug, b_title or canon, True),
+            lambda: None,
+        )
+
+    return next(
+        filter(None, map(_hit, newspaper_repo.list_brands(db))),
+        (slug, canon, False),
+    )
 
 
 def _filename_brand_slugs(tokens: list[str], *, blob: str = "") -> set[str]:
     """Brand families clearly named by filename tokens (conflict guard)."""
     found: set[str] = set()
-    norms = {_norm_key(t) for t in tokens if t}
+    norms = {_norm_key(t) for t in filter(None, tokens)}
     blob_n = _norm_key(blob)
-    if blob_n:
-        norms.add(blob_n)
+    norms = pick(bool(blob_n), lambda: norms | {blob_n}, lambda: norms)
 
     loc_norms = {_norm_key(t) for t in _LOCATION_TOKENS}
 
-    for norm in norms:
-        brand = _TOKEN_TO_BRAND.get(norm)
-        if brand:
-            found.add(brand)
-            continue
-        # Glued forms: bsahmedabad24072026, thdelhi, …
-        for tok, slug in _TOKEN_TO_BRAND.items():
-            if len(tok) < 2 or not norm.startswith(tok) or norm == tok:
-                continue
+    def _add_glued(norm: str) -> None:
+        items = filter(
+            lambda item: not (
+                len(item[0]) < 2 or not norm.startswith(item[0]) or norm == item[0]
+            ),
+            _TOKEN_TO_BRAND.items(),
+        )
+
+        def _ok(item: tuple[str, str]) -> bool:
+            tok, _slug = item
             rest = norm[len(tok) :]
-            if rest.isdigit() or any(rest.startswith(loc) for loc in loc_norms):
-                found.add(slug)
+            return rest.isdigit() or any(rest.startswith(loc) for loc in loc_norms)
+
+        for _tok, slug in filter(_ok, items):
+            found.add(slug)
+
+    def _consume(norm: str) -> None:
+        brand = _TOKEN_TO_BRAND.get(norm)
+        pick(
+            bool(brand),
+            lambda: found.add(brand),
+            lambda: _add_glued(norm),
+        )
+
+    for norm in norms:
+        _consume(norm)
     return found
 
 
@@ -356,14 +401,16 @@ def _identity_conflicts_filename(
 ) -> str | None:
     """Return conflicting brand slug if filename clearly names another paper."""
     named = _filename_brand_slugs(tokens, blob=blob)
-    if not named:
-        return None
-    if paper_slug in named and len(named) == 1:
-        return None
     others = named - {paper_slug}
-    if others:
-        return sorted(others)[0]
-    return None
+    return pick(
+        not named,
+        lambda: None,
+        lambda: pick(
+            paper_slug in named and len(named) == 1,
+            lambda: None,
+            lambda: pick(bool(others), lambda: sorted(others)[0], lambda: None),
+        ),
+    )
 
 
 def _learnable_alias_keys(
@@ -375,34 +422,43 @@ def _learnable_alias_keys(
     """Only brand-family tokens present in the filename — never cities/dates/noise."""
     loc_norms = {_norm_key(t) for t in _LOCATION_TOKENS}
     family = _BRAND_TOKEN_FAMILIES.get(paper_slug, frozenset())
-    if not family:
-        # Unknown brand: learn guessed title only if it has no location/date noise.
-        parts = [
-            p
-            for p in re.split(r"\s+", (guessed_title or "").strip())
-            if p and _norm_key(p) not in loc_norms and not _norm_key(p).isdigit()
-        ]
-        key = _norm_key(" ".join(parts))
-        if key and len(key) >= 3 and not re.fullmatch(r"\d{6,8}", key):
-            return [" ".join(parts)]
-        return []
 
-    candidates: list[str] = []
-    seen: set[str] = set()
-    # Include glued-form brand keys (thdelhi… → th) so the next city PDF skips LLM.
-    for raw in [guessed_title, *tokens, *_extracted_brand_tokens(tokens)]:
-        norm = _norm_key(raw)
-        if not norm or norm in seen:
-            continue
-        if norm in loc_norms:
-            continue
-        if norm.isdigit() or re.fullmatch(r"\d{6,8}", norm):
-            continue
-        if norm not in family:
-            continue
-        seen.add(norm)
-        candidates.append(raw)
-    return candidates
+    def _unknown_brand() -> list[str]:
+        parts = list(
+            filter(
+                lambda p: p
+                and _norm_key(p) not in loc_norms
+                and not _norm_key(p).isdigit(),
+                re.split(r"\s+", (guessed_title or "").strip()),
+            )
+        )
+        key = _norm_key(" ".join(parts))
+        return pick(
+            bool(key) and len(key) >= 3 and not re.fullmatch(r"\d{6,8}", key),
+            lambda: [" ".join(parts)],
+            lambda: [],
+        )
+
+    def _known_family() -> list[str]:
+        seen: set[str] = set()
+
+        def _keep(raw: str) -> bool:
+            norm = _norm_key(raw)
+            bad = (
+                not norm
+                or norm in seen
+                or norm in loc_norms
+                or norm.isdigit()
+                or bool(re.fullmatch(r"\d{6,8}", norm))
+                or norm not in family
+            )
+            return pick(bad, lambda: False, lambda: seen.add(norm) or True)
+
+        return list(
+            filter(_keep, [guessed_title, *tokens, *_extracted_brand_tokens(tokens)])
+        )
+
+    return pick(not family, _unknown_brand, _known_family)
 
 
 def _learn_aliases(
@@ -420,34 +476,50 @@ def _learn_aliases(
     gate = evaluate_naming_confidence(
         confidence, exact_catalog_hit=exact_catalog_hit
     )
-    if not gate.learn_alias:
-        logger.info(
+
+    def _upsert_all() -> None:
+        for key in _learnable_alias_keys(
+            paper_slug=paper_slug, guessed_title=guessed_title, tokens=tokens
+        ):
+            newspaper_repo.upsert_alias(
+                db, alias_key=key, paper_slug=paper_slug, paper_title=paper_title
+            )
+
+    def _do_learn() -> None:
+        conflict = _identity_conflicts_filename(
+            paper_slug=paper_slug, tokens=tokens, blob=blob
+        )
+        pick(
+            bool(conflict),
+            lambda: logger.info(
+                "skip alias learn paper=%s — filename brand conflict", paper_slug
+            ),
+            _upsert_all,
+        )
+
+    pick(
+        not gate.learn_alias,
+        lambda: logger.info(
             "skip alias learn paper=%s confidence=%s exact=%s",
             paper_slug,
             confidence,
             exact_catalog_hit,
-        )
-        return
-    if _identity_conflicts_filename(paper_slug=paper_slug, tokens=tokens, blob=blob):
-        logger.info("skip alias learn paper=%s — filename brand conflict", paper_slug)
-        return
-    for key in _learnable_alias_keys(
-        paper_slug=paper_slug, guessed_title=guessed_title, tokens=tokens
-    ):
-        newspaper_repo.upsert_alias(
-            db, alias_key=key, paper_slug=paper_slug, paper_title=paper_title
-        )
+        ),
+        _do_learn,
+    )
 
 
 def _known_brands_prompt(db: Session) -> str:
     brands = newspaper_repo.list_brands(db)
-    if not brands:
-        return "(none yet — invent a clear canonical English title)"
-    lines = []
-    for b in brands:
-        flag = "enabled" if b.get("enabled") else "disabled"
-        lines.append(f"- {b['paper_title']} (slug={b['paper_slug']}, {flag})")
-    return "\n".join(lines)
+    return pick(
+        not brands,
+        lambda: "(none yet — invent a clear canonical English title)",
+        lambda: "\n".join(
+            f"- {b['paper_title']} (slug={b['paper_slug']}, "
+            f"{choose(bool(b.get('enabled')), 'enabled', 'disabled')})"
+            for b in brands
+        ),
+    )
 
 
 async def _llm_identify_paper_async(
@@ -470,105 +542,143 @@ async def _llm_identify_paper_async(
     from app.services.llm_registry import default_chat_model_id
     from app.services.llm_router import acomplete_chat
 
-    tok_list = tokens if tokens is not None else [
-        t for t in re.split(r"[_\-\s.]+", _normalize_blob(filename, caption)) if t
-    ]
+    tok_list = pick(
+        tokens is not None,
+        lambda: tokens,
+        lambda: list(
+            filter(None, re.split(r"[_\-\s.]+", _normalize_blob(filename, caption)))
+        ),
+    )
     blob_s = blob or _normalize_blob(filename, caption)
     fp = _paper_id_fingerprint(filename=filename, caption=caption)
     cache_key = content_hash_key("newspaper_paper_id", fp)
     hit = cache_get(db, kind="newspaper_paper_id", cache_key=cache_key)
-    if isinstance(hit, dict) and hit.get("slug") and hit.get("title"):
+
+    def _confidence_of(raw_conf: Any) -> float:
+        try:
+            return float(choose(raw_conf is not None, raw_conf, 0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _from_cache() -> tuple[str, str, float, bool] | None:
         slug = str(hit["slug"])
         canon = str(hit["title"])
-        try:
-            confidence = float(hit.get("confidence") if hit.get("confidence") is not None else 0)
-        except (TypeError, ValueError):
-            confidence = 0.0
+        confidence = _confidence_of(hit.get("confidence"))
         exact_hit = bool(hit.get("exact_hit"))
-        if not _identity_conflicts_filename(
-            paper_slug=slug, tokens=tok_list, blob=blob_s
-        ):
-            return slug, canon, confidence, exact_hit
+        return pick(
+            not _identity_conflicts_filename(
+                paper_slug=slug, tokens=tok_list, blob=blob_s
+            ),
+            lambda: (slug, canon, confidence, exact_hit),
+            lambda: None,
+        )
 
-    system = (
-        "You identify Indian / English newspaper brands from Telegram PDF filenames "
-        "and captions. Filenames change often (abbreviations, cities, dates). "
-        "Expand common abbreviations using world knowledge (e.g. brand initials). "
-        "Never treat a city or date as the newspaper name. "
-        "Prefer matching a known catalog brand when the file clearly refers to it. "
-        "When the filename clearly matches a known brand (including common initials), "
-        "set confidence >= 0.8. "
-        "Never map a clear other-brand abbreviation onto a different catalog brand "
-        "(e.g. BS/Business Standard, HT, FE, Mint, ET are not The Hindu). "
-        "Reply with JSON only — no prose."
+    cached = pick(
+        isinstance(hit, dict) and bool(hit.get("slug")) and bool(hit.get("title")),
+        _from_cache,
+        lambda: None,
     )
-    user = (
-        f"Known brands in our catalog:\n{_known_brands_prompt(db)}\n\n"
-        f"Filename: {filename or '(none)'}\n"
-        f"Caption: {caption or '(none)'}\n\n"
-        'Return JSON only: {"paper_title":"<canonical English newspaper name>",'
-        '"confidence":<0.0-1.0>}'
-    )
-    try:
-        model_id = default_chat_model_id(db)
-        raw = await acomplete_chat(
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            db,
-            model_id=model_id,
-            log_tag="newspaper_paper_id",
-        )
-    except Exception:
-        logger.exception("newspaper paper-id LLM failed")
-        return None
 
-    data = extract_json_obj(raw)
-    title = str(data.get("paper_title") or "").strip()
-    try:
-        confidence = float(data.get("confidence") if data.get("confidence") is not None else 0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    if not title:
-        logger.info("newspaper paper-id empty title confidence=%s", confidence)
-        return None
-    slug, canon, exact_hit = _match_known_brand(db, title)
-    conflict = _identity_conflicts_filename(
-        paper_slug=slug, tokens=tok_list, blob=blob_s
-    )
-    if conflict:
-        logger.info(
-            "newspaper paper-id rejected title=%r slug=%s — filename names %s",
-            title,
-            slug,
-            conflict,
+    async def _cached() -> tuple[str, str, float, bool] | None:
+        return cached
+
+    async def _call_llm() -> tuple[str, str, float, bool] | None:
+        system = (
+            "You identify Indian / English newspaper brands from Telegram PDF filenames "
+            "and captions. Filenames change often (abbreviations, cities, dates). "
+            "Expand common abbreviations using world knowledge (e.g. brand initials). "
+            "Never treat a city or date as the newspaper name. "
+            "Prefer matching a known catalog brand when the file clearly refers to it. "
+            "When the filename clearly matches a known brand (including common initials), "
+            "set confidence >= 0.8. "
+            "Never map a clear other-brand abbreviation onto a different catalog brand "
+            "(e.g. BS/Business Standard, HT, FE, Mint, ET are not The Hindu). "
+            "Reply with JSON only — no prose."
         )
-        return None
-    # Exact catalog match may under-score confidence; soft/partial never accepted.
-    gate = evaluate_naming_confidence(confidence, exact_catalog_hit=exact_hit)
-    if not gate.accept_identity:
-        logger.info(
-            "newspaper paper-id rejected title=%r confidence=%s",
-            title,
-            confidence,
+        user = (
+            f"Known brands in our catalog:\n{_known_brands_prompt(db)}\n\n"
+            f"Filename: {filename or '(none)'}\n"
+            f"Caption: {caption or '(none)'}\n\n"
+            'Return JSON only: {"paper_title":"<canonical English newspaper name>",'
+            '"confidence":<0.0-1.0>}'
         )
-        return None
-    try:
-        cache_put(
-            db,
-            kind="newspaper_paper_id",
-            cache_key=cache_key,
-            value={
-                "slug": slug,
-                "title": canon,
-                "confidence": confidence,
-                "exact_hit": exact_hit,
-            },
-        )
-    except Exception:
-        logger.debug("newspaper paper-id cache write failed", exc_info=True)
-    return slug, canon, confidence, exact_hit
+        try:
+            model_id = default_chat_model_id(db)
+            raw = await acomplete_chat(
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                db,
+                model_id=model_id,
+                log_tag="newspaper_paper_id",
+            )
+        except Exception:
+            logger.exception("newspaper paper-id LLM failed")
+            return None
+
+        data = extract_json_obj(raw)
+        title = str(data.get("paper_title") or "").strip()
+        confidence = _confidence_of(data.get("confidence"))
+
+        def _empty() -> None:
+            logger.info("newspaper paper-id empty title confidence=%s", confidence)
+            return None
+
+        def _after_title() -> tuple[str, str, float, bool] | None:
+            slug, canon, exact_hit = _match_known_brand(db, title)
+            conflict = _identity_conflicts_filename(
+                paper_slug=slug, tokens=tok_list, blob=blob_s
+            )
+
+            def _reject_conflict() -> None:
+                logger.info(
+                    "newspaper paper-id rejected title=%r slug=%s — filename names %s",
+                    title,
+                    slug,
+                    conflict,
+                )
+                return None
+
+            def _after_conflict_clear() -> tuple[str, str, float, bool] | None:
+                gate = evaluate_naming_confidence(
+                    confidence, exact_catalog_hit=exact_hit
+                )
+
+                def _reject_gate() -> None:
+                    logger.info(
+                        "newspaper paper-id rejected title=%r confidence=%s",
+                        title,
+                        confidence,
+                    )
+                    return None
+
+                def _cache_and_return() -> tuple[str, str, float, bool]:
+                    try:
+                        cache_put(
+                            db,
+                            kind="newspaper_paper_id",
+                            cache_key=cache_key,
+                            value={
+                                "slug": slug,
+                                "title": canon,
+                                "confidence": confidence,
+                                "exact_hit": exact_hit,
+                            },
+                        )
+                    except Exception:
+                        logger.debug(
+                            "newspaper paper-id cache write failed", exc_info=True
+                        )
+                    return slug, canon, confidence, exact_hit
+
+                return pick(not gate.accept_identity, _reject_gate, _cache_and_return)
+
+            return pick(bool(conflict), _reject_conflict, _after_conflict_clear)
+
+        return pick(not title, _empty, _after_title)
+
+    return await pick(cached is not None, _cached, _call_llm)
 
 
 def _llm_identify_paper_sync(
@@ -597,6 +707,13 @@ def _llm_identify_paper_sync(
         return None
 
 
+_IDENTITY_RULES = (
+    Rule(when=(Pred("n", "eq", 4),), action="rich"),
+    Rule(when=(Pred("n", "eq", 2),), action="pair"),
+    Rule(when=(), action="none"),
+)
+
+
 def _finish_parse(
     db: Session,
     *,
@@ -611,21 +728,22 @@ def _finish_parse(
     llm_identity: tuple[str, str] | tuple[str, str, float, bool] | None,
     allow_llm: bool,
 ) -> ParsedEdition:
-    for raw in _alias_lookup_keys(guessed_title=guessed_title, blob=blob, tokens=tokens):
+    def _try_alias(raw: str) -> ParsedEdition | None:
         alias = newspaper_repo.resolve_alias(db, raw)
-        if alias:
-            conflict = _identity_conflicts_filename(
-                paper_slug=alias[0], tokens=tokens, blob=blob
+
+        def _poison() -> None:
+            logger.warning(
+                "ignoring poisoned alias key=%r -> %s (filename names %s)",
+                raw,
+                alias[0],
+                _identity_conflicts_filename(
+                    paper_slug=alias[0], tokens=tokens, blob=blob
+                ),
             )
-            if conflict:
-                logger.warning(
-                    "ignoring poisoned alias key=%r -> %s (filename names %s)",
-                    raw,
-                    alias[0],
-                    conflict,
-                )
-                newspaper_repo.delete_alias(db, raw)
-                continue
+            newspaper_repo.delete_alias(db, raw)
+            return None
+
+        def _edition() -> ParsedEdition:
             return ParsedEdition(
                 paper_slug=alias[0],
                 paper_title=alias[1],
@@ -634,39 +752,40 @@ def _finish_parse(
                 source=f"alias+{date_source}",
             )
 
-    identity = llm_identity
-    confidence = LLM_LEARN_CONFIDENCE
-    exact_hit = True
-    if identity is not None and len(identity) == 4:
-        slug, title, confidence, exact_hit = identity  # type: ignore[misc]
-        identity = (slug, title)
-    elif identity is not None and len(identity) == 2:
-        # Test/injected identity — treat as exact high-confidence unless conflict.
-        slug, title = identity  # type: ignore[misc]
-        conflict = _identity_conflicts_filename(
-            paper_slug=slug, tokens=tokens, blob=blob
-        )
-        if conflict:
-            logger.info(
-                "injected identity %s rejected — filename names %s",
-                slug,
-                conflict,
+        def _checked() -> ParsedEdition | None:
+            conflict = _identity_conflicts_filename(
+                paper_slug=alias[0], tokens=tokens, blob=blob
             )
-            identity = None
-        else:
-            confidence = LLM_LEARN_CONFIDENCE
-            exact_hit = True
+            return pick(bool(conflict), _poison, _edition)
 
-    if identity is None and allow_llm:
-        rich = _llm_identify_paper_sync(
-            db, filename=filename, caption=caption, tokens=tokens, blob=blob
+        return pick(not alias, lambda: None, _checked)
+
+    alias_edition = next(
+        filter(
+            None,
+            map(
+                _try_alias,
+                _alias_lookup_keys(
+                    guessed_title=guessed_title, blob=blob, tokens=tokens
+                ),
+            ),
+        ),
+        None,
+    )
+
+    def _heuristic() -> ParsedEdition:
+        slug, title = newspaper_repo.make_paper_identity(guessed_title)
+        return ParsedEdition(
+            paper_slug=slug,
+            paper_title=title,
+            edition_date=edition_date,
+            location_raw=location_raw,
+            source=f"heuristic+{date_source}",
         )
-        if rich:
-            slug, title, confidence, exact_hit = rich
-            identity = (slug, title)
 
-    if identity:
-        slug, title = identity
+    def _llm_edition(
+        slug: str, title: str, confidence: float, exact_hit: bool
+    ) -> ParsedEdition:
         _learn_aliases(
             db,
             paper_slug=slug,
@@ -685,15 +804,101 @@ def _finish_parse(
             source=f"llm+{date_source}",
         )
 
-    slug, title = newspaper_repo.make_paper_identity(guessed_title)
-    # Do NOT upsert heuristic aliases — short tokens like "TH" would poison the table.
-    return ParsedEdition(
-        paper_slug=slug,
-        paper_title=title,
-        edition_date=edition_date,
-        location_raw=location_raw,
-        source=f"heuristic+{date_source}",
-    )
+    def _pair_identity(
+        identity: tuple[str, str],
+    ) -> dict[str, Any]:
+        slug, title = identity
+        conflict = _identity_conflicts_filename(
+            paper_slug=slug, tokens=tokens, blob=blob
+        )
+
+        def _reject() -> dict[str, Any]:
+            logger.info(
+                "injected identity %s rejected — filename names %s",
+                slug,
+                conflict,
+            )
+            return {
+                "identity": None,
+                "confidence": LLM_LEARN_CONFIDENCE,
+                "exact_hit": True,
+            }
+
+        return pick(
+            bool(conflict),
+            _reject,
+            lambda: {
+                "identity": (slug, title),
+                "confidence": LLM_LEARN_CONFIDENCE,
+                "exact_hit": True,
+            },
+        )
+
+    def _normalize(identity: Any) -> dict[str, Any]:
+        n = pick(identity is None, lambda: 0, lambda: len(identity))
+        hit = first_match(_IDENTITY_RULES, {"n": n})
+        return apply(
+            hit.action,
+            {
+                "rich": lambda: {
+                    "identity": (identity[0], identity[1]),
+                    "confidence": identity[2],
+                    "exact_hit": identity[3],
+                },
+                "pair": lambda: _pair_identity(identity),
+                "none": lambda: {
+                    "identity": None,
+                    "confidence": LLM_LEARN_CONFIDENCE,
+                    "exact_hit": True,
+                },
+            },
+        )
+
+    def _without_alias() -> ParsedEdition:
+        normed = _normalize(llm_identity)
+        identity = normed["identity"]
+        confidence = normed["confidence"]
+        exact_hit = normed["exact_hit"]
+
+        def _maybe_llm() -> dict[str, Any]:
+            rich = _llm_identify_paper_sync(
+                db, filename=filename, caption=caption, tokens=tokens, blob=blob
+            )
+            return pick(
+                bool(rich),
+                lambda: {
+                    "identity": (rich[0], rich[1]),
+                    "confidence": rich[2],
+                    "exact_hit": rich[3],
+                },
+                lambda: {
+                    "identity": None,
+                    "confidence": confidence,
+                    "exact_hit": exact_hit,
+                },
+            )
+
+        filled = pick(
+            identity is None and allow_llm,
+            _maybe_llm,
+            lambda: {
+                "identity": identity,
+                "confidence": confidence,
+                "exact_hit": exact_hit,
+            },
+        )
+        return pick(
+            bool(filled["identity"]),
+            lambda: _llm_edition(
+                filled["identity"][0],
+                filled["identity"][1],
+                filled["confidence"],
+                filled["exact_hit"],
+            ),
+            _heuristic,
+        )
+
+    return pick(alias_edition is not None, lambda: alias_edition, _without_alias)
 
 
 def _date_and_tokens(
@@ -703,16 +908,18 @@ def _date_and_tokens(
     message_date: datetime,
 ) -> tuple[str, list[str], date, str, str, str]:
     blob = _normalize_blob(filename, caption)
-    tokens = [t for t in re.split(r"[_\-\s.]+", blob) if t]
+    tokens = list(filter(None, re.split(r"[_\-\s.]+", blob)))
     from_file = _parse_date(blob)
-    if from_file is not None:
-        edition_date = from_file
-        date_source = "filename"
-    else:
-        edition_date = resolve_edition_date(
-            filename=filename, caption=caption, message_date=message_date
-        )
-        date_source = "message_date"
+    edition_date, date_source = pick(
+        from_file is not None,
+        lambda: (from_file, "filename"),
+        lambda: (
+            resolve_edition_date(
+                filename=filename, caption=caption, message_date=message_date
+            ),
+            "message_date",
+        ),
+    )
     location_raw = _guess_location(tokens)
     guessed_title = _guess_title(tokens)
     return blob, tokens, edition_date, date_source, location_raw, guessed_title
@@ -757,40 +964,53 @@ async def parse_edition_meta_async(
     blob, tokens, edition_date, date_source, location_raw, guessed_title = _date_and_tokens(
         filename=filename, caption=caption, message_date=message_date
     )
-
-    for raw in _alias_lookup_keys(guessed_title=guessed_title, blob=blob, tokens=tokens):
-        if newspaper_repo.resolve_alias(db, raw):
-            return _finish_parse(
-                db,
-                filename=filename,
-                caption=caption,
-                edition_date=edition_date,
-                date_source=date_source,
-                location_raw=location_raw,
-                guessed_title=guessed_title,
-                blob=blob,
-                tokens=tokens,
-                llm_identity=None,
-                allow_llm=False,
-            )
-
-    llm_identity = None
-    from app.eta.llm_concurrency import llm_slot_async
-
-    async with llm_slot_async():
-        llm_identity = await _llm_identify_paper_async(
-            db, filename=filename, caption=caption, tokens=tokens, blob=blob
-        )
-    return _finish_parse(
-        db,
-        filename=filename,
-        caption=caption,
-        edition_date=edition_date,
-        date_source=date_source,
-        location_raw=location_raw,
-        guessed_title=guessed_title,
-        blob=blob,
-        tokens=tokens,
-        llm_identity=llm_identity,
-        allow_llm=False,
+    alias_hit = next(
+        filter(
+            None,
+            (
+                newspaper_repo.resolve_alias(db, raw)
+                for raw in _alias_lookup_keys(
+                    guessed_title=guessed_title, blob=blob, tokens=tokens
+                )
+            ),
+        ),
+        None,
     )
+
+    async def _via_alias() -> ParsedEdition:
+        return _finish_parse(
+            db,
+            filename=filename,
+            caption=caption,
+            edition_date=edition_date,
+            date_source=date_source,
+            location_raw=location_raw,
+            guessed_title=guessed_title,
+            blob=blob,
+            tokens=tokens,
+            llm_identity=None,
+            allow_llm=False,
+        )
+
+    async def _via_llm() -> ParsedEdition:
+        from app.eta.llm_concurrency import llm_slot_async
+
+        async with llm_slot_async():
+            llm_identity = await _llm_identify_paper_async(
+                db, filename=filename, caption=caption, tokens=tokens, blob=blob
+            )
+        return _finish_parse(
+            db,
+            filename=filename,
+            caption=caption,
+            edition_date=edition_date,
+            date_source=date_source,
+            location_raw=location_raw,
+            guessed_title=guessed_title,
+            blob=blob,
+            tokens=tokens,
+            llm_identity=llm_identity,
+            allow_llm=False,
+        )
+
+    return await pick(bool(alias_hit), _via_alias, _via_llm)

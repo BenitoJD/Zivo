@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.engine_runtime import pick
 from app.services.content_worthiness import (
     plan_study_page_split,
     should_split_native_unit,
@@ -31,22 +32,27 @@ def study_pages_from_native_units(
     ``has_native`` must be True only when the format actually contributed page /
     slide / break boundaries (not merely “we flushed one leftover segment”).
     """
-    cleaned = [u.strip() for u in units if u and str(u).strip()]
-    if not cleaned:
-        return [{"page": 1, "text": ""}]
+    cleaned = list(filter(None, map(lambda u: str(u).strip(), filter(None, units))))
 
-    if not has_native:
-        return paginate_reader_text("\n\n".join(cleaned))
+    def _from_native() -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        page_num = 1
 
-    out: list[dict[str, Any]] = []
-    page_num = 1
-    for unit in cleaned:
-        if not should_split_native_unit(unit):
-            out.append({"page": page_num, "text": unit})
+        def _append(text: str) -> None:
+            nonlocal page_num
+            out.append({"page": page_num, "text": text})
             page_num += 1
-            continue
-        # Native unit is enormous — soft-split inside it, keep order.
-        for item in paginate_reader_text(unit):
-            out.append({"page": page_num, "text": item["text"]})
-            page_num += 1
-    return out or [{"page": 1, "text": ""}]
+
+        def _soft_split(unit: str) -> None:
+            for item in paginate_reader_text(unit):
+                _append(item["text"])
+
+        for unit in cleaned:
+            pick(not should_split_native_unit(unit), lambda: _append(unit), lambda: _soft_split(unit))
+        return out or [{"page": 1, "text": ""}]
+
+    return pick(
+        not cleaned,
+        lambda: [{"page": 1, "text": ""}],
+        lambda: pick(not has_native, lambda: paginate_reader_text("\n\n".join(cleaned)), _from_native),
+    )

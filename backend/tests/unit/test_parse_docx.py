@@ -8,6 +8,7 @@ import json
 from docx import Document as DocxDocument
 from docx.enum.text import WD_BREAK
 
+from app.engine_runtime import pick
 from app.services.parse import count_document_pages, parse_document, parse_document_page
 from app.services.web_import import READER_PAGE_CHARS
 
@@ -133,27 +134,31 @@ def test_avidpay_like_docx_is_multi_page() -> None:
     from pathlib import Path
 
     path = Path("/Users/benito/Desktop/AvidPay KT - Complete Reference.docx")
-    if not path.is_file():
-        return
-    data = path.read_bytes()
-    ct = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    pages = parse_document(ct, data)
-    assert len(pages) >= 8
-    assert all(pages[i]["page"] == i + 1 for i in range(len(pages)))
-    assert any("Part 1" in p["text"] for p in pages)
+
+    def _run() -> None:
+        data = path.read_bytes()
+        ct = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        pages = parse_document(ct, data)
+        assert len(pages) >= 8
+        assert all(pages[i]["page"] == i + 1 for i in range(len(pages)))
+        assert any("Part 1" in p["text"] for p in pages)
+
+    pick(not path.is_file(), lambda: None, _run)
 
 
 def test_parse_pptx_one_slide_per_page() -> None:
     from pathlib import Path
 
     path = Path("/Users/benito/Desktop/Name_Profile Summary.pptx")
-    if not path.is_file():
-        return
-    pages = parse_document(
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        path.read_bytes(),
-    )
-    assert len(pages) >= 1
-    assert pages[0]["page"] == 1
-    # Native slide unit — not soft-split into empty crumbs.
-    assert all(p.get("text") is not None for p in pages)
+
+    def _run() -> None:
+        pages = parse_document(
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            path.read_bytes(),
+        )
+        assert len(pages) >= 1
+        assert pages[0]["page"] == 1
+        # Native slide unit — not soft-split into empty crumbs.
+        assert all(p.get("text") is not None for p in pages)
+
+    pick(not path.is_file(), lambda: None, _run)

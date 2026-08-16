@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select, text
 
 from app.db import SessionLocal
+from app.engine_runtime import pick
 from app.models import Account
 from app.services.answer_signal import record_answer_signal, resolve_subject_entity
 from app.services.guest_session import GUEST_ID_HEADER
@@ -20,8 +21,7 @@ import sys
 from pathlib import Path
 
 _STUDY = Path(__file__).resolve().parents[2].parent / "study"
-if str(_STUDY) not in sys.path:
-    sys.path.insert(0, str(_STUDY))
+pick(str(_STUDY) not in sys.path, lambda: sys.path.insert(0, str(_STUDY)), lambda: None)
 from study_main import app
 
 GUEST_ID = "c" * 32

@@ -18,18 +18,30 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import get_settings
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 from app.models.llm import LlmModel, LlmModelKind, LlmProvider
 from app.services.llm_registry import ResolvedLlmModel, configure_litellm
+from app.services.llm_route import evaluate_llm_route
+from app.services.presence import evaluate_presence
 
 logger = logging.getLogger(__name__)
 
 _pool_enabled_override: bool | None = None
 
 
+def _raise(exc: BaseException) -> None:
+    raise exc
+
+
 def is_llm_pool_enabled() -> bool:
-    if _pool_enabled_override is not None:
-        return _pool_enabled_override
-    return get_settings().llm_pool_enabled
+    return apply(
+        evaluate_presence(_pool_enabled_override).action,
+        {
+            "ok": lambda: _pool_enabled_override,
+            "missing": lambda: get_settings().llm_pool_enabled,
+            "empty": lambda: get_settings().llm_pool_enabled,
+        },
+    )
 
 
 def set_llm_pool_enabled(enabled: bool) -> None:
@@ -38,16 +50,14 @@ def set_llm_pool_enabled(enabled: bool) -> None:
 
 
 def _provider_ready(provider: LlmProvider) -> bool:
-    if provider.slug == "local":
-        return True
-    return bool((provider.api_key or "").strip())
+    return choose(provider.slug == "local", True, bool((provider.api_key or "").strip()))
 
 
 # --- Hard-failure breaker -----------------------------------------------------
 #
 # A drained balance or a dead key is not transient: the next call gets the same
-# 402. Without a breaker every job re-probes the corpse — LiteLLM retries it
-# twice, failover moves to the next model, that one is also dead, twice more —
+# 402. Without a breaker every job re-probes the corpse. LiteLLM retries it
+# twice, failover moves to the next model, that one is also dead, twice more,
 # so a pool-wide billing outage reads as "stuck" (workers pinned, queue backing
 # up) instead of "broken". Cooldown is short so restoring credit self-heals
 # without a deploy.
@@ -74,51 +84,97 @@ _HARD_ERROR_TOKENS = (
 # Deliberately NOT matched: a bare "billing" or "quota", which show up in the
 # doc-link footer of healthy providers' transient errors and would bench them.
 
+_FAILOVER_STATUS = {401, 402, 403, 408, 409, 429, 500, 502, 503, 504}
+_HARD_STATUS = {401, 402, 403}
+_FAILOVER_NAME_TOKENS = ("timeout", "rate", "unavailable", "connection")
+_FAILOVER_MESSAGE_TOKENS = (
+    "rate limit",
+    "too many requests",
+    "timeout",
+    "timed out",
+    "overloaded",
+    "unavailable",
+    "connection error",
+    "insufficient balance",
+    "billing",
+    "payment required",
+    "invalid api key",
+    "authentication",
+    "403",
+    "402",
+    "401",
+    "503",
+    "502",
+    "429",
+)
+
+
+def _exc_status(exc: BaseException) -> object:
+    status = getattr(exc, "status_code", None)
+    return pick(
+        status is None,
+        lambda: getattr(getattr(exc, "response", None), "status_code", None),
+        lambda: status,
+    )
+
 
 def is_hard_provider_error(exc: BaseException) -> bool:
     """Account-level failure: no balance, dead key, or spent daily quota.
 
-    Distinct from ``is_failover_eligible`` — that asks "try the next model?",
+    Distinct from ``is_failover_eligible``: that asks "try the next model?",
     this asks "is this provider worth calling again soon?".
     """
-    status = getattr(exc, "status_code", None)
-    if status is None:
-        response = getattr(exc, "response", None)
-        status = getattr(response, "status_code", None)
-    # Only auth/billing codes. A bare 429 is a transient rate limit.
-    if isinstance(status, int) and status in {401, 402, 403}:
-        return True
-
+    status = _exc_status(exc)
     message = str(exc).lower()
-    return any(token in message for token in _HARD_ERROR_TOKENS)
+    return (isinstance(status, int) and status in _HARD_STATUS) or any(
+        token in message for token in _HARD_ERROR_TOKENS
+    )
 
 
 def mark_provider_down(provider: LlmProvider, exc: BaseException) -> None:
     """Bench a provider that returned an account-level failure."""
-    if _HARD_ERROR_COOLDOWN_S <= 0:
-        return
-    _provider_down_until[provider.id] = time.monotonic() + _HARD_ERROR_COOLDOWN_S
-    logger.error(
-        "llm_provider_down provider=%s cooldown_s=%s error=%s",
-        provider.slug,
-        _HARD_ERROR_COOLDOWN_S,
-        exc,
-    )
+
+    def _mark() -> None:
+        _provider_down_until[provider.id] = time.monotonic() + _HARD_ERROR_COOLDOWN_S
+        logger.error(
+            "llm_provider_down provider=%s cooldown_s=%s error=%s",
+            provider.slug,
+            _HARD_ERROR_COOLDOWN_S,
+            exc,
+        )
+
+    pick(_HARD_ERROR_COOLDOWN_S <= 0, lambda: None, _mark)
 
 
 def is_provider_benched(provider: LlmProvider) -> bool:
     until = _provider_down_until.get(provider.id)
-    if until is None:
-        return False
-    if time.monotonic() >= until:
-        del _provider_down_until[provider.id]
-        return False
-    return True
+
+    def _check() -> bool:
+        expired = time.monotonic() >= until
+        pick(expired, lambda: _provider_down_until.pop(provider.id, None), lambda: None)
+        return not expired
+
+    return apply(
+        evaluate_presence(until).action,
+        {
+            "missing": lambda: False,
+            "empty": lambda: False,
+            "ok": _check,
+        },
+    )
 
 
 def reset_provider_breakers() -> None:
-    """Clear all cooldowns — for tests and for an admin-triggered retry."""
+    """Clear all cooldowns: for tests and for an admin-triggered retry."""
     _provider_down_until.clear()
+
+
+def _ready_resolved(model: LlmModel) -> ResolvedLlmModel | None:
+    return pick(
+        _provider_ready(model.provider) and not is_provider_benched(model.provider),
+        lambda: ResolvedLlmModel(record=model, provider=model.provider),
+        lambda: None,
+    )
 
 
 def list_pool_chat_models(
@@ -127,7 +183,7 @@ def list_pool_chat_models(
     require_vision: bool = False,
 ) -> list[ResolvedLlmModel]:
     """Enabled chat models whose provider has credentials, ordered for routing."""
-    query = (
+    base = (
         db.query(LlmModel)
         .join(LlmProvider)
         .options(joinedload(LlmModel.provider))
@@ -138,17 +194,24 @@ def list_pool_chat_models(
         )
         .order_by(LlmModel.sort_order, LlmModel.display_name)
     )
-    if require_vision:
-        query = query.filter(LlmModel.supports_image_input.is_(True))
-    else:
-        # Vision-only models never serve ordinary text or text failover — a metered
-        # vision model is billed for vision alone.
-        query = query.filter(LlmModel.vision_only.is_(False))
+    query = pick(
+        require_vision,
+        lambda: base.filter(LlmModel.supports_image_input.is_(True)),
+        lambda: base.filter(LlmModel.vision_only.is_(False)),
+    )
+    return list(filter(None, map(_ready_resolved, query.all())))
 
+
+def _unique_attempts(seq: tuple[ResolvedLlmModel, ...]) -> list[ResolvedLlmModel]:
+    seen: set[uuid.UUID] = set()
     out: list[ResolvedLlmModel] = []
-    for model in query.all():
-        if _provider_ready(model.provider) and not is_provider_benched(model.provider):
-            out.append(ResolvedLlmModel(record=model, provider=model.provider))
+    for candidate in seq:
+        mid = candidate.record.id
+        pick(
+            mid in seen,
+            lambda: None,
+            lambda m=mid, c=candidate: (seen.add(m), out.append(c)),
+        )
     return out
 
 
@@ -158,27 +221,20 @@ def iter_failover_attempts(
     start: ResolvedLlmModel,
     require_vision: bool = False,
 ) -> Iterator[ResolvedLlmModel]:
-    """Yield models to try after a transient error — same provider first.
+    """Yield models to try after a transient error: same provider first.
 
     Cross-provider failover re-bills the full uncached prefix; exhausting
     same-provider siblings first preserves provider-side prefix caches.
     """
     pool = list_pool_chat_models(db, require_vision=require_vision)
-    if not pool:
-        yield start
-        return
 
-    provider_id = start.provider.id
-    same_provider = [m for m in pool if m.provider.id == provider_id]
-    other_provider = [m for m in pool if m.provider.id != provider_id]
+    def _from_pool() -> Iterator[ResolvedLlmModel]:
+        provider_id = start.provider.id
+        same_provider = tuple(filter(lambda m: m.provider.id == provider_id, pool))
+        other_provider = tuple(filter(lambda m: m.provider.id != provider_id, pool))
+        return iter(_unique_attempts((start, *same_provider, *other_provider)))
 
-    seen: set[uuid.UUID] = set()
-    for candidate in (start, *same_provider, *other_provider):
-        mid = candidate.record.id
-        if mid in seen:
-            continue
-        seen.add(mid)
-        yield candidate
+    yield from pick(not pool, lambda: iter((start,)), _from_pool)
 
 
 def iter_chat_model_attempts(
@@ -187,40 +243,75 @@ def iter_chat_model_attempts(
     model_id: uuid.UUID | None = None,
     require_vision: bool = False,
 ) -> Iterator[ResolvedLlmModel]:
-    """Yield models to try — explicit pick, or default-first with pool failover.
+    """Yield models to try: explicit pick, or default-first with pool failover.
 
     Every call starts at the pinned default (falling back to pool order) instead
     of round-robining: one provider takes all traffic, so its server-side prompt
     prefix cache stays hot (DeepSeek et al. bill cache hits at a fraction of the
     uncached rate). The rest of the pool remains as failover only.
     """
-    if model_id is not None:
+
+    def _pinned() -> Iterator[ResolvedLlmModel]:
         from app.services.llm_registry import resolve_chat_model
 
-        yield resolve_chat_model(db, model_id=model_id, require_vision=require_vision)
-        return
+        return iter((resolve_chat_model(db, model_id=model_id, require_vision=require_vision),))
 
-    if not is_llm_pool_enabled():
+    def _single() -> Iterator[ResolvedLlmModel]:
         from app.services.llm_registry import resolve_chat_model
 
-        yield resolve_chat_model(db, require_vision=require_vision)
-        return
+        return iter((resolve_chat_model(db, require_vision=require_vision),))
 
-    pool = list_pool_chat_models(db, require_vision=require_vision)
-    if not pool:
-        if _provider_down_until:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "No LLM capacity: every configured provider returned a billing or "
-                    "credential failure. Check provider balances and API keys."
+    def _empty() -> Iterator[ResolvedLlmModel]:
+        apply(
+            first_match(
+                (
+                    Rule(when=(Pred("benched", "truthy"),), action="billing"),
+                    Rule(when=(), action="none"),
                 ),
-            )
-        raise HTTPException(status_code=503, detail="No chat model configured")
+                {"benched": bool(_provider_down_until)},
+            ).action,
+            {
+                "billing": lambda: _raise(
+                    HTTPException(
+                        status_code=503,
+                        detail=(
+                            "No LLM capacity: every configured provider returned a billing or "
+                            "credential failure. Check provider balances and API keys."
+                        ),
+                    )
+                ),
+                "none": lambda: _raise(
+                    HTTPException(status_code=503, detail="No chat model configured")
+                ),
+            },
+        )
+        return iter(())
 
-    start = next((i for i, m in enumerate(pool) if m.record.is_default), 0)
-    for offset in range(len(pool)):
-        yield pool[(start + offset) % len(pool)]
+    def _rotate(pool: list[ResolvedLlmModel]) -> Iterator[ResolvedLlmModel]:
+        start = next(
+            map(
+                lambda pair: pair[0],
+                filter(lambda pair: pair[1].record.is_default, enumerate(pool)),
+            ),
+            0,
+        )
+        return (pool[(start + offset) % len(pool)] for offset in range(len(pool)))
+
+    def _from_pool() -> Iterator[ResolvedLlmModel]:
+        pool = list_pool_chat_models(db, require_vision=require_vision)
+        return pick(not pool, _empty, lambda: _rotate(pool))
+
+    yield from apply(
+        evaluate_llm_route(
+            has_primary=model_id is not None,
+            has_fallback=is_llm_pool_enabled(),
+        ).action,
+        {
+            "use_primary": _pinned,
+            "use_fallback": _from_pool,
+            "skip": _single,
+        },
+    )
 
 
 def is_failover_eligible(exc: BaseException) -> bool:
@@ -236,46 +327,15 @@ def is_failover_eligible(exc: BaseException) -> bool:
     except ImportError:
         RateLimitError = Timeout = ServiceUnavailableError = APIConnectionError = APIError = ()  # type: ignore[misc, assignment]
 
-    if isinstance(exc, (RateLimitError, Timeout, ServiceUnavailableError, APIConnectionError)):
-        return True
-
-    status = getattr(exc, "status_code", None)
-    if status is None:
-        response = getattr(exc, "response", None)
-        status = getattr(response, "status_code", None)
-    if isinstance(status, int) and status in {401, 402, 403, 408, 409, 429, 500, 502, 503, 504}:
-        return True
-
-    if isinstance(exc, APIError):
-        return True
-
+    status = _exc_status(exc)
     name = type(exc).__name__.lower()
-    if any(token in name for token in ("timeout", "rate", "unavailable", "connection")):
-        return True
-
     message = str(exc).lower()
-    return any(
-        token in message
-        for token in (
-            "rate limit",
-            "too many requests",
-            "timeout",
-            "timed out",
-            "overloaded",
-            "unavailable",
-            "connection error",
-            "insufficient balance",
-            "billing",
-            "payment required",
-            "invalid api key",
-            "authentication",
-            "403",
-            "402",
-            "401",
-            "503",
-            "502",
-            "429",
-        )
+    return (
+        isinstance(exc, (RateLimitError, Timeout, ServiceUnavailableError, APIConnectionError))
+        or (isinstance(status, int) and status in _FAILOVER_STATUS)
+        or isinstance(exc, APIError)
+        or any(token in name for token in _FAILOVER_NAME_TOKENS)
+        or any(token in message for token in _FAILOVER_MESSAGE_TOKENS)
     )
 
 
@@ -283,46 +343,60 @@ def litellm_provider_kwargs(resolved: ResolvedLlmModel) -> dict[str, str]:
     """Per-request provider credentials + model-level call params.
 
     Credentials (avoids env-var races between providers). Model-level params
-    are read from the model row's ``meta`` JSONB so per-model behavior — e.g.
-    disabling a hosted model's reasoning/thinking mode or capping output tokens
-    — is data-driven rather than hardcoded. Only keys litellm understands are
-    forwarded; unknown keys are ignored.
+    are read from the model row's ``meta`` JSONB so per-model behavior (for
+    example disabling a hosted model's reasoning/thinking mode or capping
+    output tokens) is data-driven rather than hardcoded. Only keys litellm
+    understands are forwarded; unknown keys are ignored.
 
     Supported ``meta`` keys:
     - ``thinking_disabled`` (bool): emit ``thinking={"type": "disabled"}`` and an
-      OpenAI-compatible ``extra_body`` fallback (Z.AI GLM 4.x emits a 1–3k-token
-      reasoning trace by default that we discard — disabling it is a ~5× latency win).
+      OpenAI-compatible ``extra_body`` fallback (Z.AI GLM 4.x emits a 1-3k-token
+      reasoning trace by default that we discard: disabling it is a ~5x latency win).
     - ``max_tokens`` (int): hard cap on completion tokens.
     - ``temperature`` (float): sampling temperature.
     """
     provider = resolved.provider
     params: dict = dict(configure_litellm(provider))
-    if provider.api_key:
-        params["api_key"] = provider.api_key
-    if provider.api_base_url:
-        params["api_base"] = str(provider.api_base_url).rstrip("/")
+    pick(bool(provider.api_key), lambda: params.__setitem__("api_key", provider.api_key), lambda: None)
+    pick(
+        bool(provider.api_base_url),
+        lambda: params.__setitem__("api_base", str(provider.api_base_url).rstrip("/")),
+        lambda: None,
+    )
 
     meta = resolved.record.meta or {}
-    if not isinstance(meta, dict):
-        meta = {}
+    meta = pick(isinstance(meta, dict), lambda: meta, lambda: {})
 
-    if meta.get("thinking_disabled") and resolved.provider.slug == "zai":
-        # Z.AI native form (honored by the GLM 4.x OpenAI-compatible endpoint).
+    def _thinking() -> None:
         params["thinking"] = {"type": "disabled"}
-        # OpenAI-compatible / vLLM fallback for the same switch.
         params.setdefault("extra_body", {})
-        if isinstance(params.get("extra_body"), dict):
-            params["extra_body"].setdefault("chat_template_kwargs", {})
-            params["extra_body"]["chat_template_kwargs"].setdefault("enable_thinking", False)
+        pick(
+            isinstance(params.get("extra_body"), dict),
+            lambda: (
+                params["extra_body"].setdefault("chat_template_kwargs", {}),
+                params["extra_body"]["chat_template_kwargs"].setdefault("enable_thinking", False),
+            ),
+            lambda: None,
+        )
+
+    pick(
+        bool(meta.get("thinking_disabled")) and resolved.provider.slug == "zai",
+        _thinking,
+        lambda: None,
+    )
 
     max_tokens = meta.get("max_tokens")
-    if isinstance(max_tokens, int) and max_tokens > 0:
-        params["max_tokens"] = max_tokens
-
+    pick(
+        isinstance(max_tokens, int) and max_tokens > 0,
+        lambda: params.__setitem__("max_tokens", max_tokens),
+        lambda: None,
+    )
     temperature = meta.get("temperature")
-    if isinstance(temperature, (int, float)):
-        params["temperature"] = temperature
-
+    pick(
+        isinstance(temperature, (int, float)),
+        lambda: params.__setitem__("temperature", temperature),
+        lambda: None,
+    )
     return params
 
 
@@ -339,5 +413,4 @@ def record_failover(resolved: ResolvedLlmModel, exc: BaseException, *, log_tag: 
         resolved.provider.slug,
         exc,
     )
-    if is_hard_provider_error(exc):
-        mark_provider_down(resolved.provider, exc)
+    pick(is_hard_provider_error(exc), lambda: mark_provider_down(resolved.provider, exc), lambda: None)

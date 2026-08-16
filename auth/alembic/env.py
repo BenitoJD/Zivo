@@ -6,10 +6,10 @@ from sqlalchemy import engine_from_config, pool
 from app.config import get_settings
 from app.db import Base
 from app import models  # noqa: F401
+from app.engine_runtime import pick
 
 config = context.config
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+pick(config.config_file_name is not None, lambda: fileConfig(config.config_file_name), lambda: None)
 
 target_metadata = Base.metadata
 settings = get_settings()
@@ -46,7 +46,4 @@ def run_migrations_online() -> None:
             context.run_migrations()
 
 
-if context.is_offline_mode():
-    run_migrations_offline()
-else:
-    run_migrations_online()
+pick(context.is_offline_mode(), run_migrations_offline, run_migrations_online)

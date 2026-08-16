@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.services.document_access import require_document
 from app.config import get_settings
 from app.db import get_db
+from app.engine_runtime import pick
 from app.models import Account
 from app.services.auth import get_optional_user, require_csrf_or_guest
 from app.services.audiobook_worker import audiobook_status
@@ -32,9 +33,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _raise_http(status: int, detail: str) -> None:
+    raise HTTPException(status_code=status, detail=detail)
+
+
 def _require_enabled() -> None:
-    if not get_settings().audiobook_enabled:
-        raise HTTPException(status_code=404, detail="Not found")
+    pick(
+        get_settings().audiobook_enabled,
+        lambda: None,
+        lambda: _raise_http(404, "Not found"),
+    )
 
 
 @router.post(

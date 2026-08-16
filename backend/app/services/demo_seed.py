@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
+from app.engine_runtime import pick
 from app.models import Document, DocumentChunk
 from app.services.chunks import pgvector_literal
 from app.services.embed import embed_texts
@@ -30,56 +31,62 @@ DEMO_PAGES = [
 
 def ensure_demo_document(db: Session) -> bool:
     """Insert demo document + chunks if missing. Returns True if created."""
-    if db.get(Document, DEMO_DOC_ID):
-        return False
-    total_size = sum(len(p) for p in DEMO_PAGES)
-    doc = Document(
-        id=DEMO_DOC_ID,
-        account_id=None,
-        slug="sample-report",
-        filename="sample-report.txt",
-        content_type="text/plain",
-        size_bytes=total_size,
-        storage_key="demo/sample-report.txt",
-        status="ready",
-        index_progress=100,
-        meta={"is_demo": True},
-    )
-    db.add(doc)
-    for i, page_text in enumerate(DEMO_PAGES, start=1):
-        db.add(
-            DocumentChunk(
-                document_id=DEMO_DOC_ID,
-                page_start=i,
-                page_end=i,
-                text=page_text,
-                meta={},
-            )
+
+    def _create() -> bool:
+        total_size = sum(len(p) for p in DEMO_PAGES)
+        doc = Document(
+            id=DEMO_DOC_ID,
+            account_id=None,
+            slug="sample-report",
+            filename="sample-report.txt",
+            content_type="text/plain",
+            size_bytes=total_size,
+            storage_key="demo/sample-report.txt",
+            status="ready",
+            index_progress=100,
+            meta={"is_demo": True},
         )
-    db.commit()
-    return True
+        db.add(doc)
+        for i, page_text in enumerate(DEMO_PAGES, start=1):
+            db.add(
+                DocumentChunk(
+                    document_id=DEMO_DOC_ID,
+                    page_start=i,
+                    page_end=i,
+                    text=page_text,
+                    meta={},
+                )
+            )
+        db.commit()
+        return True
+
+    return pick(bool(db.get(Document, DEMO_DOC_ID)), lambda: False, _create)
 
 
 def embed_demo_chunks_if_needed() -> None:
     with SessionLocal() as db:
         doc = db.get(Document, DEMO_DOC_ID)
-        if not doc:
-            return
-        missing = (
-            db.query(DocumentChunk)
-            .filter(DocumentChunk.document_id == DEMO_DOC_ID)
-            .filter(text("embedding IS NULL"))
-            .order_by(DocumentChunk.page_start.asc())
-            .all()
-        )
-        if not missing:
-            return
-        texts = [c.text for c in missing]
-        vectors = embed_texts(texts)
-        for chunk, vec in zip(missing, vectors, strict=True):
-            vec_literal = pgvector_literal(vec)
-            db.execute(
-                text("UPDATE document_chunks SET embedding = CAST(:vec AS vector) WHERE id = :id"),
-                {"vec": vec_literal, "id": str(chunk.id)},
+
+        def _embed() -> None:
+            missing = (
+                db.query(DocumentChunk)
+                .filter(DocumentChunk.document_id == DEMO_DOC_ID)
+                .filter(text("embedding IS NULL"))
+                .order_by(DocumentChunk.page_start.asc())
+                .all()
             )
-        db.commit()
+
+            def _write() -> None:
+                texts = [c.text for c in missing]
+                vectors = embed_texts(texts)
+                for chunk, vec in zip(missing, vectors, strict=True):
+                    vec_literal = pgvector_literal(vec)
+                    db.execute(
+                        text("UPDATE document_chunks SET embedding = CAST(:vec AS vector) WHERE id = :id"),
+                        {"vec": vec_literal, "id": str(chunk.id)},
+                    )
+                db.commit()
+
+            pick(not missing, lambda: None, _write)
+
+        pick(not doc, lambda: None, _embed)

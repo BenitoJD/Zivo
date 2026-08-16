@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 
+from app.engine_runtime import pick
 from app.models import Document, User
 from app.services.guest import (
     can_access_document,
@@ -77,10 +78,13 @@ def test_claim_guest_documents_transfers_ownership() -> None:
 
     def query_side(model: type) -> MagicMock:
         chain = MagicMock()
-        if model is Document:
+        def _doc() -> None:
             chain.filter.return_value.filter.return_value.all.return_value = [doc]
-        elif model is ChatThread:
+
+        def _chat() -> None:
             chain.filter.return_value.filter.return_value.update.return_value = 0
+
+        pick(model is Document, _doc, lambda: pick(model is ChatThread, _chat, lambda: None))
         return chain
 
     db.query.side_effect = query_side

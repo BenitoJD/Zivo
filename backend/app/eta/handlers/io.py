@@ -4,6 +4,7 @@ import logging
 from uuid import UUID
 
 from app.db import SessionLocal
+from app.engine_runtime import pick
 from app.eta.registry import eta
 from app.models import Document, JobWorkload
 from app.services.chunks import persist_document_index
@@ -13,46 +14,50 @@ from app.services.storage import delete_object, get_json, ingest_tmp_key
 
 logger = logging.getLogger(__name__)
 
+
 @eta(name="ingest.fetch_file", workload=JobWorkload.io)
 def fetch_file(payload: dict) -> dict:
     document_id = UUID(payload["document_id"])
     with SessionLocal() as db:
         doc = db.get(Document, document_id)
-        if not doc:
-            return {"skipped": True}
-        doc.status = "indexing"
-        doc.index_progress = 10
-        db.commit()
 
-        enqueue_job(
-            db,
-            name="ingest.document",
-            workload=JobWorkload.cpu,
-            payload={"document_id": str(document_id)},
-        )
-    return {"document_id": str(document_id)}
+        def _run() -> dict:
+            doc.status = "indexing"
+            doc.index_progress = 10
+            db.commit()
+            enqueue_job(
+                db,
+                name="ingest.document",
+                workload=JobWorkload.cpu,
+                payload={"document_id": str(document_id)},
+            )
+            return {"document_id": str(document_id)}
+
+        return pick(not doc, lambda: {"skipped": True}, _run)
 
 
 @eta(name="ingest.write_chunks", workload=JobWorkload.io)
 def write_chunks(payload: dict) -> dict:
-    """Retry path — happy-path ingest persists chunks in ingest.embed_chunks."""
+    """Retry path: happy-path ingest persists chunks in ingest.embed_chunks."""
     document_id = UUID(payload["document_id"])
     key = ingest_tmp_key(document_id, "embedded")
     with SessionLocal() as db:
         doc = db.get(Document, document_id)
-        if not doc:
-            return {"skipped": True}
-        data = get_json(key)
-        chunks = data.get("chunks", [])
-        embeddings = data.get("embeddings", [])
-        count = persist_document_index(db, document_id, chunks, embeddings)
-        try:
-            delete_object(key)
-            delete_object(ingest_tmp_key(document_id, "pages"))
-            delete_object(ingest_tmp_key(document_id, "chunks"))
-        except Exception:
-            logger.debug("ingest temp-object cleanup failed", exc_info=True)
-    return {"document_id": str(document_id), "chunks": count}
+
+        def _run() -> dict:
+            data = get_json(key)
+            chunks = data.get("chunks", [])
+            embeddings = data.get("embeddings", [])
+            count = persist_document_index(db, document_id, chunks, embeddings)
+            try:
+                delete_object(key)
+                delete_object(ingest_tmp_key(document_id, "pages"))
+                delete_object(ingest_tmp_key(document_id, "chunks"))
+            except Exception:
+                logger.debug("ingest temp-object cleanup failed", exc_info=True)
+            return {"document_id": str(document_id), "chunks": count}
+
+        return pick(not doc, lambda: {"skipped": True}, _run)
 
 
 @eta(name="summarize.start", workload=JobWorkload.io)
@@ -79,12 +84,15 @@ def summarize_generate(payload: dict) -> dict:
     with SessionLocal() as db:
         summary = asyncio.run(generate_whole_doc_summary(db, document_id))
         doc = db.get(Document, document_id)
-        if doc:
+
+        def _stamp() -> None:
             meta = dict(doc.meta or {})
             meta["summary"] = summary
             doc.meta = meta
             mark_artifact_fresh(db, document_id, "summary")
             db.commit()
+
+        pick(bool(doc), _stamp, lambda: None)
     return {"document_id": str(document_id), "summary": summary}
 
 
@@ -156,10 +164,9 @@ def memory_palace_generate(payload: dict) -> dict:
 def quiz_generate(payload: dict) -> dict:
     """Build a quiz/worksheet for a document (Question Generator, off the answer path)."""
     from app.services.quiz import run_quiz_generation
-
-    document_id = UUID(payload["document_id"])
     from app.services.session_design import clamp_auxiliary_count
 
+    document_id = UUID(payload["document_id"])
     with SessionLocal() as db:
         questions = run_quiz_generation(
             db,
@@ -184,7 +191,7 @@ def mains_generate(payload: dict) -> dict:
 
 @eta(name="mains.grade", workload=JobWorkload.io)
 def mains_grade(payload: dict) -> dict:
-    """Grade a submitted Mains answer — vision-LLM OCR for photos, then examiner scoring."""
+    """Grade a submitted Mains answer: vision-LLM OCR for photos, then examiner scoring."""
     from app.services.mains import run_mains_grading
 
     document_id = UUID(payload["document_id"])
@@ -197,7 +204,7 @@ def mains_grade(payload: dict) -> dict:
 def coach_mcq_page(payload: dict) -> dict:
     """Precompute per-option feedback for a page's MCQs (off the answer path).
 
-    Makes grading an instant lookup for even the first learner. Idempotent — only
+    Makes grading an instant lookup for even the first learner. Idempotent: only
     coaches assertions that don't already have option_feedback.
     """
     from app.services.option_feedback import coach_page_assertions

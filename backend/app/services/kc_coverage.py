@@ -10,6 +10,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+from app.engine_runtime import Pred, Rule, choose, first_match, pick
+
 KC_VERSION = "qb.kc.v1"
 DEFAULT_KC_POLICY = "aspect_v1"
 
@@ -56,11 +58,77 @@ _DANGLING_LABEL_WORDS = frozenset(
         "were",
     }
 )
+_LABEL_SEPS = (". ", "? ", "! ", "; ", " — ", " – ", " - ")
+
+_PAGE_COV_RULES = (
+    Rule(when=(Pred("non_content", "truthy"),), action="non_content", extras={"complete": True}),
+    Rule(when=(Pred("no_aspects", "truthy"),), action="no_aspects", extras={"complete": False}),
+    Rule(when=(Pred("flag", "truthy"),), action="flag", extras={"complete": True}),
+    Rule(when=(Pred("covered", "truthy"),), action="aspects_covered", extras={"complete": True}),
+    Rule(when=(), action="uncovered", extras={"complete": False}),
+)
 
 
 def normalize_key(raw: str | None) -> str:
     s = _SLUG.sub("-", (raw or "").strip().lower()).strip("-")
     return s or "unknown"
+
+
+def _cut_label_clause(s: str) -> str:
+    sep = next(filter(lambda sp: sp in s, _LABEL_SEPS), None)
+    return pick(sep is None, lambda: s, lambda: s.split(sep, 1)[0].strip())
+
+
+def _from_first_upper_word(s: str) -> str | None:
+    parts = s.split()
+    idx = next(filter(lambda i: parts[i][:1].isupper(), range(len(parts))), None)
+    return pick(idx is None, lambda: None, lambda: " ".join(parts[idx:]))
+
+
+def _repair_leading_lower(s: str) -> str:
+    return pick(
+        not s[:1].islower(),
+        lambda: s,
+        lambda: _from_first_upper_word(s) or CONCEPT_LABEL_FALLBACK,
+    )
+
+
+def _take_subject(s: str, copula: re.Match[str]) -> str:
+    subject = s[: copula.start()].strip(" ,;:-")
+    return choose(1 <= len(subject.split()) <= CONCEPT_LABEL_MAX_WORDS, subject, s)
+
+
+def _clip_copula_subject(s: str) -> str:
+    copula = _CONCEPT_COPULA.search(s)
+    return pick(
+        copula is not None and copula.start() > 0,
+        lambda: _take_subject(s, copula),
+        lambda: s,
+    )
+
+
+def _cap_label_words(s: str) -> str:
+    words = s.split()
+    return pick(
+        len(words) > CONCEPT_LABEL_MAX_WORDS,
+        lambda: " ".join(words[:CONCEPT_LABEL_MAX_WORDS]),
+        lambda: s,
+    )
+
+
+def _drop_dangling_label_words(s: str) -> str:
+    words = s.split()
+    while words and words[-1].lower() in _DANGLING_LABEL_WORDS:
+        words.pop()
+    return " ".join(words)
+
+
+def _cap_label_chars(s: str, max_chars: int) -> str:
+    return pick(
+        len(s) > max_chars,
+        lambda: s[: max(1, max_chars - 1)].rstrip(" ,;:-") + "…",
+        lambda: s,
+    )
 
 
 def normalize_concept_label(
@@ -75,39 +143,21 @@ def normalize_concept_label(
     copula, else the first clause, then word/char caps.
     """
     s = re.sub(r"\s+", " ", (raw or "").strip())
-    if not s:
-        return CONCEPT_LABEL_FALLBACK
-    for sep in (". ", "? ", "! ", "; ", " — ", " – ", " - "):
-        if sep in s:
-            s = s.split(sep, 1)[0].strip()
-            break
-    # Mid-word residue from newspaper/OCR extracts ("ngress government…").
-    if s[:1].islower():
-        parts = s.split()
-        for i, w in enumerate(parts):
-            if w[:1].isupper():
-                s = " ".join(parts[i:])
-                break
-        else:
-            return CONCEPT_LABEL_FALLBACK
-    # Sentence-as-aspect → keep the subject ("Osmosis is the net…" → "Osmosis").
-    copula = _CONCEPT_COPULA.search(s)
-    if copula and copula.start() > 0:
-        subject = s[: copula.start()].strip(" ,;:-")
-        if 1 <= len(subject.split()) <= CONCEPT_LABEL_MAX_WORDS:
-            s = subject
-    words = s.split()
-    if len(words) > CONCEPT_LABEL_MAX_WORDS:
-        s = " ".join(words[:CONCEPT_LABEL_MAX_WORDS])
-        words = s.split()
-    # Drop dangling clause openers left by mid-sentence truncation
-    # ("… in plants that" → "… in plants").
-    while words and words[-1].lower() in _DANGLING_LABEL_WORDS:
-        words.pop()
-        s = " ".join(words)
-    if len(s) > max_chars:
-        s = s[: max(1, max_chars - 1)].rstrip(" ,;:-") + "…"
-    return s or CONCEPT_LABEL_FALLBACK
+    return pick(
+        not s,
+        lambda: CONCEPT_LABEL_FALLBACK,
+        lambda: (
+            _cap_label_chars(
+                _drop_dangling_label_words(
+                    _cap_label_words(
+                        _clip_copula_subject(_repair_leading_lower(_cut_label_clause(s)))
+                    )
+                ),
+                max_chars,
+            )
+            or CONCEPT_LABEL_FALLBACK
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -132,42 +182,50 @@ class CoverageState:
     policy_version: str = KC_VERSION
 
 
+def _record_aspect(a: Mapping[str, Any], key: str, seen: set[str]) -> Aspect:
+    seen.add(key)
+    central = bool(a.get("central", True)) and a.get("peripheral") is not True
+    return Aspect(key=key, label=str(a.get("label") or key), central=central)
+
+
+def _one_aspect(a: Mapping[str, Any], seen: set[str]) -> Aspect | None:
+    key = normalize_key(str(a.get("key") or a.get("label") or ""))
+    return pick(
+        key in seen,
+        lambda: None,
+        lambda: _record_aspect(a, key, seen),
+    )
+
+
+def _aspects_from_raw(raw_aspects: Sequence[Mapping[str, Any]] | None) -> AspectPlan:
+    seen: set[str] = set()
+    out: list[Aspect] = []
+    for a in raw_aspects or []:
+        out.extend(filter(None, (_one_aspect(a, seen),)))
+    return AspectPlan(aspects=tuple(out), non_content=False)
+
+
 def normalize_aspects(
     raw_aspects: Sequence[Mapping[str, Any]] | None,
     *,
     non_content: bool = False,
 ) -> AspectPlan:
-    if non_content:
-        return AspectPlan(aspects=(), non_content=True)
-    out: list[Aspect] = []
-    seen: set[str] = set()
-    for a in raw_aspects or []:
-        key = normalize_key(str(a.get("key") or a.get("label") or ""))
-        if key in seen:
-            continue
-        seen.add(key)
-        label = str(a.get("label") or key)
-        central = bool(a.get("central", True))
-        if a.get("peripheral") is True:
-            central = False
-        out.append(Aspect(key=key, label=label, central=central))
-    return AspectPlan(aspects=tuple(out), non_content=False)
+    return pick(
+        non_content,
+        lambda: AspectPlan(aspects=(), non_content=True),
+        lambda: _aspects_from_raw(raw_aspects),
+    )
 
 
 def coverage_state(
     plan: AspectPlan,
     covered_keys: Sequence[str] | None,
 ) -> CoverageState:
-    covered = {normalize_key(k) for k in (covered_keys or []) if k}
+    covered = {normalize_key(k) for k in filter(None, covered_keys or [])}
     uncovered = tuple(
-        a.key for a in plan.aspects if a.central and a.key not in covered
+        a.key for a in filter(lambda a: a.central and a.key not in covered, plan.aspects)
     )
-    complete = plan.non_content or (bool(plan.aspects) and not uncovered) or (
-        not plan.aspects and not plan.non_content
-    )
-    # Empty aspect list on content page → not complete (still cooking/unknown).
-    if not plan.non_content and not plan.aspects:
-        complete = False
+    complete = plan.non_content or (bool(plan.aspects) and not uncovered)
     return CoverageState(
         covered_keys=tuple(sorted(covered)),
         uncovered_central=uncovered,
@@ -178,16 +236,21 @@ def coverage_state(
 def is_page_covered(entry: Mapping[str, Any] | None) -> bool:
     """Read a page_coverage entry and decide completeness via the engine."""
     entry = entry or {}
-    if entry.get("non_content"):
-        return True
     aspects = entry.get("aspects") or []
-    plan = normalize_aspects(aspects, non_content=False)
-    covered = [
-        str(a.get("key"))
-        for a in aspects
-        if a.get("asked") or a.get("answered") or a.get("covered")
-    ]
-    return coverage_state(plan, covered).complete
+    return pick(
+        bool(entry.get("non_content")),
+        lambda: True,
+        lambda: coverage_state(
+            normalize_aspects(aspects, non_content=False),
+            [
+                str(a.get("key"))
+                for a in filter(
+                    lambda a: a.get("asked") or a.get("answered") or a.get("covered"),
+                    aspects,
+                )
+            ],
+        ).complete,
+    )
 
 
 @dataclass(frozen=True)
@@ -202,16 +265,17 @@ def evaluate_page_coverage_complete(
 ) -> PageCoverageVerdict:
     """Serve-path completeness: non-content, persist flag, or aspect coverage."""
     entry = entry or {}
-    if entry.get("non_content"):
-        return PageCoverageVerdict(True, "non_content")
     aspects = entry.get("aspects") or []
-    if not aspects:
-        return PageCoverageVerdict(False, "no_aspects")
-    if entry.get("coverage_complete"):
-        return PageCoverageVerdict(True, "flag")
-    if is_page_covered(entry):
-        return PageCoverageVerdict(True, "aspects_covered")
-    return PageCoverageVerdict(False, "uncovered")
+    hit = first_match(
+        _PAGE_COV_RULES,
+        {
+            "non_content": bool(entry.get("non_content")),
+            "no_aspects": not aspects,
+            "flag": bool(entry.get("coverage_complete")),
+            "covered": is_page_covered(entry),
+        },
+    )
+    return PageCoverageVerdict(bool(hit.extras["complete"]), hit.action)
 
 
 def should_persist_coverage_complete(entry: Mapping[str, Any] | None) -> bool:
@@ -228,8 +292,7 @@ def mark_aspects_answered(
     out: list[dict[str, Any]] = []
     for aspect in aspects:
         row = dict(aspect)
-        if row.get("key") == key:
-            row["answered"] = True
+        row.update(choose(row.get("key") == key, {"answered": True}, {}))
         out.append(row)
     return out
 
@@ -245,9 +308,11 @@ def evaluate_aspect_exhaustion_close(
 
 def stamp_kc_centrality(*, orig_centrality: str, central: bool) -> tuple[str, bool]:
     """Keep skip for budget weights; otherwise KC central bool maps to central/support."""
-    if orig_centrality == "skip":
-        return "skip", False
-    return ("central" if central else "support"), bool(central)
+    return pick(
+        orig_centrality == "skip",
+        lambda: ("skip", False),
+        lambda: (choose(central, "central", "support"), bool(central)),
+    )
 
 
 def stamp_aspect_flags(centrality: str) -> tuple[bool, bool]:
@@ -263,13 +328,13 @@ def evaluate_stale_coverage_stamp(
 ) -> bool:
     """True when coverage_complete was stamped before triage aspects landed."""
     entry = entry or {}
-    if not entry.get("coverage_complete"):
-        return False
-    if entry.get("aspects"):
-        return False
-    return int(mcq_count) <= 0
+    return (
+        bool(entry.get("coverage_complete"))
+        and not entry.get("aspects")
+        and int(mcq_count) <= 0
+    )
 
 
 def coverage_aspects_field(serve_mode: str) -> str:
     """Learn cooks `aspects`; Test cooks the dual-mode `test_aspects` overlay."""
-    return "test_aspects" if serve_mode == "test" else "aspects"
+    return choose(serve_mode == "test", "test_aspects", "aspects")

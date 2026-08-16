@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import select
 
 from app.db import SessionLocal
+from app.engine_runtime import pick
 from app.eta.execution_state import (
     _resolve_execution_status,
     cancel_descendants_sync,
@@ -59,10 +60,12 @@ def db():
             select(EtaExecution.id).where(EtaExecution.name.like("wtest-%"))
         ).scalars().all()
     )
-    if test_exec_ids:
+    def _wipe_execs() -> None:
         session.execute(Job.__table__.delete().where(Job.execution_id.in_(test_exec_ids)))
         session.execute(EtaExecution.__table__.delete().where(EtaExecution.id.in_(test_exec_ids)))
         session.commit()
+
+    pick(bool(test_exec_ids), _wipe_execs, lambda: None)
     # Also clean any standalone smoke jobs
     session.execute(Job.__table__.delete().where(Job.name.like("test.worker.%")))
     # Clean liveness/reclaim test jobs + their documents (slug-prefixed).
@@ -71,13 +74,15 @@ def db():
             select(Document.id).where(Document.slug.like("liveness-test%"))
         ).scalars().all()
     )
-    if test_doc_ids:
+    def _wipe_docs() -> None:
         session.execute(
             Job.__table__.delete().where(
                 Job.payload.op("->>")("document_id").in_([str(d) for d in test_doc_ids])
             )
         )
         session.execute(Document.__table__.delete().where(Document.id.in_(test_doc_ids)))
+
+    pick(bool(test_doc_ids), _wipe_docs, lambda: None)
     session.commit()
     session.close()
 
@@ -103,7 +108,8 @@ def iso_db():
         session.rollback()
         session.close()
         created = getattr(session, "created", [])
-        if created:
+
+        def _wipe_created() -> None:
             cleanup = SessionLocal()
             try:
                 cleanup.execute(Job.__table__.delete().where(Job.execution_id.in_(created)))
@@ -114,12 +120,17 @@ def iso_db():
             finally:
                 cleanup.close()
 
+        pick(bool(created), _wipe_created, lambda: None)
+
 
 def _hide_competing_queued_jobs(session, *, keep_execution_id=None) -> None:
     # Uncommitted: only visible inside this transaction, undone by rollback.
     stmt = Job.__table__.update().where(Job.status == JobStatus.queued)
-    if keep_execution_id is not None:
-        stmt = stmt.where(Job.execution_id != keep_execution_id)
+    stmt = pick(
+        keep_execution_id is not None,
+        lambda s=stmt: s.where(Job.execution_id != keep_execution_id),
+        lambda s=stmt: s,
+    )
     session.execute(stmt.values(status=JobStatus.cancelled))
 
 

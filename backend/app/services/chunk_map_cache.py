@@ -14,6 +14,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
 from app.services.generation_cache import DEFAULT_TTL_SECONDS, get as cache_get, put as cache_put
 from app.services.llm_router import complete_chat
 from app.services.token_budget import truncate_to_tokens
@@ -60,24 +61,33 @@ async def map_chunk_cached(
         user_prefix=user_content[:80],
     )
     hit = cache_get(db, kind="chunk_map", cache_key=key, ttl_seconds=ttl_seconds)
-    if isinstance(hit, str) and hit.strip():
+
+    async def _computed() -> str:
+        raw = await complete_chat(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content.replace("{excerpt}", excerpt)},
+            ],
+            db,
+            log_tag=log_tag,
+            model_id=model_id,
+        )
+        out = (raw or "").strip()
+        pick(
+            bool(out),
+            lambda: cache_put(db, kind="chunk_map", cache_key=key, value=out, ttl_seconds=ttl_seconds),
+            lambda: None,
+        )
+        return out
+
+    async def _hit() -> str:
         return hit
 
-    raw = await complete_chat(
-        [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_content.replace("{excerpt}", excerpt)},
-        ],
-        db,
-        log_tag=log_tag,
-        model_id=model_id,
+    return await pick(
+        isinstance(hit, str) and bool(hit.strip()),
+        _hit,
+        _computed,
     )
-    out = (raw or "").strip()
-    if out:
-        # Same session as the worker job — commit with the outer transaction so
-        # concurrent gather() tasks see hits without mid-job commit/rollback races.
-        cache_put(db, kind="chunk_map", cache_key=key, value=out, ttl_seconds=ttl_seconds)
-    return out
 
 
 def verify_verdict_key(

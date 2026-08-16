@@ -19,6 +19,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import choose, pick
 from app.services.mcq_parsing import _parse_mcq_json
 from app.services.session_design import (
     evaluate_option_coach_eligible,
@@ -27,7 +28,6 @@ from app.services.session_design import (
 
 logger = logging.getLogger(__name__)
 
-# Own log tag so the router caps output + we can measure coach spend separately.
 COACH_LOG_TAG = "coach_mcq"
 
 _COACH_SYSTEM = """You are Zivo — a calm, warm tutor sitting beside a learner. You want them to understand, not just be told they're right.
@@ -57,12 +57,13 @@ def _coach_user_message(
         *[f"{i}. {opt}" for i, opt in enumerate(options)],
         f"Correct option index: {correct_index}",
     ]
-    if concept:
-        lines.append(f"Concept being tested: {concept}")
+    pick(bool(concept), lambda: lines.append(f"Concept being tested: {concept}"), lambda: None)
     lines.append(
-        f"Author explanation (ground truth — stay faithful to it): {explanation}"
-        if (explanation or "").strip()
-        else "Author explanation: (none provided)"
+        choose(
+            bool((explanation or "").strip()),
+            f"Author explanation (ground truth — stay faithful to it): {explanation}",
+            "Author explanation: (none provided)",
+        )
     )
     lines.append(
         "\nReturn the JSON object mapping every option index to its feedback, per your instructions."
@@ -86,15 +87,19 @@ def generate_option_feedback(
     it had / falls back to the live grade path) — this never raises into a
     generation or grading path.
     """
-    # Deferred import avoids a module-load cycle (mcq_quality → llm_router → ...).
     from app.services.chunk_map_cache import content_hash_key
     from app.services.generation_cache import get as cache_get, put as cache_put
     from app.services.mcq_quality import _complete_chat_sync
 
     options = [str(o) for o in (options or [])]
-    if len(options) < 2 or not (0 <= int(correct_index) < len(options)):
-        return {}
+    return pick(
+        len(options) < 2 or not (0 <= int(correct_index) < len(options)),
+        lambda: {},
+        lambda: _generate(db, question, options, correct_index, explanation, concept, model_id, content_hash_key, cache_get, cache_put, _complete_chat_sync),
+    )
 
+
+def _generate(db, question, options, correct_index, explanation, concept, model_id, content_hash_key, cache_get, cache_put, complete) -> dict[str, str]:
     coach_key = content_hash_key(
         "coach_mcq",
         question or "",
@@ -105,10 +110,19 @@ def generate_option_feedback(
         model_id,
     )
     hit = cache_get(db, kind="coach_mcq", cache_key=coach_key)
-    if isinstance(hit, dict) and len(hit) == len(options):
-        if all(isinstance(hit.get(str(i)), str) and hit[str(i)].strip() for i in range(len(options))):
-            return {str(i): str(hit[str(i)]).strip() for i in range(len(options))}
+    cached_ok = (
+        isinstance(hit, dict)
+        and len(hit) == len(options)
+        and all(isinstance(hit.get(str(i)), str) and hit[str(i)].strip() for i in range(len(options)))
+    )
+    return pick(
+        cached_ok,
+        lambda: {str(i): str(hit[str(i)]).strip() for i in range(len(options))},
+        lambda: _live(db, question, options, correct_index, explanation, concept, model_id, coach_key, cache_put, complete),
+    )
 
+
+def _live(db, question, options, correct_index, explanation, concept, model_id, coach_key, cache_put, complete) -> dict[str, str]:
     messages = [
         {"role": "system", "content": _COACH_SYSTEM},
         {
@@ -123,24 +137,32 @@ def generate_option_feedback(
         },
     ]
     try:
-        raw = _complete_chat_sync(db, messages, log_tag=COACH_LOG_TAG, model_id=model_id)
+        raw = complete(db, messages, log_tag=COACH_LOG_TAG, model_id=model_id)
     except Exception:
         logger.warning("option-feedback generation failed", exc_info=True)
         return {}
 
     parsed = _parse_mcq_json(raw)
-    if not isinstance(parsed, dict):
-        return {}
+    return pick(not isinstance(parsed, dict), lambda: {}, lambda: _collect(parsed, options, db, coach_key, cache_put))
 
+
+def _collect(parsed, options, db, coach_key, cache_put) -> dict[str, str]:
     out: dict[str, str] = {}
     for i in range(len(options)):
         val = parsed.get(str(i))
-        if isinstance(val, str) and val.strip():
-            out[str(i)] = val.strip()
-    # Require full coverage — a partial map would silently leave some options on
-    # the slow live path forever, which is worse than regenerating cleanly later.
-    if len(out) != len(options):
-        return {}
+        pick(
+            isinstance(val, str) and bool(val.strip()),
+            lambda: out.__setitem__(str(i), val.strip()),
+            lambda: None,
+        )
+    return pick(
+        len(out) != len(options),
+        lambda: {},
+        lambda: _store(db, coach_key, cache_put, out),
+    )
+
+
+def _store(db, coach_key, cache_put, out) -> dict[str, str]:
     try:
         cache_put(db, kind="coach_mcq", cache_key=coach_key, value=out)
     except Exception:
@@ -157,18 +179,12 @@ def _is_single_answer(payload: dict) -> bool:
 def coach_page_assertions(
     db: Session, *, document_id, page_number: int, limit: int | None = None
 ) -> int:
-    """Precompute option feedback for every single-answer MCQ on a page that lacks it.
-
-    Runs off the answer path (background ``coach.mcq_page`` job) so authoring-time
-    coaching never delays the streaming first question. Idempotent: only touches
-    assertions with no ``option_feedback`` yet, so re-runs / retries are cheap.
-    Returns the number of assertions coached.
-    """
+    """Precompute option feedback for every single-answer MCQ on a page that lacks it."""
     import json
 
     from sqlalchemy import text
 
-    cap = plan_option_coach_page_limit() if limit is None else int(limit)
+    cap = pick(limit is None, plan_option_coach_page_limit, lambda: int(limit))
 
     rows = db.execute(
         text(
@@ -188,37 +204,47 @@ def coach_page_assertions(
 
     coached = 0
     for row in rows:
-        payload = row[1] if isinstance(row[1], dict) else json.loads(row[1])
-        if not _is_single_answer(payload):
-            continue
-        options = payload.get("options") or payload.get("choices") or []
-        fb = generate_option_feedback(
-            db,
-            question=payload.get("question") or payload.get("stem") or "",
-            options=options,
-            correct_index=int(payload.get("correct_index", 0)),
-            explanation=payload.get("explanation") or "",
-            concept=payload.get("primary_concept") or payload.get("primary_concept_key") or "",
+        payload = pick(
+            isinstance(row[1], dict),
+            lambda: row[1],
+            lambda: json.loads(row[1]),
         )
-        if not fb:
-            continue
-        try:
-            db.execute(
-                text(
-                    """
-                    UPDATE intel.assertion
-                    SET payload = jsonb_set(
-                        COALESCE(payload, '{}'::jsonb),
-                        '{option_feedback}', CAST(:fb AS jsonb), true
-                    )
-                    WHERE id = :id AND NOT (payload ? 'option_feedback')
-                    """
-                ),
-                {"id": row[0], "fb": json.dumps(fb)},
+
+        def _coach() -> None:
+            nonlocal coached
+            options = payload.get("options") or payload.get("choices") or []
+            fb = generate_option_feedback(
+                db,
+                question=payload.get("question") or payload.get("stem") or "",
+                options=options,
+                correct_index=int(payload.get("correct_index", 0)),
+                explanation=payload.get("explanation") or "",
+                concept=payload.get("primary_concept") or payload.get("primary_concept_key") or "",
             )
-            db.commit()
-            coached += 1
-        except Exception:
-            db.rollback()
-            logger.debug("option-feedback page persist failed for %s", row[0], exc_info=True)
+
+            def _persist() -> None:
+                nonlocal coached
+                try:
+                    db.execute(
+                        text(
+                            """
+                            UPDATE intel.assertion
+                            SET payload = jsonb_set(
+                                COALESCE(payload, '{}'::jsonb),
+                                '{option_feedback}', CAST(:fb AS jsonb), true
+                            )
+                            WHERE id = :id AND NOT (payload ? 'option_feedback')
+                            """
+                        ),
+                        {"id": row[0], "fb": json.dumps(fb)},
+                    )
+                    db.commit()
+                    coached += 1
+                except Exception:
+                    db.rollback()
+                    logger.debug("option-feedback page persist failed for %s", row[0], exc_info=True)
+
+            pick(not fb, lambda: None, _persist)
+
+        pick(not _is_single_answer(payload), lambda: None, _coach)
     return coached

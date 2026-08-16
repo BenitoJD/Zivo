@@ -4,6 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from app.engine_runtime import Pred, Rule, apply, first_match
 from app.models import JobPriority, JobWorkload
 
 
@@ -18,6 +19,12 @@ class EtaHandler:
 
 
 _REGISTRY: dict[str, EtaHandler] = {}
+
+_NORMALIZE_RULES = (
+    Rule(when=(Pred("has_model", "truthy"),), action="typed"),
+    Rule(when=(Pred("is_model", "truthy"),), action="dump"),
+    Rule(when=(), action="raw"),
+)
 
 
 def eta(
@@ -51,18 +58,44 @@ def list_handlers() -> dict[str, EtaHandler]:
 
 
 def normalize_payload(handler: EtaHandler | None, payload: Any) -> dict[str, Any]:
-    if handler and handler.input_model:
+    def _typed() -> dict[str, Any]:
         model = handler.input_model.model_validate(payload)
         return model.model_dump(mode="json")
-    if isinstance(payload, BaseModel):
-        return payload.model_dump(mode="json")
-    return payload
+
+    hit = first_match(
+        _NORMALIZE_RULES,
+        {
+            "has_model": bool(handler and handler.input_model),
+            "is_model": isinstance(payload, BaseModel),
+        },
+    )
+    return apply(
+        hit.action,
+        {
+            "typed": _typed,
+            "dump": lambda: payload.model_dump(mode="json"),
+            "raw": lambda: payload,
+        },
+    )
 
 
 def normalize_result(handler: EtaHandler | None, result: Any) -> dict[str, Any]:
-    if handler and handler.output_model:
+    def _typed() -> dict[str, Any]:
         model = handler.output_model.model_validate(result)
         return model.model_dump(mode="json")
-    if isinstance(result, BaseModel):
-        return result.model_dump(mode="json")
-    return result
+
+    hit = first_match(
+        _NORMALIZE_RULES,
+        {
+            "has_model": bool(handler and handler.output_model),
+            "is_model": isinstance(result, BaseModel),
+        },
+    )
+    return apply(
+        hit.action,
+        {
+            "typed": _typed,
+            "dump": lambda: result.model_dump(mode="json"),
+            "raw": lambda: result,
+        },
+    )

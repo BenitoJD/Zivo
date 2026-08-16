@@ -1,9 +1,9 @@
 "use client";
 
+import { pick, choose } from "@/lib/engineRuntime";
 import { useCallback, useSyncExternalStore } from "react";
 import { Button, Center, Stack, Text, ThemeIcon } from "@mantine/core";
 import { IconSparkles } from "@tabler/icons-react";
-
 /**
  * Per-source+mode "already generated" flag. Once a learner generates a tool for a
  * source we remember it so re-opening the mode auto-loads instead of re-prompting.
@@ -11,92 +11,116 @@ import { IconSparkles } from "@tabler/icons-react";
  * `:explain`, `:cards`, `:palace`).
  */
 export function genStartedKey(artifactId: string, mode: string): string {
-  return `zivo-gen-started:${artifactId}:${mode}`;
+    return `zivo-gen-started:${artifactId}:${mode}`;
 }
-
 export function readGenStarted(artifactId: string, mode: string): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return window.localStorage.getItem(genStartedKey(artifactId, mode)) === "1";
-  } catch {
-    return false;
-  }
+    const __z1 = { hit: false, val: undefined as any };
+    pick(Boolean(typeof window === "undefined"), () => {
+        __z1.hit = true;
+        __z1.val = false;
+    }, () => {
+        try {
+            __z1.hit = true;
+            __z1.val = window.localStorage.getItem(genStartedKey(artifactId, mode)) === "1";
+        }
+        catch {
+            __z1.hit = true;
+            __z1.val = false;
+        }
+    });
+    return __z1.val;
 }
-
 // In-process subscribers so marking a flag re-renders any useGenStarted reading it
 // in the same tab (the native `storage` event only fires cross-tab).
 const genStartedListeners = new Set<() => void>();
-
 export function markGenStarted(artifactId: string, mode: string) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(genStartedKey(artifactId, mode), "1");
-    window.localStorage.setItem(`${genStartedKey(artifactId, mode)}:at`, String(Date.now()));
-  } catch {
-    /* ignore */
-  }
-  genStartedListeners.forEach((l) => l());
+    return pick(Boolean(typeof window === "undefined"), () => {
+        return;
+    }, () => {
+        try {
+            window.localStorage.setItem(genStartedKey(artifactId, mode), "1");
+            window.localStorage.setItem(`${genStartedKey(artifactId, mode)}:at`, String(Date.now()));
+        }
+        catch {
+        }
+        genStartedListeners.forEach((l) => l());
+    });
 }
-
 export function clearGenStarted(artifactId: string, mode: string) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.removeItem(genStartedKey(artifactId, mode));
-    window.localStorage.removeItem(`${genStartedKey(artifactId, mode)}:at`);
-  } catch {
-    /* ignore */
-  }
-  genStartedListeners.forEach((l) => l());
+    return pick(Boolean(typeof window === "undefined"), () => {
+        return;
+    }, () => {
+        try {
+            window.localStorage.removeItem(genStartedKey(artifactId, mode));
+            window.localStorage.removeItem(`${genStartedKey(artifactId, mode)}:at`);
+        }
+        catch {
+        }
+        genStartedListeners.forEach((l) => l());
+    });
 }
-
 /** True when generation was started but has been spinning longer than `ms`. */
-export function isGenStartedStale(artifactId: string, mode: string, ms = 180_000): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    if (window.localStorage.getItem(genStartedKey(artifactId, mode)) !== "1") return false;
-    const at = parseInt(window.localStorage.getItem(`${genStartedKey(artifactId, mode)}:at`) || "0", 10);
-    if (!at) return false;
-    return Date.now() - at > ms;
-  } catch {
-    return false;
-  }
+export function isGenStartedStale(artifactId: string, mode: string, ms = 180000): boolean {
+    const __z2 = { hit: false, val: undefined as any };
+    pick(Boolean(typeof window === "undefined"), () => {
+        __z2.hit = true;
+        __z2.val = false;
+    }, () => {
+        try {
+            pick(Boolean(window.localStorage.getItem(genStartedKey(artifactId, mode)) !== "1"), () => {
+                __z2.hit = true;
+                __z2.val = false;
+            }, () => {
+                const at = parseInt(window.localStorage.getItem(`${genStartedKey(artifactId, mode)}:at`) || "0", 10);
+                pick(Boolean(!at), () => {
+                    __z2.hit = true;
+                    __z2.val = false;
+                }, () => {
+                    __z2.hit = true;
+                    __z2.val = Date.now() - at > ms;
+                });
+            });
+        }
+        catch {
+            __z2.hit = true;
+            __z2.val = false;
+        }
+    });
+    return __z2.val;
 }
-
 /**
  * Read the per-source+mode "already generated" flag reactively. Uses
  * useSyncExternalStore so it's SSR-safe (server renders `false`, no hydration
  * mismatch) and updates when markGenStarted runs - without a setState-in-effect.
  * Returns the flag plus a `start()` that marks it.
  */
-export function useGenStarted(artifactId: string, mode: string): [boolean, () => void] {
-  const subscribe = useCallback((onChange: () => void) => {
-    genStartedListeners.add(onChange);
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === null || e.key === genStartedKey(artifactId, mode) || e.key === `${genStartedKey(artifactId, mode)}:at`) {
-        onChange();
-      }
-    };
-    window.addEventListener("storage", onStorage);
-    return () => {
-      genStartedListeners.delete(onChange);
-      window.removeEventListener("storage", onStorage);
-    };
-  }, [artifactId, mode]);
-  const started = useSyncExternalStore(
-    subscribe,
-    () => readGenStarted(artifactId, mode),
-    () => false,
-  );
-  const start = useCallback(() => markGenStarted(artifactId, mode), [artifactId, mode]);
-  return [started, start];
+export function useGenStarted(artifactId: string, mode: string): [
+    boolean,
+    () => void
+] {
+    const subscribe = useCallback((onChange: () => void) => {
+        genStartedListeners.add(onChange);
+        const onStorage = (e: StorageEvent) => {
+            pick(Boolean(e.key === null || e.key === genStartedKey(artifactId, mode) || e.key === `${genStartedKey(artifactId, mode)}:at`), () => {
+                onChange();
+            }, () => {
+            });
+        };
+        window.addEventListener("storage", onStorage);
+        return () => {
+            genStartedListeners.delete(onChange);
+            window.removeEventListener("storage", onStorage);
+        };
+    }, [artifactId, mode]);
+    const started = useSyncExternalStore(subscribe, () => readGenStarted(artifactId, mode), () => false);
+    const start = useCallback(() => markGenStarted(artifactId, mode), [artifactId, mode]);
+    return [started, start];
 }
-
 /** Clear local gen flag and mark a fresh start (retry after stuck spinner). */
 export function restartGenStarted(artifactId: string, mode: string) {
-  clearGenStarted(artifactId, mode);
-  markGenStarted(artifactId, mode);
+    clearGenStarted(artifactId, mode);
+    markGenStarted(artifactId, mode);
 }
-
 /**
  * GenerateGate - a calm confirmation step shown before a study tool generates.
  *
@@ -106,52 +130,30 @@ export function restartGenStarted(artifactId: string, mode: string) {
  * styling: tinted lavender icon chip, serif title, plain-language description, and a
  * single primary action.
  */
-export function GenerateGate({
-  icon,
-  title,
-  description,
-  actionLabel = "Generate",
-  onStart,
-  compact = false,
-}: {
-  icon?: React.ReactNode;
-  title: string;
-  description: string;
-  actionLabel?: string;
-  onStart: () => void;
-  compact?: boolean;
+export function GenerateGate({ icon, title, description, actionLabel = "Generate", onStart, compact = false, }: {
+    icon?: React.ReactNode;
+    title: string;
+    description: string;
+    actionLabel?: string;
+    onStart: () => void;
+    compact?: boolean;
 }) {
-  return (
-    <Center mih={compact ? 240 : 320}>
-      <Stack align="center" gap="md" ta="center" maw={compact ? 360 : 440} px="md">
-        <ThemeIcon variant="light" color="lavender" radius="xl" size={compact ? 52 : 64}>
-          {icon ?? <IconSparkles size={compact ? 24 : 28} />}
+    return (<Center mih={choose(Boolean(compact), 240, 320)}>
+      <Stack align="center" gap="md" ta="center" maw={choose(Boolean(compact), 360, 440)} px="md">
+        <ThemeIcon variant="light" color="lavender" radius="xl" size={choose(Boolean(compact), 52, 64)}>
+          {icon ?? <IconSparkles size={choose(Boolean(compact), 24, 28)}/>}
         </ThemeIcon>
         <Stack gap={6}>
-          <Text
-            ff="var(--font-serif)"
-            fz={compact ? 22 : 26}
-            fw={500}
-            c="var(--mantine-color-text)"
-            lh={1.2}
-          >
+          <Text ff="var(--font-serif)" fz={choose(Boolean(compact), 22, 26)} fw={500} c="var(--mantine-color-text)" lh={1.2}>
             {title}
           </Text>
-          <Text c="dimmed" fz={compact ? "sm" : "md"} lh={1.5}>
+          <Text c="dimmed" fz={choose(Boolean(compact), "sm", "md")} lh={1.5}>
             {description}
           </Text>
         </Stack>
-        <Button
-          color="lavender"
-          radius="xl"
-          size={compact ? "sm" : "md"}
-          mt={4}
-          leftSection={<IconSparkles size={compact ? 15 : 17} />}
-          onClick={onStart}
-        >
+        <Button color="lavender" radius="xl" size={choose(Boolean(compact), "sm", "md")} mt={4} leftSection={<IconSparkles size={choose(Boolean(compact), 15, 17)}/>} onClick={onStart}>
           {actionLabel}
         </Button>
       </Stack>
-    </Center>
-  );
+    </Center>);
 }

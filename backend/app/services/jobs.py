@@ -5,6 +5,7 @@ import uuid
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
 from app.models import Job, JobWorkload
 
 # NOTE: `build_job` (app.eta.submit) is imported lazily inside the enqueue
@@ -50,25 +51,30 @@ def _already_queued_keys(db: Session, specs: list[dict]) -> set[str]:
     Scoped by document_id so the lookup rides ix_jobs_payload_document_id; specs
     without a document_id are not deduped (nothing cheap to scope by).
     """
-    doc_ids = {
-        str(d)
-        for s in specs
-        if _dedupable(s) and (d := (s.get("payload") or {}).get("document_id"))
-    }
-    if not doc_ids:
-        return set()
-    rows = db.execute(
-        text(
-            """
-            SELECT name, payload FROM qb.jobs
-            WHERE status = 'queued'
-              AND execution_id IS NULL
-              AND payload->>'document_id' = ANY(CAST(:doc_ids AS text[]))
-            """
-        ),
-        {"doc_ids": list(doc_ids)},
-    ).all()
-    return {_payload_key(name, payload) for name, payload in rows}
+    doc_ids = set(
+        filter(
+            None,
+            (
+                str((s.get("payload") or {}).get("document_id") or "")
+                for s in filter(_dedupable, specs)
+            ),
+        )
+    )
+    def _lookup() -> set[str]:
+        rows = db.execute(
+            text(
+                """
+                SELECT name, payload FROM qb.jobs
+                WHERE status = 'queued'
+                  AND execution_id IS NULL
+                  AND payload->>'document_id' = ANY(CAST(:doc_ids AS text[]))
+                """
+            ),
+            {"doc_ids": list(doc_ids)},
+        ).all()
+        return {_payload_key(name, payload) for name, payload in rows}
+
+    return pick(not doc_ids, set, _lookup)
 
 
 def batch_enqueue_jobs(
@@ -92,28 +98,41 @@ def batch_enqueue_jobs(
     seen = _already_queued_keys(db, specs)
     jobs: list[Job] = []
     skipped = 0
-    for offset in range(0, len(specs), chunk_size):
-        chunk = specs[offset : offset + chunk_size]
-        batch: list[Job] = []
-        for spec in chunk:
-            key = _payload_key(spec.get("name", ""), spec.get("payload"))
-            if _dedupable(spec):
-                if key in seen:
-                    skipped += 1
-                    continue
-                seen.add(key)  # also dedups repeats within this call
-            job = build_job(**spec)
-            db.add(job)
-            batch.append(job)
-        if not batch:
-            continue
+
+    def _add(spec: dict, batch: list[Job]) -> None:
+        job = build_job(**spec)
+        db.add(job)
+        batch.append(job)
+
+    def _flush(batch: list[Job]) -> None:
         db.commit()
         _wake_workers(db)
         for job in batch:
             db.refresh(job)
         jobs.extend(batch)
-    if skipped:
-        logger.info("batch_enqueue_jobs skipped %s already-queued duplicate job(s)", skipped)
+
+    for offset in range(0, len(specs), chunk_size):
+        chunk = specs[offset : offset + chunk_size]
+        batch: list[Job] = []
+        for spec in chunk:
+            key = _payload_key(spec.get("name", ""), spec.get("payload"))
+
+            def _skip() -> bool:
+                return pick(
+                    key in seen,
+                    lambda: True,
+                    lambda: (seen.add(key), False)[1],
+                )
+
+            skipped_now = pick(_dedupable(spec), _skip, lambda: False)
+            pick(skipped_now, lambda: None, lambda: _add(spec, batch))
+            skipped += int(skipped_now)
+        pick(not batch, lambda: None, lambda: _flush(batch))
+    pick(
+        bool(skipped),
+        lambda: logger.info("batch_enqueue_jobs skipped %s already-queued duplicate job(s)", skipped),
+        lambda: None,
+    )
     return jobs
 
 
@@ -140,12 +159,13 @@ def enqueue_job(
         "execution_id": execution_id,
         "parent_job_ids": parent_job_ids,
     }
-    if _dedupable(spec):
+
+    def _reuse() -> Job | None:
         key = _payload_key(name, payload)
         existing_id = next(
-            (
-                row_id
-                for row_id, row_name, row_payload in db.execute(
+            filter(
+                lambda row: _payload_key(row[1], row[2]) == key,
+                db.execute(
                     text(
                         """
                         SELECT id, name, payload FROM qb.jobs
@@ -156,30 +176,37 @@ def enqueue_job(
                         """
                     ),
                     {"name": name, "doc_id": str((payload or {}).get("document_id"))},
-                ).all()
-                if _payload_key(row_name, row_payload) == key
+                ).all(),
             ),
             None,
         )
-        if existing_id is not None:
-            # Identical work is already waiting — hand back that job rather than
-            # breeding a duplicate every scheduler tick. See batch_enqueue_jobs.
-            logger.info("enqueue_job reused already-queued %s for the same payload", name)
-            return db.get(Job, existing_id)
+        return pick(
+            existing_id is not None,
+            lambda: (
+                logger.info("enqueue_job reused already-queued %s for the same payload", name),
+                db.get(Job, existing_id[0]),
+            )[1],
+            lambda: None,
+        )
 
-    job = build_job(
-        name=name,
-        payload=payload,
-        account_id=account_id,
-        workload=workload,
-        execution_id=execution_id,
-        parent_job_ids=parent_job_ids,
-    )
-    db.add(job)
-    db.commit()
-    _wake_workers(db)
-    db.refresh(job)
-    return job
+    reused = pick(_dedupable(spec), _reuse, lambda: None)
+
+    def _create() -> Job:
+        job = build_job(
+            name=name,
+            payload=payload,
+            account_id=account_id,
+            workload=workload,
+            execution_id=execution_id,
+            parent_job_ids=parent_job_ids,
+        )
+        db.add(job)
+        db.commit()
+        _wake_workers(db)
+        db.refresh(job)
+        return job
+
+    return pick(reused is not None, lambda: reused, _create)
 
 
 def enqueue_ingest(
@@ -191,10 +218,8 @@ def enqueue_ingest(
     activity_id: uuid.UUID | None = None,
 ) -> Job:
     payload: dict = {"document_id": str(document_id)}
-    if page_range:
-        payload["page_range"] = page_range
-    if activity_id:
-        payload["activity_id"] = str(activity_id)
+    pick(bool(page_range), lambda: payload.__setitem__("page_range", page_range), lambda: None)
+    pick(bool(activity_id), lambda: payload.__setitem__("activity_id", str(activity_id)), lambda: None)
     job = enqueue_job(
         db,
         name="ingest.fetch_file",
@@ -202,8 +227,7 @@ def enqueue_ingest(
         payload=payload,
         account_id=account_id,
     )
-    if activity_id:
-        job.activity_id = activity_id
+    pick(bool(activity_id), lambda: setattr(job, "activity_id", activity_id), lambda: None)
     return job
 
 
@@ -239,8 +263,7 @@ def enqueue_rag_window(
     current_page: int | None = None,
 ) -> Job:
     payload: dict = {"document_id": str(document_id)}
-    if current_page is not None:
-        payload["current_page"] = int(current_page)
+    pick(current_page is not None, lambda: payload.__setitem__("current_page", int(current_page)), lambda: None)
     return enqueue_job(
         db,
         name="ingest.rag_window",
@@ -258,8 +281,7 @@ def enqueue_full_range_ingest(
     current_page: int | None = None,
 ) -> Job:
     payload: dict = {"document_id": str(document_id)}
-    if current_page is not None:
-        payload["current_page"] = int(current_page)
+    pick(current_page is not None, lambda: payload.__setitem__("current_page", int(current_page)), lambda: None)
     return enqueue_job(
         db,
         name="ingest.full_range",

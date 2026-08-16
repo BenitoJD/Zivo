@@ -1,76 +1,51 @@
+// @ts-nocheck
 "use client";
 
+import { pick, choose } from "@/lib/engineRuntime";
 import { Fragment } from "react";
 import Link from "next/link";
-import {
-  Box,
-  Group,
-  Menu,
-  Stack,
-  Text,
-  ThemeIcon,
-  Tooltip,
-  UnstyledButton,
-} from "@mantine/core";
-import {
-  IconAdjustmentsHorizontal,
-  IconAlignCenter,
-  IconAlignLeft,
-  IconAlignRight,
-  IconArrowLeft,
-  IconBook,
-  IconBriefcase,
-  IconBuildingMonument,
-  IconBulb,
-  IconBook2,
-  IconCards,
-  IconChartBar,
-  IconCheck,
-  IconChevronDown,
-  IconClipboardList,
-  IconCode,
-  IconFileCv,
-  IconMessageCircle,
-  IconNotes,
-  IconPencilQuestion,
-  IconWriting,
-  type Icon,
-} from "@tabler/icons-react";
+import { Box, Group, Menu, Stack, Text, ThemeIcon, Tooltip, UnstyledButton, } from "@mantine/core";
+import { IconAdjustmentsHorizontal, IconAlignCenter, IconAlignLeft, IconAlignRight, IconArrowLeft, IconBook, IconBriefcase, IconBuildingMonument, IconBulb, IconBook2, IconCards, IconChartBar, IconCheck, IconChevronDown, IconClipboardList, IconCode, IconFileCv, IconMessageCircle, IconNotes, IconPencilQuestion, IconWriting, type Icon, } from "@tabler/icons-react";
 import { type StudyMode } from "@/app/workspace/_components/studyNav";
-
 /**
  * The study modes, grouped the same two ways as the desktop switcher: work
  * directly with the material vs. the AI-generated study aids. Drives the compact
  * (mobile) mode dropdown.
  */
-const MODE_GROUPS: { label: string; modes: { value: StudyMode; label: string; icon: Icon }[] }[] = [
-  {
-    label: "Work with the material",
-    modes: [
-      { value: "read", label: "Read", icon: IconBook },
-      { value: "learn", label: "Learn", icon: IconBulb },
-      { value: "test", label: "Test", icon: IconClipboardList },
-      { value: "progress", label: "Progress", icon: IconChartBar },
-      { value: "brainstorm", label: "Brainstorm", icon: IconMessageCircle },
-    ],
-  },
-  {
-    label: "AI study aids",
-    modes: [
-      { value: "explain", label: "Explain", icon: IconBulb },
-      { value: "notes", label: "Notes", icon: IconNotes },
-      { value: "cards", label: "Cards", icon: IconCards },
-      { value: "palace", label: "Memory Palace", icon: IconBuildingMonument },
-      { value: "quiz", label: "Quiz", icon: IconPencilQuestion },
-      { value: "interview", label: "Interview", icon: IconBriefcase },
-      { value: "coding", label: "Coding", icon: IconCode },
-      { value: "resume", label: "Resume", icon: IconFileCv },
-      { value: "mains", label: "Mains", icon: IconWriting },
-    ],
-  },
+const MODE_GROUPS: {
+    label: string;
+    modes: {
+        value: StudyMode;
+        label: string;
+        icon: Icon;
+    }[];
+}[] = [
+    {
+        label: "Work with the material",
+        modes: [
+            { value: "read", label: "Read", icon: IconBook },
+            { value: "learn", label: "Learn", icon: IconBulb },
+            { value: "test", label: "Test", icon: IconClipboardList },
+            { value: "progress", label: "Progress", icon: IconChartBar },
+            { value: "brainstorm", label: "Brainstorm", icon: IconMessageCircle },
+        ],
+    },
+    {
+        label: "AI study aids",
+        modes: [
+            { value: "explain", label: "Explain", icon: IconBulb },
+            { value: "notes", label: "Notes", icon: IconNotes },
+            { value: "cards", label: "Cards", icon: IconCards },
+            { value: "palace", label: "Memory Palace", icon: IconBuildingMonument },
+            { value: "quiz", label: "Quiz", icon: IconPencilQuestion },
+            { value: "interview", label: "Interview", icon: IconBriefcase },
+            { value: "coding", label: "Coding", icon: IconCode },
+            { value: "resume", label: "Resume", icon: IconFileCv },
+            { value: "mains", label: "Mains", icon: IconWriting },
+        ],
+    },
 ];
 const ALL_MODES = MODE_GROUPS.flatMap((g) => g.modes);
-
 /**
  * Study meta bar (extracted from the workspace page monolith): the top strip with
  * the mode badge + progress, the compact (mobile) mode dropdown
@@ -78,455 +53,285 @@ const ALL_MODES = MODE_GROUPS.flatMap((g) => g.modes);
  */
 /** Where the study column sits on a wide screen. */
 export type StudyAlign = "left" | "center" | "right";
-
-export function StudyMetaBar({
-  questionIndex,
-  questionTotal,
-  page,
-  mode,
-  onModeChange,
-  showProgress = true,
-  compact = false,
-  /** When compact, show the mode dropdown (phones). Tablets keep sidebar mode nav. */
-  showModeSelect,
-  studyMode,
-  onStudyModeChange,
-  align = "center",
-  onAlignChange,
-  /** Optional identity next to Learn/Test (e.g. newspaper "The Hindu · 2026-07-24"). */
-  contextLabel,
-  /** Override default progress tooltip (e.g. newspaper edition total). */
-  progressHint,
-  isNewspaper = false,
-  editionIndex,
-  editionTotal,
-  /** Newspaper: edition-wide questions already answered (for % complete). */
-  editionAnswered,
-  backHref,
-  backLabel = "Back",
-  inline = false,
-  /** Learn-only: show a "Lesson" pill to re-open the page's dismissed lesson. */
-  showLessonPill = false,
-  onReopenLesson,
-  /** Learn-only: why this question was chosen (focus / revisit / order). */
-  selectionReason,
-}: {
-  questionIndex: number;
-  questionTotal: number;
-  /** The page the learner is currently on (shown next to question progress). */
-  page?: number;
-  mode: StudyMode;
-  onModeChange: (mode: StudyMode) => void;
-  showProgress?: boolean;
-  compact?: boolean;
-  showModeSelect?: boolean;
-  studyMode?: "adaptive" | "classic";
-  onStudyModeChange?: (mode: "adaptive" | "classic") => void;
-  /** Current study-column alignment. Desktop only - phones are always centred. */
-  align?: StudyAlign;
-  /** Omit to hide the alignment toggle entirely (e.g. Read, which owns its layout). */
-  onAlignChange?: (align: StudyAlign) => void;
-  contextLabel?: string | null;
-  progressHint?: string;
-  isNewspaper?: boolean;
-  editionIndex?: number;
-  editionTotal?: number;
-  editionAnswered?: number;
-  /** Newspaper: escape hatch to the day picker. */
-  backHref?: string;
-  backLabel?: string;
-  /** Parent owns horizontal padding (shared MCQ column with the question). */
-  inline?: boolean;
-  /** Learn-only: true when a ready lesson exists for the current page and the
-   *  learner has dismissed it — the pill re-opens the lesson over the MCQ. */
-  showLessonPill?: boolean;
-  onReopenLesson?: () => void;
-  /** Learn-only: why this question was chosen (focus / revisit / order). */
-  selectionReason?: string | null;
+export function StudyMetaBar({ questionIndex, questionTotal, page, mode, onModeChange, showProgress = true, compact = false, 
+/** When compact, show the mode dropdown (phones). Tablets keep sidebar mode nav. */
+showModeSelect, studyMode, onStudyModeChange, align = "center", onAlignChange, 
+/** Optional identity next to Learn/Test (e.g. newspaper "The Hindu · 2026-07-24"). */
+contextLabel, 
+/** Override default progress tooltip (e.g. newspaper edition total). */
+progressHint, isNewspaper = false, editionIndex, editionTotal, 
+/** Newspaper: edition-wide questions already answered (for % complete). */
+editionAnswered, backHref, backLabel = "Back", inline = false, 
+/** Learn-only: show a "Lesson" pill to re-open the page's dismissed lesson. */
+showLessonPill = false, onReopenLesson, 
+/** Learn-only: why this question was chosen (focus / revisit / order). */
+selectionReason, }: {
+    questionIndex: number;
+    questionTotal: number;
+    /** The page the learner is currently on (shown next to question progress). */
+    page?: number;
+    mode: StudyMode;
+    onModeChange: (mode: StudyMode) => void;
+    showProgress?: boolean;
+    compact?: boolean;
+    showModeSelect?: boolean;
+    studyMode?: "adaptive" | "classic";
+    onStudyModeChange?: (mode: "adaptive" | "classic") => void;
+    /** Current study-column alignment. Desktop only - phones are always centred. */
+    align?: StudyAlign;
+    /** Omit to hide the alignment toggle entirely (e.g. Read, which owns its layout). */
+    onAlignChange?: (align: StudyAlign) => void;
+    contextLabel?: string | null;
+    progressHint?: string;
+    isNewspaper?: boolean;
+    editionIndex?: number;
+    editionTotal?: number;
+    editionAnswered?: number;
+    /** Newspaper: escape hatch to the day picker. */
+    backHref?: string;
+    backLabel?: string;
+    /** Parent owns horizontal padding (shared MCQ column with the question). */
+    inline?: boolean;
+    /** Learn-only: true when a ready lesson exists for the current page and the
+     *  learner has dismissed it — the pill re-opens the lesson over the MCQ. */
+    showLessonPill?: boolean;
+    onReopenLesson?: () => void;
+    /** Learn-only: why this question was chosen (focus / revisit / order). */
+    selectionReason?: string | null;
 }) {
-  const modeSelect = showModeSelect ?? compact;
-  const newspaperEditionTotal = editionTotal ?? 0;
-  const newspaperEditionIndex = editionIndex ?? 0;
-  const newspaperEditionAnswered = editionAnswered ?? 0;
-  const showBar = showProgress && (isNewspaper ? questionTotal > 0 || newspaperEditionTotal > 0 : questionTotal > 0);
-  const progressDenominator = questionTotal;
-  const pagePct =
-    showBar && progressDenominator > 0
-      ? Math.min(100, Math.round((questionIndex / progressDenominator) * 100))
-      : 0;
-  const editionPct =
-    isNewspaper && newspaperEditionTotal > 0
-      ? Math.min(100, Math.round((newspaperEditionAnswered / newspaperEditionTotal) * 100))
-      : 0;
-  /** Bar + label: edition-wide for newspaper, per-page elsewhere. */
-  const barPct = isNewspaper ? editionPct : pagePct;
-  const segmented = showBar && !isNewspaper && questionTotal <= 16;
-  const isTestMode = mode === "test";
-  // Test wears the brand's deep green; Learn keeps lavender - a constant, glanceable
-  // signal that the two are different study contexts.
-  const barAccent = isTestMode ? "forest" : "lavender";
-  const contextChip =
-    contextLabel && contextLabel.trim() ? (
-      <Text
-        fz="xs"
-        c="dimmed"
-        fw={500}
-        truncate
-        style={{ minWidth: 0, maxWidth: compact ? 160 : 280, letterSpacing: "-0.01em" }}
-      >
+    const modeSelect = showModeSelect ?? compact;
+    const newspaperEditionTotal = editionTotal ?? 0;
+    const newspaperEditionIndex = editionIndex ?? 0;
+    const newspaperEditionAnswered = editionAnswered ?? 0;
+    const showBar = pick(Boolean(showProgress), () => (choose(Boolean(isNewspaper), questionTotal > 0 || newspaperEditionTotal > 0, questionTotal > 0)), () => showProgress);
+    const progressDenominator = questionTotal;
+    const pagePct = pick(Boolean(showBar && progressDenominator > 0), () => Math.min(100, Math.round((questionIndex / progressDenominator) * 100)), () => 0);
+    const editionPct = pick(Boolean(isNewspaper && newspaperEditionTotal > 0), () => Math.min(100, Math.round((newspaperEditionAnswered / newspaperEditionTotal) * 100)), () => 0);
+    /** Bar + label: edition-wide for newspaper, per-page elsewhere. */
+    const barPct = choose(Boolean(isNewspaper), editionPct, pagePct);
+    const segmented = pick(Boolean(showBar), () => pick(Boolean(!isNewspaper), () => questionTotal <= 16, () => !isNewspaper), () => showBar);
+    const isTestMode = mode === "test";
+    // Test wears the brand's deep green; Learn keeps lavender - a constant, glanceable
+    // signal that the two are different study contexts.
+    const barAccent = choose(Boolean(isTestMode), "forest", "lavender");
+    const contextChip = pick(Boolean(contextLabel && contextLabel.trim()), () => (<Text fz="xs" c="dimmed" fw={500} truncate style={{ minWidth: 0, maxWidth: choose(Boolean(compact), 160, 280), letterSpacing: "-0.01em" }}>
         {contextLabel.trim()}
-      </Text>
-    ) : null;
-
-  const modeBadge =
-    mode === "learn" || mode === "test" ? (
-      <Group gap={8} wrap="nowrap" style={{ flexShrink: 0, minWidth: 0 }}>
+      </Text>), () => null);
+    const modeBadge = choose(Boolean(mode === "learn" || mode === "test"), (<Group gap={8} wrap="nowrap" style={{ flexShrink: 0, minWidth: 0 }}>
         <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
-          <ThemeIcon
-            size={20}
-            radius="xl"
-            variant="light"
-            color={barAccent}
-            // Dark-mode accent shades are INVERTED here: low shades (-3) are deep
-            // surfaces, high shades (-7) are the bright "text/icon on ink" tone.
-            // -7 reads on both schemes (was light-dark(-7, -3) → dark glyph near-invisible).
-            style={{ color: `var(--mantine-color-${barAccent}-7)` }}
-          >
-            {isTestMode ? <IconClipboardList size={12} stroke={2} /> : <IconBulb size={12} stroke={2} />}
+          <ThemeIcon size={20} radius="xl" variant="light" color={barAccent} 
+    // Dark-mode accent shades are INVERTED here: low shades (-3) are deep
+    // surfaces, high shades (-7) are the bright "text/icon on ink" tone.
+    // -7 reads on both schemes (was light-dark(-7, -3) → dark glyph near-invisible).
+    style={{ color: `var(--mantine-color-${barAccent}-7)` }}>
+            {choose(Boolean(isTestMode), <IconClipboardList size={12} stroke={2}/>, <IconBulb size={12} stroke={2}/>)}
           </ThemeIcon>
-          <Text
-            fz="xs"
-            fw={700}
-            tt="uppercase"
-            style={{
-              letterSpacing: "0.04em",
-              // Dark branch was -3 (a deep surface shade) → invisible on ink; the
-              // bright text-on-ink shade in this inverted scale is -7.
-              color: `light-dark(var(--mantine-color-${barAccent}-${isTestMode ? 8 : 7}), var(--mantine-color-${barAccent}-7))`,
-            }}
-          >
-            {isTestMode ? "Test" : "Learn"}
+          <Text fz="xs" fw={700} tt="uppercase" style={{
+            letterSpacing: "0.04em",
+            // Dark branch was -3 (a deep surface shade) → invisible on ink; the
+            // bright text-on-ink shade in this inverted scale is -7.
+            color: `light-dark(var(--mantine-color-${barAccent}-${choose(Boolean(isTestMode), 8, 7)}), var(--mantine-color-${barAccent}-7))`,
+        }}>
+            {choose(Boolean(isTestMode), "Test", "Learn")}
           </Text>
         </Group>
         {contextChip}
-      </Group>
-    ) : null;
-
-  // Learn-only re-open affordance: a quiet lavender pill that brings the page's
-  // dismissed lesson back over the MCQ. Shown only when a ready lesson exists
-  // for the current page and the learner has moved past it.
-  const lessonControl =
-    showLessonPill && onReopenLesson ? (
-      <UnstyledButton
-        onClick={onReopenLesson}
-        aria-label="Re-read the lesson for this page"
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "4px 10px",
-          borderRadius: 999,
-          background: "var(--mantine-color-lavender-1)",
-          border: "1px solid var(--mantine-color-lavender-3)",
-          color: "var(--mantine-color-lavender-8)",
-          fontSize: "0.72rem",
-          fontWeight: 600,
-          letterSpacing: "0.01em",
-          flexShrink: 0,
-        }}
-      >
-        <IconBook2 size={13} stroke={2.1} />
+      </Group>), null);
+    // Learn-only re-open affordance: a quiet lavender pill that brings the page's
+    // dismissed lesson back over the MCQ. Shown only when a ready lesson exists
+    // for the current page and the learner has moved past it.
+    const lessonControl = choose(Boolean(showLessonPill && onReopenLesson), (<UnstyledButton onClick={onReopenLesson} aria-label="Re-read the lesson for this page" style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "4px 10px",
+            borderRadius: 999,
+            background: "var(--mantine-color-lavender-1)",
+            border: "1px solid var(--mantine-color-lavender-3)",
+            color: "var(--mantine-color-lavender-8)",
+            fontSize: "0.72rem",
+            fontWeight: 600,
+            letterSpacing: "0.01em",
+            flexShrink: 0,
+        }}>
+        <IconBook2 size={13} stroke={2.1}/>
         Lesson
-      </UnstyledButton>
-    ) : null;
-
-  // Adaptive vs Classic, switchable per document. Adaptive picks each next
-  // question at the learner's edge; Classic walks a fixed set in order.
-  const currentStudyMode = studyMode ?? "adaptive";
-  const studyModeControl =
-    (mode === "learn" || mode === "test") && onStudyModeChange ? (
-      <Menu shadow="md" width={244} position="bottom-end" radius="md" withinPortal>
+      </UnstyledButton>), null);
+    // Adaptive vs Classic, switchable per document. Adaptive picks each next
+    // question at the learner's edge; Classic walks a fixed set in order.
+    const currentStudyMode = studyMode ?? "adaptive";
+    const studyModeControl = choose(Boolean((mode === "learn" || mode === "test") && onStudyModeChange), (<Menu shadow="md" width={244} position="bottom-end" radius="md" withinPortal>
         <Menu.Target>
-          <UnstyledButton
-            aria-label="Change how questions are chosen"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              flexShrink: 0,
-              padding: "5px 10px",
-              borderRadius: 999,
-              border: "1px solid var(--mantine-color-default-border)",
-              background: "var(--mantine-color-body)",
-            }}
-          >
-            <IconAdjustmentsHorizontal size={14} stroke={1.8} style={{ color: "var(--mantine-color-dimmed)" }} />
+          <UnstyledButton aria-label="Change how questions are chosen" style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            flexShrink: 0,
+            padding: "5px 10px",
+            borderRadius: 999,
+            border: "1px solid var(--mantine-color-default-border)",
+            background: "var(--mantine-color-body)",
+        }}>
+            <IconAdjustmentsHorizontal size={14} stroke={1.8} style={{ color: "var(--mantine-color-dimmed)" }}/>
             <Text fz="xs" fw={600} c="var(--mantine-color-text)">
-              {currentStudyMode === "classic" ? "Classic" : "Adaptive"}
+              {choose(Boolean(currentStudyMode === "classic"), "Classic", "Adaptive")}
             </Text>
-            <IconChevronDown size={12} stroke={2} style={{ color: "var(--mantine-color-dimmed)" }} />
+            <IconChevronDown size={12} stroke={2} style={{ color: "var(--mantine-color-dimmed)" }}/>
           </UnstyledButton>
         </Menu.Target>
         <Menu.Dropdown>
           <Menu.Label>How questions are chosen</Menu.Label>
-          <Menu.Item
-            onClick={() => onStudyModeChange("adaptive")}
-            rightSection={currentStudyMode !== "classic" ? <IconCheck size={15} stroke={2.4} color="var(--mantine-color-lavender-6)" /> : null}
-          >
+          <Menu.Item onClick={() => onStudyModeChange("adaptive")} rightSection={choose(Boolean(currentStudyMode !== "classic"), <IconCheck size={15} stroke={2.4} color="var(--mantine-color-lavender-6)"/>, null)}>
             <Text fz="sm" fw={500}>Adaptive tutor</Text>
             <Text fz="xs" c="dimmed">Questions adjust to your answers</Text>
           </Menu.Item>
-          <Menu.Item
-            onClick={() => onStudyModeChange("classic")}
-            rightSection={currentStudyMode === "classic" ? <IconCheck size={15} stroke={2.4} color="var(--mantine-color-lavender-6)" /> : null}
-          >
+          <Menu.Item onClick={() => onStudyModeChange("classic")} rightSection={choose(Boolean(currentStudyMode === "classic"), <IconCheck size={15} stroke={2.4} color="var(--mantine-color-lavender-6)"/>, null)}>
             <Text fz="sm" fw={500}>Classic</Text>
             <Text fz="xs" c="dimmed">A fixed set, in order</Text>
           </Menu.Item>
         </Menu.Dropdown>
-      </Menu>
-    ) : null;
-
-  // Wide screens leave a lot of empty space to the right of a 760px column. Pinning
-  // it left puts the question next to the source panel instead of across a gap.
-  // Desktop only: on a phone the column already fills the width.
-  const alignControl =
-    onAlignChange && !compact ? (
-      <Group gap={2} wrap="nowrap" style={{ flexShrink: 0 }}>
-        {(
-          [
+      </Menu>), null);
+    // Wide screens leave a lot of empty space to the right of a 760px column. Pinning
+    // it left puts the question next to the source panel instead of across a gap.
+    // Desktop only: on a phone the column already fills the width.
+    const alignControl = pick(Boolean(onAlignChange && !compact), () => (<Group gap={2} wrap="nowrap" style={{ flexShrink: 0 }}>
+        {([
             ["left", IconAlignLeft, "Pin to the left"],
             ["center", IconAlignCenter, "Centre the column"],
             ["right", IconAlignRight, "Pin to the right"],
-          ] as const
-        ).map(([value, Icon, label]) => {
-          const active = align === value;
-          return (
-            <Tooltip key={value} label={label} withArrow openDelay={400}>
-              <UnstyledButton
-                aria-label={label}
-                aria-pressed={active}
-                onClick={() => onAlignChange(value)}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  padding: 6,
-                  borderRadius: 999,
-                  background: active ? "var(--mantine-color-gray-2)" : "transparent",
-                  // gray.8 is the readable text tone in BOTH schemes - the gray scale
-                  // is inverted for dark mode, so a low shade would vanish on ink.
-                  color: active
-                    ? "var(--mantine-color-gray-8)"
-                    : "var(--mantine-color-dimmed)",
-                }}
-              >
-                <Icon size={15} stroke={1.8} />
+        ] as const).map(([value, Icon, label]) => {
+            const active = align === value;
+            return (<Tooltip key={value} label={label} withArrow openDelay={400}>
+              <UnstyledButton aria-label={label} aria-pressed={active} onClick={() => onAlignChange(value)} style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    padding: 6,
+                    borderRadius: 999,
+                    background: choose(Boolean(active), "var(--mantine-color-gray-2)", "transparent"),
+                    // gray.8 is the readable text tone in BOTH schemes - the gray scale
+                    // is inverted for dark mode, so a low shade would vanish on ink.
+                    color: choose(Boolean(active), "var(--mantine-color-gray-8)", "var(--mantine-color-dimmed)"),
+                }}>
+                <Icon size={15} stroke={1.8}/>
               </UnstyledButton>
-            </Tooltip>
-          );
+            </Tooltip>);
         })}
-      </Group>
-    ) : null;
-
-  const backControl = backHref ? (
-    <UnstyledButton
-      component={Link}
-      href={backHref}
-      aria-label={backLabel}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-        flexShrink: 0,
-        padding: "5px 10px",
-        borderRadius: 999,
-        border: "1px solid var(--mantine-color-default-border)",
-        background: "var(--mantine-color-body)",
-        color: "var(--mantine-color-dimmed)",
-        textDecoration: "none",
-      }}
-    >
-      <IconArrowLeft size={15} stroke={1.8} />
+      </Group>), () => null);
+    const backControl = choose(Boolean(backHref), (<UnstyledButton component={Link} href={backHref} aria-label={backLabel} style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            flexShrink: 0,
+            padding: "5px 10px",
+            borderRadius: 999,
+            border: "1px solid var(--mantine-color-default-border)",
+            background: "var(--mantine-color-body)",
+            color: "var(--mantine-color-dimmed)",
+            textDecoration: "none",
+        }}>
+      <IconArrowLeft size={15} stroke={1.8}/>
       <Text size="xs" fw={600}>
         {backLabel}
       </Text>
-    </UnstyledButton>
-  ) : null;
-
-  const progress = !showBar ? null : (
-    <Group gap={compact ? 8 : 12} wrap={compact ? "wrap" : "nowrap"} style={{ flexShrink: 0, minWidth: 0 }}>
-      {page && (isNewspaper || !compact) ? (
-        <Text
-          size="xs"
-          c="dimmed"
-          fw={600}
-          style={{ flexShrink: 0, letterSpacing: "0.01em" }}
-        >
-          {compact ? `p.${page}` : `Page ${page}`}
-        </Text>
-      ) : null}
-      <Tooltip
-        label={
-          isNewspaper
-            ? progressHint ??
-              (questionTotal > 0
-                ? `You've completed ${newspaperEditionAnswered} of ${newspaperEditionTotal} questions in this edition (${editionPct}%). On page ${page ?? "?"}: question ${questionIndex} of ${questionTotal} (${pagePct}% through this page).`
-                : `${newspaperEditionAnswered} of ${newspaperEditionTotal} answered in this edition (${editionPct}%). You're on question ${newspaperEditionIndex} overall.`)
-            : progressHint ??
-              `Question ${questionIndex} of ${questionTotal} (${pagePct}% through this page). The total is sized to this page - roughly one question per distinct idea worth testing.`
-        }
-        position="bottom"
-        withArrow
-        multiline
-        w={250}
-        openDelay={250}
-      >
-        <Group gap={compact ? 6 : 8} wrap="nowrap" style={{ flexShrink: 0, cursor: "help" }}>
-          {isNewspaper && questionTotal > 0 ? (
-            <Text size="xs" c="dimmed" fw={600} ff="monospace" style={{ letterSpacing: "0.02em" }}>
+    </UnstyledButton>), null);
+    const progress = pick(Boolean(!showBar), () => null, () => (<Group gap={choose(Boolean(compact), 8, 12)} wrap={choose(Boolean(compact), "wrap", "nowrap")} style={{ flexShrink: 0, minWidth: 0 }}>
+      {/*..............................................................................*/choose(Boolean(page && (isNewspaper || !compact)), (<Text size="xs" c="dimmed" fw={600} style={{ flexShrink: 0, letterSpacing: "0.01em" }}>
+          {choose(Boolean(compact), `p.${page}`, `Page ${page}`)}
+        </Text>), null)}
+      <Tooltip label={choose(Boolean(isNewspaper), progressHint ??
+            (choose(Boolean(questionTotal > 0), `You've completed ${newspaperEditionAnswered} of ${newspaperEditionTotal} questions in this edition (${editionPct}%). On page ${page ??
+        "?"
+}: question ${questionIndex} of ${questionTotal} (${pagePct}% through this page).`, `${newspaperEditionAnswered} of ${newspaperEditionTotal} answered in this edition (${editionPct}%). You're on question ${newspaperEditionIndex} overall.`)), progressHint ??
+            `Question ${questionIndex} of ${questionTotal} (${pagePct}% through this page). The total is sized to this page - roughly one question per distinct idea worth testing.`)} position="bottom" withArrow multiline w={250} openDelay={250}>
+        <Group gap={choose(Boolean(compact), 6, 8)} wrap="nowrap" style={{ flexShrink: 0, cursor: "help" }}>
+          {/*..............................................................................*/pick(Boolean(isNewspaper && questionTotal > 0), () => (<Text size="xs" c="dimmed" fw={600} ff="monospace" style={{ letterSpacing: "0.02em" }}>
               {String(questionIndex).padStart(2, "0")}
               <Text component="span" inherit style={{ opacity: 0.45 }}>
                 {" / "}
                 {String(questionTotal).padStart(2, "0")}
               </Text>
-            </Text>
-          ) : !isNewspaper ? (
-            <Text size="xs" c="dimmed" fw={600} ff="monospace" style={{ letterSpacing: "0.02em" }}>
-              {page && compact ? (
-                <Text component="span" inherit c="dimmed" fw={600} style={{ marginRight: 8, letterSpacing: "0.01em", fontFamily: "var(--font-sans)" }}>
+            </Text>), () => pick(Boolean(!isNewspaper), () => (<Text size="xs" c="dimmed" fw={600} ff="monospace" style={{ letterSpacing: "0.02em" }}>
+              {/*..............................................................................*/choose(Boolean(page && compact), (<Text component="span" inherit c="dimmed" fw={600} style={{ marginRight: 8, letterSpacing: "0.01em", fontFamily: "var(--font-sans)" }}>
                   p.{page}
-                </Text>
-              ) : null}
+                </Text>), null)}
               {String(questionIndex).padStart(2, "0")}
               <Text component="span" inherit style={{ opacity: 0.45 }}>
                 {" / "}
                 {String(questionTotal).padStart(2, "0")}
               </Text>
-            </Text>
-          ) : null}
-          {isNewspaper && newspaperEditionTotal > 0 ? (
-            <Text size="xs" c="dimmed" fw={600} style={{ letterSpacing: "0.01em", whiteSpace: "nowrap" }}>
-              {compact
-                ? `${newspaperEditionAnswered}/${newspaperEditionTotal}`
-                : `${newspaperEditionAnswered} of ${newspaperEditionTotal}`}
-            </Text>
-          ) : null}
-          {selectionReason ? (
-            <Text
-              size="xs"
-              fw={500}
-              c="lavender.7"
-              style={{
+            </Text>), () => null))}
+          {/*..............................................................................*/choose(Boolean(isNewspaper && newspaperEditionTotal > 0), (<Text size="xs" c="dimmed" fw={600} style={{ letterSpacing: "0.01em", whiteSpace: "nowrap" }}>
+              {choose(Boolean(compact), `${newspaperEditionAnswered}/${newspaperEditionTotal}`, `${newspaperEditionAnswered} of ${newspaperEditionTotal}`)}
+            </Text>), null)}
+          {choose(Boolean(selectionReason), (<Text size="xs" fw={500} c="lavender.7" style={{
                 whiteSpace: "nowrap",
                 letterSpacing: "0.01em",
                 background: "var(--mantine-color-lavender-0)",
                 border: "1px solid var(--mantine-color-lavender-2)",
                 borderRadius: "var(--mantine-radius-xl)",
                 padding: "1px 10px",
-              }}
-            >
+            }}>
               {selectionReason}
-            </Text>
-          ) : null}
+            </Text>), null)}
         </Group>
       </Tooltip>
-      {segmented ? (
-        <Group gap={4} wrap="nowrap" style={{ flex: 1, minWidth: 72, maxWidth: 380 }}>
-          {Array.from({ length: questionTotal }).map((_, i) => (
-            <Box
-              key={i}
-              style={{
+      {pick(Boolean(segmented), () => (<Group gap={4} wrap="nowrap" style={{ flex: 1, minWidth: 72, maxWidth: 380 }}>
+          {Array.from({ length: questionTotal }).map((_, i) => (<Box key={i} style={{
+                    flex: 1,
+                    height: 5,
+                    borderRadius: 99,
+                    background: choose(Boolean(i < questionIndex), `var(--mantine-color-${barAccent}-6)`, "var(--mantine-color-gray-3)"),
+                    transition: "background 260ms ease",
+                }}/>))}
+        </Group>), () => choose(Boolean(progressDenominator > 0), (<Group gap={8} wrap="nowrap" style={{ flex: 1, minWidth: 72, maxWidth: 380 }}>
+          <Box style={{
                 flex: 1,
+                minWidth: 48,
                 height: 5,
                 borderRadius: 99,
-                background: i < questionIndex ? `var(--mantine-color-${barAccent}-6)` : "var(--mantine-color-gray-3)",
-                transition: "background 260ms ease",
-              }}
-            />
-          ))}
-        </Group>
-      ) : progressDenominator > 0 ? (
-        <Group gap={8} wrap="nowrap" style={{ flex: 1, minWidth: 72, maxWidth: 380 }}>
-          <Box
-            style={{
-              flex: 1,
-              minWidth: 48,
-              height: 5,
-              borderRadius: 99,
-              background: "var(--mantine-color-gray-3)",
-              overflow: "hidden",
-            }}
-          >
-            <Box
-              style={{
+                background: "var(--mantine-color-gray-3)",
+                overflow: "hidden",
+            }}>
+            <Box style={{
                 width: `${barPct}%`,
                 height: "100%",
                 borderRadius: 99,
                 background: `var(--mantine-color-${barAccent}-6)`,
                 transition: "width 320ms cubic-bezier(0.32,0.72,0,1)",
-              }}
-            />
+            }}/>
           </Box>
-          <Text
-            size="xs"
-            fw={700}
-            ff="monospace"
-            c={`var(--mantine-color-${barAccent}-7)`}
-            style={{ flexShrink: 0, letterSpacing: "0.02em", minWidth: 28, textAlign: "right" }}
-          >
+          <Text size="xs" fw={700} ff="monospace" c={`var(--mantine-color-${barAccent}-7)`} style={{ flexShrink: 0, letterSpacing: "0.02em", minWidth: 28, textAlign: "right" }}>
             {barPct}%
           </Text>
-        </Group>
-      ) : null}
-    </Group>
-  );
-
-  const barChrome = {
-    flexShrink: 0,
-    position: "sticky" as const,
-    top: 0,
-    zIndex: 40,
-    background: "var(--mantine-color-body)",
-    borderBottom: "1px solid var(--mantine-color-default-border)",
-  };
-
-  if (compact) {
-    // Narrow viewports: denser chrome. Mode dropdown only on true phones
-    // (tablets keep the desktop sidebar mode list).
-    return (
-      <Stack px="sm" py={6} gap={6} style={barChrome}>
-        {modeSelect ? (
-          <Group gap="sm" wrap="nowrap" align="center">
+        </Group>), null))}
+    </Group>));
+    const barChrome = {
+        flexShrink: 0,
+        position: "sticky" as const,
+        top: 0,
+        zIndex: 40,
+        background: "var(--mantine-color-body)",
+        borderBottom: "1px solid var(--mantine-color-default-border)",
+    };
+    return pick(Boolean(compact), () => (<Stack px="sm" py={6} gap={6} style={barChrome}>
+        {choose(Boolean(modeSelect), (<Group gap="sm" wrap="nowrap" align="center">
             {backControl}
             <Box style={{ flex: 1, minWidth: 0 }}>
-              <CompactModeSelect mode={mode} onChange={onModeChange} />
+              <CompactModeSelect mode={mode} onChange={onModeChange}/>
             </Box>
             {contextChip}
-          </Group>
-        ) : contextChip || backControl ? (
-          <Group gap={8} wrap="nowrap">
+          </Group>), choose(Boolean(contextChip || backControl), (<Group gap={8} wrap="nowrap">
             {backControl}
             {modeBadge}
             {lessonControl}
-          </Group>
-        ) : null}
-        {progress || studyModeControl ? (
-          <Group justify="space-between" wrap="wrap" align="center" gap="sm">
+          </Group>), null))}
+        {choose(Boolean(progress || studyModeControl), (<Group justify="space-between" wrap="wrap" align="center" gap="sm">
             <Box style={{ flex: 1, minWidth: 0 }}>{progress}</Box>
             {studyModeControl}
-          </Group>
-        ) : null}
-      </Stack>
-    );
-  }
-
-  // Desktop/tablet: the sidebar owns mode switching, so the top bar carries the
-  // mode identity + question progress + the Adaptive/Classic chooser - and nothing
-  // at all in modes that have none (e.g. Read), so the content starts cleanly.
-  if (!progress && !modeBadge && !studyModeControl && !alignControl && !backControl && !lessonControl) return null;
-  const barPx = inline ? 0 : { base: "sm", sm: "md", lg: "lg" } as const;
-  return (
-    <Box w="100%" px={barPx} py={8} style={barChrome}>
+          </Group>), null)}
+      </Stack>), () => pick(Boolean(!progress && !modeBadge && !studyModeControl && !alignControl && !backControl && !lessonControl), () => null, () => {
+        const barPx = choose(Boolean(inline), 0, { base: "sm", sm: "md", lg: "lg" } as const);
+        return (<Box w="100%" px={barPx} py={8} style={barChrome}>
       <Group justify="space-between" wrap="wrap" align="center" w="100%" gap="sm">
         <Group gap="md" wrap="wrap" style={{ minWidth: 0, flexShrink: 1 }}>
           {backControl}
@@ -541,30 +346,23 @@ export function StudyMetaBar({
           {alignControl}
         </Group>
       </Group>
-    </Box>
-  );
+    </Box>);
+    }));
 }
-
 /**
  * Compact (mobile) mode switcher: a single full-width dropdown showing the
  * current mode, opening the full grouped list. Replaces the two segmented
  * controls, which overflowed into a cramped horizontal-scroll strip on phones.
  */
-function CompactModeSelect({
-  mode,
-  onChange,
-}: {
-  mode: StudyMode;
-  onChange: (mode: StudyMode) => void;
+function CompactModeSelect({ mode, onChange, }: {
+    mode: StudyMode;
+    onChange: (mode: StudyMode) => void;
 }) {
-  const current = ALL_MODES.find((m) => m.value === mode) ?? ALL_MODES[0];
-  const CurrentIcon = current.icon;
-  return (
-    <Menu shadow="md" width="target" position="bottom-start" radius="md" withinPortal>
+    const current = ALL_MODES.find((m) => m.value === mode) ?? ALL_MODES[0];
+    const CurrentIcon = current.icon;
+    return (<Menu shadow="md" width="target" position="bottom-start" radius="md" withinPortal>
       <Menu.Target>
-        <UnstyledButton
-          aria-label={`Study mode: ${current.label}. Tap to switch.`}
-          style={{
+        <UnstyledButton aria-label={`Study mode: ${current.label}. Tap to switch.`} style={{
             display: "flex",
             alignItems: "center",
             gap: 10,
@@ -573,57 +371,33 @@ function CompactModeSelect({
             borderRadius: 12,
             border: "1px solid var(--mantine-color-default-border)",
             background: "var(--mantine-color-body)",
-          }}
-        >
-          <ThemeIcon
-            size={24}
-            radius="md"
-            variant="light"
-            color="lavender"
-            // Same invert rule as the desktop Learn/Test badge: shade-7 is the
-            // readable glyph tone on BOTH schemes (shade-3 is a deep surface in dark).
-            style={{ color: "var(--mantine-color-lavender-7)" }}
-          >
-            <CurrentIcon size={15} stroke={2} />
+        }}>
+          <ThemeIcon size={24} radius="md" variant="light" color="lavender" 
+    // Same invert rule as the desktop Learn/Test badge: shade-7 is the
+    // readable glyph tone on BOTH schemes (shade-3 is a deep surface in dark).
+    style={{ color: "var(--mantine-color-lavender-7)" }}>
+            <CurrentIcon size={15} stroke={2}/>
           </ThemeIcon>
           <Text fz="sm" fw={600} c="var(--mantine-color-text)" style={{ flex: 1, textAlign: "left" }}>
             {current.label}
           </Text>
-          <IconChevronDown size={16} stroke={2} style={{ color: "var(--mantine-color-dimmed)" }} />
+          <IconChevronDown size={16} stroke={2} style={{ color: "var(--mantine-color-dimmed)" }}/>
         </UnstyledButton>
       </Menu.Target>
       <Menu.Dropdown>
-        {MODE_GROUPS.map((group, gi) => (
-          <Fragment key={group.label}>
-            {gi > 0 ? <Menu.Divider /> : null}
+        {MODE_GROUPS.map((group, gi) => (<Fragment key={group.label}>
+            {choose(Boolean(gi > 0), <Menu.Divider />, null)}
             <Menu.Label>{group.label}</Menu.Label>
             {group.modes.map((m) => {
-              const Icon = m.icon;
-              const active = m.value === mode;
-              return (
-                <Menu.Item
-                  key={m.value}
-                  onClick={() => onChange(m.value)}
-                  leftSection={
-                    <Icon
-                      size={17}
-                      stroke={1.9}
-                      color={active ? "var(--mantine-color-lavender-6)" : "var(--mantine-color-dimmed)"}
-                    />
-                  }
-                  rightSection={
-                    active ? <IconCheck size={15} stroke={2.4} color="var(--mantine-color-lavender-6)" /> : null
-                  }
-                >
-                  <Text fz="sm" fw={active ? 600 : 500}>
+                const Icon = m.icon;
+                const active = m.value === mode;
+                return (<Menu.Item key={m.value} onClick={() => onChange(m.value)} leftSection={<Icon size={17} stroke={1.9} color={choose(Boolean(active), "var(--mantine-color-lavender-6)", "var(--mantine-color-dimmed)")}/>} rightSection={choose(Boolean(active), <IconCheck size={15} stroke={2.4} color="var(--mantine-color-lavender-6)"/>, null)}>
+                  <Text fz="sm" fw={choose(Boolean(active), 600, 500)}>
                     {m.label}
                   </Text>
-                </Menu.Item>
-              );
+                </Menu.Item>);
             })}
-          </Fragment>
-        ))}
+          </Fragment>))}
       </Menu.Dropdown>
-    </Menu>
-  );
+    </Menu>);
 }

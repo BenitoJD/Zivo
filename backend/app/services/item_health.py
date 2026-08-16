@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from app.engine_runtime import Pred, Rule, first_match
 from app.services.quality_evaluation import (
     EMPIRICAL_EASY_P,
     EMPIRICAL_HARD_P,
@@ -20,6 +21,24 @@ from app.services.quality_evaluation import (
 
 HEALTH_VERSION = "qb.health.v1"
 HealthAction = Literal["keep", "flag", "retire"]
+
+_RULES = (
+    Rule(when=(Pred("emp_fail", "truthy"),), action="retire"),
+    Rule(when=(Pred("likely_broken", "truthy"),), action="retire"),
+    Rule(when=(Pred("emp_revise", "truthy"),), action="flag"),
+    Rule(when=(Pred("has_empirical_code", "truthy"),), action="flag"),
+    Rule(
+        when=(Pred("exposed", "truthy"), Pred("extreme_p", "truthy")),
+        action="flag",
+        extras={"codes_fallback": "empirical_extreme_p"},
+    ),
+    Rule(
+        when=(Pred("exposed", "truthy"), Pred("weak_rpbis", "truthy")),
+        action="flag",
+        extras={"codes_fallback": "empirical_weak_discrimination"},
+    ),
+    Rule(when=(), action="keep"),
+)
 
 
 @dataclass(frozen=True)
@@ -45,25 +64,15 @@ def evaluate_item_health(
         max_broken_rate=max_broken_rate,
     )
     codes = tuple(emp.flaw_codes)
-    if emp.decision == "fail":
-        return HealthVerdict("retire", codes)
-    if emp.decision == "revise" or any(
-        c.startswith("empirical_") for c in codes
-    ):
-        # Soft CTT flags (too easy/hard / weak rpbis) → flag, not auto-retire.
-        if "empirical_likely_broken" in codes:
-            return HealthVerdict("retire", codes)
-        return HealthVerdict("flag", codes)
-    # Extra soft bands even when empirical passes.
-    if n_exposure >= min_exposure and (
-        p_correct >= EMPIRICAL_EASY_P or p_correct <= EMPIRICAL_HARD_P
-    ):
-        return HealthVerdict("flag", codes or ("empirical_extreme_p",))
-    if (
-        r_pbis is not None
-        and n_exposure >= min_exposure
-        and r_pbis < EMPIRICAL_MIN_RPBIS
-        and r_pbis >= 0
-    ):
-        return HealthVerdict("flag", codes or ("empirical_weak_discrimination",))
-    return HealthVerdict("keep", codes)
+    signals = {
+        "emp_fail": emp.decision == "fail",
+        "likely_broken": "empirical_likely_broken" in codes,
+        "emp_revise": emp.decision == "revise",
+        "has_empirical_code": any(c.startswith("empirical_") for c in codes),
+        "exposed": n_exposure >= min_exposure,
+        "extreme_p": p_correct >= EMPIRICAL_EASY_P or p_correct <= EMPIRICAL_HARD_P,
+        "weak_rpbis": r_pbis is not None and r_pbis < EMPIRICAL_MIN_RPBIS and r_pbis >= 0,
+    }
+    hit = first_match(_RULES, signals)
+    fallback = tuple(filter(None, (hit.extras.get("codes_fallback"),)))
+    return HealthVerdict(hit.action, codes or fallback)

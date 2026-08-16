@@ -6,6 +6,7 @@ import re
 
 from fastapi import Cookie, Depends, Header, HTTPException, Response
 
+from app.engine_runtime import pick
 from app.models import Account
 from app.services.auth import get_optional_user
 from app.services.usage import DEMO_COOKIE, ensure_demo_cookie
@@ -15,17 +16,17 @@ _GUEST_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 
 
 def normalize_guest_id(raw: str | None) -> str | None:
-    if raw and _GUEST_ID_RE.fullmatch(raw):
-        return raw
-    return None
+    return pick(bool(raw) and bool(_GUEST_ID_RE.fullmatch(raw or "")), lambda: raw, lambda: None)
 
 
-def _pick_guest_id(cookie_id: str | None, header_id: str | None) -> str | None:
+def _select_guest_id(cookie_id: str | None, header_id: str | None) -> str | None:
     cookie = normalize_guest_id(cookie_id)
     header = normalize_guest_id(header_id)
-    if cookie and header and cookie != header:
-        return cookie
-    return cookie or header
+    return pick(
+        bool(cookie and header and cookie != header),
+        lambda: cookie,
+        lambda: cookie or header,
+    )
 
 
 def publish_guest_id(response: Response, guest_id: str) -> None:
@@ -38,7 +39,7 @@ def resolve_guest_id(
     header_id: str | None,
 ) -> str:
     """Return stable guest id; allocate and Set-Cookie when missing."""
-    chosen = _pick_guest_id(cookie_id, header_id)
+    chosen = _select_guest_id(cookie_id, header_id)
     guest_id = ensure_demo_cookie(response, chosen)
     publish_guest_id(response, guest_id)
     return guest_id
@@ -46,7 +47,7 @@ def resolve_guest_id(
 
 def read_guest_id(cookie_id: str | None, header_id: str | None) -> str | None:
     """Read guest id from cookie or header without allocating a new session."""
-    return _pick_guest_id(cookie_id, header_id)
+    return _select_guest_id(cookie_id, header_id)
 
 
 def read_guest_id_from_cookie(cookie_id: str | None) -> str | None:
@@ -62,11 +63,15 @@ def guest_id_for_user(
     *,
     create: bool,
 ) -> str | None:
-    if user is not None:
-        return None
-    if create:
-        return resolve_guest_id(response, cookie_id, header_id)
-    return read_guest_id(cookie_id, header_id)
+    return pick(
+        user is not None,
+        lambda: None,
+        lambda: pick(
+            create,
+            lambda: resolve_guest_id(response, cookie_id, header_id),
+            lambda: read_guest_id(cookie_id, header_id),
+        ),
+    )
 
 
 def optional_guest_session(
@@ -83,9 +88,7 @@ def guest_session_for_read(
     zivo_demo_id: str | None = Cookie(default=None, alias=DEMO_COOKIE),
     x_zivo_guest_id: str | None = Header(default=None, alias=GUEST_ID_HEADER),
 ) -> str | None:
-    if user is not None:
-        return None
-    return read_guest_id(zivo_demo_id, x_zivo_guest_id)
+    return pick(user is not None, lambda: None, lambda: read_guest_id(zivo_demo_id, x_zivo_guest_id))
 
 
 def require_actor(
@@ -100,8 +103,8 @@ def require_actor(
     must only run for an identifiable actor so spend can be attributed to an
     account or a guest cookie (and quota'd / rate-limited against it).
     """
-    if user is not None:
-        return
-    if read_guest_id(zivo_demo_id, x_zivo_guest_id) is not None:
-        return
-    raise HTTPException(status_code=401, detail="Authentication required")
+
+    def _deny() -> None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    pick(user is not None or read_guest_id(zivo_demo_id, x_zivo_guest_id) is not None, lambda: None, _deny)

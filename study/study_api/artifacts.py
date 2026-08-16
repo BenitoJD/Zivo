@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 from app.models import Account
 from app.repositories import workspace as workspace_repo
 from app.services.auth import get_optional_user, require_csrf_or_guest
@@ -58,6 +59,13 @@ class ArtifactOut(BaseModel):
     ingest_kind: str | None = None
 
 
+def _raise(exc: BaseException) -> None:
+    raise exc
+
+
+def _account_id(user: Account | None):
+    return pick(bool(user), lambda: user.id, lambda: None)
+
 
 @router.get("/{artifact_id}", response_model=ArtifactOut)
 def get_artifact(
@@ -67,17 +75,18 @@ def get_artifact(
     guest_id: str | None = Depends(optional_guest_session),
 ) -> ArtifactOut:
     doc = require_document(db, artifact_id, user, guest_id)
-    # Heal stale page_count / bogus single-page selection before the FE decides
-    # whether to show the page picker.
     refresh_document_page_count(db, doc)
     maybe_recover_stuck_indexing(db, doc)
     maybe_recover_stuck_background_prep(db, doc)
     db.refresh(doc)
     meta = dict(doc.meta or {})
-    if is_background_prep(doc):
+
+    def _prep() -> None:
         progress = compute_prep_progress(db, doc)
         meta["prep_progress"] = progress
         doc.index_progress = int(progress["overall_pct"])
+
+    pick(is_background_prep(doc), _prep, lambda: None)
     return ArtifactOut(
         id=doc.id,
         artifact_captured_at=doc.artifact_captured_at,
@@ -97,9 +106,7 @@ def get_pages(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(optional_guest_session),
 ) -> dict:
-    # Learners never get the newspaper PDF — admins may for ops.
     doc = require_document_source(db, artifact_id, user, guest_id)
-    # Heal DOCX/paste that landed as page_count=1 before soft pagination.
     page_count = refresh_document_page_count(db, doc)
     return {
         "artifact_id": str(doc.id),
@@ -125,28 +132,52 @@ def confirm_page_range(
     guest_id: str | None = Depends(optional_guest_session),
 ) -> dict:
     doc = require_document_source(db, artifact_id, user, guest_id)
-    # Re-count from bytes so a healed multi-page DOCX can accept a real range.
     page_count = refresh_document_page_count(db, doc) or body.to_page
+    study_pages = sorted(set(filter(lambda p: p >= 1, body.pages or ())))
 
-    if body.pages:
-        study_pages = sorted({p for p in body.pages if p >= 1})
-        if not study_pages:
-            raise HTTPException(status_code=400, detail="No pages selected")
-        if any(p > page_count for p in study_pages):
-            raise HTTPException(status_code=400, detail="Page selection exceeds document")
-        selected = {"from": study_pages[0], "to": study_pages[-1], "pages": study_pages}
-    else:
-        if body.to_page < body.from_page:
-            raise HTTPException(status_code=400, detail="Invalid page range")
-        if body.to_page > page_count:
-            raise HTTPException(status_code=400, detail="Page range exceeds document")
-        selected = {"from": body.from_page, "to": body.to_page}
+    def _explicit_selected() -> dict:
+        return {"from": study_pages[0], "to": study_pages[-1], "pages": study_pages}
+
+    def _range_selected() -> dict:
+        return {"from": body.from_page, "to": body.to_page}
+
+    selected = apply(
+        first_match(
+            (
+                Rule(when=(Pred("explicit", "truthy"), Pred("empty", "truthy")), action="no_pages"),
+                Rule(
+                    when=(Pred("explicit", "truthy"), Pred("overflow", "truthy")),
+                    action="overflow_pages",
+                ),
+                Rule(when=(Pred("explicit", "truthy"),), action="explicit_ok"),
+                Rule(when=(Pred("inverted", "truthy"),), action="invalid_range"),
+                Rule(when=(Pred("range_overflow", "truthy"),), action="overflow_range"),
+                Rule(when=(), action="range_ok"),
+            ),
+            {
+                "explicit": bool(body.pages),
+                "empty": not study_pages,
+                "overflow": any(p > page_count for p in study_pages),
+                "inverted": body.to_page < body.from_page,
+                "range_overflow": body.to_page > page_count,
+            },
+        ).action,
+        {
+            "no_pages": lambda: _raise(HTTPException(status_code=400, detail="No pages selected")),
+            "overflow_pages": lambda: _raise(
+                HTTPException(status_code=400, detail="Page selection exceeds document")
+            ),
+            "explicit_ok": _explicit_selected,
+            "invalid_range": lambda: _raise(
+                HTTPException(status_code=400, detail="Invalid page range")
+            ),
+            "overflow_range": lambda: _raise(
+                HTTPException(status_code=400, detail="Page range exceeds document")
+            ),
+            "range_ok": _range_selected,
+        },
+    )
     reset_for_new_page_range(db, doc, selected)
-    # A doc that was already background-prepped to ready (partial pool) must not
-    # be reset to a fresh foreground index when the learner confirms pages —
-    # reset_for_new_page_range wipes prep_complete/pool state, and the 496-page
-    # seduction PDF got re-indexed from zero after promotion. Keep the cooked
-    # state; only the page-range selection changes.
     from app.services.background_prep import is_background_prep
 
     already_cooked = (
@@ -154,8 +185,8 @@ def confirm_page_range(
         and bool((doc.meta or {}).get("prep_complete"))
         and not is_background_prep(doc)
     )
-    if already_cooked:
-        # Restore the cooked flags that reset_for_new_page_range cleared.
+
+    def _restore_cooked() -> None:
         meta = dict(doc.meta or {})
         meta["prep_complete"] = True
         meta["prep_phase"] = "complete"
@@ -165,27 +196,32 @@ def confirm_page_range(
 
         _flag(doc, "meta")
         doc.index_progress = 100
-    else:
-        apply_prep_meta(db, doc, prep_mode=body.prep_mode)
-    # Drop legacy Settings override so triage/heuristic owns the page budget.
-    if "preferred_question_budget" in (doc.meta or {}):
+
+    pick(already_cooked, _restore_cooked, lambda: apply_prep_meta(db, doc, prep_mode=body.prep_mode))
+
+    def _drop_budget() -> None:
         meta = dict(doc.meta or {})
         meta.pop("preferred_question_budget", None)
         doc.meta = meta
         from sqlalchemy.orm.attributes import flag_modified
 
         flag_modified(doc, "meta")
+
+    pick("preferred_question_budget" in (doc.meta or {}), _drop_budget, lambda: None)
     study_pages = selected.get("pages") or list(
         range(int(selected["from"]), int(selected["to"]) + 1)
     )
-    page_from = int(study_pages[0]) if study_pages else int(selected["from"])
+    page_from = pick(
+        bool(study_pages),
+        lambda: int(study_pages[0]),
+        lambda: int(selected["from"]),
+    )
     captured = doc.artifact_captured_at or doc.created_at
-    # A cooked doc (ready partial pool) keeps its status — do not re-enqueue a
-    # fresh index/ingest, which would re-run the whole pipeline from zero.
-    if already_cooked:
+
+    def _keep_ready() -> dict:
         workspace_repo.upsert_workspace(
             db,
-            account_id=user.id if user else None,
+            account_id=_account_id(user),
             artifact_id=doc.id,
             artifact_captured_at=captured,
             status="ready",
@@ -196,37 +232,46 @@ def confirm_page_range(
         db.commit()
         return {"document_id": str(doc.id), "page_from": page_from, "status": "ready"}
 
-    workspace_status = "prepping" if body.prep_mode == PREP_MODE_BACKGROUND else "indexing"
-    workspace_repo.upsert_workspace(
-        db,
-        account_id=user.id if user else None,
-        artifact_id=doc.id,
-        artifact_captured_at=captured,
-        status=workspace_status,
-        page_count=page_count,
-        selected_range=selected,
-    )
-    if body.prep_mode == PREP_MODE_BACKGROUND:
-        job = enqueue_full_range_ingest(
-            db,
-            document_id=doc.id,
-            account_id=user.id if user else None,
-            current_page=page_from,
+    def _enqueue() -> dict:
+        workspace_status = choose(
+            body.prep_mode == PREP_MODE_BACKGROUND, "prepping", "indexing"
         )
-    else:
-        doc.status = "indexing"
-        job = enqueue_rag_window(
+        workspace_repo.upsert_workspace(
             db,
-            document_id=doc.id,
-            account_id=user.id if user else None,
-            current_page=page_from,
+            account_id=_account_id(user),
+            artifact_id=doc.id,
+            artifact_captured_at=captured,
+            status=workspace_status,
+            page_count=page_count,
+            selected_range=selected,
         )
-    db.commit()
-    return {
-        "activity_id": str(job.payload.get("activity_id", job.id)),
-        "job_id": str(job.id),
-        "prep_mode": body.prep_mode,
-    }
+
+        def _background():
+            return enqueue_full_range_ingest(
+                db,
+                document_id=doc.id,
+                account_id=_account_id(user),
+                current_page=page_from,
+            )
+
+        def _foreground():
+            doc.status = "indexing"
+            return enqueue_rag_window(
+                db,
+                document_id=doc.id,
+                account_id=_account_id(user),
+                current_page=page_from,
+            )
+
+        job = pick(body.prep_mode == PREP_MODE_BACKGROUND, _background, _foreground)
+        db.commit()
+        return {
+            "activity_id": str(job.payload.get("activity_id", job.id)),
+            "job_id": str(job.id),
+            "prep_mode": body.prep_mode,
+        }
+
+    return pick(already_cooked, _keep_ready, _enqueue)
 
 
 @router.get("/{artifact_id}/segments")
@@ -236,7 +281,6 @@ def list_segments(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(optional_guest_session),
 ) -> list[dict]:
-    # Full chunk text dump — same newspaper source gate as /pages and /file.
     doc = require_document_source(db, artifact_id, user, guest_id)
     rows = db.execute(
         text(

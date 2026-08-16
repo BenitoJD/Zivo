@@ -73,7 +73,7 @@ def upgrade() -> None:
     domain_id = bind.execute(
         _sa_text("SELECT id FROM intel.concept WHERE uri = '/vocab/domain/user_learning'")
     ).scalar()
-    if domain_id is not None:
+    def _seed_coding_bank() -> None:
         bind.execute(
             _sa_text(
                 "INSERT INTO intel.source (slug, name, domain_concept_id) "
@@ -82,6 +82,8 @@ def upgrade() -> None:
             ),
             {"domain": domain_id},
         )
+
+    {True: _seed_coding_bank, False: lambda: None}[domain_id is not None]()
 
 
 def downgrade() -> None:

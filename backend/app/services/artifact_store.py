@@ -28,15 +28,18 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import choose, pick
+
 
 def coerce_jsonb(value: Any) -> Any:
     """Re-parse a JSONB column that psycopg may return as a str instead of parsed JSON."""
-    if isinstance(value, str):
+    def _from_str() -> Any:
         try:
             return json.loads(value)
         except json.JSONDecodeError:
             return value
-    return value
+
+    return pick(isinstance(value, str), _from_str, lambda: value)
 
 
 class ArtifactStore:
@@ -82,7 +85,6 @@ class ArtifactStore:
         self.cast_jsonb = cast_jsonb and payload_col is not None
         self.extra_cols = extra_cols or {}
 
-    # ------------------------------------------------------------------ helpers
     @property
     def conflict_target(self) -> str:
         """ON CONFLICT target for the upsert — the natural key, scoped to document_id."""
@@ -90,27 +92,28 @@ class ArtifactStore:
 
     def _key_params(self, document_id: uuid.UUID, key_values: dict[str, Any]) -> dict[str, Any]:
         params: dict[str, Any] = {"id": document_id}
-        for col in self.key_cols[1:]:  # skip document_id (already :id)
-            if col not in key_values:
-                raise KeyError(f"key column {col!r} not provided")
-            params[col] = key_values[col]
+        for col in self.key_cols[1:]:
+            pick(
+                col not in key_values,
+                lambda: (_raise_key(col), None)[1],
+                lambda: params.__setitem__(col, key_values[col]),
+            )
         return params
 
-    # ----------------------------------------------------------------- load row
     def load_row(self, db: Session, document_id: uuid.UUID, **key_values: Any) -> dict[str, Any] | None:
         """Return the raw row as a mapping, or ``None`` if no row exists."""
-        cols = [self.payload_col] if self.payload_col else []
-        cols += list(self.extra_cols.keys())
-        cols += ["status", "error"]
+        cols = choose(bool(self.payload_col), [self.payload_col], [])
+        cols = cols + list(self.extra_cols.keys()) + ["status", "error"]
         select = ", ".join(cols)
-        where = " AND ".join(f"{c} = :{c if c != self._KEY_DOC_ID else 'id'}" for c in self.key_cols)
+        where = " AND ".join(
+            f"{c} = :{choose(c != self._KEY_DOC_ID, c, 'id')}" for c in self.key_cols
+        )
         row = db.execute(
             text(f"SELECT {select} FROM {self.table} WHERE {where}"),
             self._key_params(document_id, key_values),
         ).mappings().first()
-        return dict(row) if row else None
+        return pick(bool(row), lambda: dict(row), lambda: None)
 
-    # --------------------------------------------------------------- set status
     def set_status(
         self,
         db: Session,
@@ -122,14 +125,12 @@ class ArtifactStore:
     ) -> None:
         """Upsert a status-only row (status + error + extra_cols), payload untouched."""
         extra_keys = list(self.extra_cols.keys())
-        # document_id is always first key col; param name is :id (see _key_params).
         cols = list(self.key_cols) + extra_keys + ["status", "error", "updated_at"]
         col_list = ", ".join(cols)
-        placeholders = []
-        for c in self.key_cols:
-            placeholders.append(f":{c if c != self._KEY_DOC_ID else 'id'}")
-        for c in extra_keys:
-            placeholders.append(f":{self.extra_cols[c]}")
+        placeholders = [
+            f":{choose(c != self._KEY_DOC_ID, c, 'id')}" for c in self.key_cols
+        ]
+        placeholders += [f":{self.extra_cols[c]}" for c in extra_keys]
         placeholders += [":status", ":error", "now()"]
         params: dict[str, Any] = {"id": document_id, "status": status, "error": error}
         params.update(self._key_params(document_id, key_and_extra))
@@ -145,7 +146,6 @@ class ArtifactStore:
             params,
         )
 
-    # -------------------------------------------------------------------- save
     def save(
         self,
         db: Session,
@@ -154,27 +154,24 @@ class ArtifactStore:
         **key_and_extra: Any,
     ) -> None:
         """Upsert a finished artifact (payload + status='ready' + NULL error)."""
-        if self.payload_col is None:
-            raise ValueError("save() requires a payload_col")
+        pick(self.payload_col is None, _raise_payload, lambda: None)
 
         extra_keys = list(self.extra_cols.keys())
-        # document_id is always first key col; param name is :id (see _key_params).
         cols = list(self.key_cols) + extra_keys + [self.payload_col, "status", "error", "updated_at"]
         col_list = ", ".join(cols)
 
         payload_param = "payload"
-        if self.cast_jsonb:
-            payload_sql = f"CAST(:{payload_param} AS jsonb)"
-            payload_value: Any = json.dumps(payload)
-        else:
-            payload_sql = f":{payload_param}"
-            payload_value = payload
+        payload_sql = pick(
+            self.cast_jsonb,
+            lambda: f"CAST(:{payload_param} AS jsonb)",
+            lambda: f":{payload_param}",
+        )
+        payload_value = pick(self.cast_jsonb, lambda: json.dumps(payload), lambda: payload)
 
-        placeholders = []
-        for c in self.key_cols:
-            placeholders.append(f":{c if c != self._KEY_DOC_ID else 'id'}")
-        for c in extra_keys:
-            placeholders.append(f":{self.extra_cols[c]}")
+        placeholders = [
+            f":{choose(c != self._KEY_DOC_ID, c, 'id')}" for c in self.key_cols
+        ]
+        placeholders += [f":{self.extra_cols[c]}" for c in extra_keys]
         placeholders += [payload_sql, "'ready'", "NULL", "now()"]
 
         params: dict[str, Any] = {payload_param: payload_value, "id": document_id}
@@ -191,6 +188,14 @@ class ArtifactStore:
             ),
             params,
         )
+
+
+def _raise_key(col: str) -> None:
+    raise KeyError(f"key column {col!r} not provided")
+
+
+def _raise_payload() -> None:
+    raise ValueError("save() requires a payload_col")
 
 
 def run_artifact_generation(
@@ -225,9 +230,10 @@ def run_artifact_generation(
         store.set_status(db, document_id, "failed", error=str(exc)[:500], **kw)
         db.commit()
         raise
-    if is_complete(result):
-        store.save(db, document_id, result, **kw)
-    else:
-        store.set_status(db, document_id, "failed", error=empty_error, **kw)
+    pick(
+        is_complete(result),
+        lambda: store.save(db, document_id, result, **kw),
+        lambda: store.set_status(db, document_id, "failed", error=empty_error, **kw),
+    )
     db.commit()
     return result

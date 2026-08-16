@@ -14,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, get_db
+from app.engine_runtime import choose, pick
 from app.models import Account, Document
 from app.repositories import workspace as workspace_repo
 from app.services.auth import get_optional_user, require_csrf_or_guest
@@ -41,6 +42,12 @@ from app.services.question_pool import (
 )
 from app.services.question_budget import parse_budget_mode
 from app.services.learn_notify import wait_learn_notify
+from app.services.session_design import (
+    evaluate_advance_page,
+    evaluate_learn_auto_advance,
+    evaluate_test_downgrade,
+    plan_learn_stream_delay,
+)
 
 router = APIRouter()
 
@@ -52,25 +59,30 @@ def _artifact_concepts(db: Session, artifact_id: uuid.UUID) -> list[dict]:
     key = str(artifact_id)
     now = time.monotonic()
     cached = _concepts_cache.get(key)
-    if cached and now - cached[0] < _CONCEPTS_CACHE_TTL_SECONDS:
-        return cached[1]
 
-    concepts = db.execute(
-        text(
-            """
-            SELECT DISTINCT payload->>'primary_concept_key' AS concept_key,
-                   payload->>'primary_concept' AS label
-            FROM intel.assertion
-            WHERE payload->>'artifact_id' = :aid
-              AND status = 'active'
-              AND payload->>'primary_concept_key' IS NOT NULL
-            """
-        ),
-        {"aid": key},
-    ).mappings().all()
-    rows = [dict(c) for c in concepts]
-    _concepts_cache[key] = (now, rows)
-    return rows
+    def _load() -> list[dict]:
+        concepts = db.execute(
+            text(
+                """
+                SELECT DISTINCT payload->>'primary_concept_key' AS concept_key,
+                       payload->>'primary_concept' AS label
+                FROM intel.assertion
+                WHERE payload->>'artifact_id' = :aid
+                  AND status = 'active'
+                  AND payload->>'primary_concept_key' IS NOT NULL
+                """
+            ),
+            {"aid": key},
+        ).mappings().all()
+        rows = [dict(c) for c in concepts]
+        _concepts_cache[key] = (now, rows)
+        return rows
+
+    return pick(
+        bool(cached) and now - cached[0] < _CONCEPTS_CACHE_TTL_SECONDS,
+        lambda: cached[1],
+        _load,
+    )
 
 
 def _workspace_state(
@@ -79,15 +91,20 @@ def _workspace_state(
     user: Account | None,
 ) -> dict:
     captured = doc.artifact_captured_at or doc.created_at
-    if user:
+
+    def _for_user() -> dict:
         return workspace_repo.get_workspace(db, user.id, doc.id, captured) or {}
-    meta = doc.meta or {}
-    selected = meta.get("selected_range") or {}
-    return {
-        "current_page": selected.get("from"),
-        "status": "page_ready" if doc.status == "ready" else doc.status,
-        "selected_range": selected,
-    }
+
+    def _for_guest() -> dict:
+        meta = doc.meta or {}
+        selected = meta.get("selected_range") or {}
+        return {
+            "current_page": selected.get("from"),
+            "status": choose(doc.status == "ready", "page_ready", doc.status),
+            "selected_range": selected,
+        }
+
+    return pick(bool(user), _for_user, _for_guest)
 
 
 def _learn_queue_payload(
@@ -100,27 +117,47 @@ def _learn_queue_payload(
     guest_id: str | None = None,
 ) -> dict:
     lk = learner_key_for(user, guest_id)
-    serve_mode = parse_budget_mode(mode)
     from app.services.newspaper import is_newspaper_document
 
+    requested = parse_budget_mode(mode)
     progress = get_progress(doc, learner_key=lk)
-    if is_newspaper_document(doc) and serve_mode == "test":
-        if not newspaper_learn_pool_complete(db, artifact_id, doc, progress):
-            serve_mode = "learn"
+    learn_complete = pick(
+        is_newspaper_document(doc) and requested == "test",
+        lambda: newspaper_learn_pool_complete(db, artifact_id, doc, progress),
+        lambda: True,
+    )
+    serve_mode = evaluate_test_downgrade(
+        newspaper=is_newspaper_document(doc),
+        serve_mode=requested,
+        learn_complete=learn_complete,
+    )
     set_serve_budget_mode(db, doc, serve_mode, learner_key=lk)
     db.refresh(doc)
     progress = get_progress(doc, learner_key=lk)
-    if is_page_complete(db, doc, progress):
-        page = int(progress.get("current_page") or 1)
-        study_pages = selected_page_list(doc)
-        last_study_page = study_pages[-1] if study_pages else page_range_bounds(doc)[1]
-        if page < last_study_page:
-            advance_to_next_page(db, doc, learner_key=lk)
-            db.refresh(doc)
-            progress = get_progress(doc, learner_key=lk)
-            ensure_question_pool(db, artifact_id)
-            db.refresh(doc)
-            progress = get_progress(doc, learner_key=lk)
+
+    def _advance() -> dict:
+        advance_to_next_page(db, doc, learner_key=lk)
+        db.refresh(doc)
+        ensure_question_pool(db, artifact_id)
+        db.refresh(doc)
+        return get_progress(doc, learner_key=lk)
+
+    page = int(progress.get("current_page") or 1)
+    study_pages = selected_page_list(doc)
+    last_study_page = pick(
+        bool(study_pages),
+        lambda: study_pages[-1],
+        lambda: page_range_bounds(doc)[1],
+    )
+    progress = pick(
+        evaluate_learn_auto_advance(
+            page_complete=is_page_complete(db, doc, progress),
+            page=page,
+            last_page=last_study_page,
+        ),
+        _advance,
+        lambda: progress,
+    )
 
     state = build_learn_queue_state(
         db, artifact_id, doc, progress, mode=serve_mode, learner_key=lk
@@ -136,6 +173,14 @@ def _learn_queue_payload(
     }
 
 
+def _maybe_ensure_pool(db: Session, artifact_id: uuid.UUID, doc: Document, enabled: bool) -> None:
+    pick(
+        enabled and doc.status == "ready",
+        lambda: (ensure_question_pool(db, artifact_id), db.refresh(doc)),
+        lambda: None,
+    )
+
+
 def _learn_queue_handler(
     artifact_id: uuid.UUID,
     user: Account | None,
@@ -145,9 +190,7 @@ def _learn_queue_handler(
 ) -> dict:
     with SessionLocal() as db:
         doc = require_document(db, artifact_id, user, guest_id)
-        if doc.status == "ready":
-            ensure_question_pool(db, artifact_id)
-            db.refresh(doc)
+        _maybe_ensure_pool(db, artifact_id, doc, True)
         return _learn_queue_payload(db, artifact_id, doc, user, mode=mode, guest_id=guest_id)
 
 
@@ -161,9 +204,7 @@ def _learn_stream_tick(
 ) -> dict:
     with SessionLocal() as db:
         doc = require_document(db, artifact_id, user, guest_id)
-        if ensure_pool and doc.status == "ready":
-            ensure_question_pool(db, artifact_id)
-            db.refresh(doc)
+        _maybe_ensure_pool(db, artifact_id, doc, ensure_pool)
         return _learn_queue_payload(db, artifact_id, doc, user, mode=mode, guest_id=guest_id)
 
 
@@ -225,18 +266,30 @@ async def learn_queue_stream(
                 yield {"event": "error", "data": json.dumps({"detail": "not found"})}
                 return
             yield {"event": "queue", "data": json.dumps(payload, default=str)}
-            if payload.get("document_complete"):
-                yield {"event": "done", "data": json.dumps(payload, default=str)}
-                return
-            if payload.get("current_assertion_id") and not payload.get("generation_pending"):
-                delay = 3.0
-            elif payload.get("generation_pending"):
-                delay = min(8.0, delay * 1.15)
-            else:
-                delay = 2.0
-            woke = await asyncio.to_thread(wait_learn_notify, artifact_id, timeout=delay)
-            if not woke:
-                continue
+            plan = plan_learn_stream_delay(
+                document_complete=bool(payload.get("document_complete")),
+                current_assertion_id=payload.get("current_assertion_id"),
+                generation_pending=bool(payload.get("generation_pending")),
+                delay=delay,
+            )
+            delay = plan.delay
+            done_events = pick(
+                plan.action == "done",
+                lambda: [{"event": "done", "data": json.dumps(payload, default=str)}],
+                lambda: [],
+            )
+            for ev in done_events:
+                yield ev
+
+            async def _noop() -> None:
+                return None
+
+            await pick(
+                plan.action == "done",
+                _noop,
+                lambda: asyncio.to_thread(wait_learn_notify, artifact_id, timeout=delay),
+            )
+            tick = pick(plan.action == "done", lambda: max_ticks, lambda: tick)
 
     return EventSourceResponse(
         gen(),
@@ -279,43 +332,49 @@ def study_report(
     doc = require_document(db, artifact_id, user, guest_id)
     subject_id = resolve_subject_entity(db, user, guest_id)
     pages = selected_page_list(doc)
-    if subject_id is None or not pages:
-        return {"total": 0, "correct": 0, "wrong": 0, "topics": []}
-    rows = db.execute(
-        text(
-            """
-            SELECT COALESCE(NULLIF(TRIM(a.payload->>'primary_concept'), ''), 'General') AS concept,
-                   COUNT(*) AS total,
-                   COALESCE(SUM(m.value_numeric), 0) AS correct
-            FROM intel.measurement m
-            JOIN intel.assertion a ON a.id = m.source_assertion_id
-            WHERE m.subject_entity_id = :subject
-              AND m.metric_concept_id = :metric
-              AND a.payload->>'artifact_id' = :artifact_id
-              AND (a.payload->>'page_number')::int = ANY(:pages)
-            GROUP BY 1
-            ORDER BY (COALESCE(SUM(m.value_numeric), 0)::float / NULLIF(COUNT(*), 0)) ASC,
-                     COUNT(*) DESC
-            """
-        ),
-        {
-            "subject": subject_id,
-            "metric": concept_id(db, ANSWER_CORRECT_METRIC_URI),
-            "artifact_id": str(artifact_id),
-            "pages": pages,
-        },
-    ).mappings().all()
-    topics = [
-        {
-            "concept": short_concept_label(r["concept"]),
-            "correct": int(r["correct"]),
-            "total": int(r["total"]),
-        }
-        for r in rows
-    ]
-    total = sum(t["total"] for t in topics)
-    correct = sum(t["correct"] for t in topics)
-    return {"total": total, "correct": correct, "wrong": total - correct, "topics": topics}
+
+    def _build() -> dict:
+        rows = db.execute(
+            text(
+                """
+                SELECT COALESCE(NULLIF(TRIM(a.payload->>'primary_concept'), ''), 'General') AS concept,
+                       COUNT(*) AS total,
+                       COALESCE(SUM(m.value_numeric), 0) AS correct
+                FROM intel.measurement m
+                JOIN intel.assertion a ON a.id = m.source_assertion_id
+                WHERE m.subject_entity_id = :subject
+                  AND m.metric_concept_id = :metric
+                  AND a.payload->>'artifact_id' = :artifact_id
+                  AND (a.payload->>'page_number')::int = ANY(:pages)
+                GROUP BY 1
+                ORDER BY (COALESCE(SUM(m.value_numeric), 0)::float / NULLIF(COUNT(*), 0)) ASC,
+                         COUNT(*) DESC
+                """
+            ),
+            {
+                "subject": subject_id,
+                "metric": concept_id(db, ANSWER_CORRECT_METRIC_URI),
+                "artifact_id": str(artifact_id),
+                "pages": pages,
+            },
+        ).mappings().all()
+        topics = [
+            {
+                "concept": short_concept_label(r["concept"]),
+                "correct": int(r["correct"]),
+                "total": int(r["total"]),
+            }
+            for r in rows
+        ]
+        total = sum(t["total"] for t in topics)
+        correct = sum(t["correct"] for t in topics)
+        return {"total": total, "correct": correct, "wrong": total - correct, "topics": topics}
+
+    return pick(
+        subject_id is None or not pages,
+        lambda: {"total": 0, "correct": 0, "wrong": 0, "topics": []},
+        _build,
+    )
 
 
 @router.post("/{artifact_id}/pages/{page}/advance", dependencies=[Depends(require_csrf_or_guest)])
@@ -329,12 +388,19 @@ def advance_page(
     doc = require_document(db, artifact_id, user, guest_id)
     lk = learner_key_for(user, guest_id)
     progress = get_progress(doc, learner_key=lk)
-    advanced = False
-    if int(progress.get("current_page") or 0) == page and is_page_complete(db, doc, progress):
+    advanced = evaluate_advance_page(
+        current_page=int(progress.get("current_page") or 0),
+        requested_page=page,
+        page_complete=is_page_complete(db, doc, progress),
+    )
+
+    def _do_advance() -> None:
         advance_to_next_page(db, doc, learner_key=lk)
         ensure_question_pool(db, artifact_id)
-        advanced = True
-    if user and advanced:
+
+    pick(advanced, _do_advance, lambda: None)
+
+    def _workspace() -> None:
         captured = doc.artifact_captured_at or doc.created_at
         workspace_repo.upsert_workspace(
             db,
@@ -345,11 +411,13 @@ def advance_page(
             unlocked_through_page=page,
         )
         db.commit()
+
+    pick(bool(user) and advanced, _workspace, lambda: None)
     return {"unlocked_through_page": page, "page_ready": advanced}
 
 
 class StudyModeBody(BaseModel):
-    mode: str  # "adaptive" | "classic"
+    mode: str
 
 
 @router.post("/{artifact_id}/study-mode", dependencies=[Depends(require_csrf_or_guest)])

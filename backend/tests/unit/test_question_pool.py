@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from unittest.mock import MagicMock, patch
 
+from app.engine_runtime import pick
 from app.services.question_pool import (
     REFILL_AFTER_ANSWERED,
     _merge_progress,
@@ -558,8 +559,10 @@ def test_release_stuck_generation_keeps_queued_jobs_when_not_pending() -> None:
     def execute_side_effect(statement, params=None):
         sql = str(statement)
         mock = MagicMock()
-        if "status = 'running'" in sql:
+        def _running() -> None:
             mock.scalar.return_value = None
+
+        pick("status = 'running'" in sql, _running, lambda: None)
         return mock
 
     db.execute.side_effect = execute_side_effect

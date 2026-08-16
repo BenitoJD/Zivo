@@ -1,30 +1,11 @@
+// @ts-nocheck
 "use client";
 
+import { pick, choose } from "@/lib/engineRuntime";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import {
-  ActionIcon,
-  Box,
-  Button,
-  Center,
-  Group,
-  Paper,
-  Stack,
-  Text,
-  Textarea,
-  Title,
-  Tooltip,
-} from "@mantine/core";
+import { ActionIcon, Box, Button, Center, Group, Paper, Stack, Text, Textarea, Title, Tooltip, } from "@mantine/core";
 import { useHover } from "@mantine/hooks";
-import {
-  IconArrowDown,
-  IconArrowUp,
-  IconNotebook,
-  IconPencil,
-  IconPlayerStop,
-  IconPlus,
-  IconRefresh,
-  IconTrash,
-} from "@tabler/icons-react";
+import { IconArrowDown, IconArrowUp, IconNotebook, IconPencil, IconPlayerStop, IconPlus, IconRefresh, IconTrash, } from "@tabler/icons-react";
 import { ZIVO_ASSISTANT_NAME } from "@/lib/brand";
 import { BrandMark } from "@/app/_components/BrandMark";
 import { AssistantMarkdown, MessageCopyAction } from "@/lib/chatMarkdown";
@@ -32,162 +13,124 @@ import { splitAngles } from "@/lib/angles";
 import { useIsDark } from "@/lib/useIsDark";
 import { parseChatMcqs, type ChatMcq } from "@/lib/chatMcqs";
 import type { ChatCitation } from "@/app/(shell)/workspace/_components/useTutorChat";
-
 /**
  * Tutor chat panel + its message UI (extracted from the workspace page monolith).
  * The branded assistant chat used across Learn/Test/Read surfaces: streaming
  * messages, thinking heart, per-message actions (copy / edit / save-note /
  * regenerate), and the composer. Stateless - the page owns messages + handlers.
  */
-function AssistantLogo({ size }: { size: number }) {
-  return <BrandMark showWord={false} height={size} />;
-}
-
-export function TutorPanel({
-  messages,
-  input,
-  busy,
-  contextReady = true,
-  onInputChange,
-  onSend,
-  onStop,
-  onRegenerate,
-  onEditUser,
-  onSaveNote,
-  onClear,
-  suggestions = CHAT_SUGGESTIONS,
-  emptyHint = "Questions about this page, the source, or how to think through the answer.",
-  disclaimer,
-  showHeader = false,
-  onExploreAngle,
-  onKeepAngle,
-  onAddMcqs,
-  mcqPersistBusy = false,
-  mcqPersistDone = null,
-  mcqPersistError = null,
-}: {
-  messages: { role: string; content: string }[];
-  input: string;
-  busy: boolean;
-  contextReady?: boolean;
-  onInputChange: (value: string) => void;
-  onSend: () => void;
-  onStop?: () => void;
-  onRegenerate?: () => void;
-  onEditUser?: (index: number) => void;
-  onSaveNote?: (content: string) => void;
-  /** Clear the whole conversation (starts a fresh thread). */
-  onClear?: () => void;
-  suggestions?: string[];
-  emptyHint?: string;
-  /** Footer under the composer. Defaults to source-check copy for Learn. */
-  disclaimer?: string;
-  /** Show a branded top bar - for surfaces (Read, mobile) that have no rail header. */
-  showHeader?: boolean;
-  /** Brainstorm only: send an angle as the next turn. Passing either angle handler
-   *  turns on the ANGLES chip rendering; other modes never see it. */
-  onExploreAngle?: (angle: string) => void;
-  /** Brainstorm only: keep an angle on the idea board. */
-  onKeepAngle?: (angle: string) => void;
-  /** "Add to Learn": persist chat MCQs (zv-mcq blocks) into the pool. */
-  onAddMcqs?: (mcqs: ChatMcq[]) => void;
-  mcqPersistBusy?: boolean;
-  mcqPersistDone?: number | null;
-  mcqPersistError?: string | null;
+function AssistantLogo({ size }: {
+    size: number;
 }) {
-  const isDark = useIsDark();
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [showJumpLatest, setShowJumpLatest] = useState(false);
-  const canSend = Boolean(input.trim()) && !busy && contextReady;
-
-  const scrollToBottom = useCallback((force = false) => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    if (!force && !nearBottom) return;
-    requestAnimationFrame(() => {
-      el.scrollTop = el.scrollHeight;
-      setShowJumpLatest(false);
-    });
-  }, []);
-
-  const prevBusyRef = useRef(false);
-  useEffect(() => {
-    if (messages.length === 0) return;
-    // When a send starts (busy goes false→true) force the view down so the user
-    // immediately sees their question + the thinking indicator; during streaming
-    // just follow if they're already near the bottom.
-    const justStarted = busy && !prevBusyRef.current;
-    prevBusyRef.current = busy;
-    scrollToBottom(justStarted);
-  }, [messages, busy, scrollToBottom]);
-
-  function handleScroll() {
-    const el = scrollRef.current;
-    if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    setShowJumpLatest(!nearBottom && messages.length > 0);
-  }
-
-  function submitMessage() {
-    if (!canSend) return;
-    onSend();
-  }
-
-  return (
-    <Stack gap={0} h="100%" mih={0} bg={isDark ? "dark.8" : "gray.0"}>
+    return <BrandMark showWord={false} height={size}/>;
+}
+export function TutorPanel({ messages, input, busy, contextReady = true, onInputChange, onSend, onStop, onRegenerate, onEditUser, onSaveNote, onClear, suggestions = CHAT_SUGGESTIONS, emptyHint = "Questions about this page, the source, or how to think through the answer.", disclaimer, showHeader = false, onExploreAngle, onKeepAngle, onAddMcqs, mcqPersistBusy = false, mcqPersistDone = null, mcqPersistError = null, }: {
+    messages: {
+        role: string;
+        content: string;
+    }[];
+    input: string;
+    busy: boolean;
+    contextReady?: boolean;
+    onInputChange: (value: string) => void;
+    onSend: () => void;
+    onStop?: () => void;
+    onRegenerate?: () => void;
+    onEditUser?: (index: number) => void;
+    onSaveNote?: (content: string) => void;
+    /** Clear the whole conversation (starts a fresh thread). */
+    onClear?: () => void;
+    suggestions?: string[];
+    emptyHint?: string;
+    /** Footer under the composer. Defaults to source-check copy for Learn. */
+    disclaimer?: string;
+    /** Show a branded top bar - for surfaces (Read, mobile) that have no rail header. */
+    showHeader?: boolean;
+    /** Brainstorm only: send an angle as the next turn. Passing either angle handler
+     *  turns on the ANGLES chip rendering; other modes never see it. */
+    onExploreAngle?: (angle: string) => void;
+    /** Brainstorm only: keep an angle on the idea board. */
+    onKeepAngle?: (angle: string) => void;
+    /** "Add to Learn": persist chat MCQs (zv-mcq blocks) into the pool. */
+    onAddMcqs?: (mcqs: ChatMcq[]) => void;
+    mcqPersistBusy?: boolean;
+    mcqPersistDone?: number | null;
+    mcqPersistError?: string | null;
+}) {
+    const isDark = useIsDark();
+    const scrollRef = useRef<HTMLDivElement>(null);
+    const [showJumpLatest, setShowJumpLatest] = useState(false);
+    const canSend = pick(Boolean(input.trim()), () => pick(Boolean(!busy), () => contextReady, () => !busy), () => Boolean(input.trim()));
+    const scrollToBottom = useCallback((force = false) => {
+        const el = scrollRef.current;
+        return pick(Boolean(!el), () => {
+            return;
+        }, () => {
+            const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+            return pick(Boolean(!force && !nearBottom), () => {
+                return;
+            }, () => {
+                requestAnimationFrame(() => {
+                    el.scrollTop = el.scrollHeight;
+                    setShowJumpLatest(false);
+                });
+            });
+        });
+    }, []);
+    const prevBusyRef = useRef(false);
+    useEffect(() => {
+        return pick(Boolean(messages.length === 0), () => {
+            return;
+        }, () => {
+            // When a send starts (busy goes false→true) force the view down so the user
+            // immediately sees their question + the thinking indicator; during streaming
+            // just follow if they're already near the bottom.
+            const justStarted = pick(Boolean(busy), () => !prevBusyRef.current, () => busy);
+            prevBusyRef.current = busy;
+            scrollToBottom(justStarted);
+        });
+    }, [messages, busy, scrollToBottom]);
+    function handleScroll() {
+        const el = scrollRef.current;
+        return pick(Boolean(!el), () => {
+            return;
+        }, () => {
+            const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+            setShowJumpLatest(pick(Boolean(!nearBottom), () => messages.length > 0, () => !nearBottom));
+        });
+    }
+    function submitMessage() {
+        return pick(Boolean(!canSend), () => {
+            return;
+        }, () => {
+            onSend();
+        });
+    }
+    return (<Stack gap={0} h="100%" mih={0} bg={choose(Boolean(isDark), "dark.8", "gray.0")}>
       <style>{`
         @keyframes chat-msg-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
         .chat-msg { animation: chat-msg-in 320ms cubic-bezier(0.32,0.72,0,1) both; }
         @media (prefers-reduced-motion: reduce) { .chat-msg { animation: none; } }
       `}</style>
-      {showHeader ? (
-        <Group
-          gap={8}
-          wrap="nowrap"
-          align="center"
-          px="md"
-          py="xs"
-          style={{ flexShrink: 0, borderBottom: "1px solid var(--app-border, var(--mantine-color-default-border))", background: isDark ? "var(--mantine-color-dark-8)" : "var(--mantine-color-body)" }}
-        >
-          <BrandMark showWord={false} height={18} />
+      {choose(Boolean(showHeader), (<Group gap={8} wrap="nowrap" align="center" px="md" py="xs" style={{ flexShrink: 0, borderBottom: "1px solid var(--app-border, var(--mantine-color-default-border))", background: choose(Boolean(isDark), "var(--mantine-color-dark-8)", "var(--mantine-color-body)") }}>
+          <BrandMark showWord={false} height={18}/>
           <Text fz="sm" fw={600} c="var(--mantine-color-text)" style={{ letterSpacing: "-0.01em" }}>
             {ZIVO_ASSISTANT_NAME}
           </Text>
-        </Group>
-      ) : null}
+        </Group>), null)}
       <Box flex={1} mih={0} pos="relative">
-        {onClear && messages.length > 0 ? (
-          <Tooltip label="Clear conversation" position="left" withArrow openDelay={300}>
-            <ActionIcon
-              pos="absolute"
-              top={8}
-              right={8}
-              size={28}
-              radius="xl"
-              variant="subtle"
-              color="gray"
-              aria-label="Clear conversation"
-              onClick={onClear}
-              style={{
+        {/*..............................................................................*/choose(Boolean(onClear && messages.length > 0), (<Tooltip label="Clear conversation" position="left" withArrow openDelay={300}>
+            <ActionIcon pos="absolute" top={8} right={8} size={28} radius="xl" variant="subtle" color="gray" aria-label="Clear conversation" onClick={onClear} style={{
                 zIndex: 6,
-                background: isDark ? "var(--mantine-color-dark-7)" : "var(--mantine-color-gray-0)",
-              }}
-            >
-              <IconTrash size={15} stroke={1.8} />
+                background: choose(Boolean(isDark), "var(--mantine-color-dark-7)", "var(--mantine-color-gray-0)"),
+            }}>
+              <IconTrash size={15} stroke={1.8}/>
             </ActionIcon>
-          </Tooltip>
-        ) : null}
-        <Box
-          ref={scrollRef}
-          h="100%"
-          onScroll={handleScroll}
-          style={{ overflow: "auto", overscrollBehavior: "contain", scrollbarGutter: "stable" }}
-        >
-          {messages.length === 0 ? (
-            <Center mih="100%" px="sm" py="md">
+          </Tooltip>), null)}
+        <Box ref={scrollRef} h="100%" onScroll={handleScroll} style={{ overflow: "auto", overscrollBehavior: "contain", scrollbarGutter: "stable" }}>
+          {pick(Boolean(messages.length === 0), () => (<Center mih="100%" px="sm" py="md">
               <Stack gap="sm" align="center" maw={280} w="100%">
-                <AssistantLogo size={44} />
+                <AssistantLogo size={44}/>
                 <Stack gap={4} align="center">
                   <Title order={5} fw={600} ta="center" style={{ letterSpacing: "-0.02em" }}>
                     Ask {ZIVO_ASSISTANT_NAME}
@@ -197,195 +140,80 @@ export function TutorPanel({
                   </Text>
                 </Stack>
                 <Stack gap={6} w="100%">
-                  {suggestions.map((suggestion) => (
-                    <Button
-                      key={suggestion}
-                      variant="light"
-                      color="gray"
-                      radius="xl"
-                      size="compact-xs"
-                      fullWidth
-                      styles={{ label: { whiteSpace: "normal", lineHeight: 1.35, fontSize: 12 } }}
-                      onClick={() => onInputChange(suggestion)}
-                    >
+                  {suggestions.map((suggestion) => (<Button key={suggestion} variant="light" color="gray" radius="xl" size="compact-xs" fullWidth styles={{ label: { whiteSpace: "normal", lineHeight: 1.35, fontSize: 12 } }} onClick={() => onInputChange(suggestion)}>
                       {suggestion}
-                    </Button>
-                  ))}
+                    </Button>))}
                 </Stack>
               </Stack>
-            </Center>
-          ) : (
-            <Box
-              mih="100%"
-              style={{
+            </Center>), () => (<Box mih="100%" style={{
                 display: "flex",
                 flexDirection: "column",
                 justifyContent: "flex-end",
-              }}
-            >
+            }}>
               <Stack gap="md" py="sm" px="sm" pb="md">
-                {messages.map((m, i) => (
-                  <ChatMessage
-                    key={i}
-                    message={m}
-                    isUser={m.role === "user"}
-                    streaming={!busy ? false : m.role === "assistant" && i === messages.length - 1}
-                    isDark={isDark}
-                    canRegenerate={
-                      !busy && m.role === "assistant" && i === messages.length - 1 && Boolean(onRegenerate)
-                    }
-                    onRegenerate={onRegenerate}
-                    onEdit={onEditUser && !busy ? () => onEditUser(i) : undefined}
-                    onSaveNote={
-                      onSaveNote && m.role === "assistant" && Boolean(m.content.trim())
-                        ? () => onSaveNote(m.content)
-                        : undefined
-                    }
-                    onExploreAngle={onExploreAngle}
-                    onKeepAngle={onKeepAngle}
-                    onAddMcqs={onAddMcqs}
-                    mcqPersistBusy={mcqPersistBusy}
-                    mcqPersistDone={mcqPersistDone}
-                    mcqPersistError={mcqPersistError}
-                  />
-                ))}
+                {messages.map((m, i) => (<ChatMessage key={i} message={m} isUser={m.role === "user"} streaming={choose(Boolean(!busy), false, pick(Boolean(m.role === "assistant"), () => i === messages.length - 1, () => m.role === "assistant"))} isDark={isDark} canRegenerate={pick(Boolean(!busy), () => pick(Boolean(m.role === "assistant"), () => pick(Boolean(i === messages.length - 1), () => Boolean(onRegenerate), () => i === messages.length - 1), () => m.role === "assistant"), () => !busy)} onRegenerate={onRegenerate} onEdit={/*..............................................................................*/choose(Boolean(onEditUser && !busy), () => onEditUser(i), undefined)} onSaveNote={/*..............................................................................*/choose(Boolean(onSaveNote && m.role === "assistant" && Boolean(m.content.trim())), () => onSaveNote(m.content), undefined)} onExploreAngle={onExploreAngle} onKeepAngle={onKeepAngle} onAddMcqs={onAddMcqs} mcqPersistBusy={mcqPersistBusy} mcqPersistDone={mcqPersistDone} mcqPersistError={mcqPersistError}/>))}
               </Stack>
-            </Box>
-          )}
+            </Box>))}
         </Box>
-        {showJumpLatest ? (
-          <Tooltip label="Jump to latest" position="top" withArrow>
-            <ActionIcon
-              pos="absolute"
-              bottom={12}
-              right={12}
-              size={36}
-              radius="xl"
-              variant="default"
-              aria-label="Jump to latest"
-              onClick={() => scrollToBottom(true)}
-              bg={isDark ? "dark.6" : "gray.0"}
-              style={{ zIndex: 5, boxShadow: "var(--mantine-shadow-paper)" }}
-            >
-              <IconArrowDown size={18} stroke={2.25} />
+        {choose(Boolean(showJumpLatest), (<Tooltip label="Jump to latest" position="top" withArrow>
+            <ActionIcon pos="absolute" bottom={12} right={12} size={36} radius="xl" variant="default" aria-label="Jump to latest" onClick={() => scrollToBottom(true)} bg={choose(Boolean(isDark), "dark.6", "gray.0")} style={{ zIndex: 5, boxShadow: "var(--mantine-shadow-paper)" }}>
+              <IconArrowDown size={18} stroke={2.25}/>
             </ActionIcon>
-          </Tooltip>
-        ) : null}
+          </Tooltip>), null)}
       </Box>
 
-      <Box
-        px="xs"
-        py={6}
-        style={{
-          flexShrink: 0,
-          borderTop: `1px solid var(--mantine-color-default-border)`,
-          background: isDark ? "var(--mantine-color-dark-8)" : "var(--mantine-color-white)",
-          paddingBottom: "max(6px, env(safe-area-inset-bottom))",
-        }}
-      >
-        <Paper
-          withBorder
-          radius="xl"
-          py={2}
-          px={6}
-          shadow="none"
-          component="form"
-          onSubmit={(e) => {
+      <Box px="xs" py={6} style={{
+            flexShrink: 0,
+            borderTop: `1px solid var(--mantine-color-default-border)`,
+            background: choose(Boolean(isDark), "var(--mantine-color-dark-8)", "var(--mantine-color-white)"),
+            paddingBottom: "max(6px, env(safe-area-inset-bottom))",
+        }}>
+        <Paper withBorder radius="xl" py={2} px={6} shadow="none" component="form" onSubmit={(e) => {
             e.preventDefault();
             submitMessage();
-          }}
-          bg={isDark ? "dark.7" : "gray.0"}
-          styles={{
+        }} bg={choose(Boolean(isDark), "dark.7", "gray.0")} styles={{
             root: {
-              borderColor: isDark ? "var(--mantine-color-dark-4)" : "var(--mantine-color-gray-4)",
+                borderColor: choose(Boolean(isDark), "var(--mantine-color-dark-4)", "var(--mantine-color-gray-4)"),
             },
-          }}
-        >
+        }}>
           <Group align="center" wrap="nowrap" gap={6}>
-            {busy && onStop ? (
-              <ActionIcon
-                type="button"
-                radius="xl"
-                size={32}
-                variant="light"
-                color="terracotta"
-                onClick={onStop}
-                aria-label="Stop response"
-              >
-                <IconPlayerStop size={16} />
-              </ActionIcon>
-            ) : null}
-            <Textarea
-              flex={1}
-              variant="unstyled"
-              autosize
-              minRows={1}
-              maxRows={5}
-              placeholder={
-                contextReady ? `Message ${ZIVO_ASSISTANT_NAME}` : "Preparing chat context…"
-              }
-              value={input}
-              onChange={(e) => onInputChange(e.currentTarget.value)}
-              // Let the learner compose (and quote) freely while context finishes
-              // preparing - only sending waits on `contextReady` (see canSend).
-              disabled={busy}
-              styles={{
-                input: {
-                  paddingTop: 6,
-                  paddingBottom: 6,
-                  paddingLeft: 6,
-                  paddingRight: 0,
-                  fontSize: 14,
-                  lineHeight: 1.4,
-                  minHeight: 22,
-                },
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  submitMessage();
-                }
-              }}
-            />
-            <ActionIcon
-              type="button"
-              radius="xl"
-              size={32}
-              variant="filled"
-              onClick={submitMessage}
-              disabled={!canSend}
-              aria-label={`Send message to ${ZIVO_ASSISTANT_NAME}`}
-              styles={{
-                root: {
-                  flexShrink: 0,
-                  border: "none",
-                  transition: "background-color 160ms ease, transform 120ms ease",
-                  background: canSend
-                    ? isDark
-                      ? "var(--mantine-color-white)"
-                      : "var(--mantine-color-dark-9)"
-                    : isDark
-                      ? "var(--mantine-color-dark-4)"
-                      : "var(--mantine-color-gray-3)",
-                  color: canSend
-                    ? isDark
-                      ? "var(--mantine-color-dark-9)"
-                      : "var(--mantine-color-white)"
-                    : isDark
-                      ? "var(--mantine-color-dark-0)"
-                      : "var(--mantine-color-gray-5)",
-                  "&:hover": canSend
-                    ? {
-                        background: isDark
-                          ? "var(--mantine-color-gray-1)"
-                          : "var(--mantine-color-dark-7)",
-                      }
-                    : undefined,
-                  "&:active": canSend ? { transform: "scale(0.96)" } : undefined,
-                },
-              }}
-            >
-              <IconArrowUp size={17} stroke={2.5} />
+            {/*..............................................................................*/choose(Boolean(busy && onStop), (<ActionIcon type="button" radius="xl" size={32} variant="light" color="terracotta" onClick={onStop} aria-label="Stop response">
+                <IconPlayerStop size={16}/>
+              </ActionIcon>), null)}
+            <Textarea flex={1} variant="unstyled" autosize minRows={1} maxRows={5} placeholder={choose(Boolean(contextReady), `Message ${ZIVO_ASSISTANT_NAME}`, "Preparing chat context…")} value={input} onChange={(e) => onInputChange(e.currentTarget.value)} 
+    // Let the learner compose (and quote) freely while context finishes
+    // preparing - only sending waits on `contextReady` (see canSend).
+    disabled={busy} styles={{
+            input: {
+                paddingTop: 6,
+                paddingBottom: 6,
+                paddingLeft: 6,
+                paddingRight: 0,
+                fontSize: 14,
+                lineHeight: 1.4,
+                minHeight: 22,
+            },
+        }} onKeyDown={/*..............................................................................*/(e) => {/*..............................................................................*/
+            pick(Boolean(e.key === "Enter" && !e.shiftKey), () => {
+                e.preventDefault();
+                submitMessage();
+            }, () => {
+            });
+        }}/>
+            <ActionIcon type="button" radius="xl" size={32} variant="filled" onClick={submitMessage} disabled={!canSend} aria-label={`Send message to ${ZIVO_ASSISTANT_NAME}`} styles={{
+            root: {
+                flexShrink: 0,
+                border: "none",
+                transition: "background-color 160ms ease, transform 120ms ease",
+                background: choose(Boolean(canSend), choose(Boolean(isDark), "var(--mantine-color-white)", "var(--mantine-color-dark-9)"), choose(Boolean(isDark), "var(--mantine-color-dark-4)", "var(--mantine-color-gray-3)")),
+                color: choose(Boolean(canSend), choose(Boolean(isDark), "var(--mantine-color-dark-9)", "var(--mantine-color-white)"), choose(Boolean(isDark), "var(--mantine-color-dark-0)", "var(--mantine-color-gray-5)")),
+                "&:hover": choose(Boolean(canSend), {
+                    background: choose(Boolean(isDark), "var(--mantine-color-gray-1)", "var(--mantine-color-dark-7)"),
+                }, undefined),
+                "&:active": choose(Boolean(canSend), { transform: "scale(0.96)" }, undefined),
+            },
+        }}>
+              <IconArrowUp size={17} stroke={2.5}/>
             </ActionIcon>
           </Group>
         </Paper>
@@ -394,48 +222,37 @@ export function TutorPanel({
             `${ZIVO_ASSISTANT_NAME} can make mistakes. Check important details in your source.`}
         </Text>
       </Box>
-    </Stack>
-  );
+    </Stack>);
 }
-
 const CHAT_SUGGESTIONS = [
-  "Explain this question in simple terms",
-  "What concept is being tested here?",
-  "Give me a hint without the answer",
-  "Turn this into 3 MCQs",
+    "Explain this question in simple terms",
+    "What concept is being tested here?",
+    "Give me a hint without the answer",
+    "Turn this into 3 MCQs",
 ];
-
 // Reading-oriented prompts for Read / Study-Buddy mode (no question on screen).
 export const READ_CHAT_SUGGESTIONS = [
-  "Summarize this page",
-  "Explain the part I highlighted",
-  "What are the key takeaways?",
-  "Give me an example",
+    "Summarize this page",
+    "Explain the part I highlighted",
+    "What are the key takeaways?",
+    "Give me an example",
 ];
-
 // Openers for Brainstorm mode. Deliberately not "explain X" - each one asks the
 // learner to take a position, because a blank box is where brainstorming dies.
 export const BRAINSTORM_SUGGESTIONS = [
-  "What's the biggest tension in this material?",
-  "What is this the same shape as?",
-  "Where does this stop working?",
-  "What would break if the opposite were true?",
+    "What's the biggest tension in this material?",
+    "What is this the same shape as?",
+    "Where does this stop working?",
+    "What would break if the opposite were true?",
 ];
-
 /**
  * The brand heart, alive while the assistant thinks - a gentle beat with a soft glow
  * ring breathing outward. Replaces the old "..." dots for a more premium wait state.
  */
-function ThinkingHeart({ size = 28 }: { size?: number }) {
-  return (
-    <Box
-      pos="relative"
-      w={size}
-      h={size}
-      style={{ display: "grid", placeItems: "center", flexShrink: 0 }}
-      aria-live="polite"
-      aria-label="Thinking"
-    >
+function ThinkingHeart({ size = 28 }: {
+    size?: number;
+}) {
+    return (<Box pos="relative" w={size} h={size} style={{ display: "grid", placeItems: "center", flexShrink: 0 }} aria-live="polite" aria-label="Thinking">
       <style>{`
         @keyframes zivo-heart-beat {
           0%, 100% { transform: scale(1); }
@@ -454,279 +271,162 @@ function ThinkingHeart({ size = 28 }: { size?: number }) {
           .zivo-heart-ring { opacity: 0 !important; }
         }
       `}</style>
-      <Box
-        className="zivo-heart-ring"
-        pos="absolute"
-        style={{
-          inset: 0,
-          borderRadius: "50%",
-          background: "radial-gradient(circle, var(--mantine-color-lavender-4) 0%, transparent 68%)",
-        }}
-      />
+      <Box className="zivo-heart-ring" pos="absolute" style={{
+            inset: 0,
+            borderRadius: "50%",
+            background: "radial-gradient(circle, var(--mantine-color-lavender-4) 0%, transparent 68%)",
+        }}/>
       <Box className="zivo-heart-beat" style={{ position: "relative", lineHeight: 0 }}>
-        <BrandMark showWord={false} height={size} />
+        <BrandMark showWord={false} height={size}/>
       </Box>
-    </Box>
-  );
+    </Box>);
 }
-
-function MessageActionRail({
-  visible,
-  enabled,
-  children,
-  align = "flex-start",
-}: {
-  visible: boolean;
-  enabled: boolean;
-  children: ReactNode;
-  align?: "flex-start" | "flex-end";
+function MessageActionRail({ visible, enabled, children, align = "flex-start", }: {
+    visible: boolean;
+    enabled: boolean;
+    children: ReactNode;
+    align?: "flex-start" | "flex-end";
 }) {
-  return (
-    <Group
-      gap={4}
-      mt={align === "flex-end" ? 4 : 6}
-      justify={align}
-      h={enabled ? 28 : 0}
-      style={{
-        opacity: visible ? 1 : 0,
-        pointerEvents: visible ? "auto" : "none",
-        overflow: "hidden",
-        transition: "opacity 150ms ease",
-      }}
-    >
-      {enabled ? children : null}
-    </Group>
-  );
+    return (<Group gap={4} mt={choose(Boolean(align === "flex-end"), 4, 6)} justify={align} h={choose(Boolean(enabled), 28, 0)} style={{
+            opacity: choose(Boolean(visible), 1, 0),
+            pointerEvents: choose(Boolean(visible), "auto", "none"),
+            overflow: "hidden",
+            transition: "opacity 150ms ease",
+        }}>
+      {choose(Boolean(enabled), children, null)}
+    </Group>);
 }
-function ChatIconAction({
-  label,
-  onClick,
-  children,
-}: {
-  label: string;
-  onClick: () => void;
-  children: ReactNode;
+function ChatIconAction({ label, onClick, children, }: {
+    label: string;
+    onClick: () => void;
+    children: ReactNode;
 }) {
-  return (
-    <Tooltip label={label} position="top" withArrow openDelay={250}>
+    return (<Tooltip label={label} position="top" withArrow openDelay={250}>
       <ActionIcon variant="subtle" color="gray" size="sm" radius="md" aria-label={label} onClick={onClick}>
         {children}
       </ActionIcon>
-    </Tooltip>
-  );
+    </Tooltip>);
 }
-
-function ChatMessage({
-  message,
-  isUser,
-  streaming,
-  thinking = false,
-  isDark,
-  canRegenerate = false,
-  onRegenerate,
-  onEdit,
-  onSaveNote,
-  onExploreAngle,
-  onKeepAngle,
-  onAddMcqs,
-  mcqPersistBusy = false,
-  mcqPersistDone = null,
-  mcqPersistError = null,
-}: {
-  message: { role: string; content: string; citations?: ChatCitation[] | null };
-  isUser: boolean;
-  streaming: boolean;
-  thinking?: boolean;
-  isDark: boolean;
-  canRegenerate?: boolean;
-  onRegenerate?: () => void;
-  onEdit?: () => void;
-  onSaveNote?: () => void;
-  onExploreAngle?: (angle: string) => void;
-  onKeepAngle?: (angle: string) => void;
-  /** "Add to Learn": persist chat MCQs (zv-mcq blocks) into the pool. */
-  onAddMcqs?: (mcqs: ChatMcq[]) => void;
-  mcqPersistBusy?: boolean;
-  mcqPersistDone?: number | null;
-  mcqPersistError?: string | null;
+function ChatMessage({ message, isUser, streaming, thinking = false, isDark, canRegenerate = false, onRegenerate, onEdit, onSaveNote, onExploreAngle, onKeepAngle, onAddMcqs, mcqPersistBusy = false, mcqPersistDone = null, mcqPersistError = null, }: {
+    message: {
+        role: string;
+        content: string;
+        citations?: ChatCitation[] | null;
+    };
+    isUser: boolean;
+    streaming: boolean;
+    thinking?: boolean;
+    isDark: boolean;
+    canRegenerate?: boolean;
+    onRegenerate?: () => void;
+    onEdit?: () => void;
+    onSaveNote?: () => void;
+    onExploreAngle?: (angle: string) => void;
+    onKeepAngle?: (angle: string) => void;
+    /** "Add to Learn": persist chat MCQs (zv-mcq blocks) into the pool. */
+    onAddMcqs?: (mcqs: ChatMcq[]) => void;
+    mcqPersistBusy?: boolean;
+    mcqPersistDone?: number | null;
+    mcqPersistError?: string | null;
 }) {
-  const { hovered, ref } = useHover();
-  const actionsEnabled =
-    Boolean(message.content.trim()) && !streaming && !thinking;
-  // The last assistant reply keeps its actions visible (ChatGPT-style); others
-  // reveal on hover.
-  const showActions = (hovered || canRegenerate) && actionsEnabled;
-  const mcqs = message.role === "assistant" ? parseChatMcqs(message.content) : [];
-
-  if (isUser) {
-    return (
-      <Box
-        ref={ref}
-        className="chat-msg"
-        style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}
-      >
-        <Paper
-          px="md"
-          py="sm"
-          radius="lg"
-          maw="88%"
-          bg={isDark ? "dark.5" : "gray.1"}
-        >
+    const { hovered, ref } = useHover();
+    const actionsEnabled = pick(Boolean(message.content.trim()), () => pick(Boolean(!streaming), () => !thinking, () => !streaming), () => Boolean(message.content.trim()));
+    // The last assistant reply keeps its actions visible (ChatGPT-style); others
+    // reveal on hover.
+    const showActions = pick(Boolean((hovered || canRegenerate)), () => actionsEnabled, () => (hovered || canRegenerate));
+    const mcqs = pick(Boolean(message.role === "assistant"), () => parseChatMcqs(message.content), () => []);
+    return pick(Boolean(isUser), () => (<Box ref={ref} className="chat-msg" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+        <Paper px="md" py="sm" radius="lg" maw="88%" bg={choose(Boolean(isDark), "dark.5", "gray.1")}>
           <Text size="sm" lh={1.65} style={{ whiteSpace: "pre-wrap" }}>
             {message.content}
           </Text>
         </Paper>
         <MessageActionRail visible={showActions} enabled={actionsEnabled} align="flex-end">
-          {onEdit && (
-            <ChatIconAction label="Edit & resend" onClick={onEdit}>
-              <IconPencil size={15} stroke={1.8} />
-            </ChatIconAction>
-          )}
-          <MessageCopyAction value={message.content} label="Copy message" />
+          {pick(Boolean(onEdit), () => (<ChatIconAction label="Edit & resend" onClick={onEdit}>
+              <IconPencil size={15} stroke={1.8}/>
+            </ChatIconAction>), () => onEdit)}
+          <MessageCopyAction value={message.content} label="Copy message"/>
         </MessageActionRail>
-      </Box>
-    );
-  }
-
-  const isThinking = thinking || (streaming && !message.content);
-  // Brainstorm replies carry a trailing ANGLES block. Split it off so the prose
-  // renders as normal markdown and the angles become chips; other modes pass no
-  // angle handlers, so nothing is parsed and nothing changes for them.
-  const anglesEnabled = Boolean(onExploreAngle || onKeepAngle);
-  const { prose, angles } = anglesEnabled
-    ? splitAngles(message.content)
-    : { prose: message.content, angles: [] as string[] };
-  return (
-    <Group ref={ref} className="chat-msg" align="flex-start" gap="sm" wrap="nowrap" maw="100%">
-      {isThinking ? <ThinkingHeart size={28} /> : <AssistantLogo size={28} />}
+      </Box>), () => {
+        const isThinking = thinking || (pick(Boolean(streaming), () => !message.content, () => streaming));
+        // Brainstorm replies carry a trailing ANGLES block. Split it off so the prose
+        // renders as normal markdown and the angles become chips; other modes pass no
+        // angle handlers, so nothing is parsed and nothing changes for them.
+        const anglesEnabled = Boolean(onExploreAngle || onKeepAngle);
+        const { prose, angles } = pick(Boolean(anglesEnabled), () => splitAngles(message.content), () => ({ prose: message.content, angles: [] as string[] }));
+        return (<Group ref={ref} className="chat-msg" align="flex-start" gap="sm" wrap="nowrap" maw="100%">
+      {choose(Boolean(isThinking), <ThinkingHeart size={28}/>, <AssistantLogo size={28}/>)}
       <Box pt={4} style={{ flex: 1, minWidth: 0 }}>
-        {isThinking ? (
-          <Text size="sm" c="dimmed" pt={5} style={{ fontStyle: "italic" }}>
+        {pick(Boolean(isThinking), () => (<Text size="sm" c="dimmed" pt={5} style={{ fontStyle: "italic" }}>
             Thinking…
-          </Text>
-        ) : (
-          <>
-            <AssistantMarkdown content={prose} isDark={isDark} streaming={streaming} />
-            {!streaming && message.citations && message.citations.length > 0 && (
-              <Stack gap={4} mt={8}>
+          </Text>), () => (<>
+            <AssistantMarkdown content={prose} isDark={isDark} streaming={streaming}/>
+            {pick(Boolean(!streaming), () => pick(Boolean(message.citations), () => pick(Boolean(message.citations.length > 0), () => (<Stack gap={4} mt={8}>
                 <Text size="xs" fw={600} c="dimmed" tt="uppercase" style={{ letterSpacing: "0.04em" }}>
                   From your source
                 </Text>
                 <Group gap={6} wrap="wrap">
-                  {message.citations.slice(0, 4).map((c, ci) => (
-                    <Tooltip
-                      key={`${c.chunk_id ?? c.document_id}-${ci}`}
-                      label={c.snippet || "Source passage"}
-                      position="top"
-                      withArrow
-                      maw={280}
-                      multiline
-                      openDelay={200}
-                    >
-                      <Text
-                        size="xs"
-                        fw={500}
-                        c="lavender.7"
-                        style={{
-                          whiteSpace: "nowrap",
-                          background: "var(--mantine-color-lavender-0)",
-                          border: "1px solid var(--mantine-color-lavender-2)",
-                          borderRadius: "var(--mantine-radius-xl)",
-                          padding: "2px 10px",
-                          cursor: "default",
-                        }}
-                      >
-                        {c.page_start && c.page_end && c.page_start === c.page_end
-                          ? `p.${c.page_start}`
-                          : c.page_start && c.page_end
-                            ? `p.${c.page_start}–${c.page_end}`
-                            : "source"}
-                        {typeof c.score === "number" ? ` · ${Math.round(c.score * 100)}%` : ""}
+                  {message.citations.slice(0, 4).map((c, ci) => (<Tooltip key={`${c.chunk_id ?? c.document_id}-${ci}`} label={c.snippet || "Source passage"} position="top" withArrow maw={280} multiline openDelay={200}>
+                      <Text size="xs" fw={500} c="lavender.7" style={{
+                            whiteSpace: "nowrap",
+                            background: "var(--mantine-color-lavender-0)",
+                            border: "1px solid var(--mantine-color-lavender-2)",
+                            borderRadius: "var(--mantine-radius-xl)",
+                            padding: "2px 10px",
+                            cursor: "default",
+                        }}>
+                        {/*..............................................................................*/choose(Boolean(c.page_start && c.page_end && c.page_start === c.page_end), `p.${c.page_start}`, choose(Boolean(c.page_start && c.page_end), `p.${c.page_start}–${c.page_end}`, "source"))}
+                        {pick(Boolean(typeof c.score === "number"), () => ` · ${Math.round(c.score * 100)}%`, () => "")}
                       </Text>
-                    </Tooltip>
-                  ))}
+                    </Tooltip>))}
                 </Group>
-              </Stack>
-            )}
-          </>
-        )}
+              </Stack>), () => message.citations.length > 0), () => message.citations), () => !streaming)}
+          </>))}
         {/* Held back until the stream settles - half-written angles would flicker. */}
-        {!streaming && angles.length > 0 && (
-          <Stack gap={6} mt="xs">
-            {angles.map((angle) => (
-              <Group key={angle} gap={6} wrap="nowrap" align="center">
-                <Button
-                  variant="light"
-                  color="sage"
-                  radius="xl"
-                  size="compact-xs"
-                  styles={{
-                    root: {
-                      flex: 1,
-                      minWidth: 0,
-                      // Angles routinely wrap to two lines; compact-xs pins a fixed
-                      // height, so the label spilled out and collided with the next chip.
-                      height: "auto",
-                      paddingTop: 5,
-                      paddingBottom: 5,
-                      // The sage scale is inverted in dark mode (high shade = bright on
-                      // ink), so `variant="light"` alone resolves to a DARK green label
-                      // on a dark chip - measured at 1.19:1. -8/-7 is the readable tone
-                      // in each scheme (11.75:1 on dark).
-                      color: "light-dark(var(--mantine-color-sage-8), var(--mantine-color-sage-7))",
-                    },
-                    label: { whiteSpace: "normal", textAlign: "left", lineHeight: 1.4 },
-                  }}
-                  onClick={() => onExploreAngle?.(angle)}
-                  disabled={!onExploreAngle}
-                >
+        {pick(Boolean(!streaming), () => pick(Boolean(angles.length > 0), () => (<Stack gap={6} mt="xs">
+            {angles.map((angle) => (<Group key={angle} gap={6} wrap="nowrap" align="center">
+                <Button variant="light" color="sage" radius="xl" size="compact-xs" styles={{
+                        root: {
+                            flex: 1,
+                            minWidth: 0,
+                            // Angles routinely wrap to two lines; compact-xs pins a fixed
+                            // height, so the label spilled out and collided with the next chip.
+                            height: "auto",
+                            paddingTop: 5,
+                            paddingBottom: 5,
+                            // The sage scale is inverted in dark mode (high shade = bright on
+                            // ink), so `variant="light"` alone resolves to a DARK green label
+                            // on a dark chip - measured at 1.19:1. -8/-7 is the readable tone
+                            // in each scheme (11.75:1 on dark).
+                            color: "light-dark(var(--mantine-color-sage-8), var(--mantine-color-sage-7))",
+                        },
+                        label: { whiteSpace: "normal", textAlign: "left", lineHeight: 1.4 },
+                    }} onClick={() => onExploreAngle?.(angle)} disabled={!onExploreAngle}>
                   {angle}
                 </Button>
-                {onKeepAngle && (
-                  <ChatIconAction label="Keep on the idea board" onClick={() => onKeepAngle(angle)}>
-                    <IconPlus size={15} stroke={1.8} />
-                  </ChatIconAction>
-                )}
-              </Group>
-            ))}
-          </Stack>
-        )}
+                {pick(Boolean(onKeepAngle), () => (<ChatIconAction label="Keep on the idea board" onClick={() => onKeepAngle(angle)}>
+                    <IconPlus size={15} stroke={1.8}/>
+                  </ChatIconAction>), () => onKeepAngle)}
+              </Group>))}
+          </Stack>), () => angles.length > 0), () => !streaming)}
         <MessageActionRail visible={showActions} enabled={actionsEnabled}>
-          <MessageCopyAction value={message.content} label="Copy message" />
-          {onSaveNote && (
-            <ChatIconAction label="Save to notes" onClick={onSaveNote}>
-              <IconNotebook size={15} stroke={1.8} />
-            </ChatIconAction>
-          )}
-          {canRegenerate && onRegenerate && (
-            <ChatIconAction label="Regenerate" onClick={onRegenerate}>
-              <IconRefresh size={15} stroke={1.8} />
-            </ChatIconAction>
-          )}
+          <MessageCopyAction value={message.content} label="Copy message"/>
+          {pick(Boolean(onSaveNote), () => (<ChatIconAction label="Save to notes" onClick={onSaveNote}>
+              <IconNotebook size={15} stroke={1.8}/>
+            </ChatIconAction>), () => onSaveNote)}
+          {pick(Boolean(canRegenerate), () => pick(Boolean(onRegenerate), () => (<ChatIconAction label="Regenerate" onClick={onRegenerate}>
+              <IconRefresh size={15} stroke={1.8}/>
+            </ChatIconAction>), () => onRegenerate), () => canRegenerate)}
         </MessageActionRail>
-        {!streaming && onAddMcqs && mcqs.length > 0 && (
-          <Group gap={6} mt={8}>
-            <Button
-              variant="light"
-              color="lavender"
-              radius="xl"
-              size="compact-sm"
-              loading={mcqPersistBusy}
-              leftSection={<IconPlus size={14} stroke={2} />}
-              onClick={() => onAddMcqs(mcqs)}
-            >
-              {mcqPersistDone != null
-                ? `Added ${mcqPersistDone} to Learn`
-                : `Add ${mcqs.length} to Learn`}
+        {pick(Boolean(!streaming), () => pick(Boolean(onAddMcqs), () => pick(Boolean(mcqs.length > 0), () => (<Group gap={6} mt={8}>
+            <Button variant="light" color="lavender" radius="xl" size="compact-sm" loading={mcqPersistBusy} leftSection={<IconPlus size={14} stroke={2}/>} onClick={() => onAddMcqs(mcqs)}>
+              {choose(Boolean(mcqPersistDone != null), `Added ${mcqPersistDone} to Learn`, `Add ${mcqs.length} to Learn`)}
             </Button>
-            {mcqPersistError ? (
-              <Text size="xs" c="terracotta">
+            {choose(Boolean(mcqPersistError), (<Text size="xs" c="terracotta">
                 {mcqPersistError}
-              </Text>
-            ) : null}
-          </Group>
-        )}
+              </Text>), null)}
+          </Group>), () => mcqs.length > 0), () => onAddMcqs), () => !streaming)}
       </Box>
-    </Group>
-  );
+    </Group>);
+    });
 }

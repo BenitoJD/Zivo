@@ -12,8 +12,10 @@ from typing import Any, Literal
 
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 from app.repositories.intel import update_activity
 from app.services.llm_router import acomplete_chat
+from app.services.llm_route import evaluate_llm_route
 from app.services.llm_sync import run_coro_in_worker
 from app.services.aspect_discovery import (
     dedupe_aspects,
@@ -21,6 +23,7 @@ from app.services.aspect_discovery import (
     pick_for_plan,
     substantial_paragraphs,
 )
+from app.services.presence import evaluate_presence
 from app.services.prompts import get_prompt
 from app.services.question_budget import (
     Centrality,
@@ -40,6 +43,14 @@ logger = logging.getLogger(__name__)
 
 _TRIAGE_PAGE_MAX_TOKENS = PAGE_INPUT_MAX_TOKENS
 
+_ASPECT_SHAPE_RULES = (
+    Rule(when=(Pred("is_str", "truthy"), Pred("has_text", "truthy")), action="from_str"),
+    Rule(when=(Pred("is_dict", "truthy"),), action="from_dict"),
+    Rule(when=(), action="drop"),
+)
+
+_CONFIDENCE = frozenset({"high", "medium", "low"})
+
 
 class _TriageCache:
     """In-process LRU cache of triage JSON keyed by page-text hash."""
@@ -55,10 +66,12 @@ class _TriageCache:
     def get(self, page_text: str, page_number: int) -> dict[str, Any] | None:
         key = self._key(page_text, page_number)
         hit = self._store.get(key)
-        if hit is None:
-            return None
-        self._store.move_to_end(key)
-        return dict(hit)
+
+        def _touch() -> dict[str, Any]:
+            self._store.move_to_end(key)
+            return dict(hit)
+
+        return pick(hit is None, lambda: None, _touch)
 
     def put(self, page_text: str, page_number: int, result: dict[str, Any]) -> None:
         key = self._key(page_text, page_number)
@@ -69,6 +82,24 @@ class _TriageCache:
 
 
 _triage_cache = _TriageCache()
+
+
+def _maybe_activity(
+    db: Session,
+    activity_id: str | None,
+    stats: dict[str, Any],
+) -> None:
+    pick(
+        bool(activity_id),
+        lambda: update_activity(
+            db,
+            uuid.UUID(str(activity_id)),
+            status="succeeded",
+            stats=stats,
+            finished=True,
+        ),
+        lambda: None,
+    )
 
 
 def run_page_triage(
@@ -94,62 +125,11 @@ def run_page_triage(
         page_start=page_number,
         page_end=page_number,
     )
-    page_text = "\n\n".join(c["text"] for c in chunks if c.get("text")).strip()
+    page_text = "\n\n".join(
+        c["text"] for c in filter(lambda c: c.get("text"), chunks)
+    ).strip()
 
-    # Guard the indexing race. Eager lookahead triage can reach a page BEFORE
-    # ingest finishes. Defer (write no coverage) until the page is ready —
-    # either chunks exist, or ingest marked it in meta.ingested_pages (empty scan).
-    if not page_text:
-        if page_number not in pages_ready_for_document(db, document_id):
-            logger.info(
-                "page triage deferred: page %s not ingested yet (doc %s)",
-                page_number,
-                document_id,
-            )
-            return {
-                "question_budget": 0,
-                "aspects": [],
-                "rationale": "Deferred — page text not indexed yet.",
-                "aspect_dedup": None,
-                "content_type": None,
-                "non_content": False,
-                "deferred": True,
-            }
-
-        # Empty extractable text: one vision glance, then skip (cannot quiz without text).
-        # Vision plumbing returns usable; Content Worthiness owns the gate reason.
-        # blank → quiet skip; usable → stop and ask human; five blanks → stop and ask.
-        from app.services.content_worthiness import (
-            evaluate_vision_glance,
-            evaluate_worthiness,
-            plan_worthiness_probe,
-        )
-
-        vision_usable = False
-        rationale = "No extractable text on this page."
-        probe = plan_worthiness_probe("empty_page")
-        worth = evaluate_worthiness(
-            page_text=page_text or "",
-            empty=probe.empty,
-            check_junk=probe.check_junk,
-            min_chars=probe.min_chars,
-        )
-        doc = db.get(Document, document_id)
-        if doc and should_skip_empty_page_vision(doc):
-            rationale = "Skipped vision — already asked learner to reselect pages."
-        else:
-            glance = judge_page_has_content(db, document_id, page_number)
-            vision_usable = bool(glance.get("usable"))
-            worth = evaluate_vision_glance(
-                usable=vision_usable,
-                rationale=str(glance.get("rationale") or ""),
-            )
-            rationale = worth.details or rationale
-            note_empty_page_triage(db, document_id, vision_usable=vision_usable)
-
-        result = _non_content_result(
-            rationale=f"{rationale} [worthiness:{worth.reason}]"
-        )
+    def _finish(result: dict[str, Any], stats: dict[str, Any]) -> dict[str, Any]:
         _persist_triage_coverage(
             db,
             document_id,
@@ -158,116 +138,169 @@ def run_page_triage(
             activity_id=activity_id,
         )
         on_triage_completed(db, document_id, page=page_number, precompute=precompute)
-        if activity_id:
-            update_activity(
-                db,
-                uuid.UUID(str(activity_id)),
-                status="succeeded",
-                stats={
-                    "question_budget": 0,
-                    "aspects_count": 0,
-                    "page_number": page_number,
-                    "vision_usable": vision_usable,
-                },
-                finished=True,
-            )
+        _maybe_activity(db, activity_id, stats)
         db.commit()
         return result
 
-    reset_empty_page_streak(db, document_id)
-
-    # Newspaper editions: Worthiness Engine owns ad/junk/off-syllabus skip.
-    doc_for_signal = db.get(Document, document_id)
-    is_newspaper = bool(doc_for_signal and (doc_for_signal.meta or {}).get("newspaper"))
-    if is_newspaper:
-        from app.services.content_worthiness import evaluate_worthiness
-
-        worth = evaluate_worthiness(page_text=page_text, newspaper=True, db=db)
-        if not worth.worthy:
-            # Newspaper cook plans Learn by default (docs/QUESTION_BUDGET_ENGINE.md §0).
-            result = _non_content_result(
-                rationale=(
-                    f"Newspaper filter ({worth.reason}): {worth.details or worth.reason}"
-                    f" [worthiness:{worth.reason}]"
-                ),
-                mode="learn",
-            )
-            _persist_triage_coverage(
-                db,
+    def _empty_page() -> dict[str, Any]:
+        def _deferred() -> dict[str, Any]:
+            logger.info(
+                "page triage deferred: page %s not ingested yet (doc %s)",
+                page_number,
                 document_id,
-                page_number=page_number,
-                result=result,
-                activity_id=activity_id,
             )
-            on_triage_completed(db, document_id, page=page_number, precompute=precompute)
-            if activity_id:
-                update_activity(
-                    db,
-                    uuid.UUID(str(activity_id)),
-                    status="succeeded",
-                    stats={
+            return {
+                "question_budget": 0,
+                "aspects": [],
+                "rationale": "Deferred: page text not indexed yet.",
+                "aspect_dedup": None,
+                "content_type": None,
+                "non_content": False,
+                "deferred": True,
+            }
+
+        def _vision_path() -> dict[str, Any]:
+            from app.services.content_worthiness import (
+                evaluate_vision_glance,
+                evaluate_worthiness,
+                plan_worthiness_probe,
+            )
+
+            box: dict[str, Any] = {
+                "vision_usable": False,
+                "rationale": "No extractable text on this page.",
+            }
+            probe = plan_worthiness_probe("empty_page")
+            worth = evaluate_worthiness(
+                page_text=page_text or "",
+                empty=probe.empty,
+                check_junk=probe.check_junk,
+                min_chars=probe.min_chars,
+            )
+            doc = db.get(Document, document_id)
+
+            def _skip_vision() -> None:
+                box["rationale"] = "Skipped vision: already asked learner to reselect pages."
+
+            def _glance() -> None:
+                glance = judge_page_has_content(db, document_id, page_number)
+                box["vision_usable"] = bool(glance.get("usable"))
+                glanced = evaluate_vision_glance(
+                    usable=box["vision_usable"],
+                    rationale=str(glance.get("rationale") or ""),
+                )
+                box["worth"] = glanced
+                box["rationale"] = glanced.details or box["rationale"]
+                note_empty_page_triage(db, document_id, vision_usable=box["vision_usable"])
+
+            box["worth"] = worth
+            pick(
+                bool(doc) and should_skip_empty_page_vision(doc),
+                _skip_vision,
+                _glance,
+            )
+            result = _non_content_result(
+                rationale=f"{box['rationale']} [worthiness:{box['worth'].reason}]"
+            )
+            return _finish(
+                result,
+                {
+                    "question_budget": 0,
+                    "aspects_count": 0,
+                    "page_number": page_number,
+                    "vision_usable": box["vision_usable"],
+                },
+            )
+
+        return pick(
+            page_number not in pages_ready_for_document(db, document_id),
+            _deferred,
+            _vision_path,
+        )
+
+    def _content_page() -> dict[str, Any]:
+        reset_empty_page_streak(db, document_id)
+        doc_for_signal = db.get(Document, document_id)
+        is_newspaper = bool(doc_for_signal and (doc_for_signal.meta or {}).get("newspaper"))
+
+        def _newspaper_gate() -> dict[str, Any]:
+            from app.services.content_worthiness import evaluate_worthiness
+
+            worth = evaluate_worthiness(page_text=page_text, newspaper=True, db=db)
+
+            def _skip_paper() -> dict[str, Any]:
+                result = _non_content_result(
+                    rationale=(
+                        f"Newspaper filter ({worth.reason}): {worth.details or worth.reason}"
+                        f" [worthiness:{worth.reason}]"
+                    ),
+                    mode="learn",
+                )
+                return _finish(
+                    result,
+                    {
                         "question_budget": 0,
                         "aspects_count": 0,
                         "page_number": page_number,
                         "newspaper_filter": worth.reason,
                     },
-                    finished=True,
                 )
-            db.commit()
-            return result
 
-    # Product rule: newspaper editions cook with Learn (m=1). Test re-plans at
-    # serve time via learn-queue ?mode=test (see QUESTION_BUDGET_ENGINE.md §0).
-    triage_mode: Mode = "learn"
-    result = _triage_page(
-        db, page_text=page_text, page_number=page_number, mode=triage_mode
+            return pick(not worth.worthy, _skip_paper, _finish_triage)
+
+        def _finish_triage() -> dict[str, Any]:
+            triage_mode: Mode = "learn"
+            result = _triage_page(
+                db, page_text=page_text, page_number=page_number, mode=triage_mode
+            )
+            content_type = result.get("content_type")
+            conf_raw = result.get("budget_confidence")
+            aspects_raw = result.get("aspects") or []
+            test_overlay = plan_newspaper_test_triage(
+                is_newspaper=is_newspaper,
+                non_content=bool(result.get("non_content")),
+                aspects=aspects_raw,
+                units=pick(
+                    is_newspaper,
+                    lambda: _units_from_aspects(aspects_raw),
+                    lambda: None,
+                ),
+                words=pick(bool(page_text), lambda: len(page_text.split()), lambda: 0),
+                substantial_paragraphs=len(substantial_paragraphs(page_text)),
+                confidence=pick(conf_raw in _CONFIDENCE, lambda: conf_raw, lambda: None),
+            )
+
+            def _apply_overlay() -> None:
+                nonlocal content_type, result
+                content_type = test_overlay.content_type
+                result = {
+                    **result,
+                    "test_question_budget": test_overlay.test_question_budget,
+                    "test_aspects": list(test_overlay.test_aspects),
+                }
+
+            pick(test_overlay.apply, _apply_overlay, lambda: None)
+
+            def _stamp_type() -> None:
+                nonlocal result
+                result = {**result, "content_type": content_type}
+
+            pick(content_type is not None, _stamp_type, lambda: None)
+            return _finish(
+                result,
+                {
+                    "question_budget": result["question_budget"],
+                    "aspects_count": len(result["aspects"]),
+                    "page_number": page_number,
+                },
+            )
+
+        return pick(is_newspaper, _newspaper_gate, _finish_triage)
+
+    return apply(
+        evaluate_presence(page_text).action,
+        {"ok": _content_page, "empty": _empty_page, "missing": _empty_page},
     )
-
-    content_type = result.get("content_type")
-    conf_raw = result.get("budget_confidence")
-    aspects_raw = result.get("aspects") or []
-    test_overlay = plan_newspaper_test_triage(
-        is_newspaper=is_newspaper,
-        non_content=bool(result.get("non_content")),
-        aspects=aspects_raw,
-        units=_units_from_aspects(aspects_raw) if is_newspaper else None,
-        words=len(page_text.split()) if page_text else 0,
-        substantial_paragraphs=len(substantial_paragraphs(page_text)),
-        confidence=conf_raw if conf_raw in ("high", "medium", "low") else None,
-    )
-    if test_overlay.apply:
-        content_type = test_overlay.content_type
-        result = {
-            **result,
-            "test_question_budget": test_overlay.test_question_budget,
-            "test_aspects": list(test_overlay.test_aspects),
-        }
-
-    if content_type is not None:
-        result = {**result, "content_type": content_type}
-    _persist_triage_coverage(
-        db,
-        document_id,
-        page_number=page_number,
-        result=result,
-        activity_id=activity_id,
-    )
-    on_triage_completed(db, document_id, page=page_number, precompute=precompute)
-
-    if activity_id:
-        update_activity(
-            db,
-            uuid.UUID(str(activity_id)),
-            status="succeeded",
-            stats={
-                "question_budget": result["question_budget"],
-                "aspects_count": len(result["aspects"]),
-                "page_number": page_number,
-            },
-            finished=True,
-        )
-    db.commit()
-    return result
 
 
 def _complete_chat_sync(
@@ -277,34 +310,60 @@ def _complete_chat_sync(
         return run_coro_in_worker(
             acomplete_chat(messages, db, log_tag="page_triage", model_id=model_id)
         )
-    except Exception:
-        # Fall back to the pool if a pinned model stalls/errors, so triage (and thus
-        # generation) recovers instead of failing the whole job.
-        if model_id is None:
-            raise
-        return run_coro_in_worker(
-            acomplete_chat(messages, db, log_tag="page_triage", model_id=None)
+    except Exception as err:
+        caught = err
+
+        def _reraise() -> str:
+            raise caught
+
+        return apply(
+            evaluate_llm_route(
+                has_primary=model_id is not None,
+                has_fallback=model_id is not None,
+                primary_failed=True,
+            ).action,
+            {
+                "use_primary": _reraise,
+                "use_fallback": lambda: run_coro_in_worker(
+                    acomplete_chat(messages, db, log_tag="page_triage", model_id=None)
+                ),
+                "skip": _reraise,
+            },
         )
 
 
 def _parse_triage_json(raw: str) -> dict[str, Any] | None:
-    if not raw or not raw.strip():
+    def _none() -> None:
         return None
-    text_block = raw.strip()
-    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text_block, re.DOTALL)
-    if fence:
-        text_block = fence.group(1)
-    else:
-        start = text_block.find("{")
-        end = text_block.rfind("}")
-        if start >= 0 and end > start:
-            text_block = text_block[start : end + 1]
-        else:
+
+    def _loads(block: str) -> dict[str, Any] | None:
+        try:
+            return json.loads(block)
+        except json.JSONDecodeError:
             return None
-    try:
-        return json.loads(text_block)
-    except json.JSONDecodeError:
-        return None
+
+    def _parse() -> dict[str, Any] | None:
+        text_block = raw.strip()
+        fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text_block, re.DOTALL)
+
+        def _from_fence() -> dict[str, Any] | None:
+            return _loads(fence.group(1))
+
+        def _from_braces() -> dict[str, Any] | None:
+            start = text_block.find("{")
+            end = text_block.rfind("}")
+            return pick(
+                start >= 0 and end > start,
+                lambda: _loads(text_block[start : end + 1]),
+                _none,
+            )
+
+        return pick(bool(fence), _from_fence, _from_braces)
+
+    return apply(
+        evaluate_presence((raw or "").strip()).action,
+        {"ok": _parse, "empty": _none, "missing": _none},
+    )
 
 
 def _persist_triage_coverage(
@@ -332,7 +391,11 @@ def _persist_triage_coverage(
         programmable=bool(result.get("programmable")),
         debuggable=alias_debuggable(
             programmable=bool(result.get("programmable")),
-            debuggable=result.get("debuggable") if "debuggable" in result else None,
+            debuggable=pick(
+                "debuggable" in result,
+                lambda: result.get("debuggable"),
+                lambda: None,
+            ),
         ),
         budget_confidence=result.get("budget_confidence"),
         budget_mode=result.get("budget_mode"),
@@ -360,12 +423,12 @@ def _units_from_aspects(aspects: list[dict[str, Any]]) -> list[Unit]:
 def _select_aspects_for_plan(
     aspects: list[dict[str, Any]], *, n_page: int
 ) -> list[dict[str, Any]]:
-    """Prefer central units - Aspect Discovery Engine owns the pick."""
+    """Prefer central units: Aspect Discovery Engine owns the pick."""
     return list(pick_for_plan(aspects, n_page=n_page).aspects)
 
 
 def _normalize_aspect(item: Any, index: int, page_number: int) -> dict[str, Any] | None:
-    if isinstance(item, str) and item.strip():
+    def _from_str() -> dict[str, Any]:
         key = re.sub(r"[^a-z0-9]+", "-", item.strip().lower())[:48].strip("-") or f"aspect-{index}"
         return {
             "key": key,
@@ -374,25 +437,46 @@ def _normalize_aspect(item: Any, index: int, page_number: int) -> dict[str, Any]
             "asked": False,
             "answered": False,
         }
-    if isinstance(item, dict):
+
+    def _from_dict() -> dict[str, Any] | None:
         label = (item.get("label") or item.get("name") or "").strip()
-        if not label:
-            return None
-        key = (item.get("key") or "").strip()
-        if not key:
-            key = re.sub(r"[^a-z0-9]+", "-", label.lower())[:48].strip("-") or f"aspect-{index}"
-        aspect: dict[str, Any] = {
-            "key": key,
-            "label": label,
-            "centrality": _parse_centrality(item.get("centrality")),
-            "asked": False,
-            "answered": False,
-        }
-        angle = (item.get("cognitive_angle") or "").strip()
-        if angle:
-            aspect["cognitive_angle"] = angle
-        return aspect
-    return None
+
+        def _built() -> dict[str, Any]:
+            key = (item.get("key") or "").strip()
+            key = pick(
+                not key,
+                lambda: re.sub(r"[^a-z0-9]+", "-", label.lower())[:48].strip("-")
+                or f"aspect-{index}",
+                lambda: key,
+            )
+            aspect: dict[str, Any] = {
+                "key": key,
+                "label": label,
+                "centrality": _parse_centrality(item.get("centrality")),
+                "asked": False,
+                "answered": False,
+            }
+            angle = (item.get("cognitive_angle") or "").strip()
+            pick(bool(angle), lambda: aspect.__setitem__("cognitive_angle", angle), lambda: None)
+            return aspect
+
+        return apply(
+            evaluate_presence(label).action,
+            {"ok": _built, "empty": lambda: None, "missing": lambda: None},
+        )
+
+    hit = first_match(
+        _ASPECT_SHAPE_RULES,
+        {
+            "is_str": isinstance(item, str),
+            "has_text": isinstance(item, str) and bool(item.strip()),
+            "is_dict": isinstance(item, dict),
+        },
+    )
+    return apply(
+        hit.action,
+        {"from_str": _from_str, "from_dict": _from_dict, "drop": lambda: None},
+    )
 
 
 def _looks_like_junk(text: str) -> bool:
@@ -427,17 +511,14 @@ def _non_content_result(
 
 
 def _fallback_triage(page_text: str, page_number: int, *, mode: Mode = "learn") -> dict[str, Any]:
-    # Density prior via Aspect Discovery; planner owns N after units are built.
     from app.services.aspect_discovery import heuristic_fallback_aspects
 
-    pick = heuristic_fallback_aspects(page_text, page_number)
-    aspects = list(pick.aspects)
-    words = len(page_text.split()) if page_text else 0
+    pick_v = heuristic_fallback_aspects(page_text, page_number)
+    aspects = list(pick_v.aspects)
+    words = pick(bool(page_text), lambda: len(page_text.split()), lambda: 0)
     substantial = substantial_paragraphs(page_text)
-    # No testable text at all → genuinely non-content. Must be marked so the page
-    # completes (is_page_complete treats 0 generated + not non_content as "not done"
-    # and would otherwise strand the learner here with nothing to answer).
-    if not aspects:
+
+    def _zero() -> dict[str, Any]:
         from app.services.content_worthiness import evaluate_worthiness
 
         worth = evaluate_worthiness(page_text=page_text or "", empty=(words == 0))
@@ -448,13 +529,20 @@ def _fallback_triage(page_text: str, page_number: int, *, mode: Mode = "learn") 
             ),
             mode=mode,
         )
-    return _finalize_triage(
-        aspects=aspects,
-        rationale="Heuristic triage from page length.",
-        mode=mode,
-        words=words,
-        substantial_paragraphs=len(substantial),
-        confidence="medium",
+
+    def _plan() -> dict[str, Any]:
+        return _finalize_triage(
+            aspects=aspects,
+            rationale="Heuristic triage from page length.",
+            mode=mode,
+            words=words,
+            substantial_paragraphs=len(substantial),
+            confidence="medium",
+        )
+
+    return apply(
+        evaluate_presence(aspects).action,
+        {"ok": _plan, "empty": _zero, "missing": _zero},
     )
 
 
@@ -480,25 +568,29 @@ def _finalize_triage(
         "merged_keys": list(dedupe_verdict.merged_keys),
     }
     for aspect in deduped:
-        # Aspect Discovery owns centrality tokens (incl. peripheral→support, skip≠central).
         cent = parse_centrality(aspect.get("centrality"))
         aspect["centrality"] = cent
         central, peripheral = stamp_aspect_flags(cent)
         aspect["central"] = central
-        if peripheral:
-            aspect["peripheral"] = True
+        pick(peripheral, lambda a=aspect: a.__setitem__("peripheral", True), lambda: None)
     plan_aspects = normalize_aspects(deduped)
-    # Merge engine keys back onto triage aspect dicts (preserve angles, etc.).
     unused = list(deduped)
     normalized_dicts: list[dict[str, Any]] = []
     for a in plan_aspects.aspects:
-        matched_idx = None
-        for i, d in enumerate(unused):
-            raw_key = str(d.get("key") or d.get("label") or "")
-            if normalize_key(raw_key) == a.key or str(d.get("label") or "") == a.label:
-                matched_idx = i
-                break
-        base = dict(unused.pop(matched_idx)) if matched_idx is not None else {}
+        matched_idx = next(
+            filter(
+                lambda i: normalize_key(str(unused[i].get("key") or unused[i].get("label") or ""))
+                == a.key
+                or str(unused[i].get("label") or "") == a.label,
+                range(len(unused)),
+            ),
+            None,
+        )
+        base = pick(
+            matched_idx is not None,
+            lambda idx=matched_idx: dict(unused.pop(idx)),
+            lambda: {},
+        )
         base["key"] = a.key
         base["label"] = a.label or base.get("label") or a.key
         orig_cent = parse_centrality(base.get("centrality"))
@@ -511,14 +603,15 @@ def _finalize_triage(
     deduped = normalized_dicts
     units = _units_from_aspects(deduped)
     plan = plan_page_budget(
-        units if units else None,
+        units or None,
         mode=mode,
         non_content=False,
         words=words,
         substantial_paragraphs=substantial_paragraphs,
         confidence=confidence,
     )
-    if plan.n_page == 0:
+
+    def _zero_plan() -> dict[str, Any]:
         return _non_content_result(
             content_type=content_type or "non_content",
             rationale=(rationale or "Planner: no cookable units on this page.").strip(),
@@ -526,24 +619,32 @@ def _finalize_triage(
             mode=mode,
         )
 
-    selected = _select_aspects_for_plan(deduped, n_page=plan.n_page)
-    dedup_note = ""
-    if meta["raw_count"] != meta["deduped_count"]:
-        dedup_note = f" {meta['deduped_count']} unique aspects after dedup ({meta['raw_count']} raw)."
-    return {
-        "question_budget": plan.n_page,
-        "aspects": selected,
-        "rationale": (rationale + dedup_note).strip(),
-        "aspect_dedup": meta,
-        "content_type": content_type,
-        "programmable": bool(programmable),
-        "non_content": False,
-        "budget_confidence": plan.confidence,
-        "budget_mode": plan.mode,
-        "budget_version": plan.budget_version,
-        "n_cov": plan.n_cov,
-        "kc_policy_version": "qb.kc.v1",
-    }
+    def _keep_plan() -> dict[str, Any]:
+        selected = _select_aspects_for_plan(deduped, n_page=plan.n_page)
+        dedup_note = pick(
+            meta["raw_count"] != meta["deduped_count"],
+            lambda: (
+                f" {meta['deduped_count']} unique aspects after dedup "
+                f"({meta['raw_count']} raw)."
+            ),
+            lambda: "",
+        )
+        return {
+            "question_budget": plan.n_page,
+            "aspects": selected,
+            "rationale": (rationale + dedup_note).strip(),
+            "aspect_dedup": meta,
+            "content_type": content_type,
+            "programmable": bool(programmable),
+            "non_content": False,
+            "budget_confidence": plan.confidence,
+            "budget_mode": plan.mode,
+            "budget_version": plan.budget_version,
+            "n_cov": plan.n_cov,
+            "kc_policy_version": "qb.kc.v1",
+        }
+
+    return pick(plan.n_page == 0, _zero_plan, _keep_plan)
 
 
 def _triage_page(
@@ -556,159 +657,178 @@ def _triage_page(
     settings = get_settings()
     allow_zero = settings.allow_zero_questions
     use_llm = bool(settings.llm_page_triage)
-    excerpt = truncate_to_tokens(page_text, _TRIAGE_PAGE_MAX_TOKENS) if page_text else ""
-
-    # Separate cache namespaces so flipping llm_page_triage never serves a stale
-    # LLM plan as a "heuristic" result (or the reverse).
-    cache_kind = "page_triage" if use_llm else "page_triage_heuristic"
-    # In-process LRU is shared; prefix the logical key via page_number namespace.
-    cache_page_key = page_number if use_llm else -page_number
+    excerpt = pick(
+        bool(page_text),
+        lambda: truncate_to_tokens(page_text, _TRIAGE_PAGE_MAX_TOKENS),
+        lambda: "",
+    )
+    cache_kind = choose(use_llm, "page_triage", "page_triage_heuristic")
+    cache_page_key = choose(use_llm, page_number, -page_number)
 
     cached = _triage_cache.get(page_text, cache_page_key)
-    if cached is not None:
-        return cached
 
-    db_key = f"{cache_kind}:{triage_cache_key(page_text, page_number)}"
-    db_hit = cache_get(db, kind=cache_kind, cache_key=db_key)
-    if isinstance(db_hit, dict) and db_hit:
-        _triage_cache.put(page_text, cache_page_key, db_hit)
-        return dict(db_hit)
+    def _after_mem() -> dict[str, Any]:
+        db_key = f"{cache_kind}:{triage_cache_key(page_text, page_number)}"
+        db_hit = cache_get(db, kind=cache_kind, cache_key=db_key)
 
-    def _store(result: dict[str, Any]) -> dict[str, Any]:
-        _triage_cache.put(page_text, cache_page_key, result)
-        try:
-            cache_put(db, kind=cache_kind, cache_key=db_key, value=result)
-        except Exception:
-            logger.debug("page triage DB cache write failed", exc_info=True)
-        return result
+        def _from_db() -> dict[str, Any]:
+            _triage_cache.put(page_text, cache_page_key, db_hit)
+            return dict(db_hit)
 
-    # Empty / junk → Worthiness Engine owns honest zero (no parallel if-ladder).
-    if allow_zero:
-        from app.services.content_worthiness import evaluate_worthiness, plan_worthiness_probe
+        def _compute() -> dict[str, Any]:
+            def _store(result: dict[str, Any]) -> dict[str, Any]:
+                _triage_cache.put(page_text, cache_page_key, result)
+                try:
+                    cache_put(db, kind=cache_kind, cache_key=db_key, value=result)
+                except Exception:
+                    logger.debug("page triage DB cache write failed", exc_info=True)
+                return result
 
-        probe = plan_worthiness_probe("pre_llm", has_text=bool(excerpt))
-        worth = evaluate_worthiness(
-            page_text=excerpt or "",
-            empty=probe.empty,
-            check_junk=probe.check_junk,
-            min_chars=probe.min_chars,
-        )
-        if not worth.worthy:
-            return _store(
-                _non_content_result(
-                    rationale=(
-                        "Page has no coherent testable text."
-                        f" [worthiness:{worth.reason}]"
-                    ),
-                    mode=mode,
-                )
-            )
+            def _heuristic() -> dict[str, Any]:
+                return _store(_fallback_triage(page_text, page_number, mode=mode))
 
-    # Jobs default: instant heuristic plan. LLM only when explicitly re-enabled.
-    if not use_llm:
-        return _store(_fallback_triage(page_text, page_number, mode=mode))
+            def _llm_path() -> dict[str, Any]:
+                def _try_llm() -> dict[str, Any]:
+                    try:
+                        from app.services.llm_registry import default_chat_model_id
 
-    if excerpt:
-        try:
-            # Pin triage to the default model rather than round-robining the pool,
-            # so triage wall-clock isn't gated by the slowest pool model.
-            from app.services.llm_registry import default_chat_model_id
+                        model_id = default_chat_model_id(db)
+                        system = get_prompt(db, "page_triage_system")
+                        instructions = get_prompt(
+                            db,
+                            "page_triage_format",
+                            page_text="(the page text provided above)",
+                        )
+                        raw = _complete_chat_sync(
+                            db,
+                            [
+                                {"role": "system", "content": system},
+                                {"role": "user", "content": f"Page text:\n{excerpt}"},
+                                {"role": "user", "content": instructions},
+                            ],
+                            model_id=model_id,
+                        )
+                        parsed = _parse_triage_json(raw)
 
-            model_id = default_chat_model_id(db)
-            system = get_prompt(db, "page_triage_system")
-            instructions = get_prompt(
-                db,
-                "page_triage_format",
-                page_text="(the page text provided above)",
-            )
-            # Stable-prefix ordering for provider prompt caching: system prompt
-            # + page text lead (byte-identical across pages only by page, but
-            # stable across retries/lookahead on the SAME page), with the
-            # variable JSON instructions in the trailing message.
-            raw = _complete_chat_sync(
-                db,
-                [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": f"Page text:\n{excerpt}"},
-                    {"role": "user", "content": instructions},
-                ],
-                model_id=model_id,
-            )
-            parsed = _parse_triage_json(raw)
-            if parsed:
-                content_type = (str(parsed.get("content_type") or "").strip().lower() or None)
-                usable = parsed.get("usable")
-                programmable = bool(parsed.get("programmable"))
-                aspects_raw = parsed.get("aspects") or []
-                aspects: list[dict[str, Any]] = []
-                for i, item in enumerate(aspects_raw):
-                    norm = _normalize_aspect(item, i + 1, page_number)
-                    if norm:
-                        aspects.append(norm)
-                rationale = (parsed.get("rationale") or "").strip()
-                words = len(page_text.split()) if page_text else 0
-                substantial = len(substantial_paragraphs(page_text))
-
-                if allow_zero:
-                    # Honest zero: model judged non-content / unusable / no units.
-                    # N itself comes from plan_page_budget — never raw LLM yield.
-                    from app.services.content_worthiness import evaluate_llm_triage_units
-
-                    zero = evaluate_llm_triage_units(
-                        content_type=content_type,
-                        usable=usable,
-                        aspect_count=len(aspects),
-                    )
-                    if zero.zero_question:
-                        return _store(
-                            _non_content_result(
-                                content_type=content_type or "non_content",
-                                rationale=rationale,
-                                programmable=programmable,
-                                mode=mode,
+                        def _from_parsed() -> dict[str, Any]:
+                            content_type = (
+                                str(parsed.get("content_type") or "").strip().lower() or None
                             )
-                        )
-                    return _store(
-                        _finalize_triage(
-                            aspects=aspects,
-                            rationale=rationale,
-                            mode=mode,
-                            content_type=content_type,
-                            programmable=programmable,
-                            words=words,
-                            substantial_paragraphs=substantial,
-                            confidence="high",
-                        )
-                    )
+                            usable = parsed.get("usable")
+                            programmable = bool(parsed.get("programmable"))
+                            aspects_raw = parsed.get("aspects") or []
+                            aspects = list(
+                                filter(
+                                    None,
+                                    (
+                                        _normalize_aspect(item, i + 1, page_number)
+                                        for i, item in enumerate(aspects_raw)
+                                    ),
+                                )
+                            )
+                            rationale = (parsed.get("rationale") or "").strip()
+                            words = pick(
+                                bool(page_text),
+                                lambda: len(page_text.split()),
+                                lambda: 0,
+                            )
+                            substantial = len(substantial_paragraphs(page_text))
 
-                # Legacy path (flag off): still formula-owned N; no floor/ceiling
-                # beyond the planner. Empty aspects → heuristic fallback.
+                            def _final_high() -> dict[str, Any]:
+                                return _store(
+                                    _finalize_triage(
+                                        aspects=aspects,
+                                        rationale=rationale,
+                                        mode=mode,
+                                        content_type=content_type,
+                                        programmable=programmable,
+                                        words=words,
+                                        substantial_paragraphs=substantial,
+                                        confidence="high",
+                                    )
+                                )
+
+                            def _zero_path() -> dict[str, Any]:
+                                from app.services.content_worthiness import (
+                                    evaluate_llm_triage_units,
+                                )
+
+                                zero = evaluate_llm_triage_units(
+                                    content_type=content_type,
+                                    usable=usable,
+                                    aspect_count=len(aspects),
+                                )
+                                return pick(
+                                    zero.zero_question,
+                                    lambda: _store(
+                                        _non_content_result(
+                                            content_type=content_type or "non_content",
+                                            rationale=rationale,
+                                            programmable=programmable,
+                                            mode=mode,
+                                        )
+                                    ),
+                                    _final_high,
+                                )
+
+                            def _legacy() -> dict[str, Any]:
+                                from app.services.content_worthiness import (
+                                    should_heuristic_fallback_empty_aspects,
+                                )
+
+                                return pick(
+                                    should_heuristic_fallback_empty_aspects(
+                                        allow_zero=allow_zero, aspect_count=len(aspects)
+                                    ),
+                                    _heuristic,
+                                    _final_high,
+                                )
+
+                            return pick(allow_zero, _zero_path, _legacy)
+
+                        return pick(bool(parsed), _from_parsed, _heuristic)
+                    except Exception:
+                        logger.warning(
+                            "page triage LLM failed for page %s; using heuristic fallback",
+                            page_number,
+                            exc_info=True,
+                        )
+                        return _heuristic()
+
+                return pick(bool(excerpt), _try_llm, _heuristic)
+
+            def _after_worth() -> dict[str, Any]:
+                return pick(not use_llm, _heuristic, _llm_path)
+
+            def _maybe_zero() -> dict[str, Any]:
                 from app.services.content_worthiness import (
-                    should_heuristic_fallback_empty_aspects,
+                    evaluate_worthiness,
+                    plan_worthiness_probe,
                 )
 
-                if should_heuristic_fallback_empty_aspects(
-                    allow_zero=allow_zero, aspect_count=len(aspects)
-                ):
-                    return _store(_fallback_triage(page_text, page_number, mode=mode))
-                return _store(
-                    _finalize_triage(
-                        aspects=aspects,
-                        rationale=rationale,
-                        mode=mode,
-                        content_type=content_type,
-                        programmable=programmable,
-                        words=words,
-                        substantial_paragraphs=substantial,
-                        confidence="high",
-                    )
+                probe = plan_worthiness_probe("pre_llm", has_text=bool(excerpt))
+                worth = evaluate_worthiness(
+                    page_text=excerpt or "",
+                    empty=probe.empty,
+                    check_junk=probe.check_junk,
+                    min_chars=probe.min_chars,
                 )
-        except Exception:
-            # LLM triage failed — degrade to heuristic budgeting. Log it: if this
-            # fires for every page, the moat's first stage is silently down.
-            logger.warning(
-                "page triage LLM failed for page %s; using heuristic fallback",
-                page_number,
-                exc_info=True,
-            )
-    return _store(_fallback_triage(page_text, page_number, mode=mode))
+                return pick(
+                    not worth.worthy,
+                    lambda: _store(
+                        _non_content_result(
+                            rationale=(
+                                "Page has no coherent testable text."
+                                f" [worthiness:{worth.reason}]"
+                            ),
+                            mode=mode,
+                        )
+                    ),
+                    _after_worth,
+                )
+
+            return pick(allow_zero, _maybe_zero, _after_worth)
+
+        return pick(isinstance(db_hit, dict) and bool(db_hit), _from_db, _compute)
+
+    return pick(cached is not None, lambda: cached, _after_mem)

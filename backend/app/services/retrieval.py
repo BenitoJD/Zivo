@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.engine_runtime import pick
 from app.services.chunks import pgvector_literal
 
 settings = get_settings()
@@ -44,50 +45,59 @@ def fetch_chunks_for_page_range(
     limit: int = 48,
 ) -> list[dict]:
     """Return all indexed chunks overlapping a page range (full page text, in order)."""
-    if not document_ids:
-        return []
 
-    # Single-document page fetches are the refill-batch hot path and are
-    # immutable post-index — memoize them. Multi-document fan-outs (search)
-    # bypass the cache since they're rare and blow the key cardinality.
-    cache_key: tuple[str, int, int] | None = None
-    if len(document_ids) == 1 and limit >= 48:
-        cache_key = (str(document_ids[0]), page_start, page_end)
-        with _page_chunk_cache_lock:
-            cached = _page_chunk_cache.get(cache_key)
-            if cached is not None:
-                _page_chunk_cache.move_to_end(cache_key)
-                # Copy so callers can't mutate the cached entry.
-                return [dict(c) for c in cached]
+    def _query() -> list[dict]:
+        cache_key: tuple[str, int, int] | None = pick(
+            len(document_ids) == 1 and limit >= 48,
+            lambda: (str(document_ids[0]), page_start, page_end),
+            lambda: None,
+        )
 
-    sql = text(
-        """
-        SELECT dc.id, dc.document_id, dc.page_start, dc.page_end, dc.text
-        FROM document_chunks dc
-        WHERE dc.document_id = ANY(CAST(:doc_ids AS uuid[]))
-          AND dc.page_end >= :page_start
-          AND dc.page_start <= :page_end
-        ORDER BY dc.document_id, dc.page_start, dc.page_end, dc.id
-        LIMIT :limit
-        """
-    )
-    rows = db.execute(
-        sql,
-        {
-            "doc_ids": [str(d) for d in document_ids],
-            "page_start": page_start,
-            "page_end": page_end,
-            "limit": limit,
-        },
-    ).mappings().all()
-    out = [_row_to_chunk(dict(r)) for r in rows]
-    if cache_key is not None:
+        def _from_cache() -> list[dict] | None:
+            with _page_chunk_cache_lock:
+                cached = _page_chunk_cache.get(cache_key)
+                return pick(
+                    cached is not None,
+                    lambda: (_page_chunk_cache.move_to_end(cache_key), [dict(c) for c in cached])[1],
+                    lambda: None,
+                )
+
+        cached = pick(cache_key is not None, _from_cache, lambda: None)
+        return pick(cached is not None, lambda: cached, lambda: _load(cache_key))
+
+    def _load(cache_key: tuple[str, int, int] | None) -> list[dict]:
+        sql = text(
+            """
+            SELECT dc.id, dc.document_id, dc.page_start, dc.page_end, dc.text
+            FROM document_chunks dc
+            WHERE dc.document_id = ANY(CAST(:doc_ids AS uuid[]))
+              AND dc.page_end >= :page_start
+              AND dc.page_start <= :page_end
+            ORDER BY dc.document_id, dc.page_start, dc.page_end, dc.id
+            LIMIT :limit
+            """
+        )
+        rows = db.execute(
+            sql,
+            {
+                "doc_ids": [str(d) for d in document_ids],
+                "page_start": page_start,
+                "page_end": page_end,
+                "limit": limit,
+            },
+        ).mappings().all()
+        out = [_row_to_chunk(dict(r)) for r in rows]
+        pick(cache_key is not None, lambda: _store(cache_key, out), lambda: None)
+        return out
+
+    def _store(cache_key: tuple[str, int, int], out: list[dict]) -> None:
         with _page_chunk_cache_lock:
             _page_chunk_cache[cache_key] = [dict(c) for c in out]
             _page_chunk_cache.move_to_end(cache_key)
             while len(_page_chunk_cache) > _PAGE_CHUNK_CACHE_MAX:
                 _page_chunk_cache.popitem(last=False)
-    return out
+
+    return pick(not document_ids, lambda: [], _query)
 
 
 def merge_chunks(*lists: list[dict]) -> list[dict]:
@@ -97,10 +107,11 @@ def merge_chunks(*lists: list[dict]) -> list[dict]:
     for chunk_list in lists:
         for chunk in chunk_list:
             chunk_id = chunk.get("chunk_id")
-            if not chunk_id or chunk_id in seen:
-                continue
-            seen.add(chunk_id)
-            merged.append(chunk)
+            pick(
+                not chunk_id or chunk_id in seen,
+                lambda: None,
+                lambda: (seen.add(chunk_id), merged.append(chunk)),
+            )
     return merged
 
 
@@ -113,35 +124,44 @@ def search_chunks(
     page_start: int | None = None,
     page_end: int | None = None,
 ) -> list[dict]:
-    if not document_ids:
-        return []
+    def _search() -> list[dict]:
+        vec_literal = pgvector_literal(query_embedding)
+        params: dict = {
+            "doc_ids": [str(d) for d in document_ids],
+            "limit": limit,
+        }
+        page_filter = ""
+        pick(
+            page_start is not None,
+            lambda: (params.__setitem__("page_start", page_start), None),
+            lambda: None,
+        )
+        page_filter = pick(
+            page_start is not None,
+            lambda: " AND dc.page_end >= :page_start",
+            lambda: "",
+        )
+        extra = pick(
+            page_end is not None,
+            lambda: " AND dc.page_start <= :page_end",
+            lambda: "",
+        )
+        pick(page_end is not None, lambda: params.__setitem__("page_end", page_end), lambda: None)
+        page_filter = page_filter + extra
+        sql = text(
+            f"""
+            SELECT dc.id, dc.document_id, dc.page_start, dc.page_end, dc.text,
+                   1 - (dc.embedding <=> CAST(:vec AS vector)) AS score
+            FROM document_chunks dc
+            WHERE dc.document_id = ANY(CAST(:doc_ids AS uuid[]))
+              AND dc.embedding IS NOT NULL
+              {page_filter}
+            ORDER BY dc.embedding <=> CAST(:vec AS vector)
+            LIMIT :limit
+            """
+        )
+        params["vec"] = vec_literal
+        rows = db.execute(sql, params).mappings().all()
+        return [_row_to_chunk(dict(r), score=float(r["score"])) for r in rows]
 
-    vec_literal = pgvector_literal(query_embedding)
-    params: dict = {
-        "doc_ids": [str(d) for d in document_ids],
-        "limit": limit,
-    }
-
-    page_filter = ""
-    if page_start is not None:
-        page_filter += " AND dc.page_end >= :page_start"
-        params["page_start"] = page_start
-    if page_end is not None:
-        page_filter += " AND dc.page_start <= :page_end"
-        params["page_end"] = page_end
-
-    sql = text(
-        f"""
-        SELECT dc.id, dc.document_id, dc.page_start, dc.page_end, dc.text,
-               1 - (dc.embedding <=> CAST(:vec AS vector)) AS score
-        FROM document_chunks dc
-        WHERE dc.document_id = ANY(CAST(:doc_ids AS uuid[]))
-          AND dc.embedding IS NOT NULL
-          {page_filter}
-        ORDER BY dc.embedding <=> CAST(:vec AS vector)
-        LIMIT :limit
-        """
-    )
-    params["vec"] = vec_literal
-    rows = db.execute(sql, params).mappings().all()
-    return [_row_to_chunk(dict(r), score=float(r["score"])) for r in rows]
+    return pick(not document_ids, lambda: [], _search)

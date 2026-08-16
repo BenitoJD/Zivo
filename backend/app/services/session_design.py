@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Literal, Mapping, Sequence
 
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 from app.services.question_budget import SESSION_SOFT
 from app.services.token_budget import SUMMARIZE_SINGLE_SHOT_MAX_TOKENS
 
@@ -311,12 +312,14 @@ def plan_session(
     soft_cap: int = SESSION_SOFT_DEFAULT,
     mode: str = "learn",
 ) -> SessionPlan:
-    soft = max(1, int(soft_cap))
-    # Test sessions allow a slightly longer soft slice.
-    if (mode or "learn").lower() == "test":
-        soft = max(soft, 25)
+    base = max(1, int(soft_cap))
+    soft = pick(
+        (mode or "learn").lower() == "test",
+        lambda: max(base, 25),
+        lambda: base,
+    )
     rem = max(0, int(remaining_doc_items))
-    return SessionPlan(n_session=min(rem, soft) if rem else 0, soft_cap=soft)
+    return SessionPlan(n_session=choose(bool(rem), min(rem, soft), 0), soft_cap=soft)
 
 
 @dataclass(frozen=True)
@@ -326,15 +329,166 @@ class SessionBreakVerdict:
     policy_version: str = SESSION_VERSION
 
 
+_BREAK_RULES = (
+    Rule(when=(Pred("no_cap", "truthy"),), action="no_cap", extras={"should_break": False}),
+    Rule(when=(Pred("full", "truthy"),), action="session_full", extras={"should_break": True}),
+    Rule(when=(), action="in_session", extras={"should_break": False}),
+)
+_BACKGROUND_COOK_RULES = (
+    Rule(
+        when=(Pred("indexing", "truthy"), Pred("all_indexed", "falsey"), Pred("has_ingest", "truthy")),
+        action="ingest",
+        extras={"reason": "index_missing"},
+    ),
+    Rule(
+        when=(Pred("indexing", "truthy"), Pred("all_indexed", "falsey")),
+        action="idle",
+        extras={"reason": "wait_index"},
+    ),
+    Rule(
+        when=(Pred("indexing", "truthy"), Pred("all_indexed", "truthy")),
+        action="transition_cook",
+        extras={"reason": "index_done"},
+    ),
+    Rule(when=(Pred("has_ingest", "truthy"),), action="ingest", extras={"reason": "window_missing"}),
+    Rule(
+        when=(Pred("has_triage", "truthy"),),
+        action="triage",
+        extras={"reason": "needs_triage", "use_triage": True},
+    ),
+    Rule(when=(Pred("no_cook", "truthy"),), action="complete", extras={"reason": "no_cook_page"}),
+    Rule(
+        when=(Pred("at_cap", "truthy"),),
+        action="complete_cap",
+        extras={"reason": "cap_reached", "use_cook": True},
+    ),
+    Rule(
+        when=(Pred("page_done", "truthy"),),
+        action="complete",
+        extras={"reason": "page_budget_met", "use_cook": True},
+    ),
+    Rule(when=(), action="cook", extras={"reason": "cook_page", "use_cook": True}),
+)
+_EDITION_TICK_RULES = (
+    Rule(
+        when=(Pred("no_cook", "truthy"), Pred("has_triage", "truthy")),
+        action="triage",
+        extras={"reason": "edition_triage", "use_triage": True, "also": "missing"},
+    ),
+    Rule(
+        when=(Pred("no_cook", "truthy"), Pred("has_ingest", "truthy")),
+        action="ingest",
+        extras={"reason": "edition_ingest", "also_true": True},
+    ),
+    Rule(when=(Pred("no_cook", "truthy"),), action="idle", extras={"reason": "edition_idle"}),
+    Rule(
+        when=(Pred("budget_met", "truthy"), Pred("has_ingest", "truthy")),
+        action="ingest",
+        extras={"reason": "edition_budget_met", "also_true": True},
+    ),
+    Rule(
+        when=(Pred("budget_met", "truthy"),),
+        action="idle",
+        extras={"reason": "edition_budget_met", "use_cook": True, "keep_mode": True},
+    ),
+    Rule(
+        when=(),
+        action="cook",
+        extras={"reason": "edition_cook", "use_cook": True, "keep_mode": True, "also": "missing"},
+    ),
+)
+_PAGE_COMPLETE_RULES = (
+    Rule(
+        when=(Pred("non_content", "truthy"),),
+        action="non_content",
+        extras={"complete": True},
+    ),
+    Rule(
+        when=(Pred("has_next_card", "truthy"),),
+        action="unanswered",
+        extras={"complete": False},
+    ),
+    Rule(
+        when=(Pred("served_done", "truthy"),),
+        action="served_answered",
+        extras={"complete": True},
+    ),
+    Rule(
+        when=(Pred("none_gen", "truthy"),),
+        action="none_generated",
+        extras={"complete": False},
+    ),
+    Rule(
+        when=(Pred("still_cooking", "truthy"),),
+        action="still_cooking",
+        extras={"complete": False},
+    ),
+    Rule(
+        when=(Pred("coverage_done", "truthy"),),
+        action="coverage_done",
+        extras={"complete": True},
+    ),
+    Rule(when=(Pred("met", "truthy"),), action="budget_met", extras={"complete": True}),
+    Rule(when=(), action="under_budget", extras={"complete": False}),
+)
+_SHAPE_RULES = (
+    Rule(when=(Pred("bad_mcq", "truthy"),), action="typed"),
+    Rule(when=(Pred("bad_coding", "truthy"),), action="coding_fallback"),
+    Rule(when=(), action="keep"),
+)
+_PAGE_COOK_RULES = (
+    Rule(when=(Pred("skip", "truthy"),), action="idle", extras={"reason": "skip_page"}),
+    Rule(
+        when=(Pred("learn", "truthy"), Pred("no_learn_budget", "truthy")),
+        action="idle",
+        extras={"reason": "no_learn_budget"},
+    ),
+    Rule(
+        when=(Pred("learn", "truthy"), Pred("learn_needs_cook", "truthy")),
+        action="cook",
+        extras={"reason": "edition_learn", "cook_mode": "learn"},
+    ),
+    Rule(when=(Pred("learn", "truthy"),), action="idle", extras={"reason": "learn_met"}),
+    Rule(when=(Pred("learn_unmet", "truthy"),), action="idle", extras={"reason": "learn_first"}),
+    Rule(
+        when=(Pred("no_test_budget", "truthy"),),
+        action="idle",
+        extras={"reason": "no_test_budget"},
+    ),
+    Rule(
+        when=(Pred("test_open", "truthy"),),
+        action="cook",
+        extras={"reason": "edition_test", "cook_mode": "test"},
+    ),
+    Rule(when=(), action="idle", extras={"reason": "test_met"}),
+)
+_TRANSITION_RULES = (
+    Rule(when=(Pred("has_next", "falsey"),), action="none"),
+    Rule(when=(Pred("next_has_coverage", "falsey"),), action="triage"),
+    Rule(when=(), action="maybe_cook"),
+)
+_PAGE_ADVANCE_RULES = (
+    Rule(when=(Pred("has_coverage", "falsey"),), action="triage"),
+    Rule(when=(Pred("none_gen", "truthy"),), action="cook_first_batch"),
+    Rule(when=(Pred("rag_ready", "falsey"),), action="ingest_rag"),
+    Rule(when=(), action="noop"),
+)
+_HUB_HEAL_RULES = (
+    Rule(when=(Pred("reingest", "truthy"),), action="reingest"),
+    Rule(when=(Pred("recook", "truthy"),), action="recook"),
+    Rule(when=(), action="idle"),
+)
+
+
 def evaluate_session_break(*, session_items: int, n_session: int) -> SessionBreakVerdict:
     """Soft break when the learner has filled this session's planned slice."""
     cap = max(0, int(n_session))
     items = max(0, int(session_items))
-    if cap <= 0:
-        return SessionBreakVerdict(False, "no_cap")
-    if items >= cap:
-        return SessionBreakVerdict(True, "session_full")
-    return SessionBreakVerdict(False, "in_session")
+    hit = first_match(
+        _BREAK_RULES,
+        {"no_cap": cap <= 0, "full": items >= cap},
+    )
+    return SessionBreakVerdict(bool(hit.extras["should_break"]), hit.action)
 
 
 def evaluate_serve_schedule(
@@ -348,24 +502,22 @@ def evaluate_serve_schedule(
     refill_after_answered: int = REFILL_AFTER_ANSWERED,
 ) -> ServeScheduleVerdict:
     """When to refill the ready pool / prefetch next page / kick early generation."""
-    refill = False
-    if ready_count is not None:
-        refill = int(ready_count) < max(0, int(low_water))
-    prefetch = False
-    generate = False
-    if (
+    refill = ready_count is not None and int(ready_count) < max(0, int(low_water))
+    has_page = (
         answered_on_page is not None
         and page_budget is not None
         and int(page_budget) > 0
-    ):
-        ratio = int(answered_on_page) / int(page_budget)
-        prefetch = ratio > float(prefetch_ratio)
-        generate = ratio >= float(generation_ratio)
-    periodic = False
+    )
+    ratio = pick(has_page, lambda: int(answered_on_page) / int(page_budget), lambda: 0.0)
+    prefetch = has_page and ratio > float(prefetch_ratio)
+    generate = has_page and ratio >= float(generation_ratio)
     cadence = int(refill_after_answered)
-    if answered_on_page is not None and cadence > 0:
-        answered = int(answered_on_page)
-        periodic = answered > 0 and answered % cadence == 0
+    periodic = (
+        answered_on_page is not None
+        and cadence > 0
+        and int(answered_on_page) > 0
+        and int(answered_on_page) % cadence == 0
+    )
     return ServeScheduleVerdict(
         refill_now=refill,
         prefetch_transition=prefetch,
@@ -376,9 +528,8 @@ def evaluate_serve_schedule(
 
 def plan_interview_rounds(category: str | None) -> InterviewRoundsPlan:
     """Resolve mock-interview round schedule for a company category."""
-    cat = (category or "").strip().lower()
-    if cat not in INTERVIEW_ROUND_PLANS:
-        cat = "other"
+    raw = (category or "").strip().lower()
+    cat = choose(raw in INTERVIEW_ROUND_PLANS, raw, "other")
     rounds = tuple(dict(r) for r in INTERVIEW_ROUND_PLANS[cat])
     return InterviewRoundsPlan(category=cat, rounds=rounds)
 
@@ -391,27 +542,36 @@ def evaluate_prep_progress(
     has_study_pages: bool,
 ) -> PrepProgressVerdict:
     """Index/cook blend for the background-prep modal. Orchestration loads percents."""
-    if not has_study_pages:
+    def with_pages() -> PrepProgressVerdict:
+        idx = max(0, min(100, int(index_pct)))
+        cook = max(0, min(100, int(cook_pct)))
+        base = phase or PREP_PHASE_INDEXING
+        resolved = pick(
+            base == PREP_PHASE_INDEXING and idx >= 100,
+            lambda: PREP_PHASE_COOKING,
+            lambda: base,
+        )
+        overall = pick(
+            resolved == PREP_PHASE_INDEXING,
+            lambda: idx,
+            lambda: int(idx * PREP_INDEX_WEIGHT + cook * PREP_COOK_WEIGHT),
+        )
         return PrepProgressVerdict(
+            phase=resolved,
+            index_pct=idx,
+            cook_pct=cook,
+            overall_pct=min(100, overall),
+        )
+
+    return pick(
+        not has_study_pages,
+        lambda: PrepProgressVerdict(
             phase=PREP_PHASE_INDEXING,
             index_pct=0,
             cook_pct=0,
             overall_pct=0,
-        )
-    idx = max(0, min(100, int(index_pct)))
-    cook = max(0, min(100, int(cook_pct)))
-    resolved = phase or PREP_PHASE_INDEXING
-    if resolved == PREP_PHASE_INDEXING and idx >= 100:
-        resolved = PREP_PHASE_COOKING
-    if resolved == PREP_PHASE_INDEXING:
-        overall = idx
-    else:
-        overall = int(idx * PREP_INDEX_WEIGHT + cook * PREP_COOK_WEIGHT)
-    return PrepProgressVerdict(
-        phase=resolved,
-        index_pct=idx,
-        cook_pct=cook,
-        overall_pct=min(100, overall),
+        ),
+        with_pages,
     )
 
 
@@ -427,24 +587,26 @@ def evaluate_background_cook_tick(
     remaining_on_page: int | None,
 ) -> CookScheduleVerdict:
     """Next background-prep cook step. DB lookups stay in orchestration."""
-    if phase == PREP_PHASE_INDEXING and not all_indexed:
-        if has_ingest_missing:
-            return CookScheduleVerdict(action="ingest", reason="index_missing")
-        return CookScheduleVerdict(action="idle", reason="wait_index")
-    if phase == PREP_PHASE_INDEXING and all_indexed:
-        return CookScheduleVerdict(action="transition_cook", reason="index_done")
-    if has_ingest_missing:
-        return CookScheduleVerdict(action="ingest", reason="window_missing")
-    if triage_page is not None:
-        return CookScheduleVerdict(action="triage", page=triage_page, reason="needs_triage")
-    if cook_page is None:
-        return CookScheduleVerdict(action="complete", reason="no_cook_page")
-    if int(total_generated) >= max(0, int(max_questions)):
-        return CookScheduleVerdict(action="complete_cap", page=cook_page, reason="cap_reached")
-    remaining = 0 if remaining_on_page is None else int(remaining_on_page)
-    if remaining <= 0:
-        return CookScheduleVerdict(action="complete", page=cook_page, reason="page_budget_met")
-    return CookScheduleVerdict(action="cook", page=cook_page, reason="cook_page")
+    remaining = pick(remaining_on_page is None, lambda: 0, lambda: int(remaining_on_page))
+    hit = first_match(
+        _BACKGROUND_COOK_RULES,
+        {
+            "indexing": phase == PREP_PHASE_INDEXING,
+            "all_indexed": all_indexed,
+            "has_ingest": has_ingest_missing,
+            "has_triage": triage_page is not None,
+            "no_cook": cook_page is None,
+            "at_cap": int(total_generated) >= max(0, int(max_questions)),
+            "page_done": remaining <= 0,
+        },
+    )
+    page = pick(
+        bool(hit.extras.get("use_triage")),
+        lambda: triage_page,
+        lambda: pick(bool(hit.extras.get("use_cook")), lambda: cook_page, lambda: None),
+    )
+    action: CookAction = hit.action  # type: ignore[assignment]
+    return CookScheduleVerdict(action=action, page=page, reason=str(hit.extras["reason"]))
 
 
 def evaluate_newspaper_edition_tick(
@@ -456,27 +618,33 @@ def evaluate_newspaper_edition_tick(
     triage_page: int | None,
 ) -> CookScheduleVerdict:
     """Full-edition newspaper cook priority: ingest in parallel, cook before triage."""
-    if cook_page is None:
-        if triage_page is not None:
-            return CookScheduleVerdict(
-                action="triage",
-                page=triage_page,
-                also_ingest=has_ingest_missing,
-                reason="edition_triage",
-            )
-        if has_ingest_missing:
-            return CookScheduleVerdict(action="ingest", also_ingest=True, reason="edition_ingest")
-        return CookScheduleVerdict(action="idle", reason="edition_idle")
-    if int(remaining) <= 0:
-        if has_ingest_missing:
-            return CookScheduleVerdict(action="ingest", also_ingest=True, reason="edition_budget_met")
-        return CookScheduleVerdict(action="idle", page=cook_page, cook_mode=cook_mode, reason="edition_budget_met")
+    hit = first_match(
+        _EDITION_TICK_RULES,
+        {
+            "no_cook": cook_page is None,
+            "has_triage": triage_page is not None,
+            "has_ingest": has_ingest_missing,
+            "budget_met": int(remaining) <= 0,
+        },
+    )
+    also_ingest = pick(
+        bool(hit.extras.get("also_true")),
+        lambda: True,
+        lambda: pick(hit.extras.get("also") == "missing", lambda: has_ingest_missing, lambda: False),
+    )
+    page = pick(
+        bool(hit.extras.get("use_triage")),
+        lambda: triage_page,
+        lambda: pick(bool(hit.extras.get("use_cook")), lambda: cook_page, lambda: None),
+    )
+    mode = pick(bool(hit.extras.get("keep_mode")), lambda: cook_mode, lambda: None)
+    action: CookAction = hit.action  # type: ignore[assignment]
     return CookScheduleVerdict(
-        action="cook",
-        page=cook_page,
-        cook_mode=cook_mode,
-        also_ingest=has_ingest_missing,
-        reason="edition_cook",
+        action=action,
+        page=page,
+        cook_mode=mode,
+        also_ingest=also_ingest,
+        reason=str(hit.extras["reason"]),
     )
 
 
@@ -499,20 +667,19 @@ def evaluate_page_complete(
     generation_pending: bool,
 ) -> PageCompleteVerdict:
     """When the current study page is done and the queue may advance."""
-    if non_content:
-        return PageCompleteVerdict(True, "non_content")
-    if has_next_card:
-        return PageCompleteVerdict(False, "unanswered")
-    if all_served_answered and not has_active_generate:
-        return PageCompleteVerdict(True, "served_answered")
-    if int(generated) <= 0:
-        return PageCompleteVerdict(False, "none_generated")
-    if generation_pending and not coverage_done and int(generated) < int(budget):
-        return PageCompleteVerdict(False, "still_cooking")
-    if coverage_done:
-        return PageCompleteVerdict(True, "coverage_done")
-    met = int(generated) >= int(budget)
-    return PageCompleteVerdict(met, "budget_met" if met else "under_budget")
+    hit = first_match(
+        _PAGE_COMPLETE_RULES,
+        {
+            "non_content": non_content,
+            "has_next_card": has_next_card,
+            "served_done": all_served_answered and not has_active_generate,
+            "none_gen": int(generated) <= 0,
+            "still_cooking": generation_pending and not coverage_done and int(generated) < int(budget),
+            "coverage_done": coverage_done,
+            "met": int(generated) >= int(budget),
+        },
+    )
+    return PageCompleteVerdict(bool(hit.extras["complete"]), hit.action)
 
 
 def evaluate_newspaper_learn_complete(
@@ -550,13 +717,9 @@ def evaluate_newspaper_catalog_ready(
     page1_mcq_count: int,
 ) -> bool:
     """When a newspaper edition can leave indexing in the catalog."""
-    if not is_newspaper:
-        return False
-    if not has_coverage:
-        return False
-    if int(budget) <= 0 or non_content:
-        return True
-    return int(page1_mcq_count) >= 1
+    return bool(is_newspaper) and bool(has_coverage) and (
+        int(budget) <= 0 or non_content or int(page1_mcq_count) >= 1
+    )
 
 
 def plan_interview_question_shape(
@@ -566,11 +729,14 @@ def plan_interview_question_shape(
     coding_has_tests: bool,
 ) -> str:
     """Degrade a broken MCQ to typed; keep coding rounds via fallback bank."""
-    if planned_kind == "mcq" and not mcq_valid:
-        return "typed"
-    if planned_kind == "coding" and not coding_has_tests:
-        return "coding_fallback"
-    return planned_kind
+    hit = first_match(
+        _SHAPE_RULES,
+        {
+            "bad_mcq": planned_kind == "mcq" and not mcq_valid,
+            "bad_coding": planned_kind == "coding" and not coding_has_tests,
+        },
+    )
+    return choose(hit.action == "keep", planned_kind, hit.action)
 
 
 @dataclass(frozen=True)
@@ -583,41 +749,44 @@ class InterviewGenContract:
     policy_version: str = SESSION_VERSION
 
 
+_INTERVIEW_TYPED_CONTRACT = InterviewGenContract(
+    schema='{"question":"..."}',
+    rules="An open-ended question the candidate answers by typing. No options.",
+    kind="typed",
+)
+_INTERVIEW_CONTRACTS = {
+    "mcq": InterviewGenContract(
+        schema=(
+            '{"question":"...","options":["a","b","c","d"],"correct_index":0,'
+            '"explanation":"why the correct option is right"}'
+        ),
+        rules="Exactly 4 options, exactly one correct. correct_index is 0-3.",
+        kind="mcq",
+        max_options=INTERVIEW_MCQ_MAX_OPTIONS,
+    ),
+    "coding": InterviewGenContract(
+        schema=(
+            '{"question":"full problem statement incl. the exact stdin format and expected stdout format",'
+            '"starter_code":"a runnable Python 3 stub reading stdin","language_id":71,'
+            '"tests":[{"stdin":"...","expected_output":"..."}],'
+            '"explanation":"the intended approach"}'
+        ),
+        rules=(
+            "A self-contained coding problem the candidate solves by reading stdin and printing to "
+            "stdout (no function signatures, a full program). Give 3-5 tests with EXACT stdin and the "
+            "EXACT expected stdout (no trailing prose). starter_code must be valid Python 3 for "
+            "language_id 71. Keep it solvable in ~10 minutes."
+        ),
+        kind="coding",
+        max_tests=INTERVIEW_CODING_MAX_TESTS,
+    ),
+}
+
+
 def plan_interview_gen_contract(kind: str) -> InterviewGenContract:
     """JSON schema + writer rules for the next interview question kind."""
     k = (kind or "").strip().lower()
-    if k == "mcq":
-        return InterviewGenContract(
-            schema=(
-                '{"question":"...","options":["a","b","c","d"],"correct_index":0,'
-                '"explanation":"why the correct option is right"}'
-            ),
-            rules="Exactly 4 options, exactly one correct. correct_index is 0-3.",
-            kind="mcq",
-            max_options=INTERVIEW_MCQ_MAX_OPTIONS,
-        )
-    if k == "coding":
-        return InterviewGenContract(
-            schema=(
-                '{"question":"full problem statement incl. the exact stdin format and expected stdout format",'
-                '"starter_code":"a runnable Python 3 stub reading stdin","language_id":71,'
-                '"tests":[{"stdin":"...","expected_output":"..."}],'
-                '"explanation":"the intended approach"}'
-            ),
-            rules=(
-                "A self-contained coding problem the candidate solves by reading stdin and printing to "
-                "stdout (no function signatures, a full program). Give 3-5 tests with EXACT stdin and the "
-                "EXACT expected stdout (no trailing prose). starter_code must be valid Python 3 for "
-                "language_id 71. Keep it solvable in ~10 minutes."
-            ),
-            kind="coding",
-            max_tests=INTERVIEW_CODING_MAX_TESTS,
-        )
-    return InterviewGenContract(
-        schema='{"question":"..."}',
-        rules="An open-ended question the candidate answers by typing. No options.",
-        kind="typed",
-    )
+    return _INTERVIEW_CONTRACTS.get(k, _INTERVIEW_TYPED_CONTRACT)
 
 
 def pick_interview_coding_fallback(
@@ -625,10 +794,7 @@ def pick_interview_coding_fallback(
     bank: Sequence[dict[str, Any]],
 ) -> dict[str, Any]:
     """Rotate the built-in coding bank when the LLM produced no tests."""
-    if not bank:
-        return {}
-    idx = int(asked_count) % len(bank)
-    return dict(bank[idx])
+    return pick(not bank, lambda: {}, lambda: dict(bank[int(asked_count) % len(bank)]))
 
 
 def evaluate_document_complete(
@@ -639,11 +805,7 @@ def evaluate_document_complete(
     generation_pending: bool,
 ) -> bool:
     """Whole study range is done; newspaper waits for in-flight cook."""
-    if not page_complete or not on_last_page:
-        return False
-    if newspaper and generation_pending:
-        return False
-    return True
+    return bool(page_complete) and bool(on_last_page) and not (newspaper and generation_pending)
 
 
 def evaluate_page_prep_ready(
@@ -655,11 +817,9 @@ def evaluate_page_prep_ready(
     coverage_complete: bool,
 ) -> bool:
     """Background-prep page is cooked enough to count as ready."""
-    if not has_coverage:
-        return False
-    if non_content or int(budget) <= 0:
-        return True
-    return int(generated) >= int(budget) or coverage_complete
+    return bool(has_coverage) and (
+        non_content or int(budget) <= 0 or int(generated) >= int(budget) or coverage_complete
+    )
 
 
 @dataclass(frozen=True)
@@ -681,46 +841,53 @@ def evaluate_newspaper_page_cook(
     phase: Literal["learn", "test"],
 ) -> CookScheduleVerdict:
     """Whether this edition page should cook in the current learn/test pass."""
-    if page.has_active_generate or not page.has_coverage or page.non_content:
-        return CookScheduleVerdict(action="idle", page=page.page, reason="skip_page")
-    if phase == "learn":
-        if int(page.learn_budget) <= 0:
-            return CookScheduleVerdict(action="idle", page=page.page, reason="no_learn_budget")
-        if not page.coverage_complete or int(page.learn_generated) < int(page.learn_budget):
-            return CookScheduleVerdict(
-                action="cook",
-                page=page.page,
-                cook_mode="learn",
-                reason="edition_learn",
-            )
-        return CookScheduleVerdict(action="idle", page=page.page, reason="learn_met")
-    if int(page.learn_budget) > 0 and int(page.learn_generated) < int(page.learn_budget):
-        return CookScheduleVerdict(action="idle", page=page.page, reason="learn_first")
-    if int(page.test_budget) <= 0:
-        return CookScheduleVerdict(action="idle", page=page.page, reason="no_test_budget")
-    if int(page.test_generated) < int(page.test_budget):
-        return CookScheduleVerdict(
-            action="cook",
-            page=page.page,
-            cook_mode="test",
-            reason="edition_test",
-        )
-    return CookScheduleVerdict(action="idle", page=page.page, reason="test_met")
+    hit = first_match(
+        _PAGE_COOK_RULES,
+        {
+            "skip": page.has_active_generate or not page.has_coverage or page.non_content,
+            "learn": phase == "learn",
+            "no_learn_budget": int(page.learn_budget) <= 0,
+            "learn_needs_cook": not page.coverage_complete
+            or int(page.learn_generated) < int(page.learn_budget),
+            "learn_unmet": int(page.learn_budget) > 0
+            and int(page.learn_generated) < int(page.learn_budget),
+            "no_test_budget": int(page.test_budget) <= 0,
+            "test_open": int(page.test_generated) < int(page.test_budget),
+        },
+    )
+    action: CookAction = hit.action  # type: ignore[assignment]
+    return CookScheduleVerdict(
+        action=action,
+        page=page.page,
+        cook_mode=hit.extras.get("cook_mode"),
+        reason=str(hit.extras["reason"]),
+    )
 
 
 def plan_newspaper_cook_target(
     pages: Sequence[NewspaperPageCookSignal],
 ) -> CookScheduleVerdict:
     """Learn cook across pages first, then test cook."""
-    for page in pages:
-        verdict = evaluate_newspaper_page_cook(page, phase="learn")
-        if verdict.action == "cook":
-            return verdict
-    for page in pages:
-        verdict = evaluate_newspaper_page_cook(page, phase="test")
-        if verdict.action == "cook":
-            return verdict
-    return CookScheduleVerdict(action="idle", reason="edition_cook_idle")
+
+    def first_cook(phase: Literal["learn", "test"]) -> CookScheduleVerdict | None:
+        return next(
+            filter(
+                lambda v: v.action == "cook",
+                (evaluate_newspaper_page_cook(p, phase=phase) for p in pages),
+            ),
+            None,
+        )
+
+    learn = first_cook("learn")
+    return pick(
+        learn is not None,
+        lambda: learn,
+        lambda: pick(
+            (test := first_cook("test")) is not None,
+            lambda: test,
+            lambda: CookScheduleVerdict(action="idle", reason="edition_cook_idle"),
+        ),
+    )
 
 
 def evaluate_newspaper_triage_complete(
@@ -747,13 +914,12 @@ def evaluate_empty_batch_coverage_close(
     has_aspects: bool,
 ) -> bool:
     """Close coverage when a zero-save batch already sits at budget with no targets."""
-    if int(saved) != 0:
-        return False
-    if int(start_sequence) + int(batch_size) < int(budget):
-        return False
-    if has_targets:
-        return False
-    return bool(has_aspects)
+    return (
+        int(saved) == 0
+        and int(start_sequence) + int(batch_size) >= int(budget)
+        and not has_targets
+        and bool(has_aspects)
+    )
 
 
 @dataclass(frozen=True)
@@ -765,8 +931,6 @@ class AuxCookSpawnVerdict:
 
 def alias_debuggable(*, programmable: bool, debuggable: bool | None) -> bool:
     """Debug cook follows an explicit flag, else programmable pages."""
-    if debuggable is None:
-        return bool(programmable)
     return bool(debuggable or programmable)
 
 
@@ -785,8 +949,6 @@ def evaluate_auxiliary_cook_spawn(
 def plan_first_cook_batch(*, budget: int, first_batch: int = 1) -> int:
     """Zero-wait first MCQ batch; never larger than remaining N_page."""
     n = max(0, int(budget))
-    if n <= 0:
-        return 0
     return min(max(1, int(first_batch)), n)
 
 
@@ -797,9 +959,11 @@ def evaluate_background_first_batch(
     first_batch: int = 1,
 ) -> int:
     """Kick the first cook after background triage, or 0 to skip."""
-    if int(generated) > 0:
-        return 0
-    return plan_first_cook_batch(budget=budget, first_batch=first_batch)
+    return pick(
+        int(generated) > 0,
+        lambda: 0,
+        lambda: plan_first_cook_batch(budget=budget, first_batch=first_batch),
+    )
 
 
 @dataclass(frozen=True)
@@ -818,13 +982,20 @@ def plan_transition_next(
     current_budget: int,
 ) -> TransitionNextPlan:
     """Page-turn: triage the next page, or cook its first batch."""
-    if not has_next:
-        return TransitionNextPlan(False, False)
-    if not next_has_coverage:
-        return TransitionNextPlan(True, False)
+    hit = first_match(
+        _TRANSITION_RULES,
+        {"has_next": has_next, "next_has_coverage": next_has_coverage},
+    )
     allow = bool(generate_next_page) and int(current_budget) > 0
     cook = allow and int(next_generated) == 0
-    return TransitionNextPlan(False, cook)
+    return apply(
+        hit.action,
+        {
+            "none": lambda: TransitionNextPlan(False, False),
+            "triage": lambda: TransitionNextPlan(True, False),
+            "maybe_cook": lambda: TransitionNextPlan(False, cook),
+        },
+    )
 
 
 def evaluate_serial_cook_fallback(*, saved: int, has_targets: bool) -> bool:
@@ -842,13 +1013,20 @@ def plan_eager_triage_pages(
 ) -> tuple[int, ...]:
     """Rolling lookahead: pages after the reader that still need triage."""
     study = list(study_pages)
-    if from_page not in study:
-        return ()
-    start = study.index(from_page) + 1
-    window = study[start : start + max(0, int(lookahead))]
-    covered = set(covered_pages)
-    active = set(active_triage_pages)
-    return tuple(p for p in window if p not in covered and p not in active)
+    return pick(
+        from_page not in study,
+        lambda: (),
+        lambda: tuple(
+            filter(
+                lambda p: p not in set(covered_pages) and p not in set(active_triage_pages),
+                study[
+                    study.index(from_page) + 1 : study.index(from_page)
+                    + 1
+                    + max(0, int(lookahead))
+                ],
+            )
+        ),
+    )
 
 
 PageAdvanceAction = Literal["triage", "cook_first_batch", "ingest_rag", "noop"]
@@ -867,13 +1045,16 @@ def plan_page_advance_next(
     rag_ready: bool,
 ) -> PageAdvancePlan:
     """After a page turn: triage, first cook, RAG ingest, or nothing."""
-    if not has_coverage:
-        return PageAdvancePlan("triage")
-    if int(generated) <= 0:
-        return PageAdvancePlan("cook_first_batch")
-    if not rag_ready:
-        return PageAdvancePlan("ingest_rag")
-    return PageAdvancePlan("noop")
+    hit = first_match(
+        _PAGE_ADVANCE_RULES,
+        {
+            "has_coverage": has_coverage,
+            "none_gen": int(generated) <= 0,
+            "rag_ready": rag_ready,
+        },
+    )
+    action: PageAdvanceAction = hit.action  # type: ignore[assignment]
+    return PageAdvancePlan(action)
 
 
 def should_require_rag_on_page_advance(*, has_coverage: bool, generated: int) -> bool:
@@ -893,8 +1074,6 @@ def plan_newspaper_ingest_batch(
     batch_size: int = NEWSPAPER_INGEST_BATCH,
 ) -> tuple[int, ...]:
     """Cap missing-page ingest so one edition tick cannot flood the queue."""
-    if not missing:
-        return ()
     cap = max(1, int(batch_size))
     return tuple(int(p) for p in list(missing)[:cap])
 
@@ -906,10 +1085,10 @@ def plan_newspaper_recovery_batch() -> int:
 
 def plan_newspaper_edition_questions_limit(requested: int | None = None) -> int:
     """How many edition MCQs newspaper practice may list (default + hard max)."""
-    n = (
-        NEWSPAPER_EDITION_QUESTIONS_DEFAULT
-        if requested is None
-        else int(requested)
+    n = pick(
+        requested is None,
+        lambda: NEWSPAPER_EDITION_QUESTIONS_DEFAULT,
+        lambda: int(requested),
     )
     return max(1, min(n, NEWSPAPER_EDITION_QUESTIONS_MAX))
 
@@ -930,9 +1109,7 @@ class NewspaperServeScope:
 
 def plan_newspaper_serve_scope(*, newspaper: bool) -> NewspaperServeScope:
     """Edition-wide stats; page-scoped adaptive pick so chrome does not jump."""
-    if newspaper:
-        return NewspaperServeScope(True, True, True, True)
-    return NewspaperServeScope(False, False, False, False)
+    return NewspaperServeScope(*([newspaper] * 4))
 
 
 def plan_refill_batch(
@@ -951,16 +1128,20 @@ NewspaperUncookedFollowup = Literal["wait", "promote_ready"]
 def plan_newspaper_hub_heal(*, doc_status: str) -> NewspaperHealAction:
     """Hub/schedule: stuck edition re-ingest vs recook vs ignore."""
     status = (doc_status or "").strip().lower()
-    if status in ("indexing", "pending"):
-        return "reingest"
-    if status == "ready":
-        return "recook"
-    return "idle"
+    hit = first_match(
+        _HUB_HEAL_RULES,
+        {
+            "reingest": status in ("indexing", "pending"),
+            "recook": status == "ready",
+        },
+    )
+    action: NewspaperHealAction = hit.action  # type: ignore[assignment]
+    return action
 
 
 def plan_newspaper_uncooked_followup(*, cook_enqueued: bool) -> NewspaperUncookedFollowup:
     """After a ready-doc recook attempt: wait for the job or promote the catalog."""
-    return "wait" if cook_enqueued else "promote_ready"
+    return choose(cook_enqueued, "wait", "promote_ready")
 
 
 @dataclass(frozen=True)
@@ -977,13 +1158,15 @@ def evaluate_generation_batch_outcome(
     has_targets: bool,
 ) -> GenerationBatchOutcome:
     """Cook batch: failed only when targets existed and quality saved nothing."""
-    if int(saved) <= 0 and bool(has_targets):
-        return GenerationBatchOutcome(
+    return pick(
+        int(saved) <= 0 and bool(has_targets),
+        lambda: GenerationBatchOutcome(
             "failed",
             "No questions passed quality gates",
             "generation_empty",
-        )
-    return GenerationBatchOutcome("succeeded", None, None)
+        ),
+        lambda: GenerationBatchOutcome("succeeded", None, None),
+    )
 
 
 @dataclass(frozen=True)
@@ -1002,13 +1185,15 @@ def plan_interview_advance(
     round_count: int,
 ) -> InterviewAdvancePlan:
     """Next question in round, else next round, else the interview is complete."""
-    qi = int(q_in_round) + 1
-    ri = int(round_index)
-    if qi >= int(round_question_count):
-        ri, qi = ri + 1, 0
-    if ri >= int(round_count):
-        return InterviewAdvancePlan(True, int(round_count), 0)
-    return InterviewAdvancePlan(False, ri, qi)
+    qi_next = int(q_in_round) + 1
+    overflow = qi_next >= int(round_question_count)
+    ri = int(round_index) + choose(overflow, 1, 0)
+    qi = choose(overflow, 0, qi_next)
+    return pick(
+        ri >= int(round_count),
+        lambda: InterviewAdvancePlan(True, int(round_count), 0),
+        lambda: InterviewAdvancePlan(False, ri, qi),
+    )
 
 
 @dataclass(frozen=True)
@@ -1025,18 +1210,27 @@ def plan_study_range_heal(
     doc_status: str,
 ) -> StudyRangeHealPlan:
     """DOCX page-count heal: drop a stale auto-selected [1] when more pages exist."""
-    if int(counted_pages) <= 1 or not selected_range:
-        return StudyRangeHealPlan(False, False)
-    pages = selected_range.get("pages")
-    only_page_one = (isinstance(pages, list) and pages == [1]) or (
-        int(selected_range.get("from") or 0) == 1
-        and int(selected_range.get("to") or 0) == 1
-        and not pages
+    def heal() -> StudyRangeHealPlan:
+        pages = selected_range.get("pages")
+        only_page_one = (isinstance(pages, list) and pages == [1]) or (
+            int(selected_range.get("from") or 0) == 1
+            and int(selected_range.get("to") or 0) == 1
+            and not pages
+        )
+        return pick(
+            not only_page_one,
+            lambda: StudyRangeHealPlan(False, False),
+            lambda: StudyRangeHealPlan(
+                True,
+                (doc_status or "").strip().lower() in {"ready", "indexing"},
+            ),
+        )
+
+    return pick(
+        int(counted_pages) <= 1 or not selected_range,
+        lambda: StudyRangeHealPlan(False, False),
+        heal,
     )
-    if not only_page_one:
-        return StudyRangeHealPlan(False, False)
-    reset = (doc_status or "").strip().lower() in {"ready", "indexing"}
-    return StudyRangeHealPlan(True, reset)
 
 
 AuxiliaryKind = Literal["flashcards", "topics", "memory_palace", "quiz"]
@@ -1053,24 +1247,24 @@ class AuxiliaryArtifactCap:
 
 def plan_auxiliary_artifact_cap(kind: AuxiliaryKind) -> AuxiliaryArtifactCap:
     """How many flashcards, topics, palace stations, or quiz items to keep."""
-    if kind == "flashcards":
-        return AuxiliaryArtifactCap("flashcards", 0, FLASHCARD_MAX, FLASHCARD_MAX)
-    if kind == "topics":
-        return AuxiliaryArtifactCap("topics", 0, TOPIC_OUTLINE_MAX, TOPIC_OUTLINE_MAX)
-    if kind == "memory_palace":
-        return AuxiliaryArtifactCap(
+    caps = {
+        "flashcards": AuxiliaryArtifactCap("flashcards", 0, FLASHCARD_MAX, FLASHCARD_MAX),
+        "topics": AuxiliaryArtifactCap("topics", 0, TOPIC_OUTLINE_MAX, TOPIC_OUTLINE_MAX),
+        "memory_palace": AuxiliaryArtifactCap(
             "memory_palace",
             MEMORY_PALACE_MIN_STATIONS,
             MEMORY_PALACE_MAX_STATIONS,
             MEMORY_PALACE_MAX_STATIONS,
-        )
-    return AuxiliaryArtifactCap("quiz", 1, QUIZ_MAX_QUESTIONS, QUIZ_DEFAULT_COUNT)
+        ),
+        "quiz": AuxiliaryArtifactCap("quiz", 1, QUIZ_MAX_QUESTIONS, QUIZ_DEFAULT_COUNT),
+    }
+    return caps.get(kind, caps["quiz"])
 
 
 def clamp_auxiliary_count(kind: AuxiliaryKind, requested: int | None) -> int:
     """Clamp a requested artifact count into the session cap."""
     plan = plan_auxiliary_artifact_cap(kind)
-    n = int(requested) if requested else plan.default_count
+    n = pick(bool(requested), lambda: int(requested), lambda: plan.default_count)
     return max(plan.min_count, min(n, plan.max_count))
 
 
@@ -1084,9 +1278,11 @@ class AuxiliaryOutputVerdict:
 def evaluate_auxiliary_output(kind: AuxiliaryKind, count: int) -> AuxiliaryOutputVerdict:
     """Keep or reject a generated auxiliary artifact after count is known."""
     cap = plan_auxiliary_artifact_cap(kind)
-    if int(count) < cap.min_count:
-        return AuxiliaryOutputVerdict(False, "below_min")
-    return AuxiliaryOutputVerdict(True, "ok")
+    return pick(
+        int(count) < cap.min_count,
+        lambda: AuxiliaryOutputVerdict(False, "below_min"),
+        lambda: AuxiliaryOutputVerdict(True, "ok"),
+    )
 
 
 AuxiliaryMapKind = Literal[
@@ -1099,9 +1295,7 @@ AUXILIARY_CHUNK_LOAD_LIMIT = 200
 
 def plan_auxiliary_map_concurrency(kind: AuxiliaryMapKind) -> int:
     """How many chunk-map LLM calls may run in parallel for one artifact cook."""
-    if kind == "audiobook":
-        return AUDIOBOOK_MAP_CONCURRENCY
-    return AUXILIARY_MAP_CONCURRENCY
+    return choose(kind == "audiobook", AUDIOBOOK_MAP_CONCURRENCY, AUXILIARY_MAP_CONCURRENCY)
 
 
 def plan_auxiliary_chunk_load_limit() -> int:
@@ -1133,9 +1327,7 @@ LearnerListKind = Literal["saved_notes", "brainstorm"]
 
 def plan_learner_list_cap(kind: LearnerListKind) -> int:
     """How many saved notes or brainstorm ideas a learner may keep per source."""
-    if kind == "saved_notes":
-        return SAVED_NOTES_MAX
-    return BRAINSTORM_IDEAS_MAX
+    return choose(kind == "saved_notes", SAVED_NOTES_MAX, BRAINSTORM_IDEAS_MAX)
 
 
 def plan_brainstorm_tree_depth() -> int:
@@ -1155,12 +1347,10 @@ class AuxiliaryFieldCaps:
 
 def plan_auxiliary_field_caps(kind: AuxiliaryKind) -> AuxiliaryFieldCaps:
     """Truncate generated artifact fields so a runaway model cannot store a wall of text."""
-    if kind == "flashcards":
-        return AuxiliaryFieldCaps("flashcards", {"front": 400, "back": 600})
-    if kind == "topics":
-        return AuxiliaryFieldCaps("topics", {"title": 120, "summary": 300})
-    if kind == "memory_palace":
-        return AuxiliaryFieldCaps(
+    fields = {
+        "flashcards": AuxiliaryFieldCaps("flashcards", {"front": 400, "back": 600}),
+        "topics": AuxiliaryFieldCaps("topics", {"title": 120, "summary": 300}),
+        "memory_palace": AuxiliaryFieldCaps(
             "memory_palace",
             {
                 "locus": 120,
@@ -1171,17 +1361,19 @@ def plan_auxiliary_field_caps(kind: AuxiliaryKind) -> AuxiliaryFieldCaps:
                 "setting": 160,
                 "intro": 400,
             },
-        )
-    return AuxiliaryFieldCaps(
-        "quiz",
-        {
-            "prompt": 600,
-            "explanation": 600,
-            "answer": 1200,
-            "options": 8,
-            "pairs": 8,
-        },
-    )
+        ),
+        "quiz": AuxiliaryFieldCaps(
+            "quiz",
+            {
+                "prompt": 600,
+                "explanation": 600,
+                "answer": 1200,
+                "options": 8,
+                "pairs": 8,
+            },
+        ),
+    }
+    return fields.get(kind, fields["quiz"])
 
 
 AuxiliaryGenMode = Literal["single_shot", "map_reduce"]
@@ -1200,14 +1392,16 @@ def plan_auxiliary_generation_strategy(
     single_shot_max_tokens: int | None = None,
 ) -> AuxiliaryGenerationPlan:
     """Single-shot vs map-reduce for notes, topics, flashcards, palace, summarize."""
-    cap = (
-        SUMMARIZE_SINGLE_SHOT_MAX_TOKENS
-        if single_shot_max_tokens is None
-        else int(single_shot_max_tokens)
+    cap = pick(
+        single_shot_max_tokens is None,
+        lambda: SUMMARIZE_SINGLE_SHOT_MAX_TOKENS,
+        lambda: int(single_shot_max_tokens),
     )
-    if int(token_count) <= cap:
-        return AuxiliaryGenerationPlan("single_shot", cap)
-    return AuxiliaryGenerationPlan("map_reduce", cap)
+    return pick(
+        int(token_count) <= cap,
+        lambda: AuxiliaryGenerationPlan("single_shot", cap),
+        lambda: AuxiliaryGenerationPlan("map_reduce", cap),
+    )
 
 
 def plan_option_coach_page_limit() -> int:
@@ -1240,3 +1434,284 @@ class BundleUploadPlan:
 def plan_bundle_upload() -> BundleUploadPlan:
     """How many files a learner must (and may) combine into one source."""
     return BundleUploadPlan(BUNDLE_UPLOAD_MIN_FILES, BUNDLE_UPLOAD_MAX_FILES)
+
+
+PREP_MODE_NOW = "now"
+PREP_MODE_BACKGROUND = "background"
+
+
+def evaluate_background_prep_active(
+    *,
+    has_doc: bool,
+    prep_mode: str | None,
+    prep_complete: bool,
+) -> bool:
+    """True while a document is still in background prep (not yet flipped complete)."""
+    return bool(has_doc) and prep_mode == PREP_MODE_BACKGROUND and not prep_complete
+
+
+def evaluate_prep_short_circuit(
+    *,
+    prep_complete: bool,
+    prep_mode: str | None,
+) -> bool:
+    """Prep is done when flagged complete, or the document is not in background mode."""
+    return bool(prep_complete) or prep_mode != PREP_MODE_BACKGROUND
+
+
+def evaluate_capped_prep_promote(*, prep_complete: bool, status: str) -> bool:
+    """Promote a cap-halted prep doc to ready so the learner can open the partial pool."""
+    return bool(prep_complete) and status != "ready"
+
+
+_DIGEST_ENQUEUE_RULES = (
+    Rule(when=(Pred("cook_enabled", "falsey"),), action="skip_disabled"),
+    Rule(when=(Pred("has_row", "falsey"),), action="skip_missing"),
+    Rule(when=(Pred("already_published", "truthy"),), action="skip_published"),
+    Rule(when=(Pred("has_post_id", "truthy"),), action="skip_has_post"),
+    Rule(when=(Pred("may_enqueue", "falsey"),), action="skip_attempted"),
+    Rule(when=(), action="enqueue"),
+)
+
+
+def evaluate_newspaper_digest_enqueue(
+    *,
+    cook_enabled: bool,
+    has_row: bool,
+    already_published: bool,
+    has_post_id: bool,
+    may_enqueue: bool,
+) -> str:
+    """Whether becoming catalog-ready should enqueue an edition digest cook."""
+    return first_match(
+        _DIGEST_ENQUEUE_RULES,
+        {
+            "cook_enabled": cook_enabled,
+            "has_row": has_row,
+            "already_published": already_published,
+            "has_post_id": has_post_id,
+            "may_enqueue": may_enqueue,
+        },
+    ).action
+
+
+_LEARNER_IDENTITY_RULES = (
+    Rule(when=(Pred("has_account", "truthy"),), action="account"),
+    Rule(when=(Pred("has_guest", "truthy"),), action="guest"),
+    Rule(when=(), action="none"),
+)
+
+
+def evaluate_learner_identity(
+    *,
+    account_id: Any,
+    guest_id: str | None,
+) -> str:
+    """Which subject key scopes progress SQL: account, guest, or none."""
+    return first_match(
+        _LEARNER_IDENTITY_RULES,
+        {"has_account": account_id is not None, "has_guest": bool(guest_id)},
+    ).action
+
+
+_TEST_DOWNGRADE_RULES = (
+    Rule(
+        when=(
+            Pred("newspaper", "truthy"),
+            Pred("test", "truthy"),
+            Pred("learn_complete", "falsey"),
+        ),
+        action="learn",
+    ),
+    Rule(when=(), action="keep"),
+)
+_AUTO_ADVANCE_RULES = (
+    Rule(when=(Pred("page_complete", "falsey"),), action="stay"),
+    Rule(when=(Pred("at_last", "truthy"),), action="stay"),
+    Rule(when=(), action="advance"),
+)
+_ADVANCE_PAGE_RULES = (
+    Rule(
+        when=(Pred("same_page", "truthy"), Pred("page_complete", "truthy")),
+        action="advance",
+    ),
+    Rule(when=(), action="stay"),
+)
+_LEARN_STREAM_DELAY_RULES = (
+    Rule(when=(Pred("document_complete", "truthy"),), action="done", extras={"delay": 0.0}),
+    Rule(
+        when=(Pred("has_current", "truthy"), Pred("generation_pending", "falsey")),
+        action="idle_question",
+        extras={"delay": 3.0},
+    ),
+    Rule(when=(Pred("generation_pending", "truthy"),), action="backoff"),
+    Rule(when=(), action="poll", extras={"delay": 2.0}),
+)
+
+
+def evaluate_test_downgrade(
+    *,
+    newspaper: bool,
+    serve_mode: str,
+    learn_complete: bool,
+) -> str:
+    """Newspaper Test stays locked on Learn until the Learn pool is finished."""
+    hit = first_match(
+        _TEST_DOWNGRADE_RULES,
+        {
+            "newspaper": bool(newspaper),
+            "test": serve_mode == "test",
+            "learn_complete": bool(learn_complete),
+        },
+    )
+    return pick(hit.action == "keep", lambda: serve_mode, lambda: hit.action)
+
+
+def evaluate_learn_auto_advance(
+    *,
+    page_complete: bool,
+    page: int,
+    last_page: int,
+) -> bool:
+    """Learn queue may walk to the next study page when this page is done."""
+    hit = first_match(
+        _AUTO_ADVANCE_RULES,
+        {
+            "page_complete": bool(page_complete),
+            "at_last": int(page) >= int(last_page),
+        },
+    )
+    return hit.action == "advance"
+
+
+def evaluate_advance_page(
+    *,
+    current_page: int,
+    requested_page: int,
+    page_complete: bool,
+) -> bool:
+    """POST advance only moves when the requested page is the complete current page."""
+    hit = first_match(
+        _ADVANCE_PAGE_RULES,
+        {
+            "same_page": int(current_page) == int(requested_page),
+            "page_complete": bool(page_complete),
+        },
+    )
+    return hit.action == "advance"
+
+
+@dataclass(frozen=True)
+class LearnStreamDelayPlan:
+    action: str
+    delay: float
+    policy_version: str = SESSION_VERSION
+
+
+def plan_learn_stream_delay(
+    *,
+    document_complete: bool,
+    current_assertion_id: Any,
+    generation_pending: bool,
+    delay: float,
+) -> LearnStreamDelayPlan:
+    """SSE poll cadence while the Learn queue is still cooking."""
+    hit = first_match(
+        _LEARN_STREAM_DELAY_RULES,
+        {
+            "document_complete": bool(document_complete),
+            "has_current": bool(current_assertion_id),
+            "generation_pending": bool(generation_pending),
+        },
+    )
+    next_delay = pick(
+        hit.action == "backoff",
+        lambda: min(8.0, float(delay) * 1.15),
+        lambda: float(hit.extras["delay"]),
+    )
+    return LearnStreamDelayPlan(hit.action, next_delay)
+
+
+_RAG_READY_COOK_RULES = (
+    Rule(when=(Pred("background", "truthy"),), action="skip"),
+    Rule(when=(), action="enqueue"),
+)
+
+
+def evaluate_rag_ready_cook_spawn(*, background_prep: bool) -> str:
+    """After RAG window is ready: enqueue first cook, unless background-prep owns it."""
+    return first_match(_RAG_READY_COOK_RULES, {"background": background_prep}).action
+
+
+_EDITION_DISPATCH_RULES = (
+    Rule(when=(Pred("action", "eq", "triage"), Pred("has_page", "truthy")), action="triage"),
+    Rule(when=(Pred("action", "eq", "cook"), Pred("has_page", "truthy")), action="cook"),
+    Rule(when=(), action="ingest_only"),
+)
+
+_PAGE_BATCH_ENQUEUE_RULES = (
+    Rule(when=(Pred("no_remaining", "truthy"), Pred("is_current", "truthy")), action="clear_pending"),
+    Rule(when=(Pred("no_remaining", "truthy"),), action="skip"),
+    Rule(when=(Pred("active", "truthy"), Pred("is_current", "truthy")), action="mark_pending"),
+    Rule(when=(Pred("active", "truthy"),), action="skip"),
+    Rule(when=(), action="enqueue"),
+)
+
+_REFILL_DISPATCH_RULES = (
+    Rule(when=(Pred("empty", "truthy"),), action="skip"),
+    Rule(when=(), action="enqueue"),
+)
+
+_POOL_WAKE_RULES = (
+    Rule(when=(Pred("missing", "truthy"),), action="skip"),
+    Rule(when=(Pred("not_ready", "truthy"),), action="skip"),
+    Rule(when=(Pred("no_text", "truthy"),), action="skip"),
+    Rule(when=(), action="ok"),
+)
+
+
+def evaluate_newspaper_edition_dispatch(*, action: str, page: int | None) -> str:
+    """Map an edition-tick verdict onto triage / cook / ingest-only effects."""
+    return first_match(
+        _EDITION_DISPATCH_RULES,
+        {"action": action, "has_page": page is not None},
+    ).action
+
+
+def evaluate_page_batch_enqueue(
+    *,
+    remaining: int,
+    is_current: bool,
+    active: bool,
+) -> str:
+    """Wake / skip / enqueue the next generate batch for a page."""
+    return first_match(
+        _PAGE_BATCH_ENQUEUE_RULES,
+        {
+            "no_remaining": int(remaining) <= 0,
+            "is_current": is_current,
+            "active": active,
+        },
+    ).action
+
+
+def evaluate_refill_dispatch(*, batch: int) -> str:
+    """Skip enqueue when the refill batch is empty."""
+    return first_match(_REFILL_DISPATCH_RULES, {"empty": int(batch) <= 0}).action
+
+
+def evaluate_pool_wake(
+    *,
+    missing: bool,
+    ready: bool,
+    no_searchable_text: bool,
+) -> str:
+    """Whether ensure_question_pool should start work."""
+    return first_match(
+        _POOL_WAKE_RULES,
+        {
+            "missing": missing,
+            "not_ready": not ready,
+            "no_text": no_searchable_text,
+        },
+    ).action

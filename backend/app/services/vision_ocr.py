@@ -21,6 +21,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
 from app.models import Document
 from app.services.content_worthiness import (
     plan_vision_ocr_cache,
@@ -71,11 +72,10 @@ def transcribe_page_with_vision(
     from app.services.generation_cache import get as cache_get, put as cache_put
 
     doc = db.get(Document, document_id)
-    if not doc:
-        return ""
-    # Key binds the vision model + prompt text: at a 30-day horizon a model or
-    # prompt upgrade must invalidate old transcriptions (the page image itself
-    # is immutable per storage_key).
+    return pick(not doc, lambda: "", lambda: _transcribe(db, doc, document_id, page_number, cache_get, cache_put, content_hash_key))
+
+
+def _transcribe(db, doc, document_id, page_number, cache_get, cache_put, content_hash_key) -> str:
     model_id = vision_chat_model_id(db)
     cache_key = content_hash_key(
         "vision_ocr", doc.storage_key or str(doc.id), int(page_number),
@@ -88,19 +88,28 @@ def transcribe_page_with_vision(
         cache_key=cache_key,
         ttl_seconds=cache_plan.transcription_ttl_seconds,
     )
-    if should_revalidate_ocr_blank(
-        hit=hit if isinstance(hit, str) else None,
-        requested_ttl_seconds=cache_plan.transcription_ttl_seconds,
-        blank_trust_ttl_seconds=cache_plan.blank_trust_ttl_seconds,
-    ):
-        hit = cache_get(db, kind="vision_ocr", cache_key=cache_key)
-    if isinstance(hit, str) and hit:
-        return "" if hit == "BLANK" else hit
+    hit = pick(
+        should_revalidate_ocr_blank(
+            hit=pick(isinstance(hit, str), lambda: hit, lambda: None),
+            requested_ttl_seconds=cache_plan.transcription_ttl_seconds,
+            blank_trust_ttl_seconds=cache_plan.blank_trust_ttl_seconds,
+        ),
+        lambda: cache_get(db, kind="vision_ocr", cache_key=cache_key),
+        lambda: hit,
+    )
+    return pick(
+        isinstance(hit, str) and bool(hit),
+        lambda: pick(hit == "BLANK", lambda: "", lambda: hit),
+        lambda: _call_vision(db, doc, document_id, page_number, model_id, cache_key, cache_plan, cache_put),
+    )
 
+
+def _call_vision(db, doc, document_id, page_number, model_id, cache_key, cache_plan, cache_put) -> str:
     image_url = _page_image_url(db, doc, page_number)
-    if not image_url:
-        return ""
+    return pick(not image_url, lambda: "", lambda: _run_ocr(db, doc, document_id, page_number, model_id, cache_key, cache_plan, cache_put, image_url))
 
+
+def _run_ocr(db, doc, document_id, page_number, model_id, cache_key, cache_plan, cache_put, image_url) -> str:
     content: list[dict[str, Any]] = [
         {"type": "text", "text": _OCR_USER},
         {"type": "image_url", "image_url": {"url": image_url}},
@@ -129,20 +138,13 @@ def transcribe_page_with_vision(
         return ""
 
     out = (raw or "").strip()
-    if not out or out.upper() == "BLANK":
-        cache_put(
-            db,
-            kind="vision_ocr",
-            cache_key=cache_key,
-            value="BLANK",
-            ttl_seconds=cache_plan.transcription_ttl_seconds,
-        )
-        return ""
+    blank = not out or out.upper() == "BLANK"
+    value = pick(blank, lambda: "BLANK", lambda: out)
     cache_put(
         db,
         kind="vision_ocr",
         cache_key=cache_key,
-        value=out,
+        value=value,
         ttl_seconds=cache_plan.transcription_ttl_seconds,
     )
-    return out
+    return pick(blank, lambda: "", lambda: out)

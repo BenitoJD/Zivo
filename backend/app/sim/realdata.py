@@ -20,6 +20,8 @@ from collections.abc import Sequence
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
+
 # Need enough real first-answers before a gate verdict is meaningful.
 MIN_FIRST_ANSWERS = 100
 
@@ -44,14 +46,15 @@ def auc(scores: Sequence[float], labels: Sequence[bool]) -> float:
 
     Returns NaN when one class is absent (AUC undefined). Ties handled by average ranks.
     """
-    pos = sum(1 for label in labels if label)
+    pos = sum(1 for label in filter(lambda lab: lab, labels))
     neg = len(labels) - pos
-    if pos == 0 or neg == 0:
-        return float("nan")
-    ranks = _average_ranks(scores)
-    sum_pos = sum(r for r, label in zip(ranks, labels) if label)
-    u = sum_pos - pos * (pos + 1) / 2.0
-    return u / (pos * neg)
+    def _auc() -> float:
+        ranks = _average_ranks(scores)
+        sum_pos = sum(r * float(label) for r, label in zip(ranks, labels))
+        u = sum_pos - pos * (pos + 1) / 2.0
+        return u / (pos * neg)
+
+    return pick(pos == 0 or neg == 0, lambda: float("nan"), _auc)
 
 
 def expected_calibration_error(
@@ -59,23 +62,28 @@ def expected_calibration_error(
 ) -> float:
     """Mean gap between predicted probability and observed accuracy, binned by prob."""
     n = len(probs)
-    if n == 0:
-        return float("nan")
-    bucket_conf = [0.0] * bins
-    bucket_hits = [0.0] * bins
-    bucket_n = [0] * bins
-    for p, label in zip(probs, labels):
-        b = min(int(p * bins), bins - 1)
-        bucket_conf[b] += p
-        bucket_hits[b] += 1.0 if label else 0.0
-        bucket_n[b] += 1
-    ece = 0.0
-    for b in range(bins):
-        if bucket_n[b]:
-            conf = bucket_conf[b] / bucket_n[b]
-            acc = bucket_hits[b] / bucket_n[b]
-            ece += (bucket_n[b] / n) * abs(conf - acc)
-    return ece
+
+    def _ece() -> float:
+        bucket_conf = [0.0] * bins
+        bucket_hits = [0.0] * bins
+        bucket_n = [0] * bins
+        for p, label in zip(probs, labels):
+            b = min(int(p * bins), bins - 1)
+            bucket_conf[b] += p
+            bucket_hits[b] += float(label)
+            bucket_n[b] += 1
+        ece = 0.0
+        for b in range(bins):
+            def _add(b: int = b) -> None:
+                nonlocal ece
+                conf = bucket_conf[b] / bucket_n[b]
+                acc = bucket_hits[b] / bucket_n[b]
+                ece += (bucket_n[b] / n) * abs(conf - acc)
+
+            pick(bool(bucket_n[b]), _add, lambda: None)
+        return ece
+
+    return pick(n == 0, lambda: float("nan"), _ece)
 
 
 def evaluate_prior_gate(db: Session, *, min_n: int = MIN_FIRST_ANSWERS) -> dict:
@@ -119,10 +127,14 @@ def evaluate_prior_gate(db: Session, *, min_n: int = MIN_FIRST_ANSWERS) -> dict:
         },
     ).all()
 
-    if len(rows) < min_n:
-        return {"status": "insufficient_data", "n": len(rows), "need": min_n}
+    def _ok() -> dict:
+        scores = [-float(r.difficulty) for r in rows]
+        labels = [bool(int(r.correct)) for r in rows]
+        a = auc(scores, labels)
+        return {"status": "ok", "n": len(rows), "auc": a, "pass": bool(a >= 0.70)}
 
-    scores = [-float(r.difficulty) for r in rows]
-    labels = [bool(int(r.correct)) for r in rows]
-    a = auc(scores, labels)
-    return {"status": "ok", "n": len(rows), "auc": a, "pass": bool(a >= 0.70)}
+    return pick(
+        len(rows) < min_n,
+        lambda: {"status": "insufficient_data", "n": len(rows), "need": min_n},
+        _ok,
+    )

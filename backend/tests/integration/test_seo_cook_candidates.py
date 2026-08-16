@@ -18,6 +18,7 @@ import pytest
 from sqlalchemy import select, text
 
 from app.db import SessionLocal
+from app.engine_runtime import pick
 from app.repositories import seo
 
 
@@ -43,10 +44,9 @@ def test_candidates_are_distinct_pages_not_chunk_fragments() -> None:
     db = SessionLocal()
     try:
         rows = seo.list_newspaper_cook_candidates(db, limit=8)
-        if not rows:
-            pytest.skip("no newspaper candidates in dev DB")
+        pick(not rows, lambda: pytest.skip("no newspaper candidates in dev DB"), lambda: None)
         keys = [f"{r['document_id']}:{r['page_start']}" for r in rows]
-        dupes = {k: n for k, n in Counter(keys).items() if n > 1}
+        dupes = dict(filter(lambda kn: kn[1] > 1, Counter(keys).items()))
         assert not dupes, f"candidate source_keys should be unique, got duplicates: {dupes}"
         assert len(rows) == len(set(keys)), "rows must map 1:1 to distinct pages"
     finally:
@@ -63,8 +63,7 @@ def test_candidate_text_is_full_page_not_fragment() -> None:
     db = SessionLocal()
     try:
         rows = seo.list_newspaper_cook_candidates(db, limit=8)
-        if not rows:
-            pytest.skip("no newspaper candidates in dev DB")
+        pick(not rows, lambda: pytest.skip("no newspaper candidates in dev DB"), lambda: None)
         row = rows[0]
         agg_len = db.execute(
             text(
@@ -88,9 +87,11 @@ def test_candidate_text_is_full_page_not_fragment() -> None:
             ),
             {"d": row["document_id"], "p": row["page_start"]},
         ).scalar()
-        if single_chunk and agg_len > single_chunk:
+        def _check_chunk() -> None:
             assert len(row["text"]) > single_chunk, (
                 "returned a single chunk fragment, not the aggregated page"
             )
+
+        pick(bool(single_chunk) and agg_len > single_chunk, _check_chunk, lambda: None)
     finally:
         db.close()

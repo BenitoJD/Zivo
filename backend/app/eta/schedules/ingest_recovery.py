@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 
 from app.db import SessionLocal
+from app.engine_runtime import pick
 from app.eta.scheduler_registry import eta_scheduler
 from app.eta.stale_jobs import (
     ACTIVE_JOB_LIVENESS_SQL,
@@ -21,8 +22,22 @@ from app.services.session_design import plan_ingest_recovery_schedule
 logger = logging.getLogger(__name__)
 
 
+def _recover_one(db, doc_id, recover_fn, label: str) -> int:
+    doc = db.get(Document, doc_id)
+
+    def _recover() -> int:
+        try:
+            recover_fn(db, doc)
+            logger.info("ingest recovery %s for document %s", label, doc_id)
+            return 1
+        except Exception:
+            logger.exception("ingest recovery failed for document %s", doc_id)
+            return 0
+
+    return pick(doc is None, lambda: 0, _recover)
+
+
 def _recover_stuck_indexing_documents() -> int:
-    recovered = 0
     schedule = plan_ingest_recovery_schedule()
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=schedule.indexing_grace_minutes)
     with SessionLocal() as db:
@@ -48,25 +63,14 @@ def _recover_stuck_indexing_documents() -> int:
                 "queued_cutoff": stale_queued_cutoff(),
             },
         ).scalars().all()
-        for doc_id in doc_ids:
-            doc = db.get(Document, doc_id)
-            if not doc:
-                continue
-            try:
-                maybe_recover_stuck_indexing(db, doc)
-                recovered += 1
-                logger.info("ingest recovery re-queued work for document %s", doc_id)
-            except Exception:
-                logger.exception("ingest recovery failed for document %s", doc_id)
-    return recovered
-
-
-@eta_scheduler(every_minutes=5, key="ingest.recover_stuck")
-def run_ingest_recover() -> None:
-    n = _recover_stuck_indexing_documents()
-    n += _recover_stuck_prepping_documents()
-    if n:
-        logger.info("ingest recovery touched %s stuck documents", n)
+        return sum(
+            map(
+                lambda doc_id: _recover_one(
+                    db, doc_id, maybe_recover_stuck_indexing, "re-queued work"
+                ),
+                doc_ids,
+            )
+        )
 
 
 def _recover_stuck_prepping_documents() -> int:
@@ -75,7 +79,7 @@ def _recover_stuck_prepping_documents() -> int:
     A background-prep doc reaches ``status='prepping'`` once indexing finishes
     and the cook (triage + generate.questions) begins. The cook chain is only
     re-driven by job-success callbacks (``tick_background_cook``); if that job
-    dies, the doc sits frozen at its last ``prep_progress`` forever — which the
+    dies, the doc sits frozen at its last ``prep_progress`` forever, which the
     sources sidebar renders as "Prepping X%" indefinitely. The per-artifact GET
     recovers it on open, but the sources list never does.
 
@@ -83,7 +87,8 @@ def _recover_stuck_prepping_documents() -> int:
     and re-ticks the cook chain. The liveness check spans both ingest-stage and
     cook-stage job names so a genuinely-running cook is never double-enqueued.
     """
-    recovered = 0
+    from app.services.background_prep import maybe_recover_stuck_background_prep
+
     schedule = plan_ingest_recovery_schedule()
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=schedule.prepping_grace_minutes)
     with SessionLocal() as db:
@@ -110,10 +115,6 @@ def _recover_stuck_prepping_documents() -> int:
                 "cutoff": cutoff,
                 "stale_cutoff": stale_running_cutoff(),
                 "queued_cutoff": stale_queued_cutoff(),
-                # Ingest-stage + cook-stage names: a cook in flight keeps the
-                # doc out of recovery so we never enqueue a duplicate batch.
-                # Note: triage batches are enqueued as generate.questions with
-                # mode='page_triage', so generate.questions covers both.
                 "names": [
                     "ingest.page",
                     "ingest.rag_window",
@@ -128,16 +129,25 @@ def _recover_stuck_prepping_documents() -> int:
                 ],
             },
         ).scalars().all()
-        for doc_id in doc_ids:
-            doc = db.get(Document, doc_id)
-            if not doc:
-                continue
-            try:
-                from app.services.background_prep import maybe_recover_stuck_background_prep
+        return sum(
+            map(
+                lambda doc_id: _recover_one(
+                    db,
+                    doc_id,
+                    maybe_recover_stuck_background_prep,
+                    "re-ticked background prep",
+                ),
+                doc_ids,
+            )
+        )
 
-                maybe_recover_stuck_background_prep(db, doc)
-                recovered += 1
-                logger.info("ingest recovery re-ticked background prep for document %s", doc_id)
-            except Exception:
-                logger.exception("ingest recovery failed for prepping document %s", doc_id)
-    return recovered
+
+@eta_scheduler(every_minutes=5, key="ingest.recover_stuck")
+def run_ingest_recover() -> None:
+    n = _recover_stuck_indexing_documents()
+    n += _recover_stuck_prepping_documents()
+    pick(
+        bool(n),
+        lambda: logger.info("ingest recovery touched %s stuck documents", n),
+        lambda: None,
+    )

@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import select
 
 from app.db import SessionLocal
+from app.engine_runtime import pick
 from app.models import Document
 from app.services.question_pool import (
     ensure_question_pool,
@@ -69,9 +70,7 @@ def _cleanup(doc_id: uuid.UUID) -> None:
     db = SessionLocal()
     try:
         doc = db.get(Document, doc_id)
-        if doc:
-            db.delete(doc)
-            db.commit()
+        pick(bool(doc), lambda: (db.delete(doc), db.commit()), lambda: None)
     finally:
         db.close()
 

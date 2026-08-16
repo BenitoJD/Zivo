@@ -7,11 +7,13 @@ import uuid
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.engine_runtime import apply, pick
 from app.services.embed import embed_query
 from app.services.retrieval import fetch_chunks_for_page_range, merge_chunks, search_chunks
 from app.services.tutor_retrieval import (
     DEFAULT_FETCH_LIMIT,
     DEFAULT_TOP_N,
+    ChunkRetrievalPlan,
     decide_page_pin,
     extract_query_page_range,
     finish_ranked_chunks,
@@ -53,46 +55,66 @@ def retrieve_document_chunks(
     pin = decide_page_pin(scope)
     plan = plan_chunk_retrieval(pin, scope, query)
 
-    if plan.strategy == "pin_page":
+    def _vector(active: ChunkRetrievalPlan, page_chunks: list[dict]) -> list[dict]:
+        embedding = embed_query(query)
+        vector_chunks = search_chunks(
+            db,
+            document_ids=document_ids,
+            query_embedding=embedding,
+            limit=_FETCH_LIMIT,
+            page_start=active.page_start,
+            page_end=active.page_end,
+        )
+        return apply(
+            active.strategy,
+            {
+                "page_plus_vector": lambda: _finish_chunks(query, merge_chunks(page_chunks, vector_chunks)),
+                "vector_only": lambda: _finish_chunks(query, vector_chunks),
+                "page_range": lambda: _finish_chunks(query, page_chunks),
+                "pin_page": lambda: _finish_chunks(query, vector_chunks),
+            },
+        )
+
+    def _with_pages(active: ChunkRetrievalPlan) -> list[dict]:
+        def _fetched() -> tuple[list[dict], ChunkRetrievalPlan]:
+            page_chunks = fetch_chunks_for_page_range(
+                db,
+                document_ids=document_ids,
+                page_start=active.page_start,
+                page_end=active.page_end or active.page_start,
+            )
+            next_plan = plan_chunk_retrieval(
+                pin,
+                scope,
+                query,
+                pin_missed=True,
+                page_chunk_count=len(page_chunks),
+                page_chunks_fetched=True,
+            )
+            return page_chunks, next_plan
+
+        page_chunks, next_plan = pick(
+            active.page_start is not None,
+            _fetched,
+            lambda: ([], active),
+        )
+        return pick(
+            next_plan.strategy == "page_range",
+            lambda: _finish_chunks(query, page_chunks),
+            lambda: _vector(next_plan, page_chunks),
+        )
+
+    def _pin() -> list[dict]:
         primary_chunks = fetch_chunks_for_page_range(
             db,
             document_ids=document_ids,
             page_start=plan.page_start,
             page_end=plan.page_end,
         )
-        if primary_chunks:
-            return _finish_chunks(query, primary_chunks)
-        plan = plan_chunk_retrieval(pin, scope, query, pin_missed=True)
-
-    page_chunks: list[dict] = []
-    if plan.page_start is not None:
-        page_chunks = fetch_chunks_for_page_range(
-            db,
-            document_ids=document_ids,
-            page_start=plan.page_start,
-            page_end=plan.page_end or plan.page_start,
-        )
-        plan = plan_chunk_retrieval(
-            pin,
-            scope,
-            query,
-            pin_missed=True,
-            page_chunk_count=len(page_chunks),
-            page_chunks_fetched=True,
+        return pick(
+            bool(primary_chunks),
+            lambda: _finish_chunks(query, primary_chunks),
+            lambda: _with_pages(plan_chunk_retrieval(pin, scope, query, pin_missed=True)),
         )
 
-    if plan.strategy == "page_range":
-        return _finish_chunks(query, page_chunks)
-
-    embedding = embed_query(query)
-    vector_chunks = search_chunks(
-        db,
-        document_ids=document_ids,
-        query_embedding=embedding,
-        limit=_FETCH_LIMIT,
-        page_start=plan.page_start,
-        page_end=plan.page_end,
-    )
-    if plan.strategy == "page_plus_vector":
-        return _finish_chunks(query, merge_chunks(page_chunks, vector_chunks))
-    return _finish_chunks(query, vector_chunks)
+    return pick(plan.strategy == "pin_page", _pin, lambda: _with_pages(plan))

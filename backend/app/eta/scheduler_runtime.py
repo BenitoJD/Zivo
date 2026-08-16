@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 import app.eta.schedules  # noqa: F401
 from app.db import SessionLocal
+from app.engine_runtime import Pred, Rule, apply, first_match, pick
 from app.eta.scheduler_registry import (
     EtaSchedulerDefinition,
     list_scheduler_definitions,
@@ -17,6 +18,14 @@ from app.eta.scheduler_registry import (
 from app.models.eta_schedule import EtaSchedule
 
 logger = logging.getLogger(__name__)
+
+_CACHE_CLEANUP_TICKS = 720
+_JOB_CLEANUP_TICKS = 720
+
+_RECORD_RULES = (
+    Rule(when=(Pred("ok", "truthy"),), action="success"),
+    Rule(when=(), action="error"),
+)
 
 
 @dataclass(frozen=True)
@@ -35,10 +44,11 @@ def _reconcile_schedule_rows(
     existing_by_key = {row.schedule_key: row for row in existing_rows}
     active_keys = set()
 
-    for definition in definitions:
+    def _upsert(definition: EtaSchedulerDefinition) -> None:
         active_keys.add(definition.key)
         row = existing_by_key.get(definition.key)
-        if row is None:
+
+        def _create() -> None:
             existing_by_key[definition.key] = EtaSchedule(
                 schedule_key=definition.key,
                 enabled=True,
@@ -46,19 +56,31 @@ def _reconcile_schedule_rows(
                 next_run_at=definition.next_run_after(now),
                 last_error=None,
             )
-            continue
 
-        was_orphaned = bool(row.is_orphaned)
-        row.is_orphaned = False
-        if row.next_run_at is None or was_orphaned:
-            row.next_run_at = definition.next_run_after(now)
-        if was_orphaned:
-            row.enabled = True
+        def _refresh() -> None:
+            was_orphaned = bool(row.is_orphaned)
+            row.is_orphaned = False
+            pick(
+                row.next_run_at is None or was_orphaned,
+                lambda: setattr(row, "next_run_at", definition.next_run_after(now)),
+                lambda: None,
+            )
+            pick(was_orphaned, lambda: setattr(row, "enabled", True), lambda: None)
 
-    for row in existing_by_key.values():
-        if row.schedule_key not in active_keys:
+        pick(row is None, _create, _refresh)
+
+    for definition in definitions:
+        _upsert(definition)
+
+    def _orphan(row: EtaSchedule) -> None:
+        def _mark() -> None:
             row.enabled = False
             row.is_orphaned = True
+
+        pick(row.schedule_key not in active_keys, _mark, lambda: None)
+
+    for row in existing_by_key.values():
+        _orphan(row)
 
     return list(existing_by_key.values())
 
@@ -72,13 +94,23 @@ def reconcile_scheduler_definitions(db: Session, *, now: datetime | None = None)
         existing_rows=existing_rows,
         now=resolved_now,
     )
-    existing_ids = {row.id for row in existing_rows if row.id is not None}
+    existing_ids = set(
+        map(
+            lambda row: row.id,
+            filter(lambda row: row.id is not None, existing_rows),
+        )
+    )
 
-    for row in reconciled_rows:
-        if row.id not in existing_ids:
+    def _persist(row: EtaSchedule) -> None:
+        def _add() -> None:
             row.created_at = resolved_now
             db.add(row)
+
+        pick(row.id not in existing_ids, _add, lambda: None)
         row.updated_at = resolved_now
+
+    for row in reconciled_rows:
+        _persist(row)
 
     db.commit()
 
@@ -100,29 +132,29 @@ def _reserve_due_schedules(db: Session, *, now: datetime) -> tuple[list[Reserved
         .all()
     )
 
-    reserved: list[ReservedEtaSchedule] = []
-    for schedule in due_schedules:
+    def _claim(schedule: EtaSchedule) -> ReservedEtaSchedule | None:
         definition = definitions_by_key.get(schedule.schedule_key)
-        if definition is None:
+
+        def _missing() -> None:
             schedule.enabled = False
             schedule.is_orphaned = True
             schedule.last_error = "Scheduler definition no longer exists"
             schedule.updated_at = now
-            continue
 
-        schedule.next_run_at = definition.next_run_after(now)
-        schedule.updated_at = now
-        reserved.append(
-            ReservedEtaSchedule(
+        def _reserve() -> ReservedEtaSchedule:
+            schedule.next_run_at = definition.next_run_after(now)
+            schedule.updated_at = now
+            return ReservedEtaSchedule(
                 schedule_id=schedule.id,
                 schedule_key=schedule.schedule_key,
                 definition=definition,
             )
-        )
 
-    if due_schedules:
-        db.commit()
+        pick(definition is None, _missing, lambda: None)
+        return pick(definition is None, lambda: None, _reserve)
 
+    reserved = list(filter(None, map(_claim, due_schedules)))
+    pick(bool(due_schedules), db.commit, lambda: None)
     return reserved, len(due_schedules)
 
 
@@ -134,23 +166,30 @@ def _record_schedule_result(
     error: str | None,
 ) -> None:
     schedule = db.get(EtaSchedule, reserved_schedule.schedule_id)
-    if schedule is None:
-        return
 
-    if error is None:
-        schedule.last_run_at = now
-        schedule.last_error = None
-    else:
-        schedule.last_error = error
-    schedule.updated_at = now
-    db.commit()
+    def _write(active: EtaSchedule) -> None:
+        hit = first_match(_RECORD_RULES, {"ok": error is None})
+        apply(
+            hit.action,
+            {
+                "success": lambda: (
+                    setattr(active, "last_run_at", now),
+                    setattr(active, "last_error", None),
+                ),
+                "error": lambda: setattr(active, "last_error", error),
+            },
+        )
+        active.updated_at = now
+        db.commit()
+
+    pick(schedule is None, lambda: None, lambda: _write(schedule))
 
 
 def run_due_schedules(db: Session, *, now: datetime | None = None) -> int:
     resolved_now = now or datetime.now(timezone.utc)
     reserved_schedules, claimed_count = _reserve_due_schedules(db, now=resolved_now)
 
-    for reserved_schedule in reserved_schedules:
+    def _run_one(reserved_schedule: ReservedEtaSchedule) -> None:
         try:
             reserved_schedule.definition.fn()
             _record_schedule_result(
@@ -171,6 +210,9 @@ def run_due_schedules(db: Session, *, now: datetime | None = None) -> int:
                 error=str(exc),
             )
 
+    for reserved_schedule in reserved_schedules:
+        _run_one(reserved_schedule)
+
     return claimed_count
 
 
@@ -181,11 +223,11 @@ class EtaSchedulerService:
         enabled: bool | None = None,
         poll_interval_seconds: float | None = None,
     ) -> None:
-        self.enabled = (
-            enabled
-            if enabled is not None
-            else os.getenv("ETA_SCHEDULER_ENABLED", "true").lower() == "true"
-            and os.getenv("ETA_SCHEDULER_PRIMARY", "true").lower() == "true"
+        self.enabled = pick(
+            enabled is not None,
+            lambda: enabled,
+            lambda: os.getenv("ETA_SCHEDULER_ENABLED", "true").lower() == "true"
+            and os.getenv("ETA_SCHEDULER_PRIMARY", "true").lower() == "true",
         )
         self.poll_interval_seconds = poll_interval_seconds or float(
             os.getenv("ETA_SCHEDULER_POLL_INTERVAL_SECONDS", "5.0")
@@ -193,14 +235,7 @@ class EtaSchedulerService:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
-    def start(self) -> None:
-        if not self.enabled:
-            logger.info("ETA scheduler disabled")
-            return
-
-        if self._thread and self._thread.is_alive():
-            return
-
+    def _spawn(self) -> None:
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run_loop,
@@ -213,14 +248,20 @@ class EtaSchedulerService:
             extra={"poll_interval_seconds": self.poll_interval_seconds},
         )
 
-    def stop(self) -> None:
-        if not self._thread:
-            return
+    def start(self) -> None:
+        def _maybe_spawn() -> None:
+            pick(bool(self._thread and self._thread.is_alive()), lambda: None, self._spawn)
 
-        self._stop_event.set()
-        self._thread.join(timeout=self.poll_interval_seconds + 1)
-        self._thread = None
-        logger.info("ETA scheduler stopped")
+        pick(not self.enabled, lambda: logger.info("ETA scheduler disabled"), _maybe_spawn)
+
+    def stop(self) -> None:
+        def _stop() -> None:
+            self._stop_event.set()
+            self._thread.join(timeout=self.poll_interval_seconds + 1)
+            self._thread = None
+            logger.info("ETA scheduler stopped")
+
+        pick(not self._thread, lambda: None, _stop)
 
     def _run_loop(self) -> None:
         try:
@@ -238,22 +279,40 @@ class EtaSchedulerService:
                     triggered = run_due_schedules(db)
                     cache_cleanup_counter += 1
                     job_cleanup_counter += 1
-                    if cache_cleanup_counter >= 720:  # ~1h at 5s poll
+
+                    def _cache_cleanup() -> None:
+                        nonlocal cache_cleanup_counter
                         from app.services.response_cache import cleanup_stale_cache
 
                         removed = cleanup_stale_cache(db, max_age_days=30)
                         cache_cleanup_counter = 0
-                        if removed:
-                            logger.info("LLM response cache cleanup", extra={"removed": removed})
-                    if job_cleanup_counter >= 720:
+                        pick(
+                            bool(removed),
+                            lambda: logger.info("LLM response cache cleanup", extra={"removed": removed}),
+                            lambda: None,
+                        )
+
+                    def _job_cleanup() -> None:
+                        nonlocal job_cleanup_counter
                         from app.services.job_retention import cleanup_terminal_jobs
 
                         jobs_removed = cleanup_terminal_jobs(db, max_age_days=14)
                         job_cleanup_counter = 0
-                        if jobs_removed:
-                            logger.info("ETA job retention cleanup", extra={"removed": jobs_removed})
-                if triggered:
-                    logger.info("ETA scheduler dispatched runs", extra={"count": triggered})
+                        pick(
+                            bool(jobs_removed),
+                            lambda: logger.info(
+                                "ETA job retention cleanup", extra={"removed": jobs_removed}
+                            ),
+                            lambda: None,
+                        )
+
+                    pick(cache_cleanup_counter >= _CACHE_CLEANUP_TICKS, _cache_cleanup, lambda: None)
+                    pick(job_cleanup_counter >= _JOB_CLEANUP_TICKS, _job_cleanup, lambda: None)
+                pick(
+                    bool(triggered),
+                    lambda: logger.info("ETA scheduler dispatched runs", extra={"count": triggered}),
+                    lambda: None,
+                )
             except Exception:
                 logger.exception("ETA scheduler loop failed")
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import socket
 
+from .env import _raise, pick
+
 DEFAULT_BACKEND_PORT = 8200
 DEFAULT_AUTH_PORT = 8201
 DEFAULT_STORAGE_PORT = 8202
@@ -23,18 +25,24 @@ def port_available(port: int, host: str = "127.0.0.1") -> bool:
 
 
 def find_available_port(start: int, host: str = "127.0.0.1", max_tries: int = 200) -> int:
-    for port in range(start, start + max_tries):
-        if port_available(port, host):
-            return port
-    raise RuntimeError(f"No available port found from {start} to {start + max_tries - 1}")
+    found = next(filter(lambda port: port_available(port, host), range(start, start + max_tries)), None)
+    return pick(
+        found is None,
+        lambda: _raise(RuntimeError(f"No available port found from {start} to {start + max_tries - 1}")),
+        lambda: found,
+    )
 
 
 def allocate_backend_port(requested: int | None = None) -> int:
-    if requested is not None:
-        if not port_available(requested):
-            raise RuntimeError(f"Port {requested} is already in use.")
+    def _requested() -> int:
+        pick(
+            not port_available(requested),
+            lambda: _raise(RuntimeError(f"Port {requested} is already in use.")),
+            lambda: None,
+        )
         return requested
-    return find_available_port(DEFAULT_BACKEND_PORT)
+
+    return pick(requested is not None, _requested, lambda: find_available_port(DEFAULT_BACKEND_PORT))
 
 
 def allocate_auth_port() -> int:

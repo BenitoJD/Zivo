@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.db import SessionLocal
+from app.engine_runtime import pick
 from app.models import Document
 from app.services.guest_session import GUEST_ID_HEADER
 from study_main import app
@@ -83,8 +84,7 @@ def _cleanup(doc_id: uuid.UUID) -> None:
     db = SessionLocal()
     try:
         doc = db.get(Document, doc_id)
-        if doc:
-            db.delete(doc)
+        pick(bool(doc), lambda: db.delete(doc), lambda: None)
         db.commit()
     finally:
         db.close()

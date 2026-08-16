@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from unittest.mock import MagicMock, patch
 
+from app.engine_runtime import pick
 from app.services.learn_answered_review import build_learn_answered_review
 
 
@@ -32,9 +33,8 @@ def test_build_learn_answered_review_orders_by_progress() -> None:
     def execute_side_effect(stmt, params=None):
         sql = str(stmt)
         result = MagicMock()
-        if "document_learner_state" in sql or "question_progress" in sql:
-            pass
-        if "FROM intel.assertion" in sql:
+
+        def _assertions() -> None:
             result.mappings.return_value.all.return_value = [
                 {
                     "assertion_id": aid2,
@@ -49,6 +49,8 @@ def test_build_learn_answered_review_orders_by_progress() -> None:
                     "answer_json": {"choice_index": 1},
                 },
             ]
+
+        pick("FROM intel.assertion" in sql, _assertions, lambda: None)
         return result
 
     db.execute.side_effect = execute_side_effect

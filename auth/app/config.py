@@ -1,10 +1,17 @@
 from functools import lru_cache
+from urllib.parse import urlparse
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.engine_runtime import Pred, Rule, apply, first_match, pick
+
 _DEV_SECRET_KEYS = {"dev-secret-change-me"}
 _DEV_CSRF_SECRET = "dev-csrf-change-me"
+
+
+def _raise(exc: BaseException) -> None:
+    raise exc
 
 
 class Settings(BaseSettings):
@@ -36,11 +43,14 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
-        origins = [o.strip().rstrip("/") for o in self.cors_origins.split(",") if o.strip()]
+        origins = [o.strip().rstrip("/") for o in filter(None, map(str.strip, self.cors_origins.split(",")))]
         frontend = self.frontend_url.strip().rstrip("/")
-        if frontend and frontend not in origins:
+
+        def _append() -> list[str]:
             origins.append(frontend)
-        return origins
+            return origins
+
+        return pick(bool(frontend) and frontend not in origins, _append, lambda: origins)
 
     @property
     def is_production(self) -> bool:
@@ -50,31 +60,56 @@ class Settings(BaseSettings):
     def resolved_cookie_domain(self) -> str | None:
         """Cookie Domain so apex + www + api + auth share session."""
         raw = self.cookie_domain.strip().lstrip(".")
-        if raw:
-            return raw
-        if not self.is_production:
-            return None
-        from urllib.parse import urlparse
 
-        host = (urlparse(self.frontend_url).hostname or "").strip().lower()
-        if not host or host in {"localhost", "127.0.0.1"} or host.endswith(".local"):
-            return None
-        parts = host.split(".")
-        if len(parts) < 2:
-            return None
-        return ".".join(parts[-2:])
+        def _from_frontend() -> str | None:
+            host = (urlparse(self.frontend_url).hostname or "").strip().lower()
+            parts = host.split(".")
+            blocked = (
+                not host
+                or host in {"localhost", "127.0.0.1"}
+                or host.endswith(".local")
+                or len(parts) < 2
+            )
+            return pick(blocked, lambda: None, lambda: ".".join(parts[-2:]))
+
+        def _derived() -> str | None:
+            return pick(not self.is_production, lambda: None, _from_frontend)
+
+        return pick(bool(raw), lambda: raw, _derived)
 
     @model_validator(mode="after")
     def _reject_dev_secrets_outside_development(self) -> "Settings":
-        if self.environment == "development":
+        def _check() -> Settings:
+            apply(
+                first_match(
+                    (
+                        Rule(when=(Pred("bad_secret", "truthy"),), action="secret"),
+                        Rule(when=(Pred("bad_csrf", "truthy"),), action="csrf"),
+                        Rule(when=(Pred("csrf_off", "truthy"),), action="csrf_disabled"),
+                        Rule(when=(), action="ok"),
+                    ),
+                    {
+                        "bad_secret": self.secret_key in _DEV_SECRET_KEYS,
+                        "bad_csrf": self.csrf_secret == _DEV_CSRF_SECRET,
+                        "csrf_off": self.csrf_disabled,
+                    },
+                ).action,
+                {
+                    "secret": lambda: _raise(
+                        ValueError("SECRET_KEY must be set when ENVIRONMENT != 'development'")
+                    ),
+                    "csrf": lambda: _raise(
+                        ValueError("CSRF_SECRET must be set when ENVIRONMENT != 'development'")
+                    ),
+                    "csrf_disabled": lambda: _raise(
+                        ValueError("CSRF_DISABLED cannot be true when ENVIRONMENT != 'development'")
+                    ),
+                    "ok": lambda: None,
+                },
+            )
             return self
-        if self.secret_key in _DEV_SECRET_KEYS:
-            raise ValueError("SECRET_KEY must be set when ENVIRONMENT != 'development'")
-        if self.csrf_secret == _DEV_CSRF_SECRET:
-            raise ValueError("CSRF_SECRET must be set when ENVIRONMENT != 'development'")
-        if self.csrf_disabled:
-            raise ValueError("CSRF_DISABLED cannot be true when ENVIRONMENT != 'development'")
-        return self
+
+        return pick(self.environment == "development", lambda: self, _check)
 
 
 @lru_cache

@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from unittest.mock import MagicMock, patch
 
+from app.engine_runtime import choose
 from app.services.question_budget import BUDGET_VERSION, SESSION_SOFT
 from app.services.question_pool import (
     REFILL_BATCH_SIZE,
@@ -25,7 +26,7 @@ def _doc(
     pages = pages or [page]
     coverage = {
         str(p): {
-            "question_budget": budget if p == page else 2,
+            "question_budget": choose(p == page, budget, 2),
             "aspects": [{"key": "a", "label": "A", "asked": False, "answered": False}],
             "coverage_complete": False,
             "budget_confidence": confidence,

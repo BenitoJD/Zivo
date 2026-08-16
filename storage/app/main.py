@@ -9,6 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.router import api_router
 from app.config import get_settings
+from app.engine_runtime import choose, pick
 from app.services.minio import ensure_bucket
 
 logger = logging.getLogger(__name__)
@@ -27,9 +28,9 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="Zivo Storage",
     version="0.1.0",
-    docs_url=None if settings.is_production else "/docs",
-    redoc_url=None if settings.is_production else "/redoc",
-    openapi_url=None if settings.is_production else "/openapi.json",
+    docs_url=choose(settings.is_production, None, "/docs"),
+    redoc_url=choose(settings.is_production, None, "/redoc"),
+    openapi_url=choose(settings.is_production, None, "/openapi.json"),
     lifespan=lifespan,
 )
 
@@ -37,35 +38,43 @@ _OUTAGE_SQLSTATE_CLASSES = {"08", "53", "57"}
 
 
 def _is_db_outage(exc: SQLAlchemyError) -> bool:
-    if isinstance(exc, (OperationalError, InterfaceError)):
-        return True
     orig = getattr(exc, "orig", None)
     sqlstate = getattr(orig, "sqlstate", None)
-    return bool(sqlstate) and sqlstate[:2] in _OUTAGE_SQLSTATE_CLASSES
+    return pick(
+        isinstance(exc, (OperationalError, InterfaceError)),
+        lambda: True,
+        lambda: bool(sqlstate) and sqlstate[:2] in _OUTAGE_SQLSTATE_CLASSES,
+    )
 
 
 @app.exception_handler(SQLAlchemyError)
 async def database_error_handler(_: Request, exc: SQLAlchemyError) -> JSONResponse:
     logger.exception("database error: %s", exc)
-    if _is_db_outage(exc):
-        return JSONResponse(status_code=503, content={"detail": "Database unavailable"})
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Something went wrong processing that request."},
+    return pick(
+        _is_db_outage(exc),
+        lambda: JSONResponse(status_code=503, content={"detail": "Database unavailable"}),
+        lambda: JSONResponse(
+            status_code=500,
+            content={"detail": "Something went wrong processing that request."},
+        ),
     )
 
 
 class HstsMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
-        if settings.is_production and request.url.scheme == "https":
-            response.headers["Strict-Transport-Security"] = (
-                f"max-age={settings.hsts_max_age_seconds}; includeSubDomains"
-            )
+        pick(
+            settings.is_production and request.url.scheme == "https",
+            lambda: response.headers.__setitem__(
+                "Strict-Transport-Security",
+                f"max-age={settings.hsts_max_age_seconds}; includeSubDomains",
+            ),
+            lambda: None,
+        )
         return response
 
 
-if settings.is_production:
+def _prod_middleware() -> None:
     app.add_middleware(HstsMiddleware)
     app.add_middleware(
         CORSMiddleware,
@@ -74,7 +83,9 @@ if settings.is_production:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "X-CSRF-Token", "X-Zivo-Guest-Id", "X-Zivo-Internal-Key"],
     )
-else:
+
+
+def _dev_middleware() -> None:
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
@@ -82,6 +93,9 @@ else:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "X-CSRF-Token", "X-Zivo-Guest-Id", "X-Zivo-Internal-Key"],
     )
+
+
+pick(settings.is_production, _prod_middleware, _dev_middleware)
 
 app.include_router(api_router, prefix="/api")
 

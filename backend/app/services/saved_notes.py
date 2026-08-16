@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
 from app.services.owner_scope import note_owner_scope, owner_scope_sql
 from app.services.session_design import plan_learner_list_cap
 
@@ -43,7 +44,7 @@ def list_notes(
             "id": str(r["id"]),
             "content": r["content"],
             "quote": r["quote"],
-            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            "created_at": pick(bool(r["created_at"]), lambda: r["created_at"].isoformat(), lambda: None),
         }
         for r in rows
     ]
@@ -75,7 +76,7 @@ def add_note(
         "id": str(row["id"]),
         "content": row["content"],
         "quote": row["quote"],
-        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        "created_at": pick(bool(row["created_at"]), lambda: row["created_at"].isoformat(), lambda: None),
     }
 
 

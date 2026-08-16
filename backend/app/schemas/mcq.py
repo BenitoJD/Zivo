@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import uuid
 
+from typing import NoReturn
+
 from pydantic import BaseModel, Field, field_validator
+
+from app.engine_runtime import pick
+
+
+def _invalid(message: str) -> NoReturn:
+    raise ValueError(message)
 
 
 class McqQuestion(BaseModel):
@@ -16,18 +24,22 @@ class McqQuestion(BaseModel):
     @field_validator("options")
     @classmethod
     def strip_options(cls, value: list[str]) -> list[str]:
-        cleaned = [o.strip() for o in value if o.strip()]
-        if len(cleaned) < 2:
-            raise ValueError("At least two non-empty options required")
-        return cleaned
+        cleaned = [item.strip() for item in filter(lambda option: option.strip(), value)]
+        return pick(
+            len(cleaned) < 2,
+            lambda: _invalid("At least two non-empty options required"),
+            lambda: cleaned,
+        )
 
     @field_validator("correct_index")
     @classmethod
     def index_in_range(cls, value: int, info) -> int:
         options = info.data.get("options") or []
-        if options and value >= len(options):
-            raise ValueError("correct_index out of range")
-        return value
+        return pick(
+            bool(options) and value >= len(options),
+            lambda: _invalid("correct_index out of range"),
+            lambda: value,
+        )
 
 
 class McqGradeRequest(BaseModel):

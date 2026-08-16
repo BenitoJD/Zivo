@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
-if TYPE_CHECKING:
-    from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session
+
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 
 WORTH_VERSION = "qb.worth.v1"
 DEFAULT_WORTH_POLICY = "worth_v1"
@@ -93,6 +94,86 @@ _NEWSPAPER_MASTHEAD_MARKERS = re.compile(
 
 NewspaperStructureLabel = Literal["editorial", "ad", "masthead", "low_signal"]
 
+_NEWSPAPER_STRUCTURE_RULES = (
+    Rule(
+        when=(Pred("too_short", "truthy"),),
+        action="low_signal",
+        extras={"rationale": "Too little extractable text for study."},
+    ),
+    Rule(when=(Pred("ad_markers", "truthy"),), action="ad", extras={"ad_hits": True}),
+    Rule(
+        when=(Pred("masthead", "truthy"),),
+        action="masthead",
+        extras={"rationale": "Looks like masthead / registration boilerplate."},
+    ),
+    Rule(
+        when=(Pred("phones", "truthy"),),
+        action="ad",
+        extras={"rationale": "Many phone/price-like tokens; treat as ad page."},
+    ),
+    Rule(
+        when=(Pred("prices", "truthy"),),
+        action="ad",
+        extras={"rationale": "Dense price tokens; treat as classified/ad page."},
+    ),
+    Rule(
+        when=(),
+        action="editorial",
+        extras={"rationale": "Usable editorial signal."},
+    ),
+)
+
+_RELEVANCE_RULES = (
+    Rule(when=(Pred("empty", "truthy"),), action="empty"),
+    Rule(when=(Pred("judge_error", "truthy"),), action="judge_unavailable"),
+    Rule(when=(Pred("no_parsed", "truthy"),), action="no_judgment"),
+    Rule(when=(), action="judged"),
+)
+
+_WORTH_EARLY_RULES = (
+    Rule(when=(Pred("non_content", "truthy"),), action="non_content"),
+    Rule(when=(Pred("empty", "truthy"),), action="empty"),
+    Rule(when=(Pred("ad_likely", "truthy"),), action="ad_likely"),
+    Rule(when=(), action="continue"),
+)
+
+_GENERIC_WORTH_RULES = (
+    Rule(when=(Pred("too_short", "truthy"),), action="too_short"),
+    Rule(when=(Pred("ad_copy", "truthy"),), action="ad_copy"),
+    Rule(when=(Pred("junk", "truthy"),), action="junk_text"),
+    Rule(when=(), action="ok"),
+)
+
+_LLM_TRIAGE_RULES = (
+    Rule(when=(Pred("non_content", "truthy"),), action="non_content"),
+    Rule(when=(Pred("unusable", "truthy"),), action="unusable"),
+    Rule(when=(Pred("no_aspects", "truthy"),), action="no_aspects"),
+    Rule(when=(), action="ok"),
+)
+
+_PAGE_COUNT_RULES = (
+    Rule(when=(Pred("multi", "truthy"),), action="multi_page", extras={"trust": True}),
+    Rule(when=(Pred("tiny", "truthy"),), action="tiny_one_page", extras={"trust": True}),
+    Rule(when=(), action="recount", extras={"trust": False}),
+)
+
+_RESELECT_RULES = (
+    Rule(
+        when=(Pred("vision_usable", "truthy"),),
+        action="unreadable_content",
+        extras={"prompt": True},
+    ),
+    Rule(when=(Pred("prompt_now", "truthy"),), action="streak", extras={"prompt": True}),
+    Rule(when=(), action="", extras={"prompt": False}),
+)
+
+_NEWSPAPER_REASON = {
+    "ad": "newspaper_ad",
+    "masthead": "newspaper_masthead",
+    "low_signal": "newspaper_low_signal",
+    "off_syllabus": "newspaper_off_syllabus",
+}
+
 
 @dataclass(frozen=True)
 class WorthinessVerdict:
@@ -115,20 +196,25 @@ def evaluate_newspaper_structure(page_text: str, *, policy: str | None = None) -
     """Deterministic ad / masthead / low-signal gate before LLM relevance."""
     pol = normalize_policy(policy)
     text = (page_text or "").strip()
-    if len(text) < 120:
-        return NewspaperStructureVerdict("low_signal", "Too little extractable text for study.", policy=pol)
     ad_hits = len(_NEWSPAPER_AD_MARKERS.findall(text))
-    if ad_hits >= 2 or (ad_hits >= 1 and len(text) < 800):
-        return NewspaperStructureVerdict("ad", f"Ad/classified markers ({ad_hits}).", policy=pol)
-    if _NEWSPAPER_MASTHEAD_MARKERS.search(text) and len(text) < 600:
-        return NewspaperStructureVerdict("masthead", "Looks like masthead / registration boilerplate.", policy=pol)
     phones = len(re.findall(r"\b\d{5,}[-/\s]?\d{4,}\b", text))
-    if phones >= 4 and len(text) < 1500:
-        return NewspaperStructureVerdict("ad", "Many phone/price-like tokens; treat as ad page.", policy=pol)
     prop = len(re.findall(r"\b(?:₹|rs\.?)\s*\d", text, re.I))
-    if prop >= 6 and len(text) < 2000:
-        return NewspaperStructureVerdict("ad", "Dense price tokens; treat as classified/ad page.", policy=pol)
-    return NewspaperStructureVerdict("editorial", "Usable editorial signal.", policy=pol)
+    hit = first_match(
+        _NEWSPAPER_STRUCTURE_RULES,
+        {
+            "too_short": len(text) < 120,
+            "ad_markers": ad_hits >= 2 or (ad_hits >= 1 and len(text) < 800),
+            "masthead": bool(_NEWSPAPER_MASTHEAD_MARKERS.search(text)) and len(text) < 600,
+            "phones": phones >= 4 and len(text) < 1500,
+            "prices": prop >= 6 and len(text) < 2000,
+        },
+    )
+    rationale = pick(
+        "ad_hits" in hit.extras,
+        lambda: f"Ad/classified markers ({ad_hits}).",
+        lambda: str(hit.extras.get("rationale") or ""),
+    )
+    return NewspaperStructureVerdict(hit.action, rationale, policy=pol)  # type: ignore[arg-type]
 
 
 NewspaperCookLabel = Literal["cook", "ad", "masthead", "low_signal", "off_syllabus"]
@@ -148,6 +234,37 @@ class NewspaperCookVerdict:
     policy_version: str = WORTH_VERSION
 
 
+def _cook_from_relevance(relevance: dict, pol: str) -> NewspaperCookVerdict:
+    theme = relevance.get("theme") or ""
+    theme_bit = choose(bool(theme), f" theme={theme}", "")
+    why = str(relevance.get("rationale") or "Exam-relevant.").strip()
+    return NewspaperCookVerdict(
+        "cook",
+        f"Editorial + exam-relevant.{theme_bit} {why}".strip(),
+        policy=pol,
+    )
+
+
+def _editorial_cook(relevance: dict | None, pol: str) -> NewspaperCookVerdict:
+    return pick(
+        relevance is None,
+        lambda: NewspaperCookVerdict(
+            "cook",
+            "Editorial; relevance judge unavailable, allowing.",
+            policy=pol,
+        ),
+        lambda: pick(
+            not relevance.get("relevant"),
+            lambda: NewspaperCookVerdict(
+                "off_syllabus",
+                str(relevance.get("rationale") or "Not exam-relevant."),
+                policy=pol,
+            ),
+            lambda: _cook_from_relevance(relevance, pol),
+        ),
+    )
+
+
 def evaluate_newspaper_cook_gate(
     page_text: str,
     *,
@@ -157,28 +274,10 @@ def evaluate_newspaper_cook_gate(
     """Structure + exam-relevance cook/skip. LLM judge stays plumbing."""
     structure = evaluate_newspaper_structure(page_text, policy=policy)
     pol = structure.policy
-    if structure.label == "ad":
-        return NewspaperCookVerdict("ad", structure.rationale, policy=pol)
-    if structure.label == "masthead":
-        return NewspaperCookVerdict("masthead", structure.rationale, policy=pol)
-    if structure.label == "low_signal":
-        return NewspaperCookVerdict("low_signal", structure.rationale, policy=pol)
-    if relevance is None:
-        return NewspaperCookVerdict(
-            "cook",
-            "Editorial; relevance judge unavailable, allowing.",
-            policy=pol,
-        )
-    if not relevance.get("relevant"):
-        why = str(relevance.get("rationale") or "Not exam-relevant.")
-        return NewspaperCookVerdict("off_syllabus", why, policy=pol)
-    theme = relevance.get("theme") or ""
-    theme_bit = f" theme={theme}" if theme else ""
-    why = str(relevance.get("rationale") or "Exam-relevant.").strip()
-    return NewspaperCookVerdict(
-        "cook",
-        f"Editorial + exam-relevant.{theme_bit} {why}".strip(),
-        policy=pol,
+    return pick(
+        structure.label != "editorial",
+        lambda: NewspaperCookVerdict(structure.label, structure.rationale, policy=pol),
+        lambda: _editorial_cook(relevance, pol),
     )
 
 
@@ -199,29 +298,39 @@ def evaluate_newspaper_relevance_outcome(
     judge_error: bool = False,
 ) -> NewspaperRelevanceVerdict:
     """Fail-open exam-relevance: empty rejects; LLM outage / unparseable allows."""
-    if not (page_text or "").strip():
-        return NewspaperRelevanceVerdict(
-            False, "", "Empty page text.", "empty"
-        )
-    if judge_error:
-        return NewspaperRelevanceVerdict(
-            True,
-            "",
-            "Relevance judge unavailable; allowing.",
-            "judge_unavailable",
-        )
-    if parsed is None:
-        return NewspaperRelevanceVerdict(
-            True,
-            "",
-            "Relevance judge returned no judgment; allowing.",
-            "no_judgment",
-        )
-    return NewspaperRelevanceVerdict(
-        bool(parsed.get("relevant")),
-        str(parsed.get("theme") or "").strip(),
-        str(parsed.get("rationale") or "").strip(),
-        "judged",
+    hit = first_match(
+        _RELEVANCE_RULES,
+        {
+            "empty": not (page_text or "").strip(),
+            "judge_error": judge_error,
+            "no_parsed": parsed is None,
+        },
+    )
+    return apply(
+        hit.action,
+        {
+            "empty": lambda: NewspaperRelevanceVerdict(
+                False, "", "Empty page text.", "empty"
+            ),
+            "judge_unavailable": lambda: NewspaperRelevanceVerdict(
+                True,
+                "",
+                "Relevance judge unavailable; allowing.",
+                "judge_unavailable",
+            ),
+            "no_judgment": lambda: NewspaperRelevanceVerdict(
+                True,
+                "",
+                "Relevance judge returned no judgment; allowing.",
+                "no_judgment",
+            ),
+            "judged": lambda: NewspaperRelevanceVerdict(
+                bool(parsed.get("relevant")),
+                str(parsed.get("theme") or "").strip(),
+                str(parsed.get("rationale") or "").strip(),
+                "judged",
+            ),
+        },
     )
 
 
@@ -249,10 +358,10 @@ def should_revalidate_ocr_blank(
     blank_trust_ttl_seconds: int | None = None,
 ) -> bool:
     """True when a BLANK hit was found under a longer TTL than we trust."""
-    trust = (
-        OCR_BLANK_TRUST_TTL_SECONDS
-        if blank_trust_ttl_seconds is None
-        else int(blank_trust_ttl_seconds)
+    trust = pick(
+        blank_trust_ttl_seconds is None,
+        lambda: OCR_BLANK_TRUST_TTL_SECONDS,
+        lambda: int(blank_trust_ttl_seconds),
     )
     return hit == "BLANK" and int(requested_ttl_seconds) > trust
 
@@ -267,14 +376,20 @@ def evaluate_empty_study_reason(
     range_has_no_questions: bool,
 ) -> str | None:
     """When the UI should say the study range has nothing to ask."""
-    if not range_has_no_questions:
-        return None
     empty_pool = int(questions_generated) == 0 and int(questions_answered) == 0
-    if document_complete and empty_pool:
-        return "no_testable_content"
-    if newspaper and int(questions_generated) == 0 and not generation_pending:
-        return "no_testable_content"
-    return None
+    return pick(
+        not range_has_no_questions,
+        lambda: None,
+        lambda: pick(
+            document_complete and empty_pool,
+            lambda: "no_testable_content",
+            lambda: pick(
+                newspaper and int(questions_generated) == 0 and not generation_pending,
+                lambda: "no_testable_content",
+                lambda: None,
+            ),
+        ),
+    )
 
 
 def should_probe_empty_study_range(
@@ -287,11 +402,9 @@ def should_probe_empty_study_range(
 ) -> bool:
     """Run the expensive range scan only when the pool looks empty."""
     empty_pool = int(questions_generated) == 0 and int(questions_answered) == 0
-    if document_complete and empty_pool:
-        return True
-    if newspaper and int(questions_generated) == 0 and not generation_pending:
-        return True
-    return False
+    return (document_complete and empty_pool) or (
+        newspaper and int(questions_generated) == 0 and not generation_pending
+    )
 
 
 def is_sparse_page_text(text: str | None, *, min_chars: int = WORTH_MIN_CHARS) -> bool:
@@ -301,12 +414,12 @@ def is_sparse_page_text(text: str | None, *, min_chars: int = WORTH_MIN_CHARS) -
 
 def evaluate_reference_extract(extract: str) -> bool:
     """Wikipedia/web extract is long enough and not a disambiguation stub."""
-    if is_sparse_page_text(extract):
-        return False
     lowered = (extract or "").strip().lower()
-    if "may refer to" in lowered or "can refer to" in lowered:
-        return False
-    return True
+    return (
+        not is_sparse_page_text(extract)
+        and "may refer to" not in lowered
+        and "can refer to" not in lowered
+    )
 
 
 def is_import_extract_too_short(
@@ -337,11 +450,24 @@ def plan_stored_page_count_trust(
     stored_pages: int | None,
 ) -> StoredPageCountTrust:
     """When parse may skip a MinIO re-count and keep the stored page total."""
-    if stored_pages is not None and int(stored_pages) > 1:
-        return StoredPageCountTrust(True, int(stored_pages), "multi_page")
-    if should_trust_stored_page_count(size_bytes=size_bytes, stored_pages=stored_pages):
-        return StoredPageCountTrust(True, 1, "tiny_one_page")
-    return StoredPageCountTrust(False, int(stored_pages or 0), "recount")
+    hit = first_match(
+        _PAGE_COUNT_RULES,
+        {
+            "multi": stored_pages is not None and int(stored_pages) > 1,
+            "tiny": should_trust_stored_page_count(
+                size_bytes=size_bytes, stored_pages=stored_pages
+            ),
+        },
+    )
+    pages = apply(
+        hit.action,
+        {
+            "multi_page": lambda: int(stored_pages),
+            "tiny_one_page": lambda: 1,
+            "recount": lambda: int(stored_pages or 0),
+        },
+    )
+    return StoredPageCountTrust(bool(hit.extras["trust"]), pages, hit.action)
 
 
 @dataclass(frozen=True)
@@ -365,7 +491,7 @@ def plan_study_page_split() -> StudyPageSplitPlan:
 
 def should_split_native_unit(text: str, *, max_chars: int | None = None) -> bool:
     """True when a native PDF/DOCX/PPTX unit is too large to keep as one page."""
-    cap = NATIVE_SOFT_SPLIT_CHARS if max_chars is None else int(max_chars)
+    cap = pick(max_chars is None, lambda: NATIVE_SOFT_SPLIT_CHARS, lambda: int(max_chars))
     return len(text or "") > cap
 
 
@@ -396,16 +522,18 @@ def plan_worthiness_probe(
     has_text: bool = True,
 ) -> WorthinessProbe:
     """Thresholds for empty-page vision vs pre-LLM junk skip."""
-    if stage == "empty_page":
-        return WorthinessProbe(
+    return pick(
+        stage == "empty_page",
+        lambda: WorthinessProbe(
             empty=True,
             check_junk=False,
             min_chars=WORTH_MIN_CHARS,
-        )
-    return WorthinessProbe(
-        empty=not has_text,
-        check_junk=True,
-        min_chars=JUNK_MIN_CHARS,
+        ),
+        lambda: WorthinessProbe(
+            empty=not has_text,
+            check_junk=True,
+            min_chars=JUNK_MIN_CHARS,
+        ),
     )
 
 
@@ -423,13 +551,15 @@ def evaluate_llm_triage_units(
     aspect_count: int,
 ) -> LlmTriageUnitsVerdict:
     """Honest zero when the model judged non-content, unusable, or no units."""
-    if (content_type or "") == "non_content":
-        return LlmTriageUnitsVerdict(True, "non_content")
-    if usable is False:
-        return LlmTriageUnitsVerdict(True, "unusable")
-    if int(aspect_count) <= 0:
-        return LlmTriageUnitsVerdict(True, "no_aspects")
-    return LlmTriageUnitsVerdict(False, "ok")
+    hit = first_match(
+        _LLM_TRIAGE_RULES,
+        {
+            "non_content": (content_type or "") == "non_content",
+            "unusable": usable is False,
+            "no_aspects": int(aspect_count) <= 0,
+        },
+    )
+    return LlmTriageUnitsVerdict(hit.action != "ok", hit.action)
 
 
 def should_heuristic_fallback_empty_aspects(
@@ -445,16 +575,19 @@ def evaluate_digest_page_worthy(
     *,
     mcq_count: int,
     page_text: str,
-    db: "Session | None" = None,
+    db: Session | None = None,
 ) -> bool:
     """Cooked MCQ pages are digest-worthy; otherwise run the newspaper gate."""
-    if int(mcq_count) > 0:
-        return True
-    return evaluate_worthiness(page_text=page_text, newspaper=True, db=db).worthy
+    return pick(
+        int(mcq_count) > 0,
+        lambda: True,
+        lambda: evaluate_worthiness(page_text=page_text, newspaper=True, db=db).worthy,
+    )
 
 
 @dataclass(frozen=True)
 class NewspaperPageSkipPlan:
+    action: str
     skip: bool
     reason: str
     details: str = ""
@@ -464,26 +597,39 @@ class NewspaperPageSkipPlan:
     policy_version: str = WORTH_VERSION
 
 
+_NEWSPAPER_BATCH_GATE_RULES = (
+    Rule(when=(Pred("worthy", "truthy"),), action="cook"),
+    Rule(when=(), action="skip"),
+)
+
+
 def plan_newspaper_batch_gate(
     *,
     page_text: str,
-    db: "Session | None" = None,
+    db: Session | None = None,
 ) -> NewspaperPageSkipPlan:
     """Cook skip plan when newspaper worthiness fails mid-batch."""
     worth = evaluate_worthiness(page_text=page_text, newspaper=True, db=db)
-    if worth.worthy:
-        return NewspaperPageSkipPlan(
-            skip=False,
-            reason="ok",
-            details="",
-            question_budget=0,
-            non_content=False,
-            mark_complete=False,
-        )
-    return NewspaperPageSkipPlan(
-        skip=True,
-        reason=worth.reason,
-        details=str(worth.details or worth.reason),
+    hit = first_match(_NEWSPAPER_BATCH_GATE_RULES, {"worthy": worth.worthy})
+    return apply(
+        hit.action,
+        {
+            "cook": lambda: NewspaperPageSkipPlan(
+                action="cook",
+                skip=False,
+                reason="ok",
+                details="",
+                question_budget=0,
+                non_content=False,
+                mark_complete=False,
+            ),
+            "skip": lambda: NewspaperPageSkipPlan(
+                action="skip",
+                skip=True,
+                reason=worth.reason,
+                details=str(worth.details or worth.reason),
+            ),
+        },
     )
 
 
@@ -495,13 +641,67 @@ def normalize_policy(policy: str | None) -> str:
 def looks_like_junk(text: str | None, *, min_chars: int = JUNK_MIN_CHARS) -> bool:
     """Cheap coherent-language gate (ex-_looks_like_junk). Owned by this engine."""
     t = (text or "").strip()
-    if len(t) < min_chars:
-        return True
-    letters = sum(1 for c in t if c.isalpha())
-    if letters / max(len(t), 1) < 0.45:
-        return True
+    letters = sum(map(str.isalpha, t))
     words = re.findall(r"[^\W\d_]{2,}", t, re.UNICODE)
-    return len(words) < 8
+    return len(t) < min_chars or letters / max(len(t), 1) < 0.45 or len(words) < 8
+
+
+def _generic_worth(
+    text: str,
+    min_chars: int,
+    check_junk: bool,
+    pol: str,
+) -> WorthinessVerdict:
+    hit = first_match(
+        _GENERIC_WORTH_RULES,
+        {
+            "too_short": len(text) < min_chars,
+            "ad_copy": bool(_AD_HINT.search(text)),
+            "junk": check_junk and looks_like_junk(text),
+        },
+    )
+    return WorthinessVerdict(hit.action == "ok", hit.action, policy=pol)
+
+
+def _newspaper_skip_or_none(
+    text: str,
+    db: Session | None,
+    pol: str,
+) -> WorthinessVerdict | None:
+    from app.services.newspaper_ad_filter import newspaper_page_verdict
+
+    verdict, rationale = newspaper_page_verdict(db, text)
+    return pick(
+        verdict != "cook",
+        lambda: WorthinessVerdict(
+            False,
+            _NEWSPAPER_REASON.get(verdict, "newspaper_off_syllabus"),
+            policy=pol,
+            details=rationale,
+        ),
+        lambda: None,
+    )
+
+
+def _worthiness_after_flags(
+    page_text: str | None,
+    newspaper: bool,
+    min_chars: int,
+    check_junk: bool,
+    pol: str,
+    db: Session | None,
+) -> WorthinessVerdict:
+    text = (page_text or "").strip()
+    paper = pick(
+        newspaper,
+        lambda: _newspaper_skip_or_none(text, db, pol),
+        lambda: None,
+    )
+    return pick(
+        paper is not None,
+        lambda: paper,
+        lambda: _generic_worth(text, min_chars, check_junk, pol),
+    )
 
 
 def evaluate_worthiness(
@@ -524,41 +724,21 @@ def evaluate_worthiness(
     clears them is treated as worthy.
     """
     pol = normalize_policy(policy)
-    if non_content:
-        return WorthinessVerdict(False, "non_content", policy=pol)
-    if empty:
-        return WorthinessVerdict(False, "empty", policy=pol)
-    if ad_likely:
-        return WorthinessVerdict(False, "ad_likely", policy=pol)
-
-    text = (page_text or "").strip()
-
-    if newspaper:
-        from app.services.newspaper_ad_filter import newspaper_page_verdict
-
-        verdict, rationale = newspaper_page_verdict(db, text)
-        if verdict != "cook":
-            reason_map = {
-                "ad": "newspaper_ad",
-                "masthead": "newspaper_masthead",
-                "low_signal": "newspaper_low_signal",
-                "off_syllabus": "newspaper_off_syllabus",
-            }
-            return WorthinessVerdict(
-                False,
-                reason_map.get(verdict, "newspaper_off_syllabus"),
-                policy=pol,
-                details=rationale,
-            )
-        # Editorial + exam-relevant: still apply generic length/ad checks below.
-
-    if len(text) < min_chars:
-        return WorthinessVerdict(False, "too_short", policy=pol)
-    if _AD_HINT.search(text):
-        return WorthinessVerdict(False, "ad_copy", policy=pol)
-    if check_junk and looks_like_junk(text):
-        return WorthinessVerdict(False, "junk_text", policy=pol)
-    return WorthinessVerdict(True, "ok", policy=pol)
+    hit = first_match(
+        _WORTH_EARLY_RULES,
+        {
+            "non_content": non_content,
+            "empty": empty,
+            "ad_likely": ad_likely,
+        },
+    )
+    return pick(
+        hit.action != "continue",
+        lambda: WorthinessVerdict(False, hit.action, policy=pol),
+        lambda: _worthiness_after_flags(
+            page_text, newspaper, min_chars, check_junk, pol, db
+        ),
+    )
 
 
 def evaluate_vision_glance(
@@ -575,18 +755,20 @@ def evaluate_vision_glance(
     """
     pol = normalize_policy(policy)
     detail = (rationale or "").strip()
-    if usable:
-        return WorthinessVerdict(
+    return pick(
+        usable,
+        lambda: WorthinessVerdict(
             False,
             "empty_vision_usable",
             policy=pol,
             details=detail or "Page looks like it has content, but no extractable text.",
-        )
-    return WorthinessVerdict(
-        False,
-        "empty_vision_blank",
-        policy=pol,
-        details=detail or "Vision glance: no useful study content.",
+        ),
+        lambda: WorthinessVerdict(
+            False,
+            "empty_vision_blank",
+            policy=pol,
+            details=detail or "Vision glance: no useful study content.",
+        ),
     )
 
 
@@ -611,24 +793,22 @@ def plan_empty_page_reselect(
     """Whether blank-page streak / vision-usable should prompt page reselect."""
     pol = normalize_policy(policy)
     streak = max(0, int(prior_streak)) + 1
-    if vision_usable:
-        return EmptyPageReselectVerdict(
-            prompt_reselect=True,
-            streak=streak,
-            reason="unreadable_content",
-            policy=pol,
-        )
-    if streak >= max(1, int(streak_threshold)) or already_prompted:
-        return EmptyPageReselectVerdict(
-            prompt_reselect=True,
-            streak=streak,
-            reason=(prior_reason or "empty_pages_streak"),
-            policy=pol,
-        )
+    hit = first_match(
+        _RESELECT_RULES,
+        {
+            "vision_usable": vision_usable,
+            "prompt_now": streak >= max(1, int(streak_threshold)) or already_prompted,
+        },
+    )
+    reason = pick(
+        hit.action == "streak",
+        lambda: (prior_reason or "empty_pages_streak"),
+        lambda: hit.action,
+    )
     return EmptyPageReselectVerdict(
-        prompt_reselect=False,
+        prompt_reselect=bool(hit.extras["prompt"]),
         streak=streak,
-        reason="",
+        reason=reason,
         policy=pol,
     )
 

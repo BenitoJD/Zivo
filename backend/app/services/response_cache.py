@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
 from app.services.chunks import pgvector_literal
 from app.services.tutor_retrieval import (
     RESPONSE_CACHE_SIMILARITY,
@@ -86,16 +87,20 @@ def get_cached_response(
             "scope_hash": _scope_hash(document_id, scope),
         },
     ).mappings().first()
-    if not row:
-        return None
-    similarity = float(row["similarity"])
-    if not decide_cache_reuse(similarity, threshold=threshold).reuse:
-        return None
-    return {
-        "response_text": row["response_text"],
-        "citations": row["citations"],
-        "similarity": similarity,
-    }
+
+    def _hit() -> dict | None:
+        similarity = float(row["similarity"])
+        return pick(
+            not decide_cache_reuse(similarity, threshold=threshold).reuse,
+            lambda: None,
+            lambda: {
+                "response_text": row["response_text"],
+                "citations": row["citations"],
+                "similarity": similarity,
+            },
+        )
+
+    return pick(not row, lambda: None, _hit)
 
 
 def store_response(

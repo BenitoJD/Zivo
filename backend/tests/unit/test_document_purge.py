@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from unittest.mock import MagicMock, patch
 
+from app.engine_runtime import pick
 from app.services.document_purge import purge_document
 
 
@@ -22,8 +23,10 @@ def test_purge_document_retracts_assertions_and_deletes_rows() -> None:
     def execute_side_effect(statement, params=None):
         sql = str(statement)
         mock = MagicMock()
-        if "SELECT id FROM intel.assertion" in sql:
+        def _hit() -> None:
             mock.all.return_value = [(assertion_id,)]
+
+        pick("SELECT id FROM intel.assertion" in sql, _hit, lambda: None)
         return mock
 
     db.execute.side_effect = execute_side_effect

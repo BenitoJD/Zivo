@@ -12,13 +12,17 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from app.engine_runtime import pick
 from app.services import request_ip
 
 
 def _req(peer: str, xff: str | None = None) -> SimpleNamespace:
     headers: dict[str, str] = {}
-    if xff is not None:
-        headers["x-forwarded-for"] = xff
+    pick(
+        xff is not None,
+        lambda: headers.__setitem__("x-forwarded-for", xff),
+        lambda: None,
+    )
     return SimpleNamespace(client=SimpleNamespace(host=peer), headers=headers)
 
 

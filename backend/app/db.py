@@ -7,6 +7,7 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import get_settings
 from app.db_search_path import PGBOUNCER_PSYCOPG_CONNECT_ARGS, attach_search_path
+from app.engine_runtime import pick
 
 settings = get_settings()
 
@@ -67,8 +68,10 @@ def is_db_outage(exc: SQLAlchemyError) -> bool:
     still arrives as OperationalError but some clustered/proxy setups raise a
     bare DBAPIError with the state set).
     """
-    if isinstance(exc, (OperationalError, InterfaceError)):
-        return True
     orig = getattr(exc, "orig", None)
     sqlstate = getattr(orig, "sqlstate", None)
-    return bool(sqlstate) and sqlstate[:2] in _OUTAGE_SQLSTATE_CLASSES
+    return pick(
+        isinstance(exc, (OperationalError, InterfaceError)),
+        lambda: True,
+        lambda: bool(sqlstate) and sqlstate[:2] in _OUTAGE_SQLSTATE_CLASSES,
+    )

@@ -7,6 +7,7 @@ import ipaddress
 from fastapi import Request
 
 from app.config import get_settings
+from app.engine_runtime import pick
 
 
 def _trusted_networks() -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
@@ -20,27 +21,24 @@ def _trusted_networks() -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, 
     """
     raw = get_settings().trusted_proxy_ips
     nets: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
-    for entry in raw.split(","):
-        entry = entry.strip()
-        if not entry:
-            continue
+    for entry in filter(None, (e.strip() for e in raw.split(","))):
         try:
             # strict=False so a bare host IP like 10.42.0.98 becomes a /32.
             nets.append(ipaddress.ip_network(entry, strict=False))
         except ValueError:
-            # Bad config: ignore rather than crash the request.
             continue
     return tuple(nets)
 
 
 def _is_trusted(ip: str, trusted: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]) -> bool:
-    if not trusted:
-        return False
-    try:
-        addr = ipaddress.ip_address(ip)
-    except ValueError:
-        return False
-    return any(addr in n for n in trusted if addr.version == n.version)
+    def _match() -> bool:
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            return False
+        return any(addr in n for n in filter(lambda n: addr.version == n.version, trusted))
+
+    return pick(not trusted, lambda: False, _match)
 
 
 def client_ip(request: Request) -> str:
@@ -53,18 +51,21 @@ def client_ip(request: Request) -> str:
     Trust is matched against ``trusted_proxy_ips``, which accepts both plain IPs
     and CIDR blocks (e.g. ``10.42.0.0/16`` for the K3s pod CIDR).
     """
-    direct = request.client.host if request.client else "unknown"
+    direct = pick(bool(request.client), lambda: request.client.host, lambda: "unknown")
     trusted = _trusted_networks()
-    if not _is_trusted(direct, trusted):
-        return direct
 
-    xff = request.headers.get("x-forwarded-for", "")
-    if not xff:
-        return direct
+    def _from_xff() -> str:
+        xff = request.headers.get("x-forwarded-for", "")
 
-    hops = [hop.strip() for hop in xff.split(",") if hop.strip()]
-    for hop in reversed(hops):
-        if not _is_trusted(hop, trusted):
-            return hop
-    return hops[0] if hops else direct
+        def _walk() -> str:
+            hops = list(filter(None, (hop.strip() for hop in xff.split(","))))
+            found = next(filter(lambda hop: not _is_trusted(hop, trusted), reversed(hops)), None)
+            return pick(
+                found is not None,
+                lambda: found,
+                lambda: pick(bool(hops), lambda: hops[0], lambda: direct),
+            )
 
+        return pick(not xff, lambda: direct, _walk)
+
+    return pick(not _is_trusted(direct, trusted), lambda: direct, _from_xff)

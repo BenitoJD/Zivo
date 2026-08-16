@@ -5,19 +5,18 @@ renewed deadline) OR, for rows that pre-date the lease columns, ``locked_at``
 older than the legacy :data:`STALE_RUNNING_TIMEOUT_SECONDS` fallback. A live
 worker renews ``heartbeat_at`` / ``lease_deadline`` every HEARTBEAT_INTERVAL
 (see :mod:`app.eta.lease`), so a job genuinely in flight never crosses this
-cutoff — which is the whole point: no more false reclaims on long-running jobs.
+cutoff, which is the whole point: no more false reclaims on long-running jobs.
 
 Reclaim re-queues the job and:
-  * does NOT increment ``attempts`` — only a real handler exception costs an
+  * does NOT increment ``attempts``: only a real handler exception costs an
     attempt, so a job orphaned by N deploys is not auto-failed for that;
   * marks the job ``failed`` (and cancels DAG descendants) if ``attempts`` has
-    already hit ``max_attempts`` — uniformly for both IO and CPU workloads
+    already hit ``max_attempts``, uniformly for both IO and CPU workloads
     (the old IO reaper requeued forever).
 """
 
 from __future__ import annotations
 
-import logging
 import os
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
@@ -26,6 +25,7 @@ from sqlalchemy import func, or_, update
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.engine_runtime import apply, pick
 from app.eta.execution_state import (
     cancel_descendants_async,
     cancel_descendants_sync,
@@ -33,8 +33,7 @@ from app.eta.execution_state import (
     update_execution_state_sync,
 )
 from app.models import Job, JobStatus
-
-logger = logging.getLogger(__name__)
+from app.services.job_lifecycle import evaluate_job_lifecycle
 
 # Legacy fallback: rows with NULL lease_deadline (pre-migration or unmigrated
 # writers) are reclaimed once locked_at is older than this. Kept generous so an
@@ -45,7 +44,7 @@ STALE_REAPER_INTERVAL_SECONDS = float(os.getenv("ETA_STALE_REAPER_INTERVAL", "60
 # A ``queued`` job that has sat un-run this long is treated as stale by the
 # raw-SQL liveness check (ACTIVE_JOB_LIVENESS_SQL), so it no longer masks a
 # stuck document from recovery. Generous vs. any real queue backpressure; the
-# intent is only to catch jobs that will *never* run — a DAG child orphaned by
+# intent is only to catch jobs that will *never* run: a DAG child orphaned by
 # a cancelled parent, or a row enqueued for a dead worker pool. A legitimately
 # deferred job (future ``run_after``) is always considered live regardless of
 # age. ``attempts >= max_attempts`` queued rows are also stale here.
@@ -58,20 +57,20 @@ def stale_running_cutoff(now: datetime | None = None) -> datetime:
 
     Rows written with a lease use :func:`app.eta.lease.stale_heartbeat_cutoff`.
     """
-    now = now or datetime.now(timezone.utc)
-    return now - timedelta(seconds=STALE_RUNNING_TIMEOUT_SECONDS)
+    resolved = now or datetime.now(timezone.utc)
+    return resolved - timedelta(seconds=STALE_RUNNING_TIMEOUT_SECONDS)
 
 
 def stale_queued_cutoff(now: datetime | None = None) -> datetime:
     """``created_at`` cutoff past which an un-run ``queued`` job is stale."""
-    now = now or datetime.now(timezone.utc)
-    return now - timedelta(seconds=STALE_QUEUED_TIMEOUT_SECONDS)
+    resolved = now or datetime.now(timezone.utc)
+    return resolved - timedelta(seconds=STALE_QUEUED_TIMEOUT_SECONDS)
 
 
 # Raw-SQL mirror of the *inverse* of :func:`_orphaned_clause`. A job counts as
 # "active" (live work, do not treat its document as stranded) when:
-#   * ``queued`` AND recent enough to plausibly still be picked up — OR with a
-#     future ``run_after`` (a legitimately deferred job) — AND not already
+#   * ``queued`` AND recent enough to plausibly still be picked up, OR with a
+#     future ``run_after`` (a legitimately deferred job), AND not already
 #     exhausted (``attempts < max_attempts``). The age bound closes the hole
 #     where a queued job that will *never* run (DAG child of a cancelled parent,
 #     row for a dead worker pool) masked a stuck document from recovery forever.
@@ -122,6 +121,110 @@ def _orphaned_clause(now: datetime):
     )
 
 
+def _fail_values() -> dict:
+    return {
+        "status": JobStatus.failed,
+        "error": "Orphaned after worker exit (attempts exhausted)",
+        "locked_by": None,
+        "locked_at": None,
+        "heartbeat_at": None,
+        "lease_deadline": None,
+        "finished_at": func.now(),
+        "updated_at": func.now(),
+    }
+
+
+def _requeue_values() -> dict:
+    return {
+        "status": JobStatus.queued,
+        "locked_by": None,
+        "locked_at": None,
+        "heartbeat_at": None,
+        "lease_deadline": None,
+        "error": None,
+        "updated_at": func.now(),
+    }
+
+
+def _fail_exhausted_sync(db: Session, workloads: Sequence[str], orphaned) -> int:
+    failed = db.execute(
+        update(Job)
+        .where(Job.status == JobStatus.running)
+        .where(Job.workload.in_(list(workloads)))
+        .where(orphaned)
+        .where(Job.attempts >= Job.max_attempts)
+        .values(**_fail_values())
+        .returning(Job.id, Job.execution_id)
+    )
+    exhausted_rows = failed.all()
+
+    def _one(job_id, execution_id) -> None:
+        cancel_descendants_sync(
+            db,
+            job_id=job_id,
+            error_message=f"Upstream dependency failed (orphaned): {job_id}",
+        )
+        pick(bool(execution_id), lambda: update_execution_state_sync(db, execution_id), lambda: None)
+
+    for job_id, execution_id in exhausted_rows:
+        _one(job_id, execution_id)
+    return len(exhausted_rows)
+
+
+def _requeue_orphans_sync(db: Session, workloads: Sequence[str], orphaned) -> int:
+    requeued = db.execute(
+        update(Job)
+        .where(Job.status == JobStatus.running)
+        .where(Job.workload.in_(list(workloads)))
+        .where(orphaned)
+        .values(**_requeue_values())
+    )
+    return requeued.rowcount or 0
+
+
+async def _fail_exhausted_async(session: AsyncSession, workloads: Sequence[str], orphaned) -> int:
+    failed = await session.execute(
+        update(Job)
+        .where(Job.status == JobStatus.running)
+        .where(Job.workload.in_(list(workloads)))
+        .where(orphaned)
+        .where(Job.attempts >= Job.max_attempts)
+        .values(**_fail_values())
+        .returning(Job.id, Job.execution_id)
+    )
+    exhausted_rows = failed.all()
+
+    async def _one(job_id, execution_id) -> None:
+        await cancel_descendants_async(
+            session,
+            job_id=job_id,
+            error_message=f"Upstream dependency failed (orphaned): {job_id}",
+        )
+        async def _skip() -> None:
+            return None
+
+        await pick(
+            bool(execution_id),
+            lambda: update_execution_state_async(session, execution_id),
+            _skip,
+        )
+
+    for job_id, execution_id in exhausted_rows:
+        await _one(job_id, execution_id)
+    return len(exhausted_rows)
+
+
+async def _requeue_orphans_async(session: AsyncSession, workloads: Sequence[str], orphaned) -> int:
+    requeued = await session.execute(
+        update(Job)
+        .where(Job.status == JobStatus.running)
+        .where(Job.workload.in_(list(workloads)))
+        .where(orphaned)
+        .values(**_requeue_values())
+    )
+    return requeued.rowcount or 0
+
+
 def reclaim_stale_jobs_sync(
     db: Session,
     *,
@@ -136,53 +239,27 @@ def reclaim_stale_jobs_sync(
     """
     resolved_now = now or datetime.now(timezone.utc)
     orphaned = _orphaned_clause(resolved_now)
-
-    # 1) Exhausted orphans → failed + cancel DAG descendants + rollup.
-    failed = db.execute(
-        update(Job)
-        .where(Job.status == JobStatus.running)
-        .where(Job.workload.in_(list(workloads)))
-        .where(orphaned)
-        .where(Job.attempts >= Job.max_attempts)
-        .values(
-            status=JobStatus.failed,
-            error="Orphaned after worker exit (attempts exhausted)",
-            locked_by=None,
-            locked_at=None,
-            heartbeat_at=None,
-            lease_deadline=None,
-            finished_at=func.now(),
-            updated_at=func.now(),
-        )
-        .returning(Job.id, Job.execution_id)
+    fail_verdict = evaluate_job_lifecycle(status="failed", retries_left=False)
+    reclaim_verdict = evaluate_job_lifecycle(status="running", stale_running=True)
+    exhausted = apply(
+        fail_verdict.action,
+        {
+            "fail": lambda: _fail_exhausted_sync(db, workloads, orphaned),
+            "keep": lambda: 0,
+            "reclaim": lambda: 0,
+            "retry": lambda: 0,
+        },
     )
-    exhausted_rows = failed.all()
-    for job_id, execution_id in exhausted_rows:
-        cancel_descendants_sync(
-            db,
-            job_id=job_id,
-            error_message=f"Upstream dependency failed (orphaned): {job_id}",
-        )
-        if execution_id:
-            update_execution_state_sync(db, execution_id)
-
-    # 2) Remaining orphans → requeued. attempts is NOT incremented here.
-    requeued = db.execute(
-        update(Job)
-        .where(Job.status == JobStatus.running)
-        .where(Job.workload.in_(list(workloads)))
-        .where(orphaned)
-        .values(
-            status=JobStatus.queued,
-            locked_by=None,
-            locked_at=None,
-            heartbeat_at=None,
-            lease_deadline=None,
-            error=None,
-            updated_at=func.now(),
-        )
+    requeued = apply(
+        reclaim_verdict.action,
+        {
+            "reclaim": lambda: _requeue_orphans_sync(db, workloads, orphaned),
+            "retry": lambda: _requeue_orphans_sync(db, workloads, orphaned),
+            "fail": lambda: 0,
+            "keep": lambda: 0,
+        },
     )
-    return len(exhausted_rows) + (requeued.rowcount or 0)
+    return exhausted + requeued
 
 
 async def reclaim_stale_jobs_async(
@@ -194,48 +271,28 @@ async def reclaim_stale_jobs_async(
     """Async counterpart of :func:`reclaim_stale_jobs_sync`."""
     resolved_now = now or datetime.now(timezone.utc)
     orphaned = _orphaned_clause(resolved_now)
+    fail_verdict = evaluate_job_lifecycle(status="failed", retries_left=False)
+    reclaim_verdict = evaluate_job_lifecycle(status="running", stale_running=True)
 
-    failed = await session.execute(
-        update(Job)
-        .where(Job.status == JobStatus.running)
-        .where(Job.workload.in_(list(workloads)))
-        .where(orphaned)
-        .where(Job.attempts >= Job.max_attempts)
-        .values(
-            status=JobStatus.failed,
-            error="Orphaned after worker exit (attempts exhausted)",
-            locked_by=None,
-            locked_at=None,
-            heartbeat_at=None,
-            lease_deadline=None,
-            finished_at=func.now(),
-            updated_at=func.now(),
-        )
-        .returning(Job.id, Job.execution_id)
-    )
-    exhausted_rows = failed.all()
-    for job_id, execution_id in exhausted_rows:
-        await cancel_descendants_async(
-            session,
-            job_id=job_id,
-            error_message=f"Upstream dependency failed (orphaned): {job_id}",
-        )
-        if execution_id:
-            await update_execution_state_async(session, execution_id)
+    async def _zero() -> int:
+        return 0
 
-    requeued = await session.execute(
-        update(Job)
-        .where(Job.status == JobStatus.running)
-        .where(Job.workload.in_(list(workloads)))
-        .where(orphaned)
-        .values(
-            status=JobStatus.queued,
-            locked_by=None,
-            locked_at=None,
-            heartbeat_at=None,
-            lease_deadline=None,
-            error=None,
-            updated_at=func.now(),
-        )
+    exhausted = await apply(
+        fail_verdict.action,
+        {
+            "fail": lambda: _fail_exhausted_async(session, workloads, orphaned),
+            "keep": _zero,
+            "reclaim": _zero,
+            "retry": _zero,
+        },
     )
-    return len(exhausted_rows) + (requeued.rowcount or 0)
+    requeued = await apply(
+        reclaim_verdict.action,
+        {
+            "reclaim": lambda: _requeue_orphans_async(session, workloads, orphaned),
+            "retry": lambda: _requeue_orphans_async(session, workloads, orphaned),
+            "fail": _zero,
+            "keep": _zero,
+        },
+    )
+    return exhausted + requeued

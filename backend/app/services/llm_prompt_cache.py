@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.engine_runtime import pick
 from app.services.mcq_dedup import SUBJECT_MATTER_PREFIX
 
 # User messages whose leading prefix is stable across generate/critic/rewrite/triage.
@@ -31,32 +32,33 @@ def _anthropic_cached_block(text: str) -> list[dict[str, Any]]:
 def _should_cache_message(msg: dict[str, Any], index: int) -> bool:
     role = msg.get("role")
     content = msg.get("content")
-    if not isinstance(content, str) or not content.strip():
-        return False
-    if role == "system":
-        return True
-    if role == "user" and index <= 3:
-        return any(content.startswith(marker) for marker in _STABLE_PREFIX_MARKERS)
-    return False
+    return pick(
+        not isinstance(content, str) or not content.strip(),
+        lambda: False,
+        lambda: pick(
+            role == "system",
+            lambda: True,
+            lambda: bool(
+                role == "user"
+                and index <= 3
+                and any(content.startswith(marker) for marker in _STABLE_PREFIX_MARKERS)
+            ),
+        ),
+    )
 
 
 def apply_prompt_cache(messages: list[dict], *, provider_slug: str) -> list[dict]:
     """Return a copy of *messages* with cache breakpoints where supported."""
-    if provider_slug != "anthropic":
-        return messages
 
-    out: list[dict] = []
-    for i, msg in enumerate(messages):
-        if not _should_cache_message(msg, i):
-            out.append(msg)
-            continue
-        content = msg["content"]
-        # Real check (not `assert`, which -O strips): only str content is cacheable;
-        # pass anything else through untouched rather than mis-wrapping it.
-        if not isinstance(content, str):
-            out.append(msg)
-            continue
-        cached = dict(msg)
-        cached["content"] = _anthropic_cached_block(content)
-        out.append(cached)
-    return out
+    def _apply() -> list[dict]:
+        out: list[dict] = []
+        for i, msg in enumerate(messages):
+            content = msg.get("content")
+            pick(
+                not _should_cache_message(msg, i) or not isinstance(content, str),
+                lambda: out.append(msg),
+                lambda: out.append({**msg, "content": _anthropic_cached_block(content)}),
+            )
+        return out
+
+    return pick(provider_slug != "anthropic", lambda: messages, _apply)

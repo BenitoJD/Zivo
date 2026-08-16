@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import choose, pick
 from app.services.llm_json import extract_json_obj
 from app.services.llm_router import complete_chat
 from app.services.open_response import plan_coding_teach_output_caps
@@ -31,15 +32,16 @@ Prefer honest teaching over praise.
 """
 
 
+def _add_focus(out: list[str], raw: Any) -> None:
+    s = str(raw or "").strip().lower()
+    pick(bool(s) and s not in out, lambda: out.append(s), lambda: None)
+
+
 def _normalize_focus(tags: list[str], concept: str) -> list[str]:
     out: list[str] = []
     for t in tags:
-        s = str(t).strip().lower()
-        if s and s not in out:
-            out.append(s)
-    c = str(concept or "").strip().lower()
-    if c and c not in out:
-        out.append(c)
+        _add_focus(out, t)
+    _add_focus(out, concept)
     return out[: plan_coding_teach_output_caps().focus_tags]
 
 
@@ -109,18 +111,24 @@ def pick_next_coding_id(
                 difficulty=str(r["difficulty"] or "") or None,
             )
         )
-    pick = pick_next(
+    nxt = pick_next(
         cands,
         focus,
         exclude_id=str(exclude),
         attempted_ids=attempted_ids,
     )
-    return uuid.UUID(pick.id) if pick.id else None
+    return pick(bool(nxt.id), lambda: uuid.UUID(nxt.id), lambda: None)
+
+
+def _row_id(row: Any) -> str | None:
+    return pick(bool(row.get("id")), lambda: str(row["id"]), lambda: None)
 
 
 def _solved_coding_ids(db: Session, subject_entity_id: uuid.UUID | None) -> list[str]:
-    if subject_entity_id is None:
-        return []
+    return pick(subject_entity_id is None, lambda: [], lambda: _load_solved(db, subject_entity_id))
+
+
+def _load_solved(db: Session, subject_entity_id: uuid.UUID) -> list[str]:
     rows = db.execute(
         text(
             """
@@ -135,7 +143,7 @@ def _solved_coding_ids(db: Session, subject_entity_id: uuid.UUID | None) -> list
         ),
         {"entity": subject_entity_id},
     ).mappings().all()
-    return [str(r["id"]) for r in rows if r.get("id")]
+    return list(filter(None, map(_row_id, rows)))
 
 
 async def teach_after_submit(
@@ -161,22 +169,24 @@ async def teach_after_submit(
     concept = str(payload.get("concept") or "")
     title = str(payload.get("title") or "Coding problem")
     statement = str(payload.get("statement") or "")[: caps.statement]
-    first_fail = next((c for c in cases if not c.get("ok")), None)
+    first_fail = next(filter(lambda c: not c.get("ok"), cases), None)
     graded = heuristic_teach_gap(
         all_passed=all_passed,
         passed=passed,
         total=total,
         tags=tags,
         concept=concept,
-        first_fail=first_fail if isinstance(first_fail, dict) else None,
+        first_fail=choose(isinstance(first_fail, dict), first_fail, None),
     )
-    fail_blob = ""
-    if first_fail and isinstance(first_fail, dict):
-        fail_blob = (
+    fail_blob = pick(
+        bool(first_fail) and isinstance(first_fail, dict),
+        lambda: (
             f"First fail stdin={first_fail.get('stdin')!r} "
             f"expected={first_fail.get('expected')!r} "
             f"stdout={first_fail.get('stdout')!r} stderr={first_fail.get('stderr')!r}"
-        )
+        ),
+        lambda: "",
+    )
     source_trim = str(source)[: caps.source]
     teach_key = content_hash_key(
         "coding_teach_gap",
@@ -188,72 +198,23 @@ async def teach_after_submit(
         hashlib.sha256(fail_blob.encode("utf-8", "ignore")).hexdigest()[:16],
     )
     cached = cache_get(db, kind="coding_teach_gap", cache_key=teach_key)
-    if isinstance(cached, dict) and cached.get("mentor_summary") and cached.get("lesson"):
-        graded = {
-            "mentor_summary": str(cached["mentor_summary"]),
-            "weak_concepts": list(
-                cached.get("weak_concepts") or graded["weak_concepts"]
-            )[: caps.weak_concepts],
-            "lesson": {
-                "title": str(
-                    (cached.get("lesson") or {}).get("title") or graded["lesson"]["title"]
-                )[: caps.title],
-                "body": str(
-                    (cached.get("lesson") or {}).get("body") or graded["lesson"]["body"]
-                )[: caps.body],
-                "try_this": str(
-                    (cached.get("lesson") or {}).get("try_this")
-                    or graded["lesson"]["try_this"]
-                )[: caps.try_this],
-            },
-        }
-    else:
-        try:
-            user = (
-                f"Problem: {title}\n"
-                f"Concept: {concept}\nTags: {', '.join(tags)}\n"
-                f"Passed {passed}/{total} all_passed={all_passed}\n"
-                f"Statement (trim):\n{statement}\n\n"
-                f"Source (trim):\n{source_trim}\n\n"
-                f"{fail_blob}"
-            )
-            raw = await complete_chat(
-                [
-                    {"role": "system", "content": _TEACH_SYSTEM},
-                    {"role": "user", "content": user},
-                ],
-                db,
-                log_tag="coding_teach_gap",
-            )
-            data = extract_json_obj(raw) or {}
-            lesson_in = data.get("lesson") if isinstance(data.get("lesson"), dict) else {}
-            weak = [
-                str(w).strip().lower()
-                for w in (data.get("weak_concepts") or [])
-                if str(w).strip()
-            ][: caps.weak_concepts]
-            if not weak:
-                weak = graded["weak_concepts"]
-            graded = {
-                "mentor_summary": str(data.get("mentor_summary") or "").strip()
-                or graded["mentor_summary"],
-                "weak_concepts": weak,
-                "lesson": {
-                    "title": str(lesson_in.get("title") or graded["lesson"]["title"])[
-                        : caps.title
-                    ],
-                    "body": str(lesson_in.get("body") or graded["lesson"]["body"])[
-                        : caps.body
-                    ],
-                    "try_this": str(
-                        lesson_in.get("try_this") or graded["lesson"]["try_this"]
-                    )[: caps.try_this],
-                },
-            }
-            cache_put(db, kind="coding_teach_gap", cache_key=teach_key, value=graded)
-        except Exception:
-            # Best-effort LLM teach — heuristic graded above stays the response.
-            pass
+    use_cache = isinstance(cached, dict) and bool(cached.get("mentor_summary") and cached.get("lesson"))
+    graded = pick(use_cache, lambda: _from_cache(cached, graded, caps), lambda: None) or await _llm_or_heuristic(
+        db,
+        graded=graded,
+        caps=caps,
+        title=title,
+        concept=concept,
+        tags=tags,
+        passed=passed,
+        total=total,
+        all_passed=all_passed,
+        statement=statement,
+        source_trim=source_trim,
+        fail_blob=fail_blob,
+        teach_key=teach_key,
+        cache_put=cache_put,
+    )
 
     next_id = pick_next_coding_id(
         db,
@@ -268,6 +229,80 @@ async def teach_after_submit(
         "mentor_summary": graded["mentor_summary"],
         "weak_concepts": graded["weak_concepts"],
         "lesson": graded["lesson"],
-        "recommended_next_id": str(next_id) if next_id else None,
+        "recommended_next_id": pick(bool(next_id), lambda: str(next_id), lambda: None),
         "reference_solution": ref or None,
     }
+
+
+def _from_cache(cached: dict[str, Any], graded: dict[str, Any], caps: Any) -> dict[str, Any]:
+    lesson = cached.get("lesson") or {}
+    return {
+        "mentor_summary": str(cached["mentor_summary"]),
+        "weak_concepts": list(cached.get("weak_concepts") or graded["weak_concepts"])[: caps.weak_concepts],
+        "lesson": {
+            "title": str(lesson.get("title") or graded["lesson"]["title"])[: caps.title],
+            "body": str(lesson.get("body") or graded["lesson"]["body"])[: caps.body],
+            "try_this": str(lesson.get("try_this") or graded["lesson"]["try_this"])[: caps.try_this],
+        },
+    }
+
+
+async def _llm_or_heuristic(
+    db: Session,
+    *,
+    graded: dict[str, Any],
+    caps: Any,
+    title: str,
+    concept: str,
+    tags: list[str],
+    passed: int,
+    total: int,
+    all_passed: bool,
+    statement: str,
+    source_trim: str,
+    fail_blob: str,
+    teach_key: str,
+    cache_put: Any,
+) -> dict[str, Any]:
+    try:
+        user = (
+            f"Problem: {title}\n"
+            f"Concept: {concept}\nTags: {', '.join(tags)}\n"
+            f"Passed {passed}/{total} all_passed={all_passed}\n"
+            f"Statement (trim):\n{statement}\n\n"
+            f"Source (trim):\n{source_trim}\n\n"
+            f"{fail_blob}"
+        )
+        raw = await complete_chat(
+            [
+                {"role": "system", "content": _TEACH_SYSTEM},
+                {"role": "user", "content": user},
+            ],
+            db,
+            log_tag="coding_teach_gap",
+        )
+        data = extract_json_obj(raw) or {}
+        lesson_in = choose(isinstance(data.get("lesson"), dict), data.get("lesson"), {})
+        weak = list(
+            filter(
+                None,
+                map(
+                    lambda w: str(w).strip().lower(),
+                    data.get("weak_concepts") or [],
+                ),
+            )
+        )[: caps.weak_concepts]
+        weak = choose(bool(weak), weak, graded["weak_concepts"])
+        out = {
+            "mentor_summary": str(data.get("mentor_summary") or "").strip() or graded["mentor_summary"],
+            "weak_concepts": weak,
+            "lesson": {
+                "title": str(lesson_in.get("title") or graded["lesson"]["title"])[: caps.title],
+                "body": str(lesson_in.get("body") or graded["lesson"]["body"])[: caps.body],
+                "try_this": str(lesson_in.get("try_this") or graded["lesson"]["try_this"])[: caps.try_this],
+            },
+        }
+        cache_put(db, kind="coding_teach_gap", cache_key=teach_key, value=out)
+        return out
+    except Exception:
+        return graded

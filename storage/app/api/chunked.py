@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, get_db
+from app.engine_runtime import pick
 from app.services.chunked import (
     abort_upload_session,
     complete_upload_session,
@@ -20,6 +21,11 @@ from app.services.chunked import (
 from app.services.guest import Principal
 from app.services.rate_limit import rate_limit_dependency
 from app.services.session import optional_principal, require_csrf_or_guest
+
+
+def _raise(exc: BaseException) -> None:
+    raise exc
+
 
 router = APIRouter(prefix="/storage/chunked", tags=["chunked-uploads"])
 
@@ -80,8 +86,7 @@ async def chunked_part(
     principal: Principal = Depends(optional_principal),
 ) -> dict:
     data = await request.body()
-    if not data:
-        raise HTTPException(status_code=400, detail="Empty part body")
+    pick(not data, lambda: _raise(HTTPException(status_code=400, detail="Empty part body")), lambda: None)
     db.close()
 
     def _run() -> dict:

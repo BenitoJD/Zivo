@@ -74,16 +74,18 @@ from another project and is stale; fix it to match the proof above.
 
 ### 2.4 Swappable policy behind a stable seam
 
-- **Rule.** When an algorithm is an era-guess (a metric, a ranking, a selection
-  policy), put it behind a named function seam so it can be replaced without touching
-  callers. The seam degrades safely to legacy behavior.
-- **Why.** Keeps the long-lived loop stable while the metric inside it evolves. See
-  [ADR 0004](adr/0004-swappable-policy-seam.md).
-- **Proof.** `app/services/adaptive_selection.py` (`select_next` / `choose_next_assertion`)
-  dispatches by policy name and falls back to sequence order; the caller
-  `app/services/question_pool.py` (`select_next_assertion`) is policy-agnostic.
-  Design: [ADAPTIVE_SELECTION_ENGINE.md](ADAPTIVE_SELECTION_ENGINE.md).
-  Compat re-exports: `app/services/selection.py`.
+- **Rule.** Every decision is a named engine whose body is a rule table
+  (`Pred` / `Rule` / `first_match`). Callers load signals, call `evaluate_*`,
+  and `apply()` the action. First-party Python and TypeScript have no `if` /
+  `elif` / `else` / ternary / comprehension-`if`, including `if TYPE_CHECKING:`
+  and Alembic revisions ([ADR 0018](adr/0018-zero-if-engine-tables.md)).
+  Era-guess policies still degrade safely ([ADR 0004](adr/0004-swappable-policy-seam.md)).
+- **Why.** The long-lived loop stays stable while the metric inside it evolves,
+  and control flow cannot leak back into orchestration.
+- **Proof.** `app/engine_runtime.py` (`first_match`, `apply`, `choose`, `pick`);
+  `app/services/mastery_evidence.py` (`evaluate_stop` as `_STOP_RULES`);
+  `app/services/item_health.py` (`evaluate_item_health` as `_RULES`).
+  Scanner: `scripts/scan-no-if.py`.
 
 ### 2.5 Background work goes through the ETA job system
 

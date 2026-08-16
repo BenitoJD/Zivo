@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from app.db import SessionLocal  # noqa: E402
+from app.engine_runtime import pick  # noqa: E402
 from app.services.system_design import seed_system_design_bank  # noqa: E402
 
 
@@ -19,5 +20,8 @@ def main() -> None:
     print(f"Seeded system design bank: {counts}")
 
 
-if __name__ == "__main__":
+def _cli() -> None:
     main()
+
+
+pick(__name__ == "__main__", _cli, lambda: None)

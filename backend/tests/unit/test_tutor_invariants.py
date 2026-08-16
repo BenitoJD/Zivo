@@ -15,6 +15,7 @@ import time
 
 import pytest
 
+from app.engine_runtime import pick
 from app.services import calibration, selection
 from app.services.calibration import elo_update, expected_correct
 from app.services.selection import LearnerState, choose_next_assertion
@@ -24,10 +25,15 @@ def _imported_modules(module_file: str) -> set[str]:
     tree = ast.parse(pathlib.Path(module_file).read_text())
     mods: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            mods |= {a.name for a in node.names}
-        elif isinstance(node, ast.ImportFrom):
-            mods.add(node.module or "")
+        pick(
+            isinstance(node, ast.Import),
+            lambda n=node: mods.update({a.name for a in n.names}),
+            lambda n=node: pick(
+                isinstance(n, ast.ImportFrom),
+                lambda: mods.add(n.module or ""),
+                lambda: None,
+            ),
+        )
     return mods
 
 

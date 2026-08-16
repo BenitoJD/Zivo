@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.engine_runtime import choose, pick
 from app.models import Account
 from app.services import brainstorm as brainstorm_service
 from app.services import saved_notes as saved_notes_service
@@ -19,11 +20,24 @@ from app.services.rate_limit import rate_limit_dependency
 from app.services.document_access import require_document, require_ready_document
 from app.services import interview as interview_service
 from app.services import mains as mains_service
+from app.services.http_outcome import evaluate_http_outcome
 from app.services.memory_palace import ensure_palace
 from app.services.quiz import ensure_quiz, load_quiz
 from app.services.study_artifacts import NOTE_KINDS, ensure_flashcards, ensure_notes
 
 router = APIRouter()
+
+
+def _raise(exc: BaseException) -> None:
+    raise exc
+
+
+def _raise_from(cause: BaseException, wrapped: BaseException) -> None:
+    raise wrapped from cause
+
+
+def _http(action: str, detail: str) -> None:
+    _raise(HTTPException(status_code=evaluate_http_outcome(action).status, detail=detail))
 
 
 def _owner(user: Account | None) -> uuid.UUID | None:
@@ -33,9 +47,11 @@ def _owner(user: Account | None) -> uuid.UUID | None:
     pass None, which the service maps to the legacy NULL bucket — shared, as
     before, because guests have no stable identity to scope by.
     """
-    return user.id if user else None
+    return pick(bool(user), lambda: user.id, lambda: None)
 
 
+def _learner_key(user: Account | None, guest_id: str | None) -> str | None:
+    return interview_service.resolve_interview_learner_key(_owner(user), guest_id)
 
 
 @router.get("/{artifact_id}/notes", dependencies=[Depends(rate_limit_dependency)])
@@ -51,13 +67,15 @@ def get_notes(
     Generates in the background on first request. Returns
     {status: indexing|generating|ready|failed, kind, content}.
     """
-    if kind not in NOTE_KINDS:
-        kind = "notes"
+    kind = pick(kind in NOTE_KINDS, lambda: kind, lambda: "notes")
     doc = require_ready_document(db, artifact_id, user, guest_id)
-    if doc is None:
-        return {"status": "indexing", "kind": kind, "content": ""}
-    state = ensure_notes(db, artifact_id, kind)
-    return {"status": state["status"], "kind": kind, "content": state["content"]}
+    return pick(
+        doc is None,
+        lambda: {"status": "indexing", "kind": kind, "content": ""},
+        lambda: (
+            lambda state: {"status": state["status"], "kind": kind, "content": state["content"]}
+        )(ensure_notes(db, artifact_id, kind)),
+    )
 
 
 @router.get("/{artifact_id}/flashcards", dependencies=[Depends(rate_limit_dependency)])
@@ -72,10 +90,13 @@ def get_flashcards(
     Returns {status: indexing|generating|ready|failed, cards: [{front,back,kind}]}.
     """
     doc = require_ready_document(db, artifact_id, user, guest_id)
-    if doc is None:
-        return {"status": "indexing", "cards": []}
-    state = ensure_flashcards(db, artifact_id)
-    return {"status": state["status"], "cards": state["cards"]}
+    return pick(
+        doc is None,
+        lambda: {"status": "indexing", "cards": []},
+        lambda: (
+            lambda state: {"status": state["status"], "cards": state["cards"]}
+        )(ensure_flashcards(db, artifact_id)),
+    )
 
 
 @router.get("/{artifact_id}/memory-palace", dependencies=[Depends(rate_limit_dependency)])
@@ -93,13 +114,19 @@ def get_memory_palace(
     {status: indexing|generating|ready|failed, setting, palace: {setting,intro,stations:[…]}}.
     """
     doc = require_ready_document(db, artifact_id, user, guest_id)
-    if doc is None:
-        return {"status": "indexing", "setting": "", "palace": None}
-    state = ensure_palace(db, artifact_id, setting=setting or None)
-    return {"status": state["status"], "setting": state["setting"], "palace": state["palace"]}
+    return pick(
+        doc is None,
+        lambda: {"status": "indexing", "setting": "", "palace": None},
+        lambda: (
+            lambda state: {
+                "status": state["status"],
+                "setting": state["setting"],
+                "palace": state["palace"],
+            }
+        )(ensure_palace(db, artifact_id, setting=setting or None)),
+    )
 
 
-# --------------------------------------------------- saved notes (Read / Study Buddy)
 class SaveNoteIn(BaseModel):
     content: str = Field(min_length=1, max_length=8000)
     quote: str | None = Field(default=None, max_length=4000)
@@ -114,7 +141,11 @@ def get_saved_notes(
 ) -> dict:
     """All notes the learner saved while reading this source (newest first)."""
     require_document(db, artifact_id, user, guest_id)
-    return {"notes": saved_notes_service.list_notes(db, artifact_id, account_id=_owner(user), guest_id=guest_id)}
+    return {
+        "notes": saved_notes_service.list_notes(
+            db, artifact_id, account_id=_owner(user), guest_id=guest_id
+        )
+    }
 
 
 @router.post("/{artifact_id}/saved-notes", dependencies=[Depends(require_csrf_or_guest)])
@@ -132,7 +163,6 @@ def create_saved_note(
     )
 
 
-# --------------------------------------------------- brainstorm mode (kept ideas)
 class SaveIdeaIn(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
     angle: str = Field(default="", max_length=120)
@@ -177,7 +207,7 @@ def create_brainstorm_idea(
             guest_id=guest_id,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _raise_from(exc, HTTPException(status_code=400, detail=str(exc)))
 
 
 @router.delete(
@@ -216,14 +246,11 @@ def export_brainstorm_ideas(
     )
 
 
-# --------------------------------------------------- interview mode (mock interview)
 class InterviewStartIn(BaseModel):
     category: str = Field(min_length=1, max_length=40)
 
 
 class InterviewAnswerIn(BaseModel):
-    # Typed rounds send text; MCQ rounds send the selected option index; coding rounds send
-    # an object {source, language_id}.
     answer: str | int | dict = Field(default="")
 
 
@@ -237,13 +264,13 @@ def get_interview(
     """Current mock-interview state (setup | in_progress | complete). The pending question
     is returned with its answer key stripped; a `report` is included once complete."""
     doc = require_ready_document(db, artifact_id, user, guest_id)
-    if doc is None:
-        return {"status": "indexing", "categories": interview_service.CATEGORY_META}
-    return interview_service.load_interview(
-        db,
-        artifact_id,
-        learner_key=interview_service.resolve_interview_learner_key(
-            user.id if user else None, guest_id
+    return pick(
+        doc is None,
+        lambda: {"status": "indexing", "categories": interview_service.CATEGORY_META},
+        lambda: interview_service.load_interview(
+            db,
+            artifact_id,
+            learner_key=_learner_key(user, guest_id),
         ),
     )
 
@@ -261,11 +288,8 @@ async def start_interview(
 ) -> dict:
     """Begin a mock interview for the chosen company category (asks the first question)."""
     require_ready_document(db, artifact_id, user, guest_id)
-    learner_key = interview_service.resolve_interview_learner_key(
-        user.id if user else None, guest_id
-    )
     return await interview_service.start_interview(
-        db, artifact_id, body.category, learner_key=learner_key
+        db, artifact_id, body.category, learner_key=_learner_key(user, guest_id)
     )
 
 
@@ -282,15 +306,12 @@ async def answer_interview(
 ) -> dict:
     """Evaluate the answer to the current question and advance to the next one."""
     require_document(db, artifact_id, user, guest_id)
-    learner_key = interview_service.resolve_interview_learner_key(
-        user.id if user else None, guest_id
-    )
     try:
         return await interview_service.submit_answer(
-            db, artifact_id, body.answer, learner_key=learner_key
+            db, artifact_id, body.answer, learner_key=_learner_key(user, guest_id)
         )
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        _raise(HTTPException(status_code=evaluate_http_outcome("conflict").status, detail=str(exc)))
 
 
 @router.post("/{artifact_id}/interview/reset", dependencies=[Depends(require_csrf_or_guest)])
@@ -302,21 +323,17 @@ def reset_interview(
 ) -> dict:
     """Discard the current interview so a new category can be picked."""
     require_document(db, artifact_id, user, guest_id)
-    learner_key = interview_service.resolve_interview_learner_key(
-        user.id if user else None, guest_id
+    return interview_service.reset_interview(
+        db, artifact_id, learner_key=_learner_key(user, guest_id)
     )
-    return interview_service.reset_interview(db, artifact_id, learner_key=learner_key)
 
 
-# --------------------------------------------------- mains mode (descriptive answer grading)
 class MainsStartIn(BaseModel):
-    strictness: str = Field(default="coaching")  # exam | coaching | gentle
+    strictness: str = Field(default="coaching")
     marks_max: int = Field(default=10, ge=1, le=20)
 
 
 class MainsAnswerIn(BaseModel):
-    # Typed answers send text; handwritten answers upload a photo (as a source) and
-    # send its document id, which the vision LLM reads on the worker.
     text: str = Field(default="", max_length=50000)
     image_document_id: uuid.UUID | None = None
 
@@ -334,9 +351,11 @@ def get_mains(
     question, directive, marks_max, strictness, input_kind, answer, result}. The marking
     scheme is hidden until `result` (which carries the revealed scheme_hits)."""
     doc = require_ready_document(db, artifact_id, user, guest_id)
-    if doc is None:
-        return {"status": "indexing", "question": "", "marks_max": 10, "result": None}
-    return mains_service.load_mains(db, artifact_id)
+    return pick(
+        doc is None,
+        lambda: {"status": "indexing", "question": "", "marks_max": 10, "result": None},
+        lambda: mains_service.load_mains(db, artifact_id),
+    )
 
 
 @router.post(
@@ -370,17 +389,17 @@ def answer_mains(
 ) -> dict:
     """Submit the answer (typed and/or an uploaded photo) and enqueue examiner grading."""
     require_document(db, artifact_id, user, guest_id)
-    # The answer photo is a separately-supplied document id — access-check it here (the
-    # io worker's OCR has no user/guest context), else a caller could OCR/read any
-    # image document cross-tenant (IDOR).
-    if body.image_document_id is not None:
-        require_document(db, body.image_document_id, user, guest_id)
+    pick(
+        body.image_document_id is not None,
+        lambda: require_document(db, body.image_document_id, user, guest_id),
+        lambda: None,
+    )
     try:
         return mains_service.submit_mains_answer(
             db, artifact_id, text_answer=body.text, image_document_id=body.image_document_id
         )
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        _raise(HTTPException(status_code=evaluate_http_outcome("conflict").status, detail=str(exc)))
 
 
 class RunCodeIn(BaseModel):
@@ -421,12 +440,11 @@ async def run_code_endpoint(
     try:
         return await run_code(body.source, body.language_id, body.stdin)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _raise_from(exc, HTTPException(status_code=400, detail=str(exc)))
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        _raise_from(exc, HTTPException(status_code=503, detail=str(exc)))
 
 
-# --------------------------------------------------- resume suite (ATS / optimize / build)
 class OptimizeIn(BaseModel):
     job_description: str = Field(default="", max_length=20000)
 
@@ -447,9 +465,14 @@ async def get_resume_ats(
     from app.services import resume as resume_service
 
     doc = require_ready_document(db, artifact_id, user, guest_id)
-    if doc is None:
+
+    async def _indexing() -> dict:
         return {"status": "indexing", "analysis": {}, "review_requested": False}
-    return await resume_service.ensure_ats(db, artifact_id)
+
+    async def _ready() -> dict:
+        return await resume_service.ensure_ats(db, artifact_id)
+
+    return await pick(doc is None, _indexing, _ready)
 
 
 @router.post(
@@ -496,7 +519,7 @@ def build_resume_docx_endpoint(
     from app.services.resume_export import build_resume_docx
 
     require_document(db, artifact_id, user, guest_id)
-    template = "modern" if body.template == "modern" else "ats"
+    template = choose(body.template == "modern", "modern", "ats")
     data = build_resume_docx(body.data or {}, template=template)
     name = (body.data or {}).get("name") or "resume"
     fname = f"{str(name)[:50]}-{template}.docx".replace('"', "")
@@ -508,7 +531,7 @@ def build_resume_docx_endpoint(
 
 
 def _parse_types(types: str) -> list[str]:
-    return [t.strip() for t in (types or "").split(",") if t.strip()]
+    return list(filter(None, (t.strip() for t in (types or "").split(","))))
 
 
 @router.get("/{artifact_id}/quiz", dependencies=[Depends(rate_limit_dependency)])
@@ -528,10 +551,21 @@ def get_quiz(
     answer key included (the client hides answers for the student view).
     """
     doc = require_ready_document(db, artifact_id, user, guest_id)
-    if doc is None:
-        return {"status": "indexing", "config": "", "questions": []}
-    state = ensure_quiz(db, artifact_id, types=_parse_types(types), count=count, difficulty=difficulty)
-    return {"status": state["status"], "config": state["config"], "questions": state["questions"]}
+    return pick(
+        doc is None,
+        lambda: {"status": "indexing", "config": "", "questions": []},
+        lambda: (
+            lambda state: {
+                "status": state["status"],
+                "config": state["config"],
+                "questions": state["questions"],
+            }
+        )(
+            ensure_quiz(
+                db, artifact_id, types=_parse_types(types), count=count, difficulty=difficulty
+            )
+        ),
+    )
 
 
 @router.get("/{artifact_id}/quiz/export.docx")
@@ -545,14 +579,17 @@ def export_quiz_docx(
     """Download the generated quiz as a .docx worksheet (answers=1 → teacher answer key)."""
     doc = require_document(db, artifact_id, user, guest_id)
     state = load_quiz(db, artifact_id)
-    if state["status"] != "ready" or not state["questions"]:
-        raise HTTPException(status_code=409, detail="Quiz not ready")
+    pick(
+        state["status"] != "ready" or not state["questions"],
+        lambda: _http("conflict", "Quiz not ready"),
+        lambda: None,
+    )
 
     from app.services.quiz_export import build_quiz_docx
 
     title = (doc.filename or "Quiz").rsplit(".", 1)[0]
     data = build_quiz_docx(title=title, questions=state["questions"], with_answers=bool(answers))
-    suffix = "answer-key" if answers else "worksheet"
+    suffix = choose(bool(answers), "answer-key", "worksheet")
     fname = f"{title[:60]}-{suffix}.docx".replace('"', "")
     return Response(
         content=data,

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import httpx
 
+from app.engine_runtime import choose
+
 # Used by every outbound call to a public API. Identifies the product + points
 # back at the public site per the convention public-API providers expect.
 USER_AGENT = "zivo/1.0 (+https://zivo.fyi)"
@@ -29,7 +31,5 @@ def zivo_http_client(
     that needs extra headers (e.g. an Accept for content negotiation) can still add
     them without re-specifying the User-Agent.
     """
-    merged = {"User-Agent": USER_AGENT}
-    if headers:
-        merged.update(headers)
+    merged = {"User-Agent": USER_AGENT, **choose(bool(headers), headers or {}, {})}
     return httpx.AsyncClient(timeout=timeout, headers=merged, follow_redirects=follow_redirects)

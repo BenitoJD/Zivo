@@ -6,24 +6,44 @@ import re
 from collections import OrderedDict
 from typing import Any
 
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 from app.services.aspect_discovery import ASPECT_CLUSTER_THRESHOLD
 from app.services.embed import embed_texts
 from app.services.kc_coverage import (
     CONCEPT_LABEL_MAX_CHARS,
     normalize_concept_label,
 )
+from app.services.presence import evaluate_presence
 
 # MCQ threshold lives on Quality Evaluation; resolved lazily to avoid
 # mcq_dedup → quality_evaluation → mcq_heuristics → mcq_dedup cycle.
 _SIGNATURE_EMBED_CACHE_MAX = 2_048
 
+_ATTR_RULES = (
+    Rule(when=(Pred("name", "eq", "MCQ_SIMILARITY_THRESHOLD"),), action="threshold"),
+    Rule(when=(), action="missing"),
+)
+
+_COERCE_RULES = (
+    Rule(when=(Pred("is_list", "truthy"),), action="list"),
+    Rule(when=(Pred("is_dict", "truthy"),), action="dict"),
+    Rule(when=(), action="empty"),
+)
+
 
 def __getattr__(name: str) -> float:
-    if name == "MCQ_SIMILARITY_THRESHOLD":
+    hit = first_match(_ATTR_RULES, {"name": name})
+
+    def threshold() -> float:
         from app.services.quality_evaluation import MCQ_SIMILARITY_THRESHOLD as value
 
         return value
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    def missing() -> float:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    return apply(hit.action, {"threshold": threshold, "missing": missing})
+
 
 _signature_embed_cache: OrderedDict[str, list[float]] = OrderedDict()
 
@@ -94,14 +114,21 @@ def short_concept_label(
 
 
 def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
-    if not vec_a or not vec_b or len(vec_a) != len(vec_b):
-        return 0.0
-    dot = sum(a * b for a, b in zip(vec_a, vec_b, strict=True))
-    norm_a = sum(a * a for a in vec_a) ** 0.5
-    norm_b = sum(b * b for b in vec_b) ** 0.5
-    if norm_a == 0.0 or norm_b == 0.0:
-        return 0.0
-    return dot / (norm_a * norm_b)
+    def ratio() -> float:
+        dot = sum(a * b for a, b in zip(vec_a, vec_b, strict=True))
+        norm_a = sum(a * a for a in vec_a) ** 0.5
+        norm_b = sum(b * b for b in vec_b) ** 0.5
+        return pick(
+            norm_a == 0.0 or norm_b == 0.0,
+            lambda: 0.0,
+            lambda: dot / (norm_a * norm_b),
+        )
+
+    return pick(
+        not vec_a or not vec_b or len(vec_a) != len(vec_b),
+        lambda: 0.0,
+        ratio,
+    )
 
 
 def normalize_stem(text: str) -> str:
@@ -113,9 +140,7 @@ def normalize_stem(text: str) -> str:
 def aspect_signature(aspect: dict[str, Any]) -> str:
     label = str(aspect.get("label") or aspect.get("key") or "").strip()
     angle = str(aspect.get("cognitive_angle") or "").strip()
-    if angle:
-        return f"{label} ({angle})"
-    return label
+    return choose(bool(angle), f"{label} ({angle})", label)
 
 
 def mcq_signature(mcq: dict[str, Any]) -> str:
@@ -125,15 +150,33 @@ def mcq_signature(mcq: dict[str, Any]) -> str:
         ci = int(mcq.get("correct_index", 0))
     except (TypeError, ValueError):
         ci = 0
-    correct = ""
-    if 0 <= ci < len(options):
-        correct = str(options[ci]).strip()
+    correct = pick(
+        0 <= ci < len(options),
+        lambda: str(options[ci]).strip(),
+        lambda: "",
+    )
     return f"question: {question} | answer: {correct}"
 
 
 def sanitize_mcq_option(text: str) -> str:
     """Strip leading A)/B. style prefixes — the UI renders letter labels."""
     return _OPTION_LETTER_PREFIX.sub("", (text or "").strip()).strip()
+
+
+def _apply_leading_meta(text: str) -> str:
+    current = text
+    for pattern in _LEADING_META_PATTERNS:
+        current = pattern.sub("", current).strip()
+    return current
+
+
+def _strip_leading_rounds(text: str, rounds_left: int) -> str:
+    nxt = _apply_leading_meta(text)
+    return pick(
+        nxt == text or rounds_left <= 1,
+        lambda: nxt,
+        lambda: _strip_leading_rounds(nxt, rounds_left - 1),
+    )
 
 
 def strip_document_meta(text: str) -> str:
@@ -145,32 +188,26 @@ def strip_document_meta(text: str) -> str:
     cleaned = re.sub(r"[^\S\n]+", " ", (text or "").strip())
     cleaned = re.sub(r" *\n *", "\n", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-    if not cleaned:
-        return ""
-    for _ in range(8):
-        changed = False
-        for pattern in _LEADING_META_PATTERNS:
-            updated = pattern.sub("", cleaned).strip()
-            if updated != cleaned:
-                cleaned = updated
-                changed = True
-        if not changed:
-            break
-    cleaned = re.sub(r"\s*The text states:.*$", "", cleaned, flags=re.IGNORECASE).strip()
-    # Strip mid-stem page anchors when they appear as a leading clause before the real question.
-    cleaned = re.sub(
-        r"^(?:on\s+page\s+\d+(?:\s+of\s+the\s+(?:text|book|passage))?)[,:]?\s+",
-        "",
-        cleaned,
-        flags=re.IGNORECASE,
-    ).strip()
-    cleaned = re.sub(
-        r"^(?:in\s+this\s+(?:book|text|reading|passage|document))[,:]?\s+",
-        "",
-        cleaned,
-        flags=re.IGNORECASE,
-    ).strip()
-    return cleaned
+    return pick(
+        evaluate_presence(cleaned).action != "ok",
+        lambda: "",
+        lambda: re.sub(
+            r"^(?:in\s+this\s+(?:book|text|reading|passage|document))[,:]?\s+",
+            "",
+            re.sub(
+                r"^(?:on\s+page\s+\d+(?:\s+of\s+the\s+(?:text|book|passage))?)[,:]?\s+",
+                "",
+                re.sub(
+                    r"\s*The text states:.*$",
+                    "",
+                    _strip_leading_rounds(cleaned, 8),
+                    flags=re.IGNORECASE,
+                ).strip(),
+                flags=re.IGNORECASE,
+            ).strip(),
+            flags=re.IGNORECASE,
+        ).strip(),
+    )
 
 
 def has_document_meta_residue(text: str) -> bool:
@@ -180,11 +217,12 @@ def has_document_meta_residue(text: str) -> bool:
 def has_document_meta_reference(text: str) -> bool:
     """True if learner-visible text still points at a book, page, passage, or document."""
     cleaned = (text or "").strip()
-    if not cleaned:
-        return False
-    if any(pattern.match(cleaned) for pattern in _LEADING_META_PATTERNS):
-        return True
-    return has_document_meta_residue(cleaned)
+    return pick(
+        evaluate_presence(cleaned).action != "ok",
+        lambda: False,
+        lambda: any(pattern.match(cleaned) for pattern in _LEADING_META_PATTERNS)
+        or has_document_meta_residue(cleaned),
+    )
 
 
 def has_page_reference_stem(text: str) -> bool:
@@ -193,9 +231,11 @@ def has_page_reference_stem(text: str) -> bool:
 
 
 def _capitalize_first(text: str) -> str:
-    if text and text[0].islower():
-        return text[0].upper() + text[1:]
-    return text
+    return pick(
+        bool(text) and text[0].islower(),
+        lambda: text[0].upper() + text[1:],
+        lambda: text,
+    )
 
 
 def sanitize_mcq_stem(text: str) -> str:
@@ -209,17 +249,24 @@ def sanitize_mcq_explanation(text: str) -> str:
 
 
 def sanitize_mcq_options(options: list[str]) -> list[str]:
-    return [_capitalize_first(strip_document_meta(opt)) for opt in options if strip_document_meta(opt)]
+    return list(map(_capitalize_first, filter(None, map(strip_document_meta, options))))
 
 
 def coerce_mcq_options(raw: Any) -> list[str]:
     """Normalize MCQ options whether stored as a list or object-shaped JSON."""
-    if isinstance(raw, list):
-        return [sanitize_mcq_option(str(o)) for o in raw if sanitize_mcq_option(str(o))]
-    if isinstance(raw, dict):
+    hit = first_match(
+        _COERCE_RULES,
+        {"is_list": isinstance(raw, list), "is_dict": isinstance(raw, dict)},
+    )
+
+    def from_list() -> list[str]:
+        return list(filter(None, map(lambda o: sanitize_mcq_option(str(o)), raw)))
+
+    def from_dict() -> list[str]:
         items = sorted(raw.items(), key=lambda kv: kv[0])
-        return [sanitize_mcq_option(str(v)) for _, v in items if sanitize_mcq_option(str(v))]
-    return []
+        return list(filter(None, map(lambda kv: sanitize_mcq_option(str(kv[1])), items)))
+
+    return apply(hit.action, {"list": from_list, "dict": from_dict, "empty": lambda: []})
 
 
 def prior_mcq_from_payload(payload: dict[str, Any]) -> dict[str, str]:
@@ -228,7 +275,7 @@ def prior_mcq_from_payload(payload: dict[str, Any]) -> dict[str, str]:
         ci = int(payload.get("correct_index", 0))
     except (TypeError, ValueError):
         ci = 0
-    correct = str(options[ci]) if 0 <= ci < len(options) else ""
+    correct = pick(0 <= ci < len(options), lambda: str(options[ci]), lambda: "")
     return {
         "question": str(payload.get("question") or ""),
         "correct_answer": correct,
@@ -240,19 +287,20 @@ def prior_mcq_from_payload(payload: dict[str, Any]) -> dict[str, str]:
 def format_prior_mcqs_block(
     prior_mcqs: list[dict[str, Any]] | None, *, max_items: int | None = None
 ) -> str:
-    if not prior_mcqs:
-        return ""
-    from app.services.quality_evaluation import plan_prior_mcq_prompt_items
+    def render() -> str:
+        from app.services.quality_evaluation import plan_prior_mcq_prompt_items
 
-    cap = plan_prior_mcq_prompt_items(max_items)
-    recent = list(prior_mcqs[-cap:])
-    lines = [
-        "Recent questions already used — do NOT repeat these stems or test the same fact:"
-    ]
-    for i, item in enumerate(recent, start=1):
-        label = item.get("aspect_label") or item.get("aspect_key") or "aspect"
-        lines.append(f"{i}. [{label}] Q: {item.get('question', '')}")
-    return "\n".join(lines) + "\n"
+        cap = plan_prior_mcq_prompt_items(max_items)
+        recent = list(prior_mcqs[-cap:])
+        lines = [
+            "Recent questions already used — do NOT repeat these stems or test the same fact:"
+        ]
+        for i, item in enumerate(recent, start=1):
+            label = item.get("aspect_label") or item.get("aspect_key") or "aspect"
+            lines.append(f"{i}. [{label}] Q: {item.get('question', '')}")
+        return "\n".join(lines) + "\n"
+
+    return pick(not prior_mcqs, lambda: "", render)
 
 
 def dedupe_aspects(
@@ -271,42 +319,54 @@ def dedupe_aspects(
     }
 
 
+def _evict_signature_cache() -> None:
+    while len(_signature_embed_cache) > _SIGNATURE_EMBED_CACHE_MAX:
+        _signature_embed_cache.popitem(last=False)
+
+
 def embed_signature_cached(signature: str) -> list[float]:
     """Return embedding for an MCQ signature, reusing in-process cache."""
     cached = _signature_embed_cache.get(signature)
-    if cached is not None:
+
+    def hit() -> list[float]:
         _signature_embed_cache.move_to_end(signature)
         return cached
-    vec = embed_texts([signature])[0]
-    _signature_embed_cache[signature] = vec
-    _signature_embed_cache.move_to_end(signature)
-    while len(_signature_embed_cache) > _SIGNATURE_EMBED_CACHE_MAX:
-        _signature_embed_cache.popitem(last=False)
-    return vec
+
+    def miss() -> list[float]:
+        vec = embed_texts([signature])[0]
+        _signature_embed_cache[signature] = vec
+        _signature_embed_cache.move_to_end(signature)
+        _evict_signature_cache()
+        return vec
+
+    return pick(cached is not None, hit, miss)
 
 
 def prior_mcq_embeddings(prior_mcqs: list[dict[str, Any]]) -> list[list[float]]:
     """Embed prior MCQ signatures once for repeated similarity checks."""
-    if not prior_mcqs:
-        return []
-    prior_sigs = [
-        mcq_signature(
-            {
-                "question": p.get("question"),
-                "options": [p.get("correct_answer", "")],
-                "correct_index": 0,
-            }
-        )
-        for p in prior_mcqs
-    ]
-    missing = [s for s in prior_sigs if s not in _signature_embed_cache]
-    if missing:
-        for sig, vec in zip(missing, embed_texts(missing), strict=True):
-            _signature_embed_cache[sig] = vec
-            _signature_embed_cache.move_to_end(sig)
-        while len(_signature_embed_cache) > _SIGNATURE_EMBED_CACHE_MAX:
-            _signature_embed_cache.popitem(last=False)
-    return [embed_signature_cached(s) for s in prior_sigs]
+    def compute() -> list[list[float]]:
+        prior_sigs = [
+            mcq_signature(
+                {
+                    "question": p.get("question"),
+                    "options": [p.get("correct_answer", "")],
+                    "correct_index": 0,
+                }
+            )
+            for p in prior_mcqs
+        ]
+        missing = list(filter(lambda s: s not in _signature_embed_cache, prior_sigs))
+
+        def fill() -> None:
+            for sig, vec in zip(missing, embed_texts(missing), strict=True):
+                _signature_embed_cache[sig] = vec
+                _signature_embed_cache.move_to_end(sig)
+            _evict_signature_cache()
+
+        pick(bool(missing), fill, lambda: None)
+        return [embed_signature_cached(s) for s in prior_sigs]
+
+    return pick(not prior_mcqs, lambda: [], compute)
 
 
 def is_mcq_too_similar(
@@ -325,7 +385,7 @@ def is_mcq_too_similar(
     verdict = judge_mcq_similarity(
         mcq,
         prior_mcqs,
-        threshold=MCQ_SIMILARITY_THRESHOLD if threshold is None else threshold,
+        threshold=choose(threshold is None, MCQ_SIMILARITY_THRESHOLD, threshold),
         prior_embeddings=prior_embeddings,
     )
     return verdict.too_similar, verdict.max_similarity

@@ -10,6 +10,8 @@ from __future__ import annotations
 import io
 from typing import Any
 
+from app.engine_runtime import pick
+
 
 def build_resume_docx(data: dict[str, Any], *, template: str = "ats") -> bytes:
     """Build a resume .docx from structured data. template: 'ats' (plain) or 'modern'."""
@@ -21,58 +23,52 @@ def build_resume_docx(data: dict[str, Any], *, template: str = "ats") -> bytes:
     doc = Docx()
 
     name = doc.add_heading(data.get("name") or "Your Name", level=0)
-    if modern:
-        name.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        for run in name.runs:
-            run.font.color.rgb = RGBColor(0x5A, 0x4B, 0xD6)  # lavender ink
-    if data.get("title"):
-        t = doc.add_paragraph(data["title"])
-        if modern:
-            t.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    pick(
+        modern,
+        lambda: (
+            setattr(name, "alignment", WD_ALIGN_PARAGRAPH.CENTER),
+            [setattr(run.font.color, "rgb", RGBColor(0x5A, 0x4B, 0xD6)) for run in name.runs],
+        ),
+        lambda: None,
+    )
+    pick(
+        bool(data.get("title")),
+        lambda: _add_title(doc, data["title"], modern, WD_ALIGN_PARAGRAPH),
+        lambda: None,
+    )
 
     contact = doc.add_paragraph()
     contact_parts = [data.get("email"), data.get("phone"), data.get("location"), *(data.get("links") or [])]
-    contact.add_run("  |  ".join(p for p in contact_parts if p))
-    if modern:
-        contact.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    contact.add_run("  |  ".join(filter(None, contact_parts)))
+    pick(modern, lambda: setattr(contact, "alignment", WD_ALIGN_PARAGRAPH.CENTER), lambda: None)
 
     def section(title: str) -> None:
         h = doc.add_heading(title, level=1)
-        if modern:
-            for run in h.runs:
-                run.font.color.rgb = RGBColor(0x5A, 0x4B, 0xD6)
+        pick(
+            modern,
+            lambda: [setattr(run.font.color, "rgb", RGBColor(0x5A, 0x4B, 0xD6)) for run in h.runs],
+            lambda: None,
+        )
 
-    if data.get("summary"):
-        section("Summary")
-        doc.add_paragraph(data["summary"])
+    pick(
+        bool(data.get("summary")),
+        lambda: (section("Summary"), doc.add_paragraph(data["summary"])),
+        lambda: None,
+    )
 
     experience = data.get("experience") or []
-    if experience:
-        section("Experience")
-        for job in experience:
-            p = doc.add_paragraph()
-            p.add_run(f"{job.get('role','')}".strip()).bold = True
-            company = job.get("company", "")
-            dates = job.get("dates", "")
-            meta = " — ".join(x for x in [company, dates] if x)
-            if meta:
-                p.add_run(f"   {meta}")
-            for b in (job.get("bullets") or []):
-                doc.add_paragraph(str(b), style="List Bullet")
+    pick(bool(experience), lambda: _experience(doc, experience, section), lambda: None)
 
     education = data.get("education") or []
-    if education:
-        section("Education")
-        for ed in education:
-            line = " — ".join(x for x in [ed.get("degree", ""), ed.get("school", ""), ed.get("dates", "")] if x)
-            doc.add_paragraph(line)
+    pick(bool(education), lambda: _education(doc, education, section), lambda: None)
 
     skills = data.get("skills") or []
-    if skills:
-        section("Skills")
-        doc.add_paragraph(", ".join(str(s) for s in skills))
+    pick(
+        bool(skills),
+        lambda: (section("Skills"), doc.add_paragraph(", ".join(str(s) for s in skills))),
+        lambda: None,
+    )
 
-    # Normalize base font size for compactness.
     style = doc.styles["Normal"]
     style.font.size = Pt(10.5)
 
@@ -81,7 +77,32 @@ def build_resume_docx(data: dict[str, Any], *, template: str = "ats") -> bytes:
     return buf.getvalue()
 
 
-if __name__ == "__main__":  # pragma: no cover
+def _add_title(doc, title, modern, align) -> None:
+    t = doc.add_paragraph(title)
+    pick(modern, lambda: setattr(t, "alignment", align.CENTER), lambda: None)
+
+
+def _experience(doc, experience, section) -> None:
+    section("Experience")
+    for job in experience:
+        p = doc.add_paragraph()
+        p.add_run(f"{job.get('role','')}".strip()).bold = True
+        company = job.get("company", "")
+        dates = job.get("dates", "")
+        meta = " — ".join(filter(None, [company, dates]))
+        pick(bool(meta), lambda: p.add_run(f"   {meta}"), lambda: None)
+        for b in (job.get("bullets") or []):
+            doc.add_paragraph(str(b), style="List Bullet")
+
+
+def _education(doc, education, section) -> None:
+    section("Education")
+    for ed in education:
+        line = " — ".join(filter(None, [ed.get("degree", ""), ed.get("school", ""), ed.get("dates", "")]))
+        doc.add_paragraph(line)
+
+
+def _self_check() -> None:
     sample = {
         "name": "Jane Doe", "title": "Backend Engineer", "email": "jane@example.com",
         "phone": "+1 415 555 1234", "location": "SF", "links": ["github.com/jane"],
@@ -93,5 +114,8 @@ if __name__ == "__main__":  # pragma: no cover
     }
     for tmpl in ("ats", "modern"):
         out = build_resume_docx(sample, template=tmpl)
-        assert out[:2] == b"PK" and len(out) > 1000, tmpl  # valid .docx (zip) with content
+        assert out[:2] == b"PK" and len(out) > 1000, tmpl
     print("resume_export self-check OK")
+
+
+pick(__name__ == "__main__", _self_check, lambda: None)

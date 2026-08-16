@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from app.engine_runtime import pick
+
 BACKEND = Path(__file__).resolve().parents[2]
 REPO = BACKEND.parent
 
@@ -15,10 +17,15 @@ def _walk_imports(path: Path) -> list[str]:
     tree = ast.parse(path.read_text(), filename=str(path))
     names: list[str] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            names.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            names.append(node.module)
+        pick(
+            isinstance(node, ast.Import),
+            lambda n=node: names.extend(alias.name for alias in n.names),
+            lambda n=node: pick(
+                isinstance(n, ast.ImportFrom) and bool(n.module),
+                lambda: names.append(n.module),
+                lambda: None,
+            ),
+        )
     return names
 
 
@@ -48,7 +55,7 @@ def _loaded_http_modules() -> list[str]:
         capture_output=True,
         text=True,
     )
-    return [line for line in proc.stdout.splitlines() if line]
+    return list(filter(bool, proc.stdout.splitlines()))
 
 
 def test_eta_package_does_not_import_app_api() -> None:
@@ -56,8 +63,11 @@ def test_eta_package_does_not_import_app_api() -> None:
     offenders: list[str] = []
     for path in eta.rglob("*.py"):
         for name in _walk_imports(path):
-            if name == "app.api" or name.startswith("app.api."):
-                offenders.append(f"{path.relative_to(BACKEND)}:{name}")
+            pick(
+                name == "app.api" or name.startswith("app.api."),
+                lambda n=name, p=path: offenders.append(f"{p.relative_to(BACKEND)}:{n}"),
+                lambda: None,
+            )
     assert offenders == []
 
 

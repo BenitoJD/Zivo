@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Mapping, Sequence
+
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 
 OPEN_RESPONSE_VERSION = "qb.open_response.v1"
 DEFAULT_POLICY = "open_response_v1"
@@ -65,14 +67,65 @@ INTERVIEW_FOCUS_PCT = 50
 InterviewRoundBand = Literal["strength", "focus", "mid"]
 
 
+_BAND_RULES = (
+    Rule(when=(Pred("strength", "truthy"),), action="strength"),
+    Rule(when=(Pred("focus", "truthy"),), action="focus"),
+    Rule(when=(), action="mid"),
+)
+_POLICY_ALIASES = ("default", "mains", "interview", "rubric")
+_MAINS_BAND_RULES = (
+    Rule(when=(Pred("excellent", "truthy"),), action="Excellent"),
+    Rule(when=(Pred("good", "truthy"),), action="Good"),
+    Rule(when=(Pred("average", "truthy"),), action="Average"),
+    Rule(when=(), action="Needs work"),
+)
+_CODING_VERIFY_RULES = (
+    Rule(
+        when=(Pred("missing", "truthy"),),
+        action="missing_tests_or_reference",
+        extras={"persist": False, "retry": True},
+    ),
+    Rule(
+        when=(Pred("sandbox", "truthy"),),
+        action="sandbox_error",
+        extras={"persist": False, "retry": True},
+    ),
+    Rule(
+        when=(Pred("all_pass", "truthy"),),
+        action="passed",
+        extras={"persist": True, "retry": False},
+    ),
+    Rule(
+        when=(),
+        action="failed_tests",
+        extras={"persist": False, "retry": True},
+    ),
+)
+_DEBUG_QA_RULES = (
+    Rule(when=(Pred("no_payload", "truthy"),), action="no_qa_payload", extras={"persist": True}),
+    Rule(when=(Pred("inverse_ok", "truthy"),), action="inverse_ok", extras={"persist": True}),
+    Rule(when=(), action="qa_failed", extras={"persist": False}),
+)
+_BANK_RULES = (
+    Rule(when=(Pred("missing_required", "truthy"),), action="missing_required_fields"),
+    Rule(when=(Pred("no_tests", "truthy"),), action="no_tests"),
+    Rule(when=(Pred("no_hidden", "truthy"),), action="no_hidden_tests"),
+    Rule(when=(Pred("short_title", "truthy"),), action="title_too_short"),
+    Rule(when=(), action="ok"),
+)
+
+
 def label_interview_round_band(score: int) -> InterviewRoundBand:
     """Band a mock-interview round percent for strengths vs focus areas."""
     pct = int(score)
-    if pct >= INTERVIEW_STRENGTH_PCT:
-        return "strength"
-    if pct < INTERVIEW_FOCUS_PCT:
-        return "focus"
-    return "mid"
+    hit = first_match(
+        _BAND_RULES,
+        {
+            "strength": pct >= INTERVIEW_STRENGTH_PCT,
+            "focus": pct < INTERVIEW_FOCUS_PCT,
+        },
+    )
+    return hit.action  # type: ignore[return-value]
 
 
 @dataclass(frozen=True)
@@ -94,16 +147,14 @@ class OpenResponseVerdict:
 
 def normalize_policy(policy: str | None) -> str:
     p = (policy or DEFAULT_POLICY).strip().lower()
-    if p in ("default", "mains", "interview", "rubric"):
-        return DEFAULT_POLICY
-    return p or DEFAULT_POLICY
+    return pick(p in _POLICY_ALIASES, lambda: DEFAULT_POLICY, lambda: p or DEFAULT_POLICY)
 
 
 def clamp_int(value: Any, lo: int, hi: int, *, default: int | None = None) -> int:
     try:
         return max(lo, min(hi, int(round(float(value)))))
     except (TypeError, ValueError):
-        return lo if default is None else default
+        return choose(default is None, lo, default)
 
 
 def clamp_interview_score(value: Any) -> int:
@@ -127,55 +178,63 @@ def plan_mains_attempt(
 ) -> MainsAttemptPlan:
     """Clamp mains marks band and matching word target."""
     pol = normalize_policy(policy)
-    s = strictness if strictness in MAINS_STRICTNESS else DEFAULT_MAINS_STRICTNESS
-    marks = 15 if int(marks_max or 10) >= 13 else 10
-    words = 250 if marks >= 13 else 150
+    s = choose(strictness in MAINS_STRICTNESS, strictness, DEFAULT_MAINS_STRICTNESS)
+    marks = choose(int(marks_max or 10) >= 13, 15, 10)
+    words = choose(marks >= 13, 250, 150)
     return MainsAttemptPlan(strictness=s, marks_max=marks, word_target=words, policy=pol)
 
 
 def mains_band(marks: int, marks_max: int, strictness: str = DEFAULT_MAINS_STRICTNESS) -> str:
-    pct = (marks / marks_max * 100) if marks_max else 0
+    pct = pick(bool(marks_max), lambda: marks / marks_max * 100, lambda: 0)
     hi, mid, lo = {
         "exam": (75, 60, 42),
         "coaching": (70, 55, 40),
         "gentle": (62, 48, 33),
     }.get(strictness, (70, 55, 40))
-    if pct >= hi:
-        return "Excellent"
-    if pct >= mid:
-        return "Good"
-    if pct >= lo:
-        return "Average"
-    return "Needs work"
+    hit = first_match(
+        _MAINS_BAND_RULES,
+        {
+            "excellent": pct >= hi,
+            "good": pct >= mid,
+            "average": pct >= lo,
+        },
+    )
+    return hit.action
 
 
 def _str_list(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(v).strip() for v in value if str(v or "").strip()]
+    return pick(
+        not isinstance(value, list),
+        lambda: [],
+        lambda: list(filter(None, (str(v or "").strip() for v in value))),
+    )
 
 
 def _shape_highlights(value: Any) -> list[dict[str, str]]:
-    if not isinstance(value, list):
-        return []
-    out: list[dict[str, str]] = []
-    for h in value[:4]:
-        if not isinstance(h, dict):
-            continue
-        quote = str(h.get("quote", "") or "").strip()
-        if not quote:
-            continue
-        kind = str(h.get("kind", "") or "").strip().lower()
-        if kind not in ("strong", "weak", "error"):
-            kind = "weak"
-        out.append(
-            {
-                "quote": quote,
-                "kind": kind,
-                "comment": str(h.get("comment", "") or "").strip(),
-            }
+    def one(h: Any) -> dict[str, str] | None:
+        return pick(
+            not isinstance(h, dict),
+            lambda: None,
+            lambda: pick(
+                not str(h.get("quote", "") or "").strip(),
+                lambda: None,
+                lambda: {
+                    "quote": str(h.get("quote", "") or "").strip(),
+                    "kind": choose(
+                        str(h.get("kind", "") or "").strip().lower() in ("strong", "weak", "error"),
+                        str(h.get("kind", "") or "").strip().lower(),
+                        "weak",
+                    ),
+                    "comment": str(h.get("comment", "") or "").strip(),
+                },
+            ),
         )
-    return out
+
+    return pick(
+        not isinstance(value, list),
+        lambda: [],
+        lambda: list(filter(None, map(one, value[:4]))),
+    )
 
 
 def shape_mains_result(
@@ -189,8 +248,16 @@ def shape_mains_result(
     pol = normalize_policy(policy)
     marks_max = int(scheme.get("marks_max") or 10)
     marks = clamp_int(data.get("marks"), 0, marks_max)
-    axis_scores = data.get("axes") if isinstance(data.get("axes"), dict) else {}
-    axis_notes = data.get("axis_notes") if isinstance(data.get("axis_notes"), dict) else {}
+    axis_scores = pick(
+        isinstance(data.get("axes"), dict),
+        lambda: data.get("axes"),
+        lambda: {},
+    )
+    axis_notes = pick(
+        isinstance(data.get("axis_notes"), dict),
+        lambda: data.get("axis_notes"),
+        lambda: {},
+    )
     axes = [
         {
             "key": key,
@@ -203,10 +270,17 @@ def shape_mains_result(
     ]
     hits_by_index = {
         int(h["index"]): bool(h.get("hit"))
-        for h in (data.get("scheme_hits") or [])
-        if isinstance(h, dict) and isinstance(h.get("index"), (int, float))
+        for h in filter(
+            lambda h: isinstance(h, dict) and isinstance(h.get("index"), (int, float)),
+            data.get("scheme_hits") or [],
+        )
     }
-    points = [p for p in (scheme.get("model_points") or []) if str(p.get("point", "")).strip()]
+    points = list(
+        filter(
+            lambda p: str(p.get("point", "")).strip(),
+            scheme.get("model_points") or [],
+        )
+    )
     scheme_hits = [
         {
             "point": str(p.get("point", "")).strip(),
@@ -246,8 +320,10 @@ def unreadable_mains_result(scheme: dict, *, policy: str | None = None) -> OpenR
                 "marks": int(p.get("marks") or 0),
                 "hit": False,
             }
-            for p in (scheme.get("model_points") or [])
-            if str(p.get("point", "")).strip()
+            for p in filter(
+                lambda p: str(p.get("point", "")).strip(),
+                scheme.get("model_points") or [],
+            )
         ],
         "keep_doing": [],
         "improve": [
@@ -265,7 +341,7 @@ def shape_interview_scores(
     policy: str | None = None,
 ) -> OpenResponseVerdict:
     pol = normalize_policy(policy)
-    src = raw_scores if isinstance(raw_scores, dict) else {}
+    src = pick(isinstance(raw_scores, dict), lambda: raw_scores, lambda: {})
     scores = {d: clamp_interview_score(src.get(d)) for d in INTERVIEW_DIMENSIONS}
     return OpenResponseVerdict(
         kind="interview_typed",
@@ -318,18 +394,26 @@ def evaluate_interview_coding_turn(
     """Pass/fail + feedback for an interview coding turn. Runner stays plumbing."""
     pol = normalize_policy(policy)
     ok = bool(total) and int(passed) == int(total)
-    if error:
-        feedback = f"Couldn't run your code: {error}"
-    elif ok:
-        feedback = f"All {total} tests passed — clean solution."
-    else:
-        hint = ""
-        if first_fail:
+
+    def fail_feedback() -> str:
+        def hint() -> str:
             detail = first_fail.get("stderr") or (
                 f"got {first_fail.get('stdout')!r}, expected {first_fail.get('expected')!r}"
             )
-            hint = f" First failing case: {detail}"
-        feedback = f"{passed}/{total} tests passed.{hint}"
+            return f" First failing case: {detail}"
+
+        extra = pick(bool(first_fail), hint, lambda: "")
+        return f"{passed}/{total} tests passed.{extra}"
+
+    feedback = pick(
+        bool(error),
+        lambda: f"Couldn't run your code: {error}",
+        lambda: pick(
+            ok,
+            lambda: f"All {total} tests passed — clean solution.",
+            fail_feedback,
+        ),
+    )
     return OpenResponseVerdict(
         kind="interview_coding",
         result={
@@ -352,36 +436,69 @@ def build_interview_report(
 ) -> OpenResponseVerdict:
     """Per-round + overall score, normalised to a 0-100 scale for display."""
     pol = normalize_policy(policy)
-    rounds_out: list[dict[str, Any]] = []
-    overall_pcts: list[float] = []
-    for rnd in config:
-        turns = [t for t in transcript if t.get("round_name") == rnd["name"]]
-        if not turns:
-            continue
-        if rnd["kind"] == "coding":
+
+    def round_row(rnd: dict[str, Any]) -> dict[str, Any] | None:
+        turns = list(filter(lambda t: t.get("round_name") == rnd["name"], transcript))
+
+        def coding_row() -> dict[str, Any]:
             passed = sum(t.get("passed", 0) for t in turns)
             total = sum(t.get("total", 0) for t in turns)
-            pct = round(100 * passed / total) if total else 0
-            detail = f"{passed}/{total} tests passed"
-        elif rnd["kind"] == "mcq":
-            correct = sum(1 for t in turns if t.get("correct"))
+            pct = pick(bool(total), lambda: round(100 * passed / total), lambda: 0)
+            return {
+                "name": rnd["name"],
+                "kind": rnd["kind"],
+                "score": pct,
+                "detail": f"{passed}/{total} tests passed",
+            }
+
+        def mcq_row() -> dict[str, Any]:
+            correct = sum(1 for t in filter(lambda t: t.get("correct"), turns))
             pct = round(100 * correct / len(turns))
-            detail = f"{correct}/{len(turns)} correct"
-        else:
+            return {
+                "name": rnd["name"],
+                "kind": rnd["kind"],
+                "score": pct,
+                "detail": f"{correct}/{len(turns)} correct",
+            }
+
+        def typed_row() -> dict[str, Any]:
             vals = [s for t in turns for s in (t.get("scores") or {}).values()]
-            avg = sum(vals) / len(vals) if vals else 0
-            pct = round(100 * (avg - 1) / 3) if vals else 0
-            detail = f"avg {avg:.1f}/4 across {len(turns)} question(s)"
-        rounds_out.append(
-            {"name": rnd["name"], "kind": rnd["kind"], "score": pct, "detail": detail}
+            avg = pick(bool(vals), lambda: sum(vals) / len(vals), lambda: 0)
+            pct = pick(bool(vals), lambda: round(100 * (avg - 1) / 3), lambda: 0)
+            return {
+                "name": rnd["name"],
+                "kind": rnd["kind"],
+                "score": pct,
+                "detail": f"avg {avg:.1f}/4 across {len(turns)} question(s)",
+            }
+
+        kind_key = choose(rnd["kind"] in ("coding", "mcq"), rnd["kind"], "typed")
+        return pick(
+            not turns,
+            lambda: None,
+            lambda: apply(kind_key, {"coding": coding_row, "mcq": mcq_row, "typed": typed_row}),
         )
-        overall_pcts.append(pct)
-    overall = round(sum(overall_pcts) / len(overall_pcts)) if overall_pcts else 0
+
+    rounds_out = list(filter(None, map(round_row, config)))
+    overall_pcts = [r["score"] for r in rounds_out]
+    overall = pick(
+        bool(overall_pcts),
+        lambda: round(sum(overall_pcts) / len(overall_pcts)),
+        lambda: 0,
+    )
     strengths = [
-        r["name"] for r in rounds_out if label_interview_round_band(r["score"]) == "strength"
+        r["name"]
+        for r in filter(
+            lambda r: label_interview_round_band(r["score"]) == "strength",
+            rounds_out,
+        )
     ]
     focus = [
-        r["name"] for r in rounds_out if label_interview_round_band(r["score"]) == "focus"
+        r["name"]
+        for r in filter(
+            lambda r: label_interview_round_band(r["score"]) == "focus",
+            rounds_out,
+        )
     ]
     result = {
         "overall": overall,
@@ -399,11 +516,9 @@ def _normalize_coding_focus(tags: list[str], concept: str) -> list[str]:
     out: list[str] = []
     for t in tags:
         s = str(t).strip().lower()
-        if s and s not in out:
-            out.append(s)
+        out += choose(bool(s) and s not in out, [s], [])
     c = str(concept or "").strip().lower()
-    if c and c not in out:
-        out.append(c)
+    out += choose(bool(c) and c not in out, [c], [])
     return out[:6]
 
 
@@ -424,47 +539,54 @@ def heuristic_coding_teach_gap(
     pol = normalize_policy(policy)
     focus = _normalize_coding_focus(tags, concept)
     weak = focus[:2] or ["edge-cases"]
-    if all_passed:
-        result = {
+
+    def fail_hint() -> str:
+        stderr = str(first_fail.get("stderr") or "").strip()
+        return pick(
+            bool(stderr),
+            lambda: " Runtime/compile noise showed up — fix that before chasing logic.",
+            lambda: pick(
+                first_fail.get("expected") is not None,
+                lambda: " Your output diverged from the expected case — check boundaries and off-by-one.",
+                lambda: "",
+            ),
+        )
+
+    def fail_result() -> dict[str, Any]:
+        hint = pick(bool(first_fail), fail_hint, lambda: "")
+        ratio = pick(bool(total), lambda: f"{passed}/{total}", lambda: "0/0")
+        return {
             "mentor_summary": (
-                "Tests are green. The next edge is applying the same pattern under a twist — "
-                "constraints change, or the data structure choice gets costly."
+                f"You cleared {ratio} hidden tests.{hint} "
+                "The gap is usually one missed invariant, not more code."
             ),
             "weak_concepts": weak,
             "lesson": {
-                "title": "Own the pattern, then stretch it",
+                "title": "Read the failing case as a clue",
                 "body": (
-                    "Passing tests means the happy path works. Solid mastery is recognizing when "
-                    "the same idea needs a different cut of the input or a tighter bound."
+                    "A single failing input usually points at a boundary you skipped: empty, one element, "
+                    "duplicates, or the last index. Restate the invariant the solution must keep, then fix that."
                 ),
-                "try_this": "On the next problem, name the pattern in one sentence before coding.",
+                "try_this": "Before re-submitting, write the invariant in one line above your loop.",
             },
         }
-        return OpenResponseVerdict(kind="coding_teach", result=result, policy=pol)
 
-    fail_hint = ""
-    if first_fail:
-        stderr = str(first_fail.get("stderr") or "").strip()
-        if stderr:
-            fail_hint = " Runtime/compile noise showed up — fix that before chasing logic."
-        elif first_fail.get("expected") is not None:
-            fail_hint = " Your output diverged from the expected case — check boundaries and off-by-one."
-    ratio = f"{passed}/{total}" if total else "0/0"
-    result = {
+    pass_result = {
         "mentor_summary": (
-            f"You cleared {ratio} hidden tests.{fail_hint} "
-            "The gap is usually one missed invariant, not more code."
+            "Tests are green. The next edge is applying the same pattern under a twist — "
+            "constraints change, or the data structure choice gets costly."
         ),
         "weak_concepts": weak,
         "lesson": {
-            "title": "Read the failing case as a clue",
+            "title": "Own the pattern, then stretch it",
             "body": (
-                "A single failing input usually points at a boundary you skipped: empty, one element, "
-                "duplicates, or the last index. Restate the invariant the solution must keep, then fix that."
+                "Passing tests means the happy path works. Solid mastery is recognizing when "
+                "the same idea needs a different cut of the input or a tighter bound."
             ),
-            "try_this": "Before re-submitting, write the invariant in one line above your loop.",
+            "try_this": "On the next problem, name the pattern in one sentence before coding.",
         },
     }
+    result = pick(all_passed, lambda: pass_result, fail_result)
     return OpenResponseVerdict(kind="coding_teach", result=result, policy=pol)
 
 
@@ -488,26 +610,33 @@ def heuristic_system_design_grade(
     )
     words = len(re.findall(r"\w+", text_blob))
     blocks = design.get("blocks") or []
-    base = 2
-    if words > 80:
-        base = 3
-    if words < 25:
-        base = 1
-    dims = []
+    base = pick(words > 80, lambda: 3, lambda: pick(words < 25, lambda: 1, lambda: 2))
     low = text_blob.lower()
-    for key in SD_DIMENSIONS:
-        score = base
-        if key == "api" and ("api" in low or "endpoint" in low):
-            score = min(4, score + 1)
-        if key == "data" and any(w in low for w in ("db", "database", "sql", "store")):
-            score = min(4, score + 1)
-        if key == "scale" and any(w in low for w in ("cache", "shard", "qps", "cdn", "queue")):
-            score = min(4, score + 1)
-        if key == "framing" and words > 40:
-            score = min(4, max(score, 2))
-        if blocks and key == "communication":
-            score = min(4, score + 1)
-        dims.append({"key": key, "score": score, "note": "Heuristic score - model unavailable."})
+
+    def dim_score(key: str) -> dict[str, Any]:
+        bumped = min(4, base + 1)
+        score = apply(
+            key,
+            {
+                "api": lambda: choose("api" in low or "endpoint" in low, bumped, base),
+                "data": lambda: choose(
+                    any(w in low for w in ("db", "database", "sql", "store")),
+                    bumped,
+                    base,
+                ),
+                "scale": lambda: choose(
+                    any(w in low for w in ("cache", "shard", "qps", "cdn", "queue")),
+                    bumped,
+                    base,
+                ),
+                "framing": lambda: choose(words > 40, min(4, max(base, 2)), base),
+                "communication": lambda: choose(bool(blocks), bumped, base),
+                "tradeoffs": lambda: base,
+            },
+        )
+        return {"key": key, "score": score, "note": "Heuristic score - model unavailable."}
+
+    dims = [dim_score(key) for key in SD_DIMENSIONS]
     weak = list(concept_keys[:1]) or ["requirements"]
     result = {
         "mentor_summary": (
@@ -540,7 +669,7 @@ def merge_system_design_grade(
     dims = []
     for key in SD_DIMENSIONS:
         found = next(
-            (d for d in dims_in if isinstance(d, dict) and d.get("key") == key),
+            filter(lambda d: isinstance(d, dict) and d.get("key") == key, dims_in),
             None,
         )
         dims.append(
@@ -550,11 +679,18 @@ def merge_system_design_grade(
                 "note": str((found or {}).get("note") or "")[:280],
             }
         )
-    weak = [str(w) for w in (llm.get("weak_concepts") or []) if str(w)][:3]
-    if not weak:
-        weak = list(fallback.get("weak_concepts") or [])
-    lesson_in = llm.get("lesson") if isinstance(llm.get("lesson"), dict) else {}
-    fb_lesson = fallback.get("lesson") if isinstance(fallback.get("lesson"), dict) else {}
+    weak = [str(w) for w in filter(lambda w: str(w), llm.get("weak_concepts") or [])][:3]
+    weak = pick(not weak, lambda: list(fallback.get("weak_concepts") or []), lambda: weak)
+    lesson_in = pick(
+        isinstance(llm.get("lesson"), dict),
+        lambda: llm.get("lesson"),
+        lambda: {},
+    )
+    fb_lesson = pick(
+        isinstance(fallback.get("lesson"), dict),
+        lambda: fallback.get("lesson"),
+        lambda: {},
+    )
     result = {
         "mentor_summary": str(llm.get("mentor_summary") or "").strip()
         or str(fallback.get("mentor_summary") or ""),
@@ -599,20 +735,34 @@ def evaluate_coding_bank_item(
     """
     pol = normalize_policy(policy)
     required = ("statement", "starter_code", "reference_solution", "tests")
-    if not all(problem.get(k) for k in required):
-        return CodingBankVerdict(False, "missing_required_fields", policy=pol)
     tests = problem.get("tests")
-    if not isinstance(tests, list) or not tests:
-        return CodingBankVerdict(False, "no_tests", policy=pol)
-    clean = [t for t in tests if isinstance(t, dict)]
-    if require_hidden_tests and len(clean) <= 2:
-        return CodingBankVerdict(False, "no_hidden_tests", policy=pol)
+    clean = list(
+        filter(
+            lambda t: isinstance(t, dict),
+            pick(isinstance(tests, list), lambda: tests, lambda: []),
+        )
+    )
     title = str(problem.get("title") or "").strip()
-    if len(title) < min_title_len:
-        title = str(problem.get("concept") or "").strip()
-    if len(title) < min_title_len:
-        return CodingBankVerdict(False, "title_too_short", policy=pol)
-    return CodingBankVerdict(True, "ok", resolved_title=title, policy=pol)
+    title = pick(
+        len(title) < min_title_len,
+        lambda: str(problem.get("concept") or "").strip(),
+        lambda: title,
+    )
+    hit = first_match(
+        _BANK_RULES,
+        {
+            "missing_required": not all(problem.get(k) for k in required),
+            "no_tests": not isinstance(tests, list) or not tests,
+            "no_hidden": require_hidden_tests and len(clean) <= 2,
+            "short_title": len(title) < min_title_len,
+        },
+    )
+    return CodingBankVerdict(
+        hit.action == "ok",
+        hit.action,
+        resolved_title=choose(hit.action == "ok", title, ""),
+        policy=pol,
+    )
 
 
 CODING_SAMPLE_TEST_COUNT = 2
@@ -640,11 +790,8 @@ def plan_coding_test_visibility(
             "stdin": str(t.get("stdin", "")),
             "expected_output": str(t.get("expected_output", "")),
         }
-        for t in (tests or [])
-        if isinstance(t, dict)
+        for t in filter(lambda t: isinstance(t, dict), tests or [])
     ]
-    if len(clean) <= n:
-        return CodingTestVisibilityPlan(clean, [], policy=pol)
     return CodingTestVisibilityPlan(clean[:n], clean[n:], policy=pol)
 
 
@@ -672,13 +819,20 @@ def evaluate_coding_reference_verify(
 ) -> CodingVerifyVerdict:
     """Pass/fail of one generate-and-verify attempt. Retry loop stays plumbing."""
     pol = normalize_policy(policy)
-    if not has_tests or not has_reference:
-        return CodingVerifyVerdict(False, True, "missing_tests_or_reference", policy=pol)
-    if sandbox_error:
-        return CodingVerifyVerdict(False, True, "sandbox_error", policy=pol)
-    if int(total) and int(passed) == int(total):
-        return CodingVerifyVerdict(True, False, "passed", policy=pol)
-    return CodingVerifyVerdict(False, True, "failed_tests", policy=pol)
+    hit = first_match(
+        _CODING_VERIFY_RULES,
+        {
+            "missing": not has_tests or not has_reference,
+            "sandbox": sandbox_error,
+            "all_pass": bool(int(total)) and int(passed) == int(total),
+        },
+    )
+    return CodingVerifyVerdict(
+        bool(hit.extras["persist"]),
+        bool(hit.extras["retry"]),
+        hit.action,
+        policy=pol,
+    )
 
 
 @dataclass(frozen=True)
@@ -703,11 +857,14 @@ def evaluate_debug_scenario_qa(
     Missing cook_qa is not a reject: the model may omit it for non-code scenarios.
     """
     pol = normalize_policy(policy)
-    if not has_buggy or not has_fixed or not has_tests:
-        return DebugScenarioQaVerdict(True, "no_qa_payload", policy=pol)
-    if buggy_fails and fixed_passes:
-        return DebugScenarioQaVerdict(True, "inverse_ok", policy=pol)
-    return DebugScenarioQaVerdict(False, "qa_failed", policy=pol)
+    hit = first_match(
+        _DEBUG_QA_RULES,
+        {
+            "no_payload": not has_buggy or not has_fixed or not has_tests,
+            "inverse_ok": buggy_fails and fixed_passes,
+        },
+    )
+    return DebugScenarioQaVerdict(bool(hit.extras["persist"]), hit.action, policy=pol)
 
 
 DEBUG_COOK_DEFAULT_COUNT = 3
@@ -723,7 +880,7 @@ DEBUG_MIN_STEPS = 1
 
 def plan_debug_cook_yield(requested: int | None = None) -> int:
     """How many debug scenarios one cook job may produce."""
-    n = DEBUG_COOK_DEFAULT_COUNT if not requested else int(requested)
+    n = pick(not requested, lambda: DEBUG_COOK_DEFAULT_COUNT, lambda: int(requested))
     return max(1, min(n, DEBUG_COOK_MAX_COUNT))
 
 
@@ -762,9 +919,11 @@ def evaluate_debug_cook_input(
     pol = normalize_policy(policy)
     has_material = len((material or "").strip()) >= DEBUG_COOK_MIN_MATERIAL_CHARS
     has_brief = len((brief or "").strip()) >= DEBUG_COOK_MIN_BRIEF_CHARS
-    if has_material or has_brief:
-        return DebugCookInputVerdict(True, "ok", policy=pol)
-    return DebugCookInputVerdict(False, "too_thin", policy=pol)
+    return pick(
+        has_material or has_brief,
+        lambda: DebugCookInputVerdict(True, "ok", policy=pol),
+        lambda: DebugCookInputVerdict(False, "too_thin", policy=pol),
+    )
 
 
 @dataclass(frozen=True)
@@ -785,11 +944,15 @@ def evaluate_debug_scenario_shape(
 ) -> DebugScenarioShapeVerdict:
     """Structural persist bar for a debug scenario (title + at least one step)."""
     pol = normalize_policy(policy)
-    if int(step_count) < int(min_steps):
-        return DebugScenarioShapeVerdict(False, "no_steps", policy=pol)
-    if len((title or "").strip()) < int(min_title_len):
-        return DebugScenarioShapeVerdict(False, "title_too_short", policy=pol)
-    return DebugScenarioShapeVerdict(True, "ok", policy=pol)
+    return pick(
+        int(step_count) < int(min_steps),
+        lambda: DebugScenarioShapeVerdict(False, "no_steps", policy=pol),
+        lambda: pick(
+            len((title or "").strip()) < int(min_title_len),
+            lambda: DebugScenarioShapeVerdict(False, "title_too_short", policy=pol),
+            lambda: DebugScenarioShapeVerdict(True, "ok", policy=pol),
+        ),
+    )
 
 
 RESUME_STRENGTHS_MAX = 6
@@ -927,7 +1090,7 @@ def evaluate_resume_deterministic_checks(resume: str) -> list[dict[str, Any]]:
     wc = len(words)
     bullets = sum(low.count(b) for b in ("•", "- ", "* ", "▪"))
     quantified = len(re.findall(r"\b\d+%?\b", resume))
-    action_hits = sum(1 for w in _RESUME_ACTION_VERBS if w in low)
+    action_hits = sum(1 for w in filter(lambda w: w in low, _RESUME_ACTION_VERBS))
     first_person = sum(low.count(p) for p in (" i ", " my ", " me "))
     has_email = bool(_RESUME_EMAIL.search(resume))
     has_phone = bool(_RESUME_PHONE.search(resume))
@@ -936,16 +1099,16 @@ def evaluate_resume_deterministic_checks(resume: str) -> list[dict[str, Any]]:
     has_skills = any(s in low for s in _RESUME_SECTIONS["skills"])
     length_ok = RESUME_WORD_MIN <= wc <= RESUME_WORD_MAX
     checks = [
-        ("Contact email", has_email, "A parseable email address is present." if has_email else "No email found: ATS needs one to contact you."),
-        ("Phone number", has_phone, "Phone number present." if has_phone else "Add a phone number."),
-        ("Experience section", has_exp, "Found a work-experience section." if has_exp else "Add a clearly labelled Experience section."),
-        ("Education section", has_edu, "Found an education section." if has_edu else "Add an Education section."),
-        ("Skills section", has_skills, "Found a skills section." if has_skills else "Add a Skills section with relevant keywords."),
-        ("Reasonable length", length_ok, f"{wc} words, good length." if length_ok else f"{wc} words: aim for ~1 page ({RESUME_WORD_MIN}-{RESUME_WORD_MAX} words)."),
-        ("Bullet points", bullets >= RESUME_MIN_BULLETS, f"{bullets} bullet points." if bullets >= RESUME_MIN_BULLETS else "Use bullet points for achievements, not paragraphs."),
-        ("Quantified impact", quantified >= RESUME_MIN_METRICS, f"{quantified} numbers/metrics found." if quantified >= RESUME_MIN_METRICS else "Quantify achievements (%, $, counts): ATS and recruiters reward metrics."),
-        ("Strong action verbs", action_hits >= RESUME_MIN_ACTION_VERBS, f"{action_hits} action verbs." if action_hits >= RESUME_MIN_ACTION_VERBS else "Start bullets with action verbs (Led, Built, Improved)."),
-        ("Third-person voice", first_person == 0, "No first-person pronouns." if first_person == 0 else "Drop first-person pronouns (I, my): resumes are written impersonally."),
+        ("Contact email", has_email, choose(has_email, "A parseable email address is present.", "No email found: ATS needs one to contact you.")),
+        ("Phone number", has_phone, choose(has_phone, "Phone number present.", "Add a phone number.")),
+        ("Experience section", has_exp, choose(has_exp, "Found a work-experience section.", "Add a clearly labelled Experience section.")),
+        ("Education section", has_edu, choose(has_edu, "Found an education section.", "Add an Education section.")),
+        ("Skills section", has_skills, choose(has_skills, "Found a skills section.", "Add a Skills section with relevant keywords.")),
+        ("Reasonable length", length_ok, choose(length_ok, f"{wc} words, good length.", f"{wc} words: aim for ~1 page ({RESUME_WORD_MIN}-{RESUME_WORD_MAX} words).")),
+        ("Bullet points", bullets >= RESUME_MIN_BULLETS, choose(bullets >= RESUME_MIN_BULLETS, f"{bullets} bullet points.", "Use bullet points for achievements, not paragraphs.")),
+        ("Quantified impact", quantified >= RESUME_MIN_METRICS, choose(quantified >= RESUME_MIN_METRICS, f"{quantified} numbers/metrics found.", "Quantify achievements (%, $, counts): ATS and recruiters reward metrics.")),
+        ("Strong action verbs", action_hits >= RESUME_MIN_ACTION_VERBS, choose(action_hits >= RESUME_MIN_ACTION_VERBS, f"{action_hits} action verbs.", "Start bullets with action verbs (Led, Built, Improved).")),
+        ("Third-person voice", first_person == 0, choose(first_person == 0, "No first-person pronouns.", "Drop first-person pronouns (I, my): resumes are written impersonally.")),
     ]
     return [{"name": n, "pass": bool(p), "detail": d} for (n, p, d) in checks]
 
@@ -953,4 +1116,79 @@ def evaluate_resume_deterministic_checks(resume: str) -> list[dict[str, Any]]:
 def plan_resume_ats_score(*, det_score: int, content_score: int) -> int:
     """Blend mechanical ATS checks with the LLM content review."""
     return round(RESUME_DET_WEIGHT * int(det_score) + RESUME_CONTENT_WEIGHT * int(content_score))
+
+
+CODING_DIFFICULTIES = ("easy", "medium", "hard")
+DEFAULT_CODING_DIFFICULTY = "medium"
+
+
+def resolve_coding_language_id(
+    language_id: Any,
+    known: Mapping[Any, Any],
+    *,
+    default: int,
+) -> int:
+    """Bank/interview coding language: keep a known id, else the default."""
+    lid = int(language_id or default)
+    return choose(lid in known, lid, default)
+
+
+def normalize_coding_difficulty(raw: Any) -> str:
+    """Clamp a coding-bank difficulty label to easy/medium/hard."""
+    d = str(raw or DEFAULT_CODING_DIFFICULTY).strip().lower() or DEFAULT_CODING_DIFFICULTY
+    return choose(d in CODING_DIFFICULTIES, d, DEFAULT_CODING_DIFFICULTY)
+
+
+_INTERVIEW_TURN_RULES = (
+    Rule(when=(Pred("kind", "eq", "coding"),), action="coding"),
+    Rule(when=(Pred("kind", "eq", "mcq"),), action="mcq"),
+    Rule(when=(), action="typed"),
+)
+
+
+def evaluate_interview_turn_kind(kind: str) -> str:
+    """Dispatch an interview answer onto coding, MCQ, or typed rubric scoring."""
+    return first_match(_INTERVIEW_TURN_RULES, {"kind": str(kind or "")}).action
+
+
+_SD_SUBJECT_RULES = (
+    Rule(when=(Pred("has_account", "truthy"),), action="account"),
+    Rule(when=(), action="guest"),
+)
+
+
+def evaluate_sd_subject(*, account_id: Any) -> str:
+    """System-design session rows are keyed by account or guest."""
+    return first_match(_SD_SUBJECT_RULES, {"has_account": account_id is not None}).action
+
+
+_MCQ_GRADE_KIND_RULES = (
+    Rule(when=(Pred("is_multi", "truthy"),), action="multi"),
+    Rule(when=(), action="single"),
+)
+
+
+def evaluate_mcq_grade_kind(*, is_multi: bool) -> str:
+    """Single-index vs multi-select MCQ measurement shape."""
+    return first_match(_MCQ_GRADE_KIND_RULES, {"is_multi": is_multi}).action
+
+
+def evaluate_mcq_correct(
+    *,
+    is_multi: bool,
+    choice_index: int,
+    correct_index: int,
+    choice_indices: Sequence[int] | None = None,
+    correct_indices: Sequence[int] | None = None,
+) -> bool:
+    """Instant MCQ correctness: set equality for multi-select, index match otherwise."""
+    return bool(
+        apply(
+            evaluate_mcq_grade_kind(is_multi=is_multi),
+            {
+                "multi": lambda: set(choice_indices or []) == set(correct_indices or []),
+                "single": lambda: int(choice_index) == correct_index,
+            },
+        )
+    )
 

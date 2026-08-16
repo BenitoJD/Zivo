@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import apply, choose, pick
 from app.config import get_settings
 from app.models import Document, JobWorkload
 from app.repositories import newspaper as newspaper_repo
@@ -18,6 +19,7 @@ from app.services.parse import count_pdf_pages
 from app.services.session_design import (
     NEWSPAPER_RETENTION_DAYS,
     evaluate_edition_practice_window,
+    evaluate_newspaper_digest_enqueue,
     evaluate_newspaper_learn_complete_counts,
     plan_newspaper_edition_questions_limit,
     plan_newspaper_hub_heal,
@@ -58,15 +60,20 @@ def list_catalog(db: Session) -> dict[str, Any]:
     return {
         "retention_days": NEWSPAPER_RETENTION_DAYS,
         "since": since.isoformat(),
-        "papers": [
-            {
-                "slug": p["paper_slug"],
-                "title": p["paper_title"],
-                "ready_days": p["ready_days"],
-                "latest_date": p["latest_date"].isoformat() if p.get("latest_date") else None,
-            }
-            for p in papers
-        ],
+        "papers": list(map(_catalog_paper, papers)),
+    }
+
+
+def _catalog_paper(p: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "slug": p["paper_slug"],
+        "title": p["paper_title"],
+        "ready_days": p["ready_days"],
+        "latest_date": pick(
+            bool(p.get("latest_date")),
+            lambda: p["latest_date"].isoformat(),
+            lambda: None,
+        ),
     }
 
 
@@ -76,85 +83,122 @@ def list_paper_days(
     *,
     learner_key: str | None = None,
 ) -> dict[str, Any]:
-    if not newspaper_repo.is_brand_allowed(db, paper_slug):
-        return {
+    return pick(
+        not newspaper_repo.is_brand_allowed(db, paper_slug),
+        lambda: {
             "paper_slug": paper_slug,
             "paper_title": paper_slug,
             "since": window_start().isoformat(),
             "days": [],
-        }
+        },
+        lambda: _list_allowed_paper_days(db, paper_slug, learner_key=learner_key),
+    )
+
+
+def _list_allowed_paper_days(
+    db: Session, paper_slug: str, *, learner_key: str | None
+) -> dict[str, Any]:
     since = window_start()
-    # The hub polls this endpoint. Self-heal any stuck edition (status
-    # indexing/pending) before reading, so the catalog stops showing "Preparing"
-    # the moment its cook lands — instead of up to 15 min later when the
-    # newspaper.recover_stuck schedule runs. Same recovery the scheduler does,
-    # but on-demand for the editions the learner is actually looking at.
     _heal_stuck_editions_for_hub(db, paper_slug, since=since)
     days = newspaper_repo.list_days_for_paper(db, paper_slug=paper_slug, since=since)
-    title = days[0]["paper_title"] if days else paper_slug
-
-    doc_ids = [d["document_id"] for d in days if d.get("document_id")]
+    title = pick(bool(days), lambda: days[0]["paper_title"], lambda: paper_slug)
+    doc_ids = list(filter(None, (d.get("document_id") for d in days)))
     learner_progress: dict[uuid.UUID, dict[str, Any]] = {}
     question_totals: dict[str, int] = {}
-    if learner_key and doc_ids:
-        from app.services.document_learner_state import load_learner_progress_batch
-
-        learner_progress = load_learner_progress_batch(db, doc_ids, learner_key)
-        totals_rows = db.execute(
-            text(
-                """
-                SELECT payload->>'artifact_id' AS document_id, COUNT(*)::int AS n
-                FROM intel.assertion
-                WHERE payload->>'artifact_id' = ANY(:doc_ids)
-                  AND status = 'active'
-                  AND COALESCE(payload->>'serve_mode', 'learn') = 'learn'
-                GROUP BY 1
-                """
-            ),
-            {"doc_ids": [str(doc_id) for doc_id in doc_ids]},
-        ).mappings().all()
-        question_totals = {str(row["document_id"]): int(row["n"]) for row in totals_rows}
-
-    day_items: list[dict[str, Any]] = []
-    for d in days:
-        item: dict[str, Any] = {
-            "id": str(d["id"]),
-            "edition_date": d["edition_date"].isoformat(),
-            "status": d["status"],
-            "document_id": str(d["document_id"]) if d.get("document_id") else None,
-            "has_blog": bool(d.get("blog_live")),
-            "blog_href": (
-                f"/learn/newspaper/{paper_slug}/{d['edition_date'].isoformat()}"
-                if d.get("blog_live")
-                else None
-            ),
-        }
-        document_id = d.get("document_id")
-        if learner_key and document_id:
-            progress = learner_progress.get(document_id) or {}
-            answered = progress.get("learn_answered_ids") or progress.get("answered_ids") or []
-            answered_count = len(answered) if isinstance(answered, list) else 0
-            total = question_totals.get(str(document_id), 0)
-            learn_complete = bool(progress.get("learn_complete"))
-            if not learn_complete:
-                learn_complete = evaluate_newspaper_learn_complete_counts(
-                    answered_count=answered_count,
-                    pool_count=total,
-                    generation_pending=False,
-                )
-            item["learner"] = {
-                "questions_answered": answered_count,
-                "questions_total": total,
-                "learn_complete": learn_complete,
-                "in_progress": answered_count > 0 and not learn_complete,
-            }
-        day_items.append(item)
-
+    pick(
+        bool(learner_key and doc_ids),
+        lambda: _load_learner_day_stats(db, doc_ids, learner_key, learner_progress, question_totals),
+        lambda: None,
+    )
+    day_items = [_day_item(d, paper_slug, learner_key, learner_progress, question_totals) for d in days]
     return {
         "paper_slug": paper_slug,
         "paper_title": title,
         "since": since.isoformat(),
         "days": day_items,
+    }
+
+
+def _load_learner_day_stats(
+    db: Session,
+    doc_ids: list[Any],
+    learner_key: str,
+    learner_progress: dict[uuid.UUID, dict[str, Any]],
+    question_totals: dict[str, int],
+) -> None:
+    from app.services.document_learner_state import load_learner_progress_batch
+
+    learner_progress.update(load_learner_progress_batch(db, doc_ids, learner_key))
+    totals_rows = db.execute(
+        text(
+            """
+            SELECT payload->>'artifact_id' AS document_id, COUNT(*)::int AS n
+            FROM intel.assertion
+            WHERE payload->>'artifact_id' = ANY(:doc_ids)
+              AND status = 'active'
+              AND COALESCE(payload->>'serve_mode', 'learn') = 'learn'
+            GROUP BY 1
+            """
+        ),
+        {"doc_ids": [str(doc_id) for doc_id in doc_ids]},
+    ).mappings().all()
+    question_totals.update({str(row["document_id"]): int(row["n"]) for row in totals_rows})
+
+
+def _day_item(
+    d: dict[str, Any],
+    paper_slug: str,
+    learner_key: str | None,
+    learner_progress: dict[uuid.UUID, dict[str, Any]],
+    question_totals: dict[str, int],
+) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "id": str(d["id"]),
+        "edition_date": d["edition_date"].isoformat(),
+        "status": d["status"],
+        "document_id": pick(bool(d.get("document_id")), lambda: str(d["document_id"]), lambda: None),
+        "has_blog": bool(d.get("blog_live")),
+        "blog_href": pick(
+            bool(d.get("blog_live")),
+            lambda: f"/learn/newspaper/{paper_slug}/{d['edition_date'].isoformat()}",
+            lambda: None,
+        ),
+    }
+    pick(
+        bool(learner_key and d.get("document_id")),
+        lambda: item.__setitem__(
+            "learner",
+            _learner_day_state(d["document_id"], learner_progress, question_totals),
+        ),
+        lambda: None,
+    )
+    return item
+
+
+def _learner_day_state(
+    document_id: Any,
+    learner_progress: dict[uuid.UUID, dict[str, Any]],
+    question_totals: dict[str, int],
+) -> dict[str, Any]:
+    progress = learner_progress.get(document_id) or {}
+    answered = progress.get("learn_answered_ids") or progress.get("answered_ids") or []
+    answered_count = choose(isinstance(answered, list), len(answered), 0)
+    total = question_totals.get(str(document_id), 0)
+    flagged = bool(progress.get("learn_complete"))
+    learn_complete = choose(
+        flagged,
+        True,
+        evaluate_newspaper_learn_complete_counts(
+            answered_count=answered_count,
+            pool_count=total,
+            generation_pending=False,
+        ),
+    )
+    return {
+        "questions_answered": answered_count,
+        "questions_total": total,
+        "learn_complete": learn_complete,
+        "in_progress": answered_count > 0 and not learn_complete,
     }
 
 
@@ -189,30 +233,44 @@ def _heal_stuck_editions_for_hub(db: Session, paper_slug: str, *, since: date) -
     ).mappings().all()
 
     for row in rows:
-        document_id = row["document_id"]
-        try:
-            doc = db.get(Document, document_id)
-            if doc is None:
-                continue
-            action = plan_newspaper_hub_heal(doc_status=doc.status)
-            if action == "reingest":
-                from app.services.rag_window import maybe_recover_stuck_indexing
+        _heal_one_hub_row(db, row)
 
-                maybe_recover_stuck_indexing(db, doc)
-            elif action == "recook":
-                from app.services.question_pool import page_range_bounds
-                from app.services.question_pool_jobs import _enqueue_first_question_batch
 
-                page_from, _ = page_range_bounds(doc)
-                job = _enqueue_first_question_batch(db, doc, page=page_from)
-                followup = plan_newspaper_uncooked_followup(
-                    cook_enqueued=job is not None
-                )
-                if followup == "promote_ready":
-                    maybe_mark_newspaper_edition_ready(db, doc)
-                db.commit()
-        except Exception:
-            logger.exception("hub heal failed for edition %s (doc %s)", row["id"], document_id)
+def _heal_one_hub_row(db: Session, row: Any) -> None:
+    document_id = row["document_id"]
+    try:
+        doc = db.get(Document, document_id)
+        pick(doc is None, lambda: None, lambda: _heal_doc(db, doc))
+    except Exception:
+        logger.exception("hub heal failed for edition %s (doc %s)", row["id"], document_id)
+
+
+def _heal_doc(db: Session, doc: Document) -> None:
+    apply(
+        plan_newspaper_hub_heal(doc_status=doc.status),
+        {
+            "reingest": lambda: _heal_reingest(db, doc),
+            "recook": lambda: _heal_recook(db, doc),
+            "idle": lambda: None,
+        },
+    )
+
+
+def _heal_reingest(db: Session, doc: Document) -> None:
+    from app.services.rag_window import maybe_recover_stuck_indexing
+
+    maybe_recover_stuck_indexing(db, doc)
+
+
+def _heal_recook(db: Session, doc: Document) -> None:
+    from app.services.question_pool import page_range_bounds
+    from app.services.question_pool_jobs import _enqueue_first_question_batch
+
+    page_from, _ = page_range_bounds(doc)
+    job = _enqueue_first_question_batch(db, doc, page=page_from)
+    followup = plan_newspaper_uncooked_followup(cook_enqueued=job is not None)
+    pick(followup == "promote_ready", lambda: maybe_mark_newspaper_edition_ready(db, doc), lambda: None)
+    db.commit()
 
 
 def get_channel(db: Session) -> dict[str, Any]:
@@ -222,15 +280,22 @@ def get_channel(db: Session) -> dict[str, Any]:
         "channel_label": s.get("channel_label") or "",
         "sync_cursor": s.get("sync_cursor"),
         "allowlist_only": bool(s.get("allowlist_only")),
-        "updated_at": s["updated_at"].isoformat() if s.get("updated_at") else None,
+        "updated_at": pick(
+            bool(s.get("updated_at")),
+            lambda: s["updated_at"].isoformat(),
+            lambda: None,
+        ),
     }
 
 
 def update_channel(db: Session, *, channel_ref: str, channel_label: str = "") -> dict[str, Any]:
-    if not channel_ref.strip():
-        raise ValueError("channel_ref is required")
+    pick(not channel_ref.strip(), lambda: _raise_value("channel_ref is required"), lambda: None)
     newspaper_repo.set_channel(db, channel_ref=channel_ref, channel_label=channel_label)
     return get_channel(db)
+
+
+def _raise_value(msg: str) -> None:
+    raise ValueError(msg)
 
 
 def set_allowlist_only(db: Session, *, allowlist_only: bool) -> dict[str, Any]:
@@ -243,22 +308,26 @@ def list_admin_brands(db: Session) -> dict[str, Any]:
     brands = newspaper_repo.list_brands(db)
     return {
         "allowlist_only": bool(s.get("allowlist_only")),
-        "brands": [
-            {
-                "slug": b["paper_slug"],
-                "title": b["paper_title"],
-                "enabled": bool(b["enabled"]),
-                "first_seen_at": b["first_seen_at"].isoformat() if b.get("first_seen_at") else None,
-            }
-            for b in brands
-        ],
+        "brands": list(map(_admin_brand, brands)),
+    }
+
+
+def _admin_brand(b: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "slug": b["paper_slug"],
+        "title": b["paper_title"],
+        "enabled": bool(b["enabled"]),
+        "first_seen_at": pick(
+            bool(b.get("first_seen_at")),
+            lambda: b["first_seen_at"].isoformat(),
+            lambda: None,
+        ),
     }
 
 
 def set_brand_enabled(db: Session, *, paper_slug: str, enabled: bool) -> dict[str, Any]:
     row = newspaper_repo.set_brand_enabled(db, paper_slug=paper_slug, enabled=enabled)
-    if not row:
-        raise ValueError("Unknown paper — it appears after the channel posts it once")
+    pick(not row, lambda: _raise_value("Unknown paper — it appears after the channel posts it once"), lambda: None)
     return {
         "slug": row["paper_slug"],
         "title": row["paper_title"],
@@ -287,25 +356,80 @@ def create_edition_from_pdf(
     location_raw: str,
 ) -> uuid.UUID | None:
     """Idempotent: if (paper, day) exists, skip. Returns edition id or None if skipped."""
-    if not ensure_brand_and_allowed(db, paper_slug=paper_slug, paper_title=paper_title):
-        logger.info("skip paper %s — not on allowlist", paper_slug)
-        return None
+    return pick(
+        not ensure_brand_and_allowed(db, paper_slug=paper_slug, paper_title=paper_title),
+        lambda: _skip_allowlist(paper_slug),
+        lambda: _create_edition_if_new(
+            db,
+            filename=filename,
+            data=data,
+            paper_slug=paper_slug,
+            paper_title=paper_title,
+            edition_date=edition_date,
+            telegram_msg_id=telegram_msg_id,
+            location_raw=location_raw,
+        ),
+    )
 
+
+def _skip_allowlist(paper_slug: str) -> None:
+    logger.info("skip paper %s — not on allowlist", paper_slug)
+    return None
+
+
+def _create_edition_if_new(
+    db: Session,
+    *,
+    filename: str,
+    data: bytes,
+    paper_slug: str,
+    paper_title: str,
+    edition_date: date,
+    telegram_msg_id: int | None,
+    location_raw: str,
+) -> uuid.UUID | None:
     existing = newspaper_repo.get_edition_by_paper_day(
         db, paper_slug=paper_slug, edition_date=edition_date
     )
-    if existing:
-        logger.info(
-            "skip duplicate newspaper edition %s %s (status=%s)",
-            paper_slug,
-            edition_date,
-            existing.get("status"),
-        )
-        return None
+    return pick(
+        bool(existing),
+        lambda: _skip_duplicate(paper_slug, edition_date, existing),
+        lambda: _insert_edition_pdf(
+            db,
+            filename=filename,
+            data=data,
+            paper_slug=paper_slug,
+            paper_title=paper_title,
+            edition_date=edition_date,
+            telegram_msg_id=telegram_msg_id,
+            location_raw=location_raw,
+        ),
+    )
 
+
+def _skip_duplicate(paper_slug: str, edition_date: date, existing: dict[str, Any]) -> None:
+    logger.info(
+        "skip duplicate newspaper edition %s %s (status=%s)",
+        paper_slug,
+        edition_date,
+        existing.get("status"),
+    )
+    return None
+
+
+def _insert_edition_pdf(
+    db: Session,
+    *,
+    filename: str,
+    data: bytes,
+    paper_slug: str,
+    paper_title: str,
+    edition_date: date,
+    telegram_msg_id: int | None,
+    location_raw: str,
+) -> uuid.UUID:
     settings = get_settings()
-    if len(data) > settings.max_upload_bytes:
-        raise ValueError("PDF too large")
+    pick(len(data) > settings.max_upload_bytes, lambda: _raise_value("PDF too large"), lambda: None)
 
     storage_key = _save_newspaper_pdf(filename, data)
     page_count = count_pdf_pages(data) or 1
@@ -387,24 +511,33 @@ def purge_edition(db: Session, edition_id: uuid.UUID, *, hard_delete: bool = Fal
     from app.services.storage import delete_object
 
     row = newspaper_repo.get_edition(db, edition_id)
-    if not row:
-        return False
+    return pick(not row, lambda: False, lambda: _purge_edition_row(db, row, hard_delete, delete_object))
+
+
+def _purge_edition_row(db: Session, row: dict[str, Any], hard_delete: bool, delete_object: Any) -> bool:
     doc_id = row.get("document_id")
-    if doc_id:
-        doc = db.get(Document, doc_id)
-        if doc:
-            key = purge_document(db, doc)
-            try:
-                delete_object(key)
-            except Exception:
-                logger.debug("minio delete failed for %s", key, exc_info=True)
-            purge_ingest_tmp(doc_id)
-    if hard_delete:
-        newspaper_repo.delete_edition_row(db, edition_id)
-    else:
-        newspaper_repo.update_edition_status(db, edition_id, status="purged")
+    pick(bool(doc_id), lambda: _purge_doc(db, doc_id, delete_object), lambda: None)
+    pick(
+        hard_delete,
+        lambda: newspaper_repo.delete_edition_row(db, row["id"]),
+        lambda: newspaper_repo.update_edition_status(db, row["id"], status="purged"),
+    )
     db.commit()
     return True
+
+
+def _purge_doc(db: Session, doc_id: Any, delete_object: Any) -> None:
+    doc = db.get(Document, doc_id)
+    pick(not doc, lambda: None, lambda: _purge_existing_doc(db, doc, doc_id, delete_object))
+
+
+def _purge_existing_doc(db: Session, doc: Document, doc_id: Any, delete_object: Any) -> None:
+    key = purge_document(db, doc)
+    try:
+        delete_object(key)
+    except Exception:
+        logger.debug("minio delete failed for %s", key, exc_info=True)
+    purge_ingest_tmp(doc_id)
 
 
 def purge_expired_editions(db: Session) -> int:
@@ -414,45 +547,53 @@ def purge_expired_editions(db: Session) -> int:
     expired = newspaper_repo.list_expired_ready(db, before=cutoff)
     purged = 0
     for row in expired:
-        doc_id = row.get("document_id")
-        if doc_id:
-            doc = db.get(Document, doc_id)
-            if doc:
-                key = purge_document(db, doc)
-                try:
-                    delete_object(key)
-                except Exception:
-                    logger.debug("minio delete failed for %s", key, exc_info=True)
-                purge_ingest_tmp(doc_id)
-        newspaper_repo.update_edition_status(db, row["id"], status="purged")
+        _purge_expired_one(db, row, delete_object)
         purged += 1
-    if purged:
-        db.commit()
+    pick(bool(purged), lambda: db.commit(), lambda: None)
     return purged
+
+
+def _purge_expired_one(db: Session, row: dict[str, Any], delete_object: Any) -> None:
+    doc_id = row.get("document_id")
+    pick(bool(doc_id), lambda: _purge_doc(db, doc_id, delete_object), lambda: None)
+    newspaper_repo.update_edition_status(db, row["id"], status="purged")
 
 
 def list_edition_questions(
     db: Session, edition_id: uuid.UUID, *, limit: int | None = None
 ) -> dict[str, Any]:
     ed = newspaper_repo.get_edition(db, edition_id)
-    if not ed:
-        return {"edition": None, "items": []}
-    if not edition_in_practice_window(ed["edition_date"]):
-        return {"edition": None, "items": []}
+    return pick(
+        not ed or not edition_in_practice_window(ed["edition_date"]),
+        lambda: {"edition": None, "items": []},
+        lambda: _list_edition_questions_ready(db, ed, limit),
+    )
+
+
+def _list_edition_questions_ready(
+    db: Session, ed: dict[str, Any], limit: int | None
+) -> dict[str, Any]:
     doc_id = ed.get("document_id")
-    if not doc_id or ed.get("status") != "ready":
-        return {
+    return pick(
+        not doc_id or ed.get("status") != "ready",
+        lambda: {
             "edition": {
                 "id": str(ed["id"]),
                 "paper_slug": ed["paper_slug"],
                 "paper_title": ed["paper_title"],
                 "edition_date": ed["edition_date"].isoformat(),
                 "status": ed["status"],
-                "document_id": str(doc_id) if doc_id else None,
+                "document_id": pick(bool(doc_id), lambda: str(doc_id), lambda: None),
             },
             "items": [],
-        }
+        },
+        lambda: _list_edition_items(db, ed, doc_id, limit),
+    )
 
+
+def _list_edition_items(
+    db: Session, ed: dict[str, Any], doc_id: Any, limit: int | None
+) -> dict[str, Any]:
     rows = db.execute(
         text(
             """
@@ -468,22 +609,6 @@ def list_edition_questions(
         ),
         {"aid": str(doc_id), "limit": plan_newspaper_edition_questions_limit(limit)},
     ).mappings().all()
-
-    items = []
-    for r in rows:
-        payload = r["payload"] if isinstance(r["payload"], dict) else {}
-        options = payload.get("options") or []
-        if isinstance(options, dict):
-            options = [options[k] for k in sorted(options.keys())]
-        items.append(
-            {
-                "id": str(r["id"]),
-                "question": payload.get("stem") or payload.get("question") or r.get("title") or "",
-                "options": list(options),
-                "is_multi": bool(payload.get("is_multi") or payload.get("multi")),
-            }
-        )
-
     return {
         "edition": {
             "id": str(ed["id"]),
@@ -493,7 +618,23 @@ def list_edition_questions(
             "status": ed["status"],
             "document_id": str(doc_id),
         },
-        "items": items,
+        "items": [_edition_question_item(r) for r in rows],
+    }
+
+
+def _edition_question_item(r: Any) -> dict[str, Any]:
+    payload = choose(isinstance(r["payload"], dict), r["payload"], {})
+    options = payload.get("options") or []
+    options = pick(
+        isinstance(options, dict),
+        lambda: [options[k] for k in sorted(options.keys())],
+        lambda: options,
+    )
+    return {
+        "id": str(r["id"]),
+        "question": payload.get("stem") or payload.get("question") or r.get("title") or "",
+        "options": list(options),
+        "is_multi": bool(payload.get("is_multi") or payload.get("multi")),
     }
 
 
@@ -519,22 +660,56 @@ def aggregate_worthy_newspaper_text(db: Session, document_id: uuid.UUID) -> str:
     page_rows = seo_repo.list_document_page_texts(db, document_id)
     pages: list[NewspaperDigestPage] = []
     for row in page_rows:
-        page = int(row["page_start"])
-        page_text = (row.get("text") or "").strip()
-        if not page_text:
-            continue
-        mcq_count = count_assertions_on_page(
-            db, document_id, page, serve_mode="learn"
-        )
-        worth = evaluate_digest_page_worthy(
-            mcq_count=mcq_count, page_text=page_text, db=db
-        )
-        pages.append(
-            NewspaperDigestPage(
-                page=page, text=page_text, mcq_count=mcq_count, worthy=worth
-            )
-        )
+        _append_digest_page(db, document_id, row, pages, count_assertions_on_page, evaluate_digest_page_worthy, NewspaperDigestPage)
     return plan_newspaper_digest(pages)
+
+
+def _append_digest_page(
+    db: Session,
+    document_id: uuid.UUID,
+    row: Any,
+    pages: list[Any],
+    count_assertions_on_page: Any,
+    evaluate_digest_page_worthy: Any,
+    NewspaperDigestPage: Any,
+) -> None:
+    page = int(row["page_start"])
+    page_text = (row.get("text") or "").strip()
+    pick(
+        not page_text,
+        lambda: None,
+        lambda: _push_digest_page(
+            db,
+            document_id,
+            page,
+            page_text,
+            pages,
+            count_assertions_on_page,
+            evaluate_digest_page_worthy,
+            NewspaperDigestPage,
+        ),
+    )
+
+
+def _push_digest_page(
+    db: Session,
+    document_id: uuid.UUID,
+    page: int,
+    page_text: str,
+    pages: list[Any],
+    count_assertions_on_page: Any,
+    evaluate_digest_page_worthy: Any,
+    NewspaperDigestPage: Any,
+) -> None:
+    mcq_count = count_assertions_on_page(db, document_id, page, serve_mode="learn")
+    pages.append(
+        NewspaperDigestPage(
+            page=page,
+            text=page_text,
+            mcq_count=mcq_count,
+            worthy=evaluate_digest_page_worthy(mcq_count=mcq_count, page_text=page_text, db=db),
+        )
+    )
 
 
 def newspaper_learn_ready(db: Session, doc: Document) -> bool:
@@ -543,12 +718,27 @@ def newspaper_learn_ready(db: Session, doc: Document) -> bool:
     Newspaper editions stay ``indexing`` in the catalog until this passes so learners
     never see the upload-style "Writing your questions" cook screen on first open.
     """
-    if not is_newspaper_document(doc):
-        return False
     from app.services.question_pool import get_page_coverage, page_range_bounds
     from app.services.question_pool_jobs import count_assertions_on_page
     from app.services.session_design import evaluate_newspaper_catalog_ready
 
+    return pick(
+        not is_newspaper_document(doc),
+        lambda: False,
+        lambda: _newspaper_learn_ready_eval(
+            db, doc, get_page_coverage, page_range_bounds, count_assertions_on_page, evaluate_newspaper_catalog_ready
+        ),
+    )
+
+
+def _newspaper_learn_ready_eval(
+    db: Session,
+    doc: Document,
+    get_page_coverage: Any,
+    page_range_bounds: Any,
+    count_assertions_on_page: Any,
+    evaluate_newspaper_catalog_ready: Any,
+) -> bool:
     page_from, _ = page_range_bounds(doc)
     cov = get_page_coverage(doc, page_from)
     budget = int((cov or {}).get("question_budget") or 0)
@@ -557,14 +747,16 @@ def newspaper_learn_ready(db: Session, doc: Document) -> bool:
         has_coverage=bool(cov),
         budget=budget,
         non_content=bool((cov or {}).get("non_content")),
-        page1_mcq_count=count_assertions_on_page(db, doc.id, page_from) if cov else 0,
+        page1_mcq_count=pick(bool(cov), lambda: count_assertions_on_page(db, doc.id, page_from), lambda: 0),
     )
 
 
 def mark_doc_ready_hook(db: Session, doc: Document) -> None:
     """Mark the catalog edition ready once newspaper_learn_ready passes."""
-    if not is_newspaper_document(doc):
-        return
+    pick(not is_newspaper_document(doc), lambda: None, lambda: _mark_edition_ready(db, doc))
+
+
+def _mark_edition_ready(db: Session, doc: Document) -> None:
     db.execute(
         text(
             """
@@ -579,8 +771,10 @@ def mark_doc_ready_hook(db: Session, doc: Document) -> None:
 
 def maybe_mark_newspaper_edition_ready(db: Session, doc: Document) -> None:
     """Promote edition to catalog-ready after background cook lands the first MCQ."""
-    if not newspaper_learn_ready(db, doc):
-        return
+    pick(not newspaper_learn_ready(db, doc), lambda: None, lambda: _promote_edition_ready(db, doc))
+
+
+def _promote_edition_ready(db: Session, doc: Document) -> None:
     mark_doc_ready_hook(db, doc)
     db.flush()
     _maybe_enqueue_edition_digest(db, doc)
@@ -593,9 +787,6 @@ def _maybe_enqueue_edition_digest(db: Session, doc: Document) -> None:
     from app.services.jobs import enqueue_job
 
     settings = seo_repo.get_settings(db)
-    if not settings.get("cook_enabled"):
-        return
-
     row = db.execute(
         text(
             """
@@ -607,18 +798,38 @@ def _maybe_enqueue_edition_digest(db: Session, doc: Document) -> None:
         ),
         {"d": doc.id},
     ).mappings().first()
-    if not row:
-        return
-    if row.get("blog_status") == "published" and row.get("blog_post_id"):
-        return
+    source_key = pick(
+        bool(row),
+        lambda: f"{row['paper_slug']}:{row['edition_date'].isoformat()}",
+        lambda: "",
+    )
+    action = evaluate_newspaper_digest_enqueue(
+        cook_enabled=bool(settings.get("cook_enabled")),
+        has_row=bool(row),
+        already_published=bool(row)
+        and row.get("blog_status") == "published"
+        and bool(row.get("blog_post_id")),
+        has_post_id=bool((row or {}).get("blog_post_id")),
+        may_enqueue=pick(
+            bool(row),
+            lambda: seo_repo.edition_digest_may_enqueue(db, "newspaper_edition", source_key),
+            lambda: False,
+        ),
+    )
+    apply(
+        action,
+        {
+            "skip_disabled": lambda: None,
+            "skip_missing": lambda: None,
+            "skip_published": lambda: None,
+            "skip_has_post": lambda: None,
+            "skip_attempted": lambda: None,
+            "enqueue": lambda: _enqueue_digest(db, row, enqueue_job),
+        },
+    )
 
-    if row.get("blog_post_id"):
-        return
 
-    source_key = f"{row['paper_slug']}:{row['edition_date'].isoformat()}"
-    if not seo_repo.edition_digest_may_enqueue(db, "newspaper_edition", source_key):
-        return
-
+def _enqueue_digest(db: Session, row: Any, enqueue_job: Any) -> None:
     from app.repositories import newspaper as newspaper_repo
 
     newspaper_repo.reset_edition_blog_for_retry(db, row["id"])

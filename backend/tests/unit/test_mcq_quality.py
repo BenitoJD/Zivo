@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from app.engine_runtime import pick
 from app.services.mcq_quality import (
     _critique_passes,
     _parse_mcq_blocks,
@@ -560,23 +561,26 @@ def test_pipeline_draft_split_overlaps_rest_draft_with_first_gate() -> None:
     def _fake_drafts(session, **kwargs):
         ts = kwargs["targets"]
         draft_calls.append(len(ts))
-        if len(ts) == 1:
-            return [drafts_by_key[ts[0]["key"]]]
-        # Rest draft (worker): must observe Q1 gate already running.
-        assert gate_entered.wait(timeout=2.0)
-        rest_draft_saw_gate.set()
-        time.sleep(0.05)
-        return [drafts_by_key[t["key"]] for t in ts]
+
+        def _rest():
+            assert gate_entered.wait(timeout=2.0)
+            rest_draft_saw_gate.set()
+            time.sleep(0.05)
+            return [drafts_by_key[t["key"]] for t in ts]
+
+        return pick(len(ts) == 1, lambda: [drafts_by_key[ts[0]["key"]]], _rest)
 
     def _fake_gate(session, **kwargs):
         key = (kwargs.get("target") or {}).get("key")
-        if key == "k0":
+        def _hold_k0() -> None:
             gate_entered.set()
             # Hold the gate open so the rest-draft worker must overlap.
             deadline = time.time() + 1.0
             while time.time() < deadline and not rest_draft_saw_gate.is_set():
                 time.sleep(0.01)
             assert rest_draft_saw_gate.is_set(), "rest draft must overlap Q1 gate"
+
+        pick(key == "k0", _hold_k0, lambda: None)
         return ("accept", kwargs["draft"], None, 0.0, [], None, False)
 
     settings = MagicMock()

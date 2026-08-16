@@ -1,7 +1,16 @@
+from __future__ import annotations
+
 from functools import lru_cache
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
+from app.services.presence import evaluate_presence
+
+
+def _raise(exc: BaseException) -> None:
+    raise exc
 
 _DEV_SECRET_KEYS = {"dev-secret-change-me"}
 _DEV_CSRF_SECRET = "dev-csrf-change-me"
@@ -176,13 +185,11 @@ class Settings(BaseSettings):
     @field_validator("minio_public_secure", mode="before")
     @classmethod
     def _empty_public_secure_is_none(cls, value: object) -> object:
-        if value == "" or value is None:
-            return None
-        return value
+        return choose(value == "" or value is None, None, value)
 
     @property
     def cors_origin_list(self) -> list[str]:
-        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        return list(filter(None, map(str.strip, self.cors_origins.split(","))))
 
     @property
     def is_production(self) -> bool:
@@ -192,19 +199,31 @@ class Settings(BaseSettings):
     def resolved_cookie_domain(self) -> str | None:
         """Cookie Domain so apex + www share session (host-only cookies do not)."""
         raw = self.cookie_domain.strip().lstrip(".")
-        if raw:
-            return raw
-        if not self.is_production:
-            return None
-        from urllib.parse import urlparse
 
-        host = (urlparse(self.frontend_url).hostname or "").strip().lower()
-        if not host or host in {"localhost", "127.0.0.1"} or host.endswith(".local"):
-            return None
-        parts = host.split(".")
-        if len(parts) < 2:
-            return None
-        return ".".join(parts[-2:])
+        def _from_frontend() -> str | None:
+            from urllib.parse import urlparse
+
+            host = (urlparse(self.frontend_url).hostname or "").strip().lower()
+            parts = host.split(".")
+            blocked = (
+                not host
+                or host in {"localhost", "127.0.0.1"}
+                or host.endswith(".local")
+                or len(parts) < 2
+            )
+            return pick(blocked, lambda: None, lambda: ".".join(parts[-2:]))
+
+        def _derived() -> str | None:
+            return pick(not self.is_production, lambda: None, _from_frontend)
+
+        return apply(
+            evaluate_presence(raw).action,
+            {
+                "ok": lambda: raw,
+                "empty": _derived,
+                "missing": _derived,
+            },
+        )
 
     @property
     def minio_presign_endpoint(self) -> str:
@@ -212,21 +231,41 @@ class Settings(BaseSettings):
 
     @property
     def minio_presign_secure(self) -> bool:
-        if self.minio_public_secure is not None:
-            return self.minio_public_secure
-        return self.minio_secure
+        return choose(self.minio_public_secure is not None, self.minio_public_secure, self.minio_secure)
 
     @model_validator(mode="after")
     def _reject_dev_secrets_outside_development(self) -> "Settings":
-        if self.environment == "development":
+        def _check() -> Settings:
+            apply(
+                first_match(
+                    (
+                        Rule(when=(Pred("bad_secret", "truthy"),), action="secret"),
+                        Rule(when=(Pred("bad_csrf", "truthy"),), action="csrf"),
+                        Rule(when=(Pred("csrf_off", "truthy"),), action="csrf_disabled"),
+                        Rule(when=(), action="ok"),
+                    ),
+                    {
+                        "bad_secret": self.secret_key in _DEV_SECRET_KEYS,
+                        "bad_csrf": self.csrf_secret == _DEV_CSRF_SECRET,
+                        "csrf_off": self.csrf_disabled,
+                    },
+                ).action,
+                {
+                    "secret": lambda: _raise(
+                        ValueError("SECRET_KEY must be set when ENVIRONMENT != 'development'")
+                    ),
+                    "csrf": lambda: _raise(
+                        ValueError("CSRF_SECRET must be set when ENVIRONMENT != 'development'")
+                    ),
+                    "csrf_disabled": lambda: _raise(
+                        ValueError("CSRF_DISABLED cannot be true when ENVIRONMENT != 'development'")
+                    ),
+                    "ok": lambda: None,
+                },
+            )
             return self
-        if self.secret_key in _DEV_SECRET_KEYS:
-            raise ValueError("SECRET_KEY must be set when ENVIRONMENT != 'development'")
-        if self.csrf_secret == _DEV_CSRF_SECRET:
-            raise ValueError("CSRF_SECRET must be set when ENVIRONMENT != 'development'")
-        if self.csrf_disabled:
-            raise ValueError("CSRF_DISABLED cannot be true when ENVIRONMENT != 'development'")
-        return self
+
+        return pick(self.environment == "development", lambda: self, _check)
 
 
 @lru_cache

@@ -16,6 +16,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import Pred, Rule, apply, first_match, pick
 from app.services.artifact_store import ArtifactStore, coerce_jsonb, run_artifact_generation
 from app.services.source_fingerprint import is_artifact_stale, mark_artifact_fresh
 
@@ -31,13 +32,21 @@ _EXPLANATION_STORE = ArtifactStore(
     cast_jsonb=False,  # explanation is TEXT, not JSONB
 )
 
+_ENSURE_RULES = (
+    Rule(when=(Pred("ready_fresh", "truthy"),), action="keep"),
+    Rule(when=(Pred("generating", "truthy"),), action="keep"),
+    Rule(when=(), action="enqueue"),
+)
+
 
 def load_outline(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
     """Return {status, topics, error}. status: missing|generating|ready|failed."""
     row = _OUTLINE_STORE.load_row(db, document_id)
-    if not row:
-        return {"status": "missing", "topics": [], "error": None}
-    return {"status": row["status"], "topics": coerce_jsonb(row["outline"]) or [], "error": row["error"]}
+    return pick(
+        not row,
+        lambda: {"status": "missing", "topics": [], "error": None},
+        lambda: {"status": row["status"], "topics": coerce_jsonb(row["outline"]) or [], "error": row["error"]},
+    )
 
 
 def ensure_topics(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
@@ -47,28 +56,32 @@ def ensure_topics(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
     the request returns immediately with status 'generating' the first time.
     """
     state = load_outline(db, document_id)
-    if state["status"] == "ready" and not is_artifact_stale(db, document_id, "topics"):
-        return state
-    if state["status"] == "generating":
-        return state
-    # missing, failed, or stale → kick a background generation
-    from app.services.jobs import enqueue_topics
+    hit = first_match(
+        _ENSURE_RULES,
+        {
+            "ready_fresh": state["status"] == "ready" and not is_artifact_stale(db, document_id, "topics"),
+            "generating": state["status"] == "generating",
+        },
+    )
 
-    _OUTLINE_STORE.set_status(db, document_id, "generating")
-    db.commit()
-    enqueue_topics(db, document_id)
-    return {"status": "generating", "topics": [], "error": None}
+    def _enqueue() -> dict[str, Any]:
+        from app.services.jobs import enqueue_topics
+
+        _OUTLINE_STORE.set_status(db, document_id, "generating")
+        db.commit()
+        enqueue_topics(db, document_id)
+        return {"status": "generating", "topics": [], "error": None}
+
+    return apply(hit.action, {"keep": lambda: state, "enqueue": _enqueue})
 
 
 def find_topic(topics: list[dict[str, str]], topic_key: str) -> dict[str, str] | None:
-    return next((t for t in topics if t.get("key") == topic_key), None)
+    return next(filter(lambda t: t.get("key") == topic_key, topics), None)
 
 
 def save_outline(db: Session, document_id: uuid.UUID, topics: list[dict[str, str]]) -> None:
     """Persist a finished topic outline (status='ready'). Used by the worker + tests."""
     _OUTLINE_STORE.save(db, document_id, topics)
-    # Ready outline without a fingerprint looks stale to ensure_topics and would
-    # immediately re-enqueue generation — mark fresh whenever we persist ready.
     mark_artifact_fresh(db, document_id, "topics")
 
 
@@ -77,9 +90,11 @@ def load_explanation_row(
 ) -> dict[str, Any] | None:
     """Return {status, explanation, error} for one topic, or None if never requested."""
     row = _EXPLANATION_STORE.load_row(db, document_id, topic_key=topic_key)
-    if not row:
-        return None
-    return {"status": row["status"], "explanation": row["explanation"], "error": row["error"]}
+    return pick(
+        not row,
+        lambda: None,
+        lambda: {"status": row["status"], "explanation": row["explanation"], "error": row["error"]},
+    )
 
 
 def ensure_explanation(
@@ -93,21 +108,35 @@ def ensure_explanation(
     """
     fp_key = f"explain:{topic_key}"
     row = load_explanation_row(db, document_id, topic_key)
-    if (
-        row
-        and row["status"] == "ready"
-        and row["explanation"]
-        and not is_artifact_stale(db, document_id, fp_key)
-    ):
-        return row
-    if row and row["status"] == "generating":
-        return {"status": "generating", "explanation": None, "error": None}
-    from app.services.jobs import enqueue_explanation
+    hit = first_match(
+        _ENSURE_RULES,
+        {
+            "ready_fresh": bool(
+                row
+                and row["status"] == "ready"
+                and row["explanation"]
+                and not is_artifact_stale(db, document_id, fp_key)
+            ),
+            "generating": bool(row and row["status"] == "generating"),
+        },
+    )
 
-    _EXPLANATION_STORE.set_status(db, document_id, "generating", topic_key=topic_key)
-    db.commit()
-    enqueue_explanation(db, document_id, topic_key, title=title, summary=summary)
-    return {"status": "generating", "explanation": None, "error": None}
+    def _keep() -> dict[str, Any]:
+        return pick(
+            bool(row and row["status"] == "generating"),
+            lambda: {"status": "generating", "explanation": None, "error": None},
+            lambda: row,
+        )
+
+    def _enqueue() -> dict[str, Any]:
+        from app.services.jobs import enqueue_explanation
+
+        _EXPLANATION_STORE.set_status(db, document_id, "generating", topic_key=topic_key)
+        db.commit()
+        enqueue_explanation(db, document_id, topic_key, title=title, summary=summary)
+        return {"status": "generating", "explanation": None, "error": None}
+
+    return apply(hit.action, {"keep": _keep, "enqueue": _enqueue})
 
 
 def run_explanation(
@@ -125,9 +154,11 @@ def run_explanation(
         empty_error="empty_explanation",
         key_and_extra={"topic_key": topic_key},
     )
-    if isinstance(result, str) and result.strip():
-        mark_artifact_fresh(db, document_id, f"explain:{topic_key}")
-        db.commit()
+    pick(
+        isinstance(result, str) and bool(result.strip()),
+        lambda: (mark_artifact_fresh(db, document_id, f"explain:{topic_key}"), db.commit()),
+        lambda: None,
+    )
     return result
 
 
@@ -143,8 +174,9 @@ def run_topics_generation(db: Session, document_id: uuid.UUID) -> list[dict[str,
         is_complete=bool,
         empty_error="no_topics_found",
     )
-    if result:
-        mark_artifact_fresh(db, document_id, "topics")
-        db.commit()
+    pick(
+        bool(result),
+        lambda: (mark_artifact_fresh(db, document_id, "topics"), db.commit()),
+        lambda: None,
+    )
     return result
-

@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 import sys
 
+from app.engine_runtime import pick
 import pytest
 from docx import Document as DocxDocument
 from docx.enum.text import WD_BREAK
@@ -16,8 +17,7 @@ from sqlalchemy import select
 
 _REPO = Path(__file__).resolve().parents[3]
 _LIB = str(_REPO / "library")
-if _LIB not in sys.path:
-    sys.path.insert(0, _LIB)
+pick(_LIB not in sys.path, lambda: sys.path.insert(0, _LIB), lambda: None)
 
 from app.db import SessionLocal
 from app.models import Document
@@ -91,10 +91,10 @@ def test_pages_parse_fallback_when_no_chunks(client: TestClient) -> None:
         assert "Alpha page one" in joined
         assert "Beta page two" in joined
     finally:
-        if doc_id is not None:
+        def _wipe() -> None:
             db = SessionLocal()
             row = db.get(Document, doc_id)
-            if row is not None:
-                db.delete(row)
-                db.commit()
+            pick(row is not None, lambda: (db.delete(row), db.commit()), lambda: None)
             db.close()
+
+        pick(doc_id is not None, _wipe, lambda: None)

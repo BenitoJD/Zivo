@@ -15,6 +15,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import OperationalError
 
+from app.engine_runtime import pick
 from app.services import rate_limit
 
 
@@ -40,10 +41,11 @@ def _session_with_counter(*, start: int = 0) -> MagicMock:
 
     def execute(stmt, params=None):
         sql = str(stmt)
-        if "RETURNING" in sql:  # the rate-limit INSERT
-            state["count"] += 1
-            return _Result(state["count"])
-        return MagicMock()  # sweep DELETE or anything else
+        return pick(
+            "RETURNING" in sql,
+            lambda: (state.__setitem__("count", state["count"] + 1) or _Result(state["count"])),
+            lambda: MagicMock(),
+        )
 
     sess = MagicMock()
     sess.execute.side_effect = execute
@@ -91,11 +93,14 @@ def test_counter_keys_by_client_ip() -> None:
 
     def execute(stmt, params=None):
         sql = str(stmt)
-        if "RETURNING" not in sql:  # sweep DELETE, ignore
-            return MagicMock()
-        key = params["key"]
-        counts[key] = counts.get(key, 0) + 1
-        return _Result(counts[key])
+        return pick(
+            "RETURNING" not in sql,
+            lambda: MagicMock(),
+            lambda: (
+                counts.__setitem__(params["key"], counts.get(params["key"], 0) + 1)
+                or _Result(counts[params["key"]])
+            ),
+        )
 
     sess = MagicMock()
     sess.execute.side_effect = execute

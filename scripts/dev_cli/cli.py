@@ -24,6 +24,10 @@ from .env import (
     STORAGE_DIR,
     STUDY_DIR,
     WORKERS_DIR,
+    _raise,
+    apply,
+    choose,
+    pick,
     require_defaults,
 )
 from .ports import (
@@ -49,44 +53,56 @@ def run(cmd: list[str], *, cwd: Path | None = None, check: bool = True) -> subpr
 
 
 def find_python() -> str:
-    for name in ("python3.12", "python3"):
+    def _try(name: str) -> str | None:
         path = shutil.which(name)
-        if path:
+
+        def _check() -> str | None:
             proc = subprocess.run(
                 [path, "-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            if proc.returncode == 0:
-                return path
-    raise RuntimeError("python >= 3.12 is required.")
+            return pick(proc.returncode == 0, lambda: path, lambda: None)
+
+        return pick(bool(path), _check, lambda: None)
+
+    found = next(filter(None, map(_try, ("python3.12", "python3"))), None)
+    return pick(
+        found is None,
+        lambda: _raise(RuntimeError("python >= 3.12 is required.")),
+        lambda: found,
+    )
 
 
 def setup(_: argparse.Namespace) -> int:
     require_defaults()
-    if not VENV.exists():
-        VENV.parent.mkdir(parents=True, exist_ok=True)
-        run([find_python(), "-m", "venv", str(VENV)])
+    pick(
+        not VENV.exists(),
+        lambda: (VENV.parent.mkdir(parents=True, exist_ok=True), run([find_python(), "-m", "venv", str(VENV)]))[1],
+        lambda: None,
+    )
     # Dev venv gets pytest/ruff too (requirements-dev pulls in requirements.txt).
     run([str(VENV / "bin" / "pip"), "install", "-q", "-r", str(BACKEND_DIR / "requirements-dev.txt")])
     run([str(VENV / "bin" / "pip"), "install", "-q", "-r", str(AUTH_DIR / "requirements-dev.txt")])
     run([str(VENV / "bin" / "pip"), "install", "-q", "-r", str(STORAGE_DIR / "requirements-dev.txt")])
     local_env = BACKEND_DIR / ".env.local"
-    if not local_env.exists():
-        print(f"Tip: copy overrides to {local_env.relative_to(ROOT)}")
+    pick(
+        not local_env.exists(),
+        lambda: print(f"Tip: copy overrides to {local_env.relative_to(ROOT)}"),
+        lambda: None,
+    )
     print("Setup complete.")
     return 0
 
 
 def doctor(_: argparse.Namespace) -> int:
-    status = 0
+    status = [0]
     print("zivo dev doctor")
-    print(f"{'✓' if BACKEND_DEFAULTS.exists() else '✗'} {BACKEND_DEFAULTS.relative_to(ROOT)}")
-    print(f"{'✓' if (AUTH_DIR / '.env.example').exists() else '✗'} {(AUTH_DIR / '.env.example').relative_to(ROOT)}")
-    print(f"{'✓' if (STORAGE_DIR / '.env.example').exists() else '✗'} {(STORAGE_DIR / '.env.example').relative_to(ROOT)}")
-    print(f"{'✓' if (VENV / 'bin' / 'python').exists() else '✗'} venv: {VENV}")
-    if deps_status() != 0:
-        status = 1
+    print(f"{choose(BACKEND_DEFAULTS.exists(), '✓', '✗')} {BACKEND_DEFAULTS.relative_to(ROOT)}")
+    print(f"{choose((AUTH_DIR / '.env.example').exists(), '✓', '✗')} {(AUTH_DIR / '.env.example').relative_to(ROOT)}")
+    print(f"{choose((STORAGE_DIR / '.env.example').exists(), '✓', '✗')} {(STORAGE_DIR / '.env.example').relative_to(ROOT)}")
+    print(f"{choose((VENV / 'bin' / 'python').exists(), '✓', '✗')} venv: {VENV}")
+    pick(deps_status() != 0, lambda: status.__setitem__(0, 1), lambda: None)
     judge0_url = backend_env().get("JUDGE0_URL", "http://localhost:2358")
     try:
         import urllib.error
@@ -97,17 +113,18 @@ def doctor(_: argparse.Namespace) -> int:
             ok = 200 <= resp.status < 300
     except (urllib.error.URLError, TimeoutError, OSError):
         ok = False
-    label = "Judge0 sandbox" if ok else "Judge0 sandbox (unreachable — set JUDGE0_URL in backend/.env.local)"
-    print(f"{'✓' if ok else '✗'} {label}: {judge0_url}")
-    if not ok:
-        status = 1
-    return status
+    label = choose(
+        ok,
+        "Judge0 sandbox",
+        "Judge0 sandbox (unreachable — set JUDGE0_URL in backend/.env.local)",
+    )
+    print(f"{choose(ok, '✓', '✗')} {label}: {judge0_url}")
+    pick(not ok, lambda: status.__setitem__(0, 1), lambda: None)
+    return status[0]
 
 
 def load_state() -> dict:
-    if STATE_FILE.exists():
-        return json.loads(STATE_FILE.read_text())
-    return {}
+    return pick(STATE_FILE.exists(), lambda: json.loads(STATE_FILE.read_text()), lambda: {})
 
 
 def save_state(state: dict) -> None:
@@ -116,38 +133,63 @@ def save_state(state: dict) -> None:
 
 
 def pid_running(pid: int | None) -> bool:
-    if not pid:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
+    def _kill() -> bool:
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+
+    return pick(not pid, lambda: False, _kill)
 
 
 def _require_npm() -> str:
     npm = shutil.which("npm")
-    if not npm:
-        raise RuntimeError("npm is required for the frontend. Install Node.js 22+.")
-    return npm
+    return pick(
+        not npm,
+        lambda: _raise(RuntimeError("npm is required for the frontend. Install Node.js 22+.")),
+        lambda: npm,
+    )
 
 
 def _ensure_frontend_deps(npm: str) -> None:
-    if not FRONTEND_DIR.is_dir():
-        raise RuntimeError(f"Missing frontend directory: {FRONTEND_DIR.relative_to(ROOT)}")
-    if not (FRONTEND_DIR / "node_modules").exists():
-        print("Installing frontend dependencies…")
-        run([npm, "install"], cwd=FRONTEND_DIR)
+    pick(
+        not FRONTEND_DIR.is_dir(),
+        lambda: _raise(RuntimeError(f"Missing frontend directory: {FRONTEND_DIR.relative_to(ROOT)}")),
+        lambda: None,
+    )
+    pick(
+        not (FRONTEND_DIR / "node_modules").exists(),
+        lambda: (print("Installing frontend dependencies…"), run([npm, "install"], cwd=FRONTEND_DIR))[1],
+        lambda: None,
+    )
 
 
 def start(args: argparse.Namespace) -> int:
     require_defaults()
-    if not (VENV / "bin" / "python").exists():
-        raise RuntimeError("Run ./scripts/dev.sh setup first.")
+    pick(
+        not (VENV / "bin" / "python").exists(),
+        lambda: _raise(RuntimeError("Run ./scripts/dev.sh setup first.")),
+        lambda: None,
+    )
 
     state = load_state()
-    if pid_running(state.get("api_pid")) or pid_running(state.get("auth_pid")) or pid_running(state.get("storage_pid")) or pid_running(state.get("practice_pid")) or pid_running(state.get("content_pid")) or pid_running(state.get("study_pid")) or pid_running(state.get("library_pid")) or pid_running(state.get("admin_pid")) or pid_running(state.get("frontend_pid")):
-        raise RuntimeError("Dev stack already running. Use ./scripts/dev.sh stop first.")
+    already = (
+        pid_running(state.get("api_pid"))
+        or pid_running(state.get("auth_pid"))
+        or pid_running(state.get("storage_pid"))
+        or pid_running(state.get("practice_pid"))
+        or pid_running(state.get("content_pid"))
+        or pid_running(state.get("study_pid"))
+        or pid_running(state.get("library_pid"))
+        or pid_running(state.get("admin_pid"))
+        or pid_running(state.get("frontend_pid"))
+    )
+    pick(
+        already,
+        lambda: _raise(RuntimeError("Dev stack already running. Use ./scripts/dev.sh stop first.")),
+        lambda: None,
+    )
 
     auth_port = allocate_auth_port()
     storage_port = allocate_storage_port()
@@ -387,15 +429,13 @@ def stop(_: argparse.Namespace) -> int:
     state = load_state()
     for key in ("frontend_pid", "api_pid", "auth_pid", "storage_pid", "practice_pid", "content_pid", "study_pid", "library_pid", "admin_pid", "io_pid", "cpu_pid"):
         pid = state.get(key)
-        if pid_running(pid):
-            os.kill(pid, signal.SIGTERM)
-            print(f"Stopped {key} (pid {pid})")
+        pick(pid_running(pid), lambda: (os.kill(pid, signal.SIGTERM), print(f"Stopped {key} (pid {pid})"))[1], lambda: None)
     save_state({})
     return 0
 
 
 def db_cmd(args: argparse.Namespace) -> int:
-    if args.db_command == "migrate":
+    def _migrate() -> None:
         start_deps()
         from .db import (
             run_alembic,
@@ -416,15 +456,18 @@ def db_cmd(args: argparse.Namespace) -> int:
         run_library_alembic("upgrade", "head")
         run_admin_alembic("upgrade", "head")
         run_alembic("upgrade", "head")
-    elif args.db_command == "schema":
+
+    def _schema() -> None:
         start_deps()
         apply_schema(backend_env())
-    elif args.db_command == "qb-schema":
+
+    def _qb_schema() -> None:
         start_deps()
         from .db import apply_qb_schema
 
         apply_qb_schema(backend_env())
-    elif args.db_command == "seed":
+
+    def _seed() -> None:
         start_deps()
         subprocess.run(
             [python_bin(), "scripts/seed_question_vocab.py"],
@@ -444,8 +487,16 @@ def db_cmd(args: argparse.Namespace) -> int:
             env=backend_env(),
             check=True,
         )
-    else:
-        raise RuntimeError(f"unknown db command: {args.db_command}")
+
+    apply(
+        args.db_command,
+        {
+            "migrate": _migrate,
+            "schema": _schema,
+            "qb-schema": _qb_schema,
+            "seed": _seed,
+        },
+    )
     return 0
 
 
@@ -473,5 +524,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
 
-if __name__ == "__main__":
+def _cli() -> None:
     raise SystemExit(main())
+
+
+pick(__name__ == "__main__", _cli, lambda: None)

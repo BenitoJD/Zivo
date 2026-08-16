@@ -11,24 +11,28 @@ import json
 import re
 from typing import Any
 
+from app.engine_runtime import pick
+
 
 def extract_json_obj(raw: str) -> dict[str, Any]:
     """Tolerant single-object JSON parse (handles code fences / surrounding prose)."""
-    if not raw or not raw.strip():
-        return {}
-    s = raw.strip()
-    fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", s, re.DOTALL)
-    if fence:
-        s = fence.group(1)
-    else:
-        a, b = s.find("{"), s.rfind("}")
-        if a >= 0 and b > a:
-            s = s[a : b + 1]
-    try:
-        obj = json.loads(s)
-        return obj if isinstance(obj, dict) else {}
-    except json.JSONDecodeError:
-        return {}
+
+    def _parse() -> dict[str, Any]:
+        s = raw.strip()
+        fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", s, re.DOTALL)
+
+        def _from_braces() -> str:
+            a, b = s.find("{"), s.rfind("}")
+            return pick(a >= 0 and b > a, lambda: s[a : b + 1], lambda: s)
+
+        s = pick(bool(fence), lambda: fence.group(1), _from_braces)
+        try:
+            obj = json.loads(s)
+            return pick(isinstance(obj, dict), lambda: obj, lambda: {})
+        except json.JSONDecodeError:
+            return {}
+
+    return pick(not raw or not raw.strip(), lambda: {}, _parse)
 
 
 def extract_json_array(raw: str) -> list[dict[str, Any]]:
@@ -39,29 +43,31 @@ def extract_json_array(raw: str) -> list[dict[str, Any]]:
     still yields the objects that did finish. Callers then coerce each dict to
     their domain shape (topic / card / question / …).
     """
-    if not raw or not raw.strip():
-        return []
-    text = raw.strip()
-    fence = re.search(r"```(?:json)?\s*(\[.*\])\s*```", text, re.DOTALL)
-    candidate = fence.group(1) if fence else text
-    if not fence:
-        start, end = text.find("["), text.rfind("]")
-        if start >= 0 and end > start:
-            candidate = text[start : end + 1]
-    try:
-        data = json.loads(candidate)
-    except json.JSONDecodeError:
-        # Salvage every complete {...} object from the full text (not the
-        # bracket-sliced candidate, whose end can land on an inner `]`).
-        data = []
-        for frag in re.findall(r"\{[^{}]*\}", text, re.DOTALL):
-            try:
-                obj = json.loads(frag)
-                if isinstance(obj, dict):
-                    data.append(obj)
-            except json.JSONDecodeError:
-                continue
-    if not isinstance(data, list):
-        return []
-    return [d for d in data if isinstance(d, dict)]
 
+    def _parse() -> list[dict[str, Any]]:
+        text = raw.strip()
+        fence = re.search(r"```(?:json)?\s*(\[.*\])\s*```", text, re.DOTALL)
+        candidate = pick(bool(fence), lambda: fence.group(1), lambda: text)
+
+        def _from_brackets() -> str:
+            start, end = text.find("["), text.rfind("]")
+            return pick(start >= 0 and end > start, lambda: text[start : end + 1], lambda: candidate)
+
+        candidate = pick(not fence, _from_brackets, lambda: candidate)
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            data = []
+            for frag in re.findall(r"\{[^{}]*\}", text, re.DOTALL):
+                try:
+                    obj = json.loads(frag)
+                    pick(isinstance(obj, dict), lambda: data.append(obj), lambda: None)
+                except json.JSONDecodeError:
+                    continue
+        return pick(
+            not isinstance(data, list),
+            lambda: [],
+            lambda: list(filter(lambda d: isinstance(d, dict), data)),
+        )
+
+    return pick(not raw or not raw.strip(), lambda: [], _parse)

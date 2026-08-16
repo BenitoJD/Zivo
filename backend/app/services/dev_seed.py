@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
 
 from app.config import get_settings
+from app.engine_runtime import pick
 from app.models import Account as User
 from app.models.llm import LlmModel, LlmProvider
 from app.services.auth import hash_password
@@ -43,14 +44,20 @@ def default_seed_users() -> tuple[SeedUserSpec, ...]:
 
 def assert_local_dev_seed_allowed() -> None:
     settings = get_settings()
-    if settings.environment != "development":
+
+    def _bad_env() -> None:
         raise RuntimeError(
             f"Refusing to seed users when ENVIRONMENT={settings.environment!r} (development only)"
         )
+
+    pick(settings.environment != "development", _bad_env, lambda: None)
     parsed = urlparse(settings.database_url.replace("postgresql+psycopg", "postgresql"))
     host = parsed.hostname or "localhost"
-    if host not in {"localhost", "127.0.0.1", "::1"}:
+
+    def _bad_host() -> None:
         raise RuntimeError(f"Refusing to seed users against non-local database host: {host}")
+
+    pick(host not in {"localhost", "127.0.0.1", "::1"}, _bad_host, lambda: None)
 
 
 def upsert_seed_user(db: Session, spec: SeedUserSpec) -> tuple[User, bool]:
@@ -60,7 +67,8 @@ def upsert_seed_user(db: Session, spec: SeedUserSpec) -> tuple[User, bool]:
         text("SELECT id FROM auth.account WHERE username = :username"),
         {"username": spec.username},
     ).first()
-    if existing:
+
+    def _update() -> tuple[User, bool]:
         account_id = existing[0]
         db.execute(
             text(
@@ -97,38 +105,41 @@ def upsert_seed_user(db: Session, spec: SeedUserSpec) -> tuple[User, bool]:
         assert user is not None
         return user, False
 
-    account_id = uuid.uuid4()
-    db.execute(
-        text(
-            """
-            INSERT INTO auth.account (id, username, password_hash, is_admin)
-            VALUES (:id, :username, :password_hash, :is_admin)
-            """
-        ),
-        {
-            "id": account_id,
-            "username": spec.username,
-            "password_hash": password_hash,
-            "is_admin": spec.is_admin,
-        },
-    )
-    db.execute(
-        text(
-            """
-            INSERT INTO qb.account (id, username, is_admin)
-            VALUES (:id, :username, :is_admin)
-            """
-        ),
-        {
-            "id": account_id,
-            "username": spec.username,
-            "is_admin": spec.is_admin,
-        },
-    )
-    db.flush()
-    user = db.get(User, account_id)
-    assert user is not None
-    return user, True
+    def _insert() -> tuple[User, bool]:
+        account_id = uuid.uuid4()
+        db.execute(
+            text(
+                """
+                INSERT INTO auth.account (id, username, password_hash, is_admin)
+                VALUES (:id, :username, :password_hash, :is_admin)
+                """
+            ),
+            {
+                "id": account_id,
+                "username": spec.username,
+                "password_hash": password_hash,
+                "is_admin": spec.is_admin,
+            },
+        )
+        db.execute(
+            text(
+                """
+                INSERT INTO qb.account (id, username, is_admin)
+                VALUES (:id, :username, :is_admin)
+                """
+            ),
+            {
+                "id": account_id,
+                "username": spec.username,
+                "is_admin": spec.is_admin,
+            },
+        )
+        db.flush()
+        user = db.get(User, account_id)
+        assert user is not None
+        return user, True
+
+    return pick(bool(existing), _update, _insert)
 
 
 def seed_local_users(
@@ -137,7 +148,7 @@ def seed_local_users(
 ) -> list[tuple[SeedUserSpec, bool]]:
     """Seed local dev users. Returns ``(spec, created)`` for each account."""
     assert_local_dev_seed_allowed()
-    specs = users if users is not None else default_seed_users()
+    specs = pick(users is not None, lambda: users, default_seed_users)
     results: list[tuple[SeedUserSpec, bool]] = []
     for spec in specs:
         _, created = upsert_seed_user(db, spec)
@@ -157,43 +168,54 @@ def seed_local_database(
     assert_local_dev_seed_allowed()
     report = SeedReport()
 
-    if users:
-        report.users = seed_local_users(db)
+    pick(users, lambda: setattr(report, "users", seed_local_users(db)), lambda: None)
 
-    if llm:
+    def _seed_llm() -> None:
         seed_llm_registry_from_env(db, force_keys=True)
         report.llm_provider_count = db.query(LlmProvider).count()
         report.llm_model_count = db.query(LlmModel).count()
         report.providers_with_keys = [
-            p.slug for p in db.query(LlmProvider).all() if p.api_key or p.slug == "local"
+            p.slug
+            for p in filter(
+                lambda p: p.api_key or p.slug == "local",
+                db.query(LlmProvider).all(),
+            )
         ]
         try:
             default = resolve_chat_model(db)
             report.default_chat_model = default.record.litellm_model
-            if default.provider.slug != "local" and not default.provider.api_key:
-                report.warnings.append(
+            pick(
+                default.provider.slug != "local" and not default.provider.api_key,
+                lambda: report.warnings.append(
                     f"Default chat model {default.record.litellm_model!r} has no API key — "
                     f"set the provider key in backend/.env.local"
-                )
+                ),
+                lambda: None,
+            )
         except Exception as exc:
             report.warnings.append(f"Chat model not ready: {exc}")
 
         settings = get_settings()
-        if not any(
-            [
-                settings.openai_api_key,
-                settings.zai_api_key,
-                settings.openrouter_api_key,
-                settings.gemini_api_key,
-                settings.anthropic_api_key,
-            ]
-        ):
-            report.warnings.append(
+        pick(
+            not any(
+                [
+                    settings.openai_api_key,
+                    settings.zai_api_key,
+                    settings.openrouter_api_key,
+                    settings.gemini_api_key,
+                    settings.anthropic_api_key,
+                ]
+            ),
+            lambda: report.warnings.append(
                 "No LLM API keys in env — add OPENAI_API_KEY, ZAI_API_KEY, OPENROUTER_API_KEY, "
                 "GEMINI_API_KEY, or ANTHROPIC_API_KEY to backend/.env.local"
-            )
+            ),
+            lambda: None,
+        )
 
-    if demo_embeddings:
+    pick(llm, _seed_llm, lambda: None)
+
+    def _embed_demo() -> None:
         try:
             from app.services.demo_seed import embed_demo_chunks_if_needed, ensure_demo_document
 
@@ -201,7 +223,8 @@ def seed_local_database(
             embed_demo_chunks_if_needed()
         except Exception as exc:
             report.warnings.append(f"Demo embeddings skipped: {exc}")
-    else:
+
+    def _ensure_demo() -> None:
         try:
             from app.services.demo_seed import ensure_demo_document
 
@@ -209,4 +232,5 @@ def seed_local_database(
         except Exception as exc:
             report.warnings.append(f"Demo document skipped: {exc}")
 
+    pick(demo_embeddings, _embed_demo, _ensure_demo)
     return report

@@ -6,17 +6,20 @@ Only true session-rejection details clear client auth state.
 
 from __future__ import annotations
 
+from app.engine_runtime import pick
+
 
 def is_session_auth_failure(status: int, detail: str) -> bool:
-    if status != 401:
-        return False
-    d = detail.lower()
-    return (
-        "invalid session" in d
-        or "session revoked" in d
-        or "user not found" in d
-        or d == "not authenticated"
-    )
+    def _check() -> bool:
+        d = detail.lower()
+        return (
+            "invalid session" in d
+            or "session revoked" in d
+            or "user not found" in d
+            or d == "not authenticated"
+        )
+
+    return pick(status != 401, lambda: False, _check)
 
 
 def test_session_rejection_details_clear_state() -> None:

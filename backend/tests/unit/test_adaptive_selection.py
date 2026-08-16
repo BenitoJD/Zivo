@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.engine_runtime import pick
 from app.services.adaptive_selection import (
     DEFAULT_SELECTION_POLICY,
     SELECTION_VERSION,
@@ -74,8 +75,10 @@ def test_test_mode_prefers_higher_information_near_coin_flip() -> None:
     assert learn.assertion_id == "band"
     assert test.assertion_id in ("info", "band")
     assert test.scores is not None
-    if test.assertion_id == "info":
+    def _info_score() -> None:
         assert test.scores.information >= 0.99
+
+    pick(test.assertion_id == "info", _info_score, lambda: None)
 
 
 def test_adaptive_lineage_routes_miss() -> None:

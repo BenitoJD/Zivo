@@ -49,10 +49,7 @@ class _FakeDB:
         self.commit_calls += 1
 
     def get(self, model, schedule_id):
-        for row in self.rows:
-            if row.id == schedule_id:
-                return row
-        return None
+        return next(filter(lambda row: row.id == schedule_id, self.rows), None)
 
 
 def test_reconcile_schedule_rows_inserts_and_orphans():

@@ -16,6 +16,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import Pred, Rule, apply, first_match, pick
 from app.graphs.quiz_graph import quiz_config_signature
 from app.services.artifact_store import ArtifactStore, coerce_jsonb, run_artifact_generation
 from app.services.source_fingerprint import is_artifact_stale, mark_artifact_fresh
@@ -33,14 +34,16 @@ _QUIZ_STORE = ArtifactStore(
 def load_quiz(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
     """Return {status, config, questions, error}. status: missing|generating|ready|failed."""
     row = _QUIZ_STORE.load_row(db, document_id)
-    if not row:
-        return {"status": "missing", "config": "", "questions": [], "error": None}
-    return {
-        "status": row["status"],
-        "config": row["config"] or "",
-        "questions": coerce_jsonb(row["questions"]) or [],
-        "error": row["error"],
-    }
+    return pick(
+        not row,
+        lambda: {"status": "missing", "config": "", "questions": [], "error": None},
+        lambda: {
+            "status": row["status"],
+            "config": row["config"] or "",
+            "questions": coerce_jsonb(row["questions"]) or [],
+            "error": row["error"],
+        },
+    )
 
 
 def ensure_quiz(
@@ -50,20 +53,31 @@ def ensure_quiz(
     config = quiz_config_signature(types, count, difficulty)
     state = load_quiz(db, document_id)
     fp_key = f"quiz:{config}"
-    if (
-        state["status"] == "ready"
-        and state["config"] == config
-        and not is_artifact_stale(db, document_id, fp_key)
-    ):
-        return state
-    if state["status"] == "generating" and state["config"] == config:
-        return state
-    from app.services.jobs import enqueue_quiz
+    hit = first_match(
+        (
+            Rule(when=(Pred("ready_fresh", "truthy"),), action="keep"),
+            Rule(when=(Pred("generating_same", "truthy"),), action="keep"),
+            Rule(when=(), action="enqueue"),
+        ),
+        {
+            "ready_fresh": (
+                state["status"] == "ready"
+                and state["config"] == config
+                and not is_artifact_stale(db, document_id, fp_key)
+            ),
+            "generating_same": state["status"] == "generating" and state["config"] == config,
+        },
+    )
 
-    _QUIZ_STORE.set_status(db, document_id, "generating", config=config)
-    db.commit()
-    enqueue_quiz(db, document_id, types=types, count=count, difficulty=difficulty)
-    return {"status": "generating", "config": config, "questions": [], "error": None}
+    def _enqueue() -> dict[str, Any]:
+        from app.services.jobs import enqueue_quiz
+
+        _QUIZ_STORE.set_status(db, document_id, "generating", config=config)
+        db.commit()
+        enqueue_quiz(db, document_id, types=types, count=count, difficulty=difficulty)
+        return {"status": "generating", "config": config, "questions": [], "error": None}
+
+    return apply(hit.action, {"keep": lambda: state, "enqueue": _enqueue})
 
 
 def run_quiz_generation(
@@ -82,8 +96,10 @@ def run_quiz_generation(
         empty_error="no_questions_generated",
         key_and_extra={"config": config},
     )
-    if result:
-        mark_artifact_fresh(db, document_id, f"quiz:{config}")
-        db.commit()
+    pick(
+        bool(result),
+        lambda: (mark_artifact_fresh(db, document_id, f"quiz:{config}"), db.commit()),
+        lambda: None,
+    )
     return result
 

@@ -6,6 +6,8 @@ import logging
 import functools
 import os
 
+from app.engine_runtime import pick
+
 _CHARS_PER_TOKEN = float(os.getenv("ZIVO_CHARS_PER_TOKEN", "3.5"))
 
 # Completion caps — generous floors so reasoning models finish with parseable content.
@@ -45,22 +47,26 @@ def _tiktoken_encoding():
 def count_tokens(text: str, *, model: str = "") -> int:
     del model  # reserved for per-model encodings later
     enc = _tiktoken_encoding()
-    if enc is not None:
-        return len(enc.encode(text or ""))
-    return max(1, int(len(text or "") / _CHARS_PER_TOKEN))
+    return pick(
+        enc is not None,
+        lambda: len(enc.encode(text or "")),
+        lambda: max(1, int(len(text or "") / _CHARS_PER_TOKEN)),
+    )
 
 
 def truncate_to_tokens(text: str, max_tokens: int, *, model: str = "") -> str:
     del model
-    if not text or max_tokens <= 0:
-        return ""
     enc = _tiktoken_encoding()
-    if enc is not None:
+
+    def _from_enc() -> str:
         tokens = enc.encode(text)
-        if len(tokens) <= max_tokens:
-            return text
-        return enc.decode(tokens[:max_tokens])
-    return text[: int(max_tokens * _CHARS_PER_TOKEN)]
+        return pick(len(tokens) <= max_tokens, lambda: text, lambda: enc.decode(tokens[:max_tokens]))
+
+    return pick(
+        not text or max_tokens <= 0,
+        lambda: "",
+        lambda: pick(enc is not None, _from_enc, lambda: text[: int(max_tokens * _CHARS_PER_TOKEN)]),
+    )
 
 
 def token_budget_chars(max_tokens: int) -> int:

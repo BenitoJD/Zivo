@@ -11,8 +11,15 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 _REPO = _ROOT.parent
 _BACKEND = _REPO / "backend"
-for path in (str(_BACKEND), str(_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
-sys.path.remove(str(_BACKEND))
-sys.path.insert(0, str(_BACKEND))
+
+
+def _front(path: str) -> None:
+    try:
+        sys.path.remove(path)
+    except ValueError:
+        pass
+    sys.path.insert(0, path)
+
+
+_front(str(_ROOT))
+_front(str(_BACKEND))

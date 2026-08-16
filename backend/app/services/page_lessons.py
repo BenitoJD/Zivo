@@ -33,6 +33,7 @@ from typing import Any, Sequence
 
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 from app.services.artifact_store import ArtifactStore, coerce_jsonb
 
 logger = logging.getLogger(__name__)
@@ -50,45 +51,66 @@ class LessonAspectPlan:
     policy_version: str = "qb.lesson.v1"
 
     def as_block(self) -> str:
-        return "\n".join(self.lines) if self.lines else self.fallback
+        return choose(bool(self.lines), "\n".join(self.lines), self.fallback)
+
+
+_CENTRALITY_SOURCE_RULES = (
+    Rule(when=(Pred("has_central", "truthy"),), action="bool_flag"),
+    Rule(when=(Pred("has_centrality", "truthy"),), action="parse"),
+    Rule(when=(), action="not_central"),
+)
+
+_COOK_LESSON_RULES = (
+    Rule(
+        when=(Pred("learn", "eq", "learn"), Pred("has_aspects", "truthy")),
+        action="cook",
+    ),
+    Rule(when=(), action="skip"),
+)
 
 
 def _aspect_is_central(aspect: dict[str, Any]) -> bool:
     from app.services.aspect_discovery import parse_centrality
 
-    is_central = aspect.get("central")
-    if is_central is not None:
-        return bool(is_central)
-    raw = aspect.get("centrality")
-    if raw is None:
-        return False
-    return parse_centrality(raw) == "central"
+    return apply(
+        first_match(
+            _CENTRALITY_SOURCE_RULES,
+            {
+                "has_central": aspect.get("central") is not None,
+                "has_centrality": aspect.get("centrality") is not None,
+            },
+        ).action,
+        {
+            "bool_flag": lambda: bool(aspect.get("central")),
+            "parse": lambda: parse_centrality(aspect.get("centrality")) == "central",
+            "not_central": lambda: False,
+        },
+    )
 
 
 def _aspect_prompt_line(aspect: dict[str, Any]) -> str | None:
     label = str(aspect.get("label") or "").strip()
-    if not label:
-        return None
     angle = str(aspect.get("cognitive_angle") or "").strip()
-    suffix = f" ({angle})" if angle and angle.lower() != "recall" else ""
-    return f"- {label}{suffix}"
+    suffix = choose(bool(angle) and angle.lower() != "recall", f" ({angle})", "")
+    return pick(not label, lambda: None, lambda: f"- {label}{suffix}")
 
 
 def plan_lesson_aspects(aspects: Sequence[dict[str, Any]] | None) -> LessonAspectPlan:
     """Only central aspects are taught; recall angle is the default (omitted)."""
-    lines: list[str] = []
-    for aspect in aspects or []:
-        if not _aspect_is_central(aspect):
-            continue
-        line = _aspect_prompt_line(aspect)
-        if line:
-            lines.append(line)
+    central = filter(_aspect_is_central, aspects or [])
+    lines = list(filter(None, map(_aspect_prompt_line, central)))
     return LessonAspectPlan(tuple(lines))
 
 
 def should_cook_lesson(*, serve_mode: str, aspects: Sequence[dict[str, Any]] | None) -> bool:
     """Learn-only: teach central aspects before the MCQ loop. Test never pre-teaches."""
-    return serve_mode == "learn" and bool(aspects)
+    return (
+        first_match(
+            _COOK_LESSON_RULES,
+            {"learn": serve_mode, "has_aspects": bool(aspects)},
+        ).action
+        == "cook"
+    )
 
 
 @dataclass(frozen=True)
@@ -114,16 +136,22 @@ _LESSON_STORE = ArtifactStore(
 )
 
 
-def _row_to_state(row: dict[str, Any] | None) -> dict[str, Any]:
-    """Normalize a raw page_lessons row into the queue payload shape, or null."""
-    if not row:
-        return {"status": "missing", "title": None, "body": None}
+def _from_row(row: dict[str, Any]) -> dict[str, Any]:
     lesson = coerce_jsonb(row.get("lesson")) or {}
     return {
         "status": row.get("status") or "missing",
         "title": lesson.get("title"),
         "body": lesson.get("body"),
     }
+
+
+def _row_to_state(row: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize a raw page_lessons row into the queue payload shape, or null."""
+    return pick(
+        not row,
+        lambda: {"status": "missing", "title": None, "body": None},
+        lambda: _from_row(row),
+    )
 
 
 def get_lesson(db: Session, document_id: uuid.UUID, page: int) -> dict[str, Any] | None:
@@ -136,9 +164,11 @@ def get_lesson(db: Session, document_id: uuid.UUID, page: int) -> dict[str, Any]
     """
     row = _LESSON_STORE.load_row(db, document_id, page_number=page)
     state = _row_to_state(row)
-    if state["status"] != "ready" or not state.get("body"):
-        return None
-    return state
+    return pick(
+        state["status"] != "ready" or not state.get("body"),
+        lambda: None,
+        lambda: state,
+    )
 
 
 def cook_page_lesson(
@@ -160,47 +190,57 @@ def cook_page_lesson(
     from app.graphs.lesson_graph import LESSON_POLICY_VERSION, generate_lesson
 
     row = _LESSON_STORE.load_row(db, document_id, page_number=page)
-    if (
-        row
+    fresh = (
+        bool(row)
         and row.get("status") == "ready"
         and row.get("content_hash") == content_hash
-        and (coerce_jsonb(row.get("lesson")) or {}).get("body")
-    ):
-        # Page text unchanged and a lesson already exists — reuse it.
-        return
+        and bool((coerce_jsonb(row.get("lesson")) or {}).get("body"))
+    )
 
-    _LESSON_STORE.set_status(
-        db, document_id, "generating", page_number=page, content_hash=content_hash
-    )
-    db.commit()
-    try:
-        result = generate_lesson(db, page_text=page_text, aspects=aspects)
-    except Exception as exc:  # noqa: BLE001 — best-effort; never block the cook
-        logger.warning(
-            "lesson generation failed doc=%s page=%s: %s", document_id, page, exc, exc_info=True
-        )
+    def _generate() -> None:
         _LESSON_STORE.set_status(
-            db,
-            document_id,
-            "failed",
-            error=str(exc)[:500],
-            page_number=page,
-            content_hash=content_hash,
+            db, document_id, "generating", page_number=page, content_hash=content_hash
         )
         db.commit()
-        return
-    if not result or not result.get("body"):
-        _LESSON_STORE.set_status(
-            db, document_id, "failed", error="empty_lesson", page_number=page, content_hash=content_hash
-        )
-        db.commit()
-        return
-    payload = {
-        "title": result["title"],
-        "body": result["body"],
-        "policy_version": LESSON_POLICY_VERSION,
-    }
-    _LESSON_STORE.save(
-        db, document_id, payload, page_number=page, content_hash=content_hash
-    )
-    db.commit()
+        try:
+            result = generate_lesson(db, page_text=page_text, aspects=aspects)
+        except Exception as exc:  # noqa: BLE001 — best-effort; never block the cook
+            logger.warning(
+                "lesson generation failed doc=%s page=%s: %s", document_id, page, exc, exc_info=True
+            )
+            _LESSON_STORE.set_status(
+                db,
+                document_id,
+                "failed",
+                error=str(exc)[:500],
+                page_number=page,
+                content_hash=content_hash,
+            )
+            db.commit()
+            return
+
+        def _fail_empty() -> None:
+            _LESSON_STORE.set_status(
+                db,
+                document_id,
+                "failed",
+                error="empty_lesson",
+                page_number=page,
+                content_hash=content_hash,
+            )
+            db.commit()
+
+        def _save() -> None:
+            payload = {
+                "title": result["title"],
+                "body": result["body"],
+                "policy_version": LESSON_POLICY_VERSION,
+            }
+            _LESSON_STORE.save(
+                db, document_id, payload, page_number=page, content_hash=content_hash
+            )
+            db.commit()
+
+        pick(not result or not result.get("body"), _fail_empty, _save)
+
+    pick(fresh, lambda: None, _generate)

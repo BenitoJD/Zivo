@@ -28,6 +28,7 @@ from sqlalchemy.sql import text
 
 from app.config import get_settings
 from app.db import get_db
+from app.engine_runtime import pick
 from app.services.request_ip import client_ip
 
 logger = logging.getLogger(__name__)
@@ -42,14 +43,17 @@ def _maybe_sweep(db: Session) -> None:
     and self-healing across pod restarts."""
     global _last_sweep_monotonic
     now = time.monotonic()
-    if now - _last_sweep_monotonic < _SWEEP_MIN_INTERVAL_S:
-        return
-    _last_sweep_monotonic = now
-    cutoff_bucket = int(time.time()) // 60 - 2
-    db.execute(
-        text("DELETE FROM qb.rate_limit_hit WHERE bucket < :cutoff"),
-        {"cutoff": cutoff_bucket},
-    )
+
+    def _sweep() -> None:
+        global _last_sweep_monotonic
+        _last_sweep_monotonic = now
+        cutoff_bucket = int(time.time()) // 60 - 2
+        db.execute(
+            text("DELETE FROM qb.rate_limit_hit WHERE bucket < :cutoff"),
+            {"cutoff": cutoff_bucket},
+        )
+
+    pick(now - _last_sweep_monotonic < _SWEEP_MIN_INTERVAL_S, lambda: None, _sweep)
 
 
 def rate_limit(request: Request, db: Session = Depends(get_db)) -> None:
@@ -60,35 +64,38 @@ def rate_limit(request: Request, db: Session = Depends(get_db)) -> None:
     """
     settings = get_settings()
     limit = settings.rate_limit_per_minute
-    if limit <= 0:
-        return
 
-    key = client_ip(request)
-    bucket = int(time.time()) // 60
+    def _check() -> None:
+        key = client_ip(request)
+        bucket = int(time.time()) // 60
 
-    try:
-        count = db.execute(
-            text(
-                """
-                INSERT INTO qb.rate_limit_hit (bucket, client_key, hit_count)
-                VALUES (:bucket, :key, 1)
-                ON CONFLICT (bucket, client_key)
-                DO UPDATE SET hit_count = qb.rate_limit_hit.hit_count + 1
-                RETURNING hit_count
-                """
-            ),
-            {"bucket": bucket, "key": key},
-        ).scalar()
-        _maybe_sweep(db)
-        db.commit()
-    except SQLAlchemyError as exc:
-        # Fail open — never block a user over limiter bookkeeping.
-        logger.warning("rate_limit DB failure (allowing request): %s", exc)
-        db.rollback()
-        return
+        try:
+            count = db.execute(
+                text(
+                    """
+                    INSERT INTO qb.rate_limit_hit (bucket, client_key, hit_count)
+                    VALUES (:bucket, :key, 1)
+                    ON CONFLICT (bucket, client_key)
+                    DO UPDATE SET hit_count = qb.rate_limit_hit.hit_count + 1
+                    RETURNING hit_count
+                    """
+                ),
+                {"bucket": bucket, "key": key},
+            ).scalar()
+            _maybe_sweep(db)
+            db.commit()
+        except SQLAlchemyError as exc:
+            # Fail open — never block a user over limiter bookkeeping.
+            logger.warning("rate_limit DB failure (allowing request): %s", exc)
+            db.rollback()
+            return
 
-    if count is not None and int(count) > limit:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+        def _reject() -> None:
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+        pick(count is not None and int(count) > limit, _reject, lambda: None)
+
+    pick(limit <= 0, lambda: None, _check)
 
 
 def rate_limit_dependency(_: None = Depends(rate_limit)) -> None:

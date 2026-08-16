@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.services.document_access import require_document, require_document_source
 from app.db import get_db
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 from app.models import Account, Document, DocumentChunk, User
 from app.services.auth import get_current_user, get_optional_user, require_csrf, require_csrf_or_guest
 from app.services.document_bundle import build_document_bundle
@@ -23,6 +24,7 @@ from app.services.document_purge import purge_document, purge_ingest_tmp
 from app.services.guest import document_owned_by_guest
 from app.services.guest_session import guest_session_for_read, optional_guest_session
 from app.services.jobs import enqueue_summarize
+from app.services.presence import evaluate_presence
 from app.services.storage import delete_object, get_object_meta, presigned_get_url
 from app.services.web_import import (
     WebImportError,
@@ -49,6 +51,10 @@ _LIST_DOCUMENTS_LIMIT = 100
 _CHUNK_PAGE_LIMIT = 500
 
 DEMO_DOC_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
+
+
+def _raise_http(status: int, detail: str) -> None:
+    raise HTTPException(status_code=status, detail=detail)
 
 
 class DocumentOut(BaseModel):
@@ -91,8 +97,14 @@ class ImportGithubIn(BaseModel):
 @router.get("/demo", response_model=DocumentOut)
 def get_demo_document(db: Session = Depends(get_db)) -> Document:
     doc = db.get(Document, DEMO_DOC_ID)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Demo document not seeded")
+    apply(
+        evaluate_presence(doc).action,
+        {
+            "missing": lambda: _raise_http(404, "Demo document not seeded"),
+            "empty": lambda: _raise_http(404, "Demo document not seeded"),
+            "ok": lambda: None,
+        },
+    )
     return doc
 
 
@@ -102,22 +114,17 @@ def list_documents(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(optional_guest_session),
 ) -> list[Document]:
-    if user:
-        docs = (
+    def _account_docs() -> list[Document]:
+        return (
             db.query(Document)
             .filter(Document.account_id == user.id)
             .order_by(Document.created_at.desc())
             .limit(_LIST_DOCUMENTS_LIMIT)
             .all()
         )
-    elif guest_id is None:
-        # No user → guest scope. A real check (not `assert`, which -O strips):
-        # without a guest id there are no guest documents — and we must never
-        # fall through to an unfiltered query that could surface another
-        # anonymous user's documents.
-        return []
-    else:
-        docs = (
+
+    def _guest_docs() -> list[Document]:
+        return (
             db.query(Document)
             .filter(Document.account_id.is_(None))
             .filter(Document.meta["guest_id"].astext == guest_id)
@@ -126,12 +133,21 @@ def list_documents(
             .all()
         )
 
-    # The sidebar polls this endpoint, so it must self-heal like the per-artifact
-    # GET does. Background-prep docs whose cook chain died would otherwise sit at
-    # a stale "Prepping X%" forever here: list_documents never ran recovery or
-    # recomputed progress, so the sidebar showed the last-persisted index_progress
-    # even after the detail view had moved on. Recover + recompute for any doc
-    # still in background prep; everything else passes through untouched.
+    docs = apply(
+        first_match(
+            (
+                Rule(when=(Pred("has_user", "truthy"),), action="account"),
+                Rule(when=(Pred("has_guest", "falsey"),), action="empty"),
+                Rule(when=(), action="guest"),
+            ),
+            {"has_user": user is not None, "has_guest": guest_id is not None},
+        ).action,
+        {
+            "account": _account_docs,
+            "empty": lambda: [],
+            "guest": _guest_docs,
+        },
+    )
     return [_refresh_prep_state(db, doc) for doc in docs]
 
 
@@ -140,7 +156,7 @@ def _refresh_prep_state(db: Session, doc: Document) -> Document:
 
     Cheap for the common case (ready/failed docs short-circuit on
     ``is_background_prep``). Only docs still cooking hit the recovery + compute
-    path — the same work the detail view already does on open.
+    path, the same work the detail view already does on open.
     """
     from app.services.background_prep import (
         compute_prep_progress,
@@ -152,7 +168,8 @@ def _refresh_prep_state(db: Session, doc: Document) -> Document:
     try:
         maybe_recover_stuck_indexing(db, doc)
         maybe_recover_stuck_background_prep(db, doc)
-        if is_background_prep(doc):
+
+        def _update() -> None:
             db.refresh(doc)
             progress = compute_prep_progress(db, doc)
             doc.index_progress = int(progress["overall_pct"])
@@ -162,9 +179,9 @@ def _refresh_prep_state(db: Session, doc: Document) -> Document:
             db.add(doc)
             db.commit()
             db.refresh(doc)
+
+        pick(is_background_prep(doc), _update, lambda: None)
     except Exception:
-        # Never let a healing failure on one doc break the whole list — the
-        # scheduler and per-artifact GET remain the authoritative backstops.
         logger.exception("prep state refresh failed for document %s", doc.id)
     return doc
 
@@ -187,17 +204,22 @@ def get_document_file(
     guest_id: str | None = Depends(guest_session_for_read),
 ):
     doc = require_document_source(db, document_id, user, guest_id)
-    if doc.meta and doc.meta.get("is_demo"):
+
+    def _demo_text() -> Response:
         chunks = (
             db.query(DocumentChunk)
             .filter(DocumentChunk.document_id == document_id)
             .order_by(DocumentChunk.page_start.asc())
             .all()
         )
-        text = "\n\n".join(c.text for c in chunks if c.text)
-        return Response(content=text.encode("utf-8"), media_type="text/plain")
-    url = presigned_get_url(doc.storage_key)
-    return RedirectResponse(url)
+        text_body = "\n\n".join(filter(None, (c.text for c in chunks)))
+        return Response(content=text_body.encode("utf-8"), media_type="text/plain")
+
+    return pick(
+        bool(doc.meta) and bool(doc.meta.get("is_demo")),
+        _demo_text,
+        lambda: RedirectResponse(presigned_get_url(doc.storage_key)),
+    )
 
 
 @router.get("/{document_id}/pages")
@@ -211,7 +233,7 @@ def get_document_pages(
 
     Prefer indexed chunks when present. Before page selection (no ingest yet),
     fall back to ``parse_document`` so DOCX/PPTX/text still get usable
-    thumbnails — PDFs use client-side pdf.js instead.
+    thumbnails. PDFs use client-side pdf.js instead.
     """
     doc = require_document_source(db, document_id, user, guest_id)
     chunks = (
@@ -224,74 +246,100 @@ def get_document_pages(
     pages: dict[int, str] = {}
     for c in chunks:
         existing = pages.get(c.page_start)
-        pages[c.page_start] = f"{existing}\n\n{c.text}" if existing else c.text
-    if pages:
+        pages[c.page_start] = pick(
+            bool(existing),
+            lambda existing=existing, text=c.text: f"{existing}\n\n{text}",
+            lambda text=c.text: text,
+        )
+
+    def _from_chunks() -> dict:
         return {"pages": [{"page": p, "text": t} for p, t in sorted(pages.items())]}
 
-    from app.services.parse import parse_document
-    from app.services.storage import fetch_object
+    def _parse_fallback() -> dict:
+        from app.services.parse import parse_document
+        from app.services.storage import fetch_object
 
-    try:
-        raw = fetch_object(doc.storage_key)
-        parsed = parse_document(doc.content_type or "", raw)
-    except Exception:
-        logger.exception("page preview parse failed for %s", document_id)
-        return {"pages": []}
-    return {
-        "pages": [
-            {"page": int(item.get("page") or i), "text": str(item.get("text") or "")}
-            for i, item in enumerate(parsed, start=1)
-        ]
-    }
+        try:
+            raw = fetch_object(doc.storage_key)
+            parsed = parse_document(doc.content_type or "", raw)
+        except Exception:
+            logger.exception("page preview parse failed for %s", document_id)
+            return {"pages": []}
+        return {
+            "pages": [
+                {"page": int(item.get("page") or i), "text": str(item.get("text") or "")}
+                for i, item in enumerate(parsed, start=1)
+            ]
+        }
+
+    return pick(bool(pages), _from_chunks, _parse_fallback)
 
 
 async def _read_upload_capped(request: Request, file: UploadFile) -> bytes:
     max_bytes = settings.max_upload_bytes
     content_length = request.headers.get("content-length")
-    if content_length is not None:
+
+    def _check_declared() -> None:
         try:
             declared = int(content_length)
         except ValueError as exc:
             raise HTTPException(status_code=413, detail="File too large") from exc
-        if declared > max_bytes:
-            raise HTTPException(status_code=413, detail="File too large")
+        pick(declared > max_bytes, lambda: _raise_http(413, "File too large"), lambda: None)
+
+    pick(content_length is not None, _check_declared, lambda: None)
 
     chunks: list[bytes] = []
-    total = 0
-    while True:
+    total = [0]
+
+    async def _step() -> bytes:
         chunk = await file.read(_READ_CHUNK_BYTES)
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > max_bytes:
-            raise HTTPException(status_code=413, detail="File too large")
-        chunks.append(chunk)
-    return b"".join(chunks)
+
+        async def _more() -> bytes:
+            total[0] += len(chunk)
+            pick(total[0] > max_bytes, lambda: _raise_http(413, "File too large"), lambda: None)
+            chunks.append(chunk)
+            return await _step()
+
+        async def _done() -> bytes:
+            return b"".join(chunks)
+
+        return await pick(not chunk, _done, _more)
+
+    return await _step()
 
 
 async def _read_files_capped(files: list[UploadFile]) -> list[tuple[str, str, bytes]]:
     max_bytes = settings.max_upload_bytes
     payloads: list[tuple[str, str, bytes]] = []
-    total = 0
-    for upload in files:
+    total = [0]
+
+    async def _read_one(upload: UploadFile) -> None:
         chunks: list[bytes] = []
-        file_total = 0
-        while True:
+
+        async def _step() -> None:
             chunk = await upload.read(_READ_CHUNK_BYTES)
-            if not chunk:
-                break
-            file_total += len(chunk)
-            total += len(chunk)
-            if total > max_bytes:
-                raise HTTPException(status_code=413, detail="File too large")
-            chunks.append(chunk)
-        payloads.append(
-            (
-                upload.filename or "document",
-                upload.content_type or "",
-                b"".join(chunks),
-            )
-        )
+
+            async def _more() -> None:
+                total[0] += len(chunk)
+                pick(total[0] > max_bytes, lambda: _raise_http(413, "File too large"), lambda: None)
+                chunks.append(chunk)
+                await _step()
+
+            async def _done() -> None:
+                payloads.append(
+                    (
+                        upload.filename or "document",
+                        upload.content_type or "",
+                        b"".join(chunks),
+                    )
+                )
+
+            await pick(not chunk, _done, _more)
+
+        await _step()
+
+    for upload in files:
+        await _read_one(upload)
     return payloads
 
 
@@ -310,14 +358,34 @@ async def create_from_storage_object(
     meta = get_object_meta(object_id=body.object_id)
     owner_account = meta.get("account_id")
     owner_guest = meta.get("guest_id")
-    if user:
-        if owner_account != str(user.id):
-            raise HTTPException(status_code=404, detail="Object not found")
-    elif guest_id:
-        if owner_guest != guest_id:
-            raise HTTPException(status_code=404, detail="Object not found")
-    else:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    apply(
+        first_match(
+            (
+                Rule(
+                    when=(Pred("has_user", "truthy"), Pred("owner_ok", "falsey")),
+                    action="missing",
+                ),
+                Rule(when=(Pred("has_user", "truthy"),), action="ok"),
+                Rule(
+                    when=(Pred("has_guest", "truthy"), Pred("guest_ok", "falsey")),
+                    action="missing",
+                ),
+                Rule(when=(Pred("has_guest", "truthy"),), action="ok"),
+                Rule(when=(), action="unauth"),
+            ),
+            {
+                "has_user": user is not None,
+                "has_guest": bool(guest_id),
+                "owner_ok": user is not None and owner_account == str(user.id),
+                "guest_ok": bool(guest_id) and owner_guest == guest_id,
+            },
+        ).action,
+        {
+            "ok": lambda: None,
+            "missing": lambda: _raise_http(404, "Object not found"),
+            "unauth": lambda: _raise_http(401, "Not authenticated"),
+        },
+    )
 
     def _run() -> Document:
         return create_document_from_storage(
@@ -394,17 +462,17 @@ async def import_document_from_url(
 ) -> Document:
     is_youtube = is_youtube_url(body.url)
     try:
-        if is_youtube:
-            # Scribely-style: paste a YouTube link → study its transcript.
-            article = await asyncio.to_thread(fetch_youtube_transcript, body.url)
-        else:
-            article = await fetch_and_extract(body.url)
+        article = await pick(
+            is_youtube,
+            lambda: asyncio.to_thread(fetch_youtube_transcript, body.url),
+            lambda: fetch_and_extract(body.url),
+        )
     except WebImportError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     pages = paginate_reader_text(article.text)
     data = encode_article_pages(pages)
-    meta = build_document_meta(article, source_type="youtube" if is_youtube else "url")
+    meta = build_document_meta(article, source_type=choose(is_youtube, "youtube", "url"))
     meta["page_count"] = len(pages)
     filename = article_filename(article.title, article.source_domain)
     return await asyncio.to_thread(
@@ -433,7 +501,9 @@ async def import_document_from_text(
 
     pages = paginate_reader_text(article.text)
     data = encode_article_pages(pages)
-    meta = build_document_meta(article, source_type="paste" if not article.source_url else "url")
+    meta = build_document_meta(
+        article, source_type=choose(not article.source_url, "paste", "url")
+    )
     meta["page_count"] = len(pages)
     filename = article_filename(article.title, article.source_domain)
     return await asyncio.to_thread(
@@ -460,14 +530,13 @@ async def import_document_from_github(
     except WebImportError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     host = source_domain(url).lower()
-    # Host allowlist — substring "github.com" previously accepted evil.com/?q=github.com.
-    if not (
+    github_ok = (
         host == "github.com"
         or host.endswith(".github.com")
         or host == "githubusercontent.com"
         or host.endswith(".githubusercontent.com")
-    ):
-        raise HTTPException(status_code=422, detail="Not a GitHub URL")
+    )
+    pick(github_ok, lambda: None, lambda: _raise_http(422, "Not a GitHub URL"))
     try:
         article = await fetch_and_extract(url)
     except WebImportError as exc:
@@ -497,25 +566,45 @@ def summarize_document(
     user: User = Depends(get_current_user),
 ) -> dict:
     doc = db.get(Document, document_id)
-    if not doc or doc.account_id != user.id:
-        raise HTTPException(status_code=404, detail="Not found")
-    if doc.status != "ready":
-        raise HTTPException(status_code=409, detail="Document not ready")
+    apply(
+        first_match(
+            (
+                Rule(when=(Pred("found", "falsey"),), action="missing"),
+                Rule(when=(Pred("owner", "falsey"),), action="missing"),
+                Rule(when=(Pred("ready", "falsey"),), action="conflict"),
+                Rule(when=(), action="ok"),
+            ),
+            {
+                "found": doc is not None,
+                "owner": doc is not None and doc.account_id == user.id,
+                "ready": doc is not None and doc.status == "ready",
+            },
+        ).action,
+        {
+            "missing": lambda: _raise_http(404, "Not found"),
+            "conflict": lambda: _raise_http(409, "Document not ready"),
+            "ok": lambda: None,
+        },
+    )
     from app.services.source_fingerprint import chunks_fingerprint, is_artifact_stale
 
-    meta = doc.meta if isinstance(doc.meta, dict) else {}
+    meta = pick(isinstance(doc.meta, dict), lambda: doc.meta, lambda: {})
     cached_summary = meta.get("summary")
-    if (
-        isinstance(cached_summary, str)
-        and cached_summary.strip()
-        and not is_artifact_stale(db, document_id, "summary")
-    ):
+
+    def _cached() -> dict:
         return {"job_id": None, "status": "ready", "summary": cached_summary}
-    # Bind fingerprint now so a concurrent re-index during the job still
-    # invalidates on next request if chunks change before mark_fresh.
-    _ = chunks_fingerprint(db, document_id)
-    job = enqueue_summarize(db, doc.id, user.id)
-    return {"job_id": job.id, "status": job.status}
+
+    def _enqueue() -> dict:
+        _ = chunks_fingerprint(db, document_id)
+        job = enqueue_summarize(db, doc.id, user.id)
+        return {"job_id": job.id, "status": job.status}
+
+    fresh = (
+        isinstance(cached_summary, str)
+        and bool(cached_summary.strip())
+        and not is_artifact_stale(db, document_id, "summary")
+    )
+    return pick(fresh, _cached, _enqueue)
 
 
 @router.delete("/{document_id}", status_code=204, dependencies=[Depends(require_csrf_or_guest)])
@@ -526,26 +615,55 @@ def delete_document(
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> Response:
     """Delete a document and everything it owns."""
-    if document_id == DEMO_DOC_ID:
-        raise HTTPException(status_code=403, detail="The demo document cannot be deleted")
+    pick(
+        document_id == DEMO_DOC_ID,
+        lambda: _raise_http(403, "The demo document cannot be deleted"),
+        lambda: None,
+    )
 
     doc = db.get(Document, document_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Not found")
-    if doc.meta and doc.meta.get("is_demo"):
-        raise HTTPException(status_code=403, detail="The demo document cannot be deleted")
-    if user:
-        if doc.account_id != user.id:
-            raise HTTPException(status_code=404, detail="Not found")
-    elif not document_owned_by_guest(doc, guest_id):
-        raise HTTPException(status_code=404, detail="Not found")
+    apply(
+        evaluate_presence(doc).action,
+        {
+            "missing": lambda: _raise_http(404, "Not found"),
+            "empty": lambda: _raise_http(404, "Not found"),
+            "ok": lambda: None,
+        },
+    )
+    pick(
+        bool(doc.meta) and bool(doc.meta.get("is_demo")),
+        lambda: _raise_http(403, "The demo document cannot be deleted"),
+        lambda: None,
+    )
+    apply(
+        first_match(
+            (
+                Rule(
+                    when=(Pred("has_user", "truthy"), Pred("owner", "falsey")),
+                    action="missing",
+                ),
+                Rule(when=(Pred("has_user", "truthy"),), action="ok"),
+                Rule(when=(Pred("guest_ok", "falsey"),), action="missing"),
+                Rule(when=(), action="ok"),
+            ),
+            {
+                "has_user": user is not None,
+                "owner": user is not None and doc.account_id == user.id,
+                "guest_ok": document_owned_by_guest(doc, guest_id),
+            },
+        ).action,
+        {
+            "missing": lambda: _raise_http(404, "Not found"),
+            "ok": lambda: None,
+        },
+    )
 
     storage_key = purge_document(db, doc)
 
-    # Clean up orphaned newspaper edition if this document was a newspaper paper.
     meta = doc.meta or {}
-    if meta.get("ingest_kind") == "newspaper":
-        db.execute(
+    pick(
+        meta.get("ingest_kind") == "newspaper",
+        lambda: db.execute(
             text(
                 """
                 UPDATE qb.newspaper_edition
@@ -554,7 +672,9 @@ def delete_document(
                 """
             ),
             {"doc": doc.id},
-        )
+        ),
+        lambda: None,
+    )
     db.commit()
 
     purge_ingest_tmp(document_id)

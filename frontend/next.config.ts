@@ -17,13 +17,20 @@ const nextConfig: NextConfig = {
     proxyClientMaxBodySize: "1024mb",
   },
   async rewrites() {
-    const authProxy = process.env.AUTH_PROXY_URL ?? "http://127.0.0.1:8201";
-    const storageProxy = process.env.STORAGE_PROXY_URL ?? "http://127.0.0.1:8202";
-    const practiceProxy = process.env.PRACTICE_PROXY_URL ?? "http://127.0.0.1:8203";
-    const contentProxy = process.env.CONTENT_PROXY_URL ?? "http://127.0.0.1:8204";
-    const studyProxy = process.env.STUDY_PROXY_URL ?? "http://127.0.0.1:8205";
-    const libraryProxy = process.env.LIBRARY_PROXY_URL ?? "http://127.0.0.1:8206";
-    const adminProxy = process.env.ADMIN_PROXY_URL ?? "http://127.0.0.1:8207";
+    const authProxy = process.env.AUTH_PROXY_URL ??
+        "http://127.0.0.1:8201";
+    const storageProxy = process.env.STORAGE_PROXY_URL ??
+        "http://127.0.0.1:8202";
+    const practiceProxy = process.env.PRACTICE_PROXY_URL ??
+        "http://127.0.0.1:8203";
+    const contentProxy = process.env.CONTENT_PROXY_URL ??
+        "http://127.0.0.1:8204";
+    const studyProxy = process.env.STUDY_PROXY_URL ??
+        "http://127.0.0.1:8205";
+    const libraryProxy = process.env.LIBRARY_PROXY_URL ??
+        "http://127.0.0.1:8206";
+    const adminProxy = process.env.ADMIN_PROXY_URL ??
+        "http://127.0.0.1:8207";
     return [
       { source: "/api/auth/:path*", destination: `${authProxy}/api/auth/:path*` },
       { source: "/api/storage/:path*", destination: `${storageProxy}/api/storage/:path*` },

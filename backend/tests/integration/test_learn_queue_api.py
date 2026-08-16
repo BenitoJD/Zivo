@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.db import SessionLocal
+from app.engine_runtime import pick
 from app.models import Document
 from app.services.guest_session import GUEST_ID_HEADER
 
@@ -16,8 +17,7 @@ import sys
 from pathlib import Path
 
 _STUDY = Path(__file__).resolve().parents[2].parent / "study"
-if str(_STUDY) not in sys.path:
-    sys.path.insert(0, str(_STUDY))
+pick(str(_STUDY) not in sys.path, lambda: sys.path.insert(0, str(_STUDY)), lambda: None)
 from study_main import app
 
 GUEST_ID = "b" * 32
@@ -85,8 +85,7 @@ def _cleanup(doc_id: uuid.UUID) -> None:
     db = SessionLocal()
     try:
         doc = db.get(Document, doc_id)
-        if doc:
-            db.delete(doc)
+        pick(bool(doc), lambda: db.delete(doc), lambda: None)
         db.commit()
     finally:
         db.close()

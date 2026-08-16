@@ -14,17 +14,25 @@ from sqlalchemy.sql import text
 
 from app.config import get_settings
 from app.db import get_db
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 from app.models import Account, User
+from app.services.presence import evaluate_presence
 from app.services.usage import DEMO_COOKIE
 
 settings = get_settings()
 
 
+def _raise(exc: BaseException) -> None:
+    raise exc
+
+
+def _raise_from(cause: BaseException, wrapped: BaseException) -> None:
+    raise wrapped from cause
+
+
 def _password_bytes(password: str) -> bytes:
     raw = password.encode("utf-8")
-    if len(raw) > 72:
-        return hashlib.sha256(raw).digest()
-    return raw
+    return pick(len(raw) > 72, lambda: hashlib.sha256(raw).digest(), lambda: raw)
 
 
 def hash_password(password: str) -> str:
@@ -43,7 +51,7 @@ def create_session_token(
     remember: bool = False,
 ) -> tuple[str, str]:
     """Mint a session JWT. Production minting lives on the auth service; tests reuse this."""
-    days = settings.session_remember_days if remember else settings.session_days
+    days = choose(remember, settings.session_remember_days, settings.session_days)
     exp = datetime.now(timezone.utc) + timedelta(days=days)
     csrf = secrets.token_urlsafe(32)
     payload = {"sub": str(account_id), "exp": exp, "csrf": csrf, "sv": int(session_version)}
@@ -59,11 +67,9 @@ def cookie_set_kwargs(*, max_age: int | None = None) -> dict:
         "samesite": "lax",
         "path": "/",
     }
-    if max_age is not None:
-        kwargs["max_age"] = max_age
+    pick(max_age is not None, lambda: kwargs.__setitem__("max_age", max_age), lambda: None)
     domain = settings.resolved_cookie_domain
-    if domain:
-        kwargs["domain"] = domain
+    pick(bool(domain), lambda: kwargs.__setitem__("domain", domain), lambda: None)
     return kwargs
 
 
@@ -74,7 +80,7 @@ def cookie_delete_kwargs() -> dict:
 
 
 def set_session_cookie(response: Response, token: str, remember: bool) -> None:
-    max_age = (settings.session_remember_days if remember else settings.session_days) * 86400
+    max_age = choose(remember, settings.session_remember_days, settings.session_days) * 86400
     response.set_cookie(key="zivo_session", value=token, **cookie_set_kwargs(max_age=max_age))
 
 
@@ -100,7 +106,14 @@ def _load_identity(db: Session, account_id: uuid.UUID) -> dict[str, Any] | None:
         ),
         {"id": account_id},
     ).mappings().first()
-    return dict(row) if row else None
+    return apply(
+        evaluate_presence(row).action,
+        {
+            "missing": lambda: None,
+            "empty": lambda: None,
+            "ok": lambda: dict(row),
+        },
+    )
 
 
 def _session_version_matches(identity: dict[str, Any], payload: dict) -> bool:
@@ -133,22 +146,52 @@ def _upsert_account_stub(db: Session, identity: dict[str, Any]) -> Account:
     )
     db.flush()
     user = db.get(Account, account_id)
-    if user is None:
-        raise HTTPException(status_code=401, detail="User not found")
+    apply(
+        evaluate_presence(user).action,
+        {
+            "missing": lambda: _raise(HTTPException(status_code=401, detail="User not found")),
+            "empty": lambda: _raise(HTTPException(status_code=401, detail="User not found")),
+            "ok": lambda: None,
+        },
+    )
     return user
 
 
 def _maybe_claim_guest(db: Session, user: Account, guest_id: str | None) -> None:
-    if not guest_id:
-        return
-    from app.services.guest import claim_guest_documents, claim_guest_progress
-    from app.services.guest_session import normalize_guest_id
+    def _claim() -> None:
+        from app.services.guest import claim_guest_documents, claim_guest_progress
+        from app.services.guest_session import normalize_guest_id
 
-    normalized = normalize_guest_id(guest_id)
-    if not normalized:
-        return
-    claim_guest_documents(db, user.id, normalized)
-    claim_guest_progress(db, user.id, user.username, normalized)
+        normalized = normalize_guest_id(guest_id)
+        pick(
+            not normalized,
+            lambda: None,
+            lambda: (
+                claim_guest_documents(db, user.id, normalized),
+                claim_guest_progress(db, user.id, user.username, normalized),
+            ),
+        )
+
+    apply(
+        evaluate_presence(guest_id).action,
+        {
+            "missing": lambda: None,
+            "empty": lambda: None,
+            "ok": _claim,
+        },
+    )
+
+
+def _unauth(required: bool, detail: str, cause: BaseException | None = None) -> Account | None:
+    def _do_raise() -> Account | None:
+        exc = HTTPException(status_code=401, detail=detail)
+        return pick(
+            cause is None,
+            lambda: _raise(exc),
+            lambda: _raise_from(cause, exc),
+        )
+
+    return pick(required, _do_raise, lambda: None)
 
 
 def _user_from_session(
@@ -158,33 +201,55 @@ def _user_from_session(
     required: bool,
     guest_id: str | None = None,
 ) -> Account | None:
-    if not zivo_session:
-        if required:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        return None
-    payload = _decode_session(zivo_session)
-    if payload is None:
-        if required:
-            raise HTTPException(status_code=401, detail="Invalid session")
-        return None
-    try:
-        account_id = uuid.UUID(payload["sub"])
-    except (KeyError, ValueError) as exc:
-        if required:
-            raise HTTPException(status_code=401, detail="Invalid session") from exc
-        return None
-    identity = _load_identity(db, account_id)
-    if not identity:
-        if required:
-            raise HTTPException(status_code=401, detail="User not found")
-        return None
-    if not _session_version_matches(identity, payload):
-        if required:
-            raise HTTPException(status_code=401, detail="Session revoked")
-        return None
-    user = _upsert_account_stub(db, identity)
-    _maybe_claim_guest(db, user, guest_id)
-    return user
+    def _after_cookie() -> Account | None:
+        payload = _decode_session(zivo_session)
+
+        def _after_payload() -> Account | None:
+            try:
+                account_id = uuid.UUID(payload["sub"])
+            except (KeyError, ValueError) as exc:
+                return _unauth(required, "Invalid session", exc)
+
+            identity = _load_identity(db, account_id)
+
+            def _after_identity() -> Account | None:
+                def _after_sv() -> Account:
+                    user = _upsert_account_stub(db, identity)
+                    _maybe_claim_guest(db, user, guest_id)
+                    return user
+
+                return pick(
+                    not _session_version_matches(identity, payload),
+                    lambda: _unauth(required, "Session revoked"),
+                    _after_sv,
+                )
+
+            return apply(
+                evaluate_presence(identity).action,
+                {
+                    "missing": lambda: _unauth(required, "User not found"),
+                    "empty": lambda: _unauth(required, "User not found"),
+                    "ok": _after_identity,
+                },
+            )
+
+        return apply(
+            evaluate_presence(payload).action,
+            {
+                "missing": lambda: _unauth(required, "Invalid session"),
+                "empty": lambda: _unauth(required, "Invalid session"),
+                "ok": _after_payload,
+            },
+        )
+
+    return apply(
+        evaluate_presence(zivo_session).action,
+        {
+            "missing": lambda: _unauth(required, "Not authenticated"),
+            "empty": lambda: _unauth(required, "Not authenticated"),
+            "ok": _after_cookie,
+        },
+    )
 
 
 def get_current_user(
@@ -198,8 +263,19 @@ def get_current_user(
 
 
 def require_admin(user: User = Depends(get_current_user)) -> User:
-    if not user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin required")
+    apply(
+        first_match(
+            (
+                Rule(when=(Pred("admin", "falsey"),), action="deny"),
+                Rule(when=(), action="allow"),
+            ),
+            {"admin": user.is_admin},
+        ).action,
+        {
+            "deny": lambda: _raise(HTTPException(status_code=403, detail="Admin required")),
+            "allow": lambda: None,
+        },
+    )
     return user
 
 
@@ -213,27 +289,69 @@ def get_optional_user(
 
 def csrf_from_session_token(zivo_session: str) -> str:
     payload = _decode_session(zivo_session)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid session")
+    apply(
+        evaluate_presence(payload).action,
+        {
+            "missing": lambda: _raise(HTTPException(status_code=401, detail="Invalid session")),
+            "empty": lambda: _raise(HTTPException(status_code=401, detail="Invalid session")),
+            "ok": lambda: None,
+        },
+    )
     csrf = payload.get("csrf")
-    if not isinstance(csrf, str) or not csrf:
-        raise HTTPException(status_code=401, detail="Invalid session")
-    return csrf
+    csrf_str = pick(isinstance(csrf, str), lambda: csrf, lambda: None)
+    return apply(
+        evaluate_presence(csrf_str).action,
+        {
+            "missing": lambda: _raise(HTTPException(status_code=401, detail="Invalid session")),
+            "empty": lambda: _raise(HTTPException(status_code=401, detail="Invalid session")),
+            "ok": lambda: csrf_str,
+        },
+    )
 
 
 def require_csrf(
     x_csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
     zivo_session: str | None = Cookie(default=None),
 ) -> None:
-    if settings.csrf_disabled:
-        return
-    if not zivo_session or not x_csrf_token:
-        raise HTTPException(status_code=403, detail="CSRF token required")
-    payload = _decode_session(zivo_session)
-    if payload is None:
-        raise HTTPException(status_code=403, detail="Invalid CSRF")
-    if payload.get("csrf") != x_csrf_token:
-        raise HTTPException(status_code=403, detail="CSRF mismatch")
+    def _check() -> None:
+        apply(
+            first_match(
+                (
+                    Rule(
+                        when=(Pred("session", "falsey"),),
+                        action="required",
+                    ),
+                    Rule(
+                        when=(Pred("header", "falsey"),),
+                        action="required",
+                    ),
+                    Rule(when=(), action="compare"),
+                ),
+                {"session": zivo_session, "header": x_csrf_token},
+            ).action,
+            {
+                "required": lambda: _raise(
+                    HTTPException(status_code=403, detail="CSRF token required")
+                ),
+                "compare": lambda: None,
+            },
+        )
+        payload = _decode_session(zivo_session)
+        apply(
+            evaluate_presence(payload).action,
+            {
+                "missing": lambda: _raise(HTTPException(status_code=403, detail="Invalid CSRF")),
+                "empty": lambda: _raise(HTTPException(status_code=403, detail="Invalid CSRF")),
+                "ok": lambda: None,
+            },
+        )
+        pick(
+            payload.get("csrf") != x_csrf_token,
+            lambda: _raise(HTTPException(status_code=403, detail="CSRF mismatch")),
+            lambda: None,
+        )
+
+    pick(settings.csrf_disabled, lambda: None, _check)
 
 
 def require_csrf_or_guest(
@@ -242,7 +360,11 @@ def require_csrf_or_guest(
     zivo_demo_id: str | None = Cookie(default=None, alias=DEMO_COOKIE),
 ) -> None:
     """Signed-in users need CSRF; anonymous guests use httponly cookie."""
-    if zivo_session:
-        require_csrf(x_csrf_token, zivo_session)
-        return
-    return
+    apply(
+        evaluate_presence(zivo_session).action,
+        {
+            "ok": lambda: require_csrf(x_csrf_token, zivo_session),
+            "missing": lambda: None,
+            "empty": lambda: None,
+        },
+    )

@@ -6,12 +6,12 @@ import sys
 from pathlib import Path
 
 import pytest
+from app.engine_runtime import pick
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 for _svc in ("practice", "content", "study", "library", "admin", "workers"):
     _path = str(_REPO_ROOT / _svc)
-    if _path not in sys.path:
-        sys.path.append(_path)
+    pick(_path not in sys.path, lambda p=_path: sys.path.append(p), lambda: None)
 
 # Register ETA handlers before any test module imports question_pool → jobs.
 import app.eta  # noqa: F401

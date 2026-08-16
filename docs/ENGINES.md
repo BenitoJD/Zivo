@@ -1,8 +1,8 @@
 # Question Better engines
 
-Index of durable policy engines (ADR 0004 seams). Budget plans N; Quality decides survivors; Selection picks next; Calibration updates ratings; the rest specialize cook/serve/grade hygiene.
+Index of durable policy engines (ADR 0004 seams, [ADR 0018](adr/0018-zero-if-engine-tables.md) rule tables). Budget plans N; Quality decides survivors; Selection picks next; Calibration updates ratings; the rest specialize cook/serve/grade hygiene. Plumbing domains (presence, auth, HTTP, parse, jobs, LLM route) are engines too. Facade bodies are `Rule` tables evaluated by `app/engine_runtime.py`; no `if` token.
 
-**Scan rule:** DONE = doc + facade + live-path call (not compute-and-discard) + unit tests. PARTIAL = facade exists but a parallel ad-hoc path remains or outputs are not persisted/consumed.
+**Scan rule:** DONE = doc + facade + live-path call (not compute-and-discard) + unit tests + zero `if` tokens in the facade. PARTIAL = facade exists but a parallel ad-hoc path remains or outputs are not persisted/consumed.
 
 | # | Engine | Doc | Facade | Live path | Tests | Status |
 |---|--------|-----|--------|-----------|-------|--------|
@@ -26,6 +26,12 @@ Index of durable policy engines (ADR 0004 seams). Budget plans N; Quality decide
 | 18 | Aspect Discovery | (this index) | `aspect_discovery.py` | triage pick + speculative + next-unasked | yes | DONE |
 | 19 | Learn Lesson | (this index) | `page_lessons.py` | page cook (before MCQ loop) → learn-queue `page_lesson` | yes | DONE |
 | 20 | LLM Prose | [LLM_PROSE_ENGINE.md](LLM_PROSE_ENGINE.md) | `llm_prose_engine.py` | `llm_router` output boundary | yes | DONE |
+| 21 | Presence | (this index) | `presence.py` | missing / empty / ok | yes | DONE |
+| 22 | Auth Gate | (this index) | `auth_gate.py` | allow / deny / redirect / guest | yes | DONE |
+| 23 | Http Outcome | (this index) | `http_outcome.py` | domain action → HTTP status | yes | DONE |
+| 24 | Parse Detect | (this index) | `parse_detect.py` | magic-bytes / filename format | yes | DONE |
+| 25 | Job Lifecycle | (this index) | `job_lifecycle.py` | stale / retry / reclaim / keep | yes | DONE |
+| 26 | Llm Route | (this index) | `llm_route.py` | primary / fallback / skip | yes | DONE |
 
 ## Pipeline sketch
 
@@ -95,6 +101,12 @@ Speculative pre-triage `N_page` lives in **Question Budget** (`speculative_page_
 | Clone template re-attest | Quality Evaluation | `quality_evaluation.evaluate_clone_template` |
 | Newspaper cook content-type | Quality Evaluation | `quality_evaluation.resolve_cook_content_type` |
 | Parallel gate prefilter | Quality Evaluation | `quality_evaluation.evaluate_parallel_gate_prefilter` |
+| Answer-key / similarity cook spend | Quality Evaluation | `quality_evaluation.should_run_answer_key_verify` / `should_run_similarity_gate` |
+| MCQ grade kind (single vs multi) | Open Response | `open_response.evaluate_mcq_grade_kind` / `evaluate_mcq_correct` |
+| RAG-ready first cook spawn | Session Design | `session_design.evaluate_rag_ready_cook_spawn` |
+| Newspaper mid-batch skip | Content Worthiness | `content_worthiness.plan_newspaper_batch_gate` |
+| Pool wake / batch enqueue / refill skip | Session Design | `session_design.evaluate_pool_wake` / `evaluate_page_batch_enqueue` / `evaluate_refill_dispatch` |
+| Newspaper edition tick dispatch | Session Design | `session_design.evaluate_newspaper_edition_dispatch` |
 | Vision empty-page glance → skip reason | Content Worthiness | `content_worthiness.evaluate_vision_glance` (vision LLM stays plumbing) |
 | Empty-page reselect streak | Content Worthiness | `content_worthiness.plan_empty_page_reselect` |
 | Skip empty-page vision after reselect prompt | Content Worthiness | `content_worthiness.should_skip_empty_page_vision` |
@@ -259,7 +271,7 @@ pure index-compare, identical to the server's `grade_verdict`:
 
 | Seam | Mirrors | Scope |
 |------|---------|-------|
-| Local study engine (`frontend/lib/offline/engine.ts`) | `mcq_graph.grade_verdict` (verdict only) + pre-baked `option_feedback` | Verdict + bundled feedback offline; the real Adaptive/Calibration/Mastery engines run on sync |
+| Local study engine (`frontend/lib/offline/engine.ts`) | `open_response.evaluate_mcq_correct` via `mcq_graph.grade_verdict` + pre-baked `option_feedback` | Verdict + bundled feedback offline; the real Adaptive/Calibration/Mastery engines run on sync |
 
 Pack build (server) and grade replay (server) are the authoritative paths; the
 local engine is a throwaway projection whose grades are recomputed server-side

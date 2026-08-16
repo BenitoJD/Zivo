@@ -24,6 +24,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
+from app.engine_runtime import Pred, Rule, apply, first_match, pick
 from app.services.content_worthiness import is_import_extract_too_short
 from app.services.web_import import ImportedArticle, WebImportError
 
@@ -47,11 +48,9 @@ def _transcript_kwargs() -> dict:
     reliable from a server. Empty (no-op) unless ZIVO_YOUTUBE_PROXY / _COOKIES_FILE set."""
     kwargs: dict = {}
     proxy = os.getenv("ZIVO_YOUTUBE_PROXY", "").strip()
-    if proxy:
-        kwargs["proxies"] = {"http": proxy, "https": proxy}
     cookies = os.getenv("ZIVO_YOUTUBE_COOKIES_FILE", "").strip()
-    if cookies:
-        kwargs["cookies"] = cookies
+    pick(bool(proxy), lambda: kwargs.__setitem__("proxies", {"http": proxy, "https": proxy}), lambda: None)
+    pick(bool(cookies), lambda: kwargs.__setitem__("cookies", cookies), lambda: None)
     return kwargs
 
 
@@ -70,19 +69,34 @@ def extract_video_id(url: str) -> str | None:
     except ValueError:
         return None
     host = (parsed.hostname or "").lower()
-    if host in {"youtu.be", "www.youtu.be"}:
-        candidate = parsed.path.lstrip("/").split("/")[0]
-        return candidate or None
-    if host not in _YT_HOSTS:
-        return None
-    if parsed.path == "/watch":
-        vid = parse_qs(parsed.query).get("v", [None])[0]
-        if vid:
-            return vid
+    vid = parse_qs(parsed.query).get("v", [None])[0]
     m = re.match(r"^/(?:shorts|embed|v|live)/([^/?#]+)", parsed.path)
-    if m:
-        return m.group(1)
-    return None
+    candidate = parsed.path.lstrip("/").split("/")[0]
+    rule = first_match(
+        [
+            Rule(when=(Pred("youtu_be", "truthy"),), action="path"),
+            Rule(when=(Pred("unknown_host", "truthy"),), action="none"),
+            Rule(when=(Pred("watch", "truthy"), Pred("vid", "truthy")), action="vid"),
+            Rule(when=(Pred("m", "truthy"),), action="regex"),
+        ],
+        {
+            "youtu_be": host in {"youtu.be", "www.youtu.be"},
+            "unknown_host": host not in _YT_HOSTS,
+            "watch": parsed.path == "/watch",
+            "vid": bool(vid),
+            "m": bool(m),
+        },
+        default=Rule(when=(), action="none"),
+    )
+    return apply(
+        rule.action,
+        {
+            "path": lambda: candidate or None,
+            "none": lambda: None,
+            "vid": lambda: vid,
+            "regex": lambda: m.group(1),
+        },
+    )
 
 
 def _fetch_title(video_id: str) -> str:
@@ -92,8 +106,11 @@ def _fetch_title(video_id: str) -> str:
             params={"url": f"https://www.youtube.com/watch?v={video_id}", "format": "json"},
             timeout=_FETCH_TIMEOUT_S,
         )
-        if resp.status_code == 200:
-            return str(resp.json().get("title") or "").strip()[:200]
+        return pick(
+            resp.status_code == 200,
+            lambda: str(resp.json().get("title") or "").strip()[:200],
+            lambda: "",
+        )
     except Exception:
         logger.debug("youtube oembed title fetch failed", exc_info=True)
     return ""
@@ -103,22 +120,41 @@ def _classify_error(exc: Exception) -> WebImportError:
     """Map youtube-transcript-api failures to an honest, actionable message."""
     from youtube_transcript_api import _errors as yt_errors
 
-    if isinstance(exc, (yt_errors.TooManyRequests, yt_errors.YouTubeRequestFailed)) or "429" in str(exc):
-        return WebImportError(
-            "YouTube is rate-limiting transcript requests right now. Try again in a bit, "
-            "or paste the transcript/text instead.",
-            code="fetch_failed",
-        )
-    if isinstance(exc, (yt_errors.TranscriptsDisabled, yt_errors.NoTranscriptFound, yt_errors.NoTranscriptAvailable)):
-        return WebImportError(
-            "This video has no captions to study. Try another video or paste the text instead.",
-            code="empty_content",
-        )
-    if isinstance(exc, (yt_errors.VideoUnavailable, yt_errors.InvalidVideoId)):
-        return WebImportError("That video is unavailable.", code="invalid_url")
-    return WebImportError(
-        "Couldn't fetch a transcript for this video. Try another video or paste the text instead.",
-        code="fetch_failed",
+    rule = first_match(
+        [
+            Rule(when=(Pred("rate", "truthy"),), action="rate"),
+            Rule(when=(Pred("none", "truthy"),), action="none"),
+            Rule(when=(Pred("gone", "truthy"),), action="gone"),
+        ],
+        {
+            "rate": isinstance(exc, (yt_errors.TooManyRequests, yt_errors.YouTubeRequestFailed))
+            or "429" in str(exc),
+            "none": isinstance(
+                exc,
+                (yt_errors.TranscriptsDisabled, yt_errors.NoTranscriptFound, yt_errors.NoTranscriptAvailable),
+            ),
+            "gone": isinstance(exc, (yt_errors.VideoUnavailable, yt_errors.InvalidVideoId)),
+        },
+        default=Rule(when=(), action="generic"),
+    )
+    return apply(
+        rule.action,
+        {
+            "rate": lambda: WebImportError(
+                "YouTube is rate-limiting transcript requests right now. Try again in a bit, "
+                "or paste the transcript/text instead.",
+                code="fetch_failed",
+            ),
+            "none": lambda: WebImportError(
+                "This video has no captions to study. Try another video or paste the text instead.",
+                code="empty_content",
+            ),
+            "gone": lambda: WebImportError("That video is unavailable.", code="invalid_url"),
+            "generic": lambda: WebImportError(
+                "Couldn't fetch a transcript for this video. Try another video or paste the text instead.",
+                code="fetch_failed",
+            ),
+        },
     )
 
 
@@ -137,43 +173,54 @@ def _fetch_transcript_text(video_id: str) -> str:
         segments = YouTubeTranscriptApi.get_transcript(video_id, languages=_TRANSCRIPT_LANGS, **extra)
     except Exception as exc:
         last_exc = exc
-        # Fall back to any available transcript (manual or auto-generated, any language).
         try:
             listing = YouTubeTranscriptApi.list_transcripts(video_id, **extra)
             for transcript in listing:
-                try:
-                    segments = transcript.fetch()
-                    break
-                except Exception as inner:
-                    last_exc = inner
-                    continue
+                def _try() -> None:
+                    nonlocal segments, last_exc
+                    try:
+                        segments = transcript.fetch()
+                    except Exception as inner:
+                        last_exc = inner
+
+                pick(segments is None, _try, lambda: None)
         except Exception as exc2:
             raise _classify_error(exc2) from exc2
 
-    if not segments:
+    def _no_segments() -> None:
         raise _classify_error(last_exc or Exception("no segments"))
+
+    pick(not segments, _no_segments, lambda: None)
 
     parts: list[str] = []
     for seg in segments:
-        # Segments are dicts ({"text": ...}) in 0.6.x; objects with .text in newer versions.
-        text = seg.get("text") if isinstance(seg, dict) else getattr(seg, "text", "")
+        text = pick(
+            isinstance(seg, dict),
+            lambda: seg.get("text"),
+            lambda: getattr(seg, "text", ""),
+        )
         text = (text or "").replace("\n", " ").strip()
-        if text and text != "[Music]":
-            parts.append(text)
+        pick(bool(text) and text != "[Music]", lambda: parts.append(text), lambda: None)
     joined = re.sub(r"\s+", " ", " ".join(parts)).strip()
-    if is_import_extract_too_short(joined):
+
+    def _too_short() -> None:
         raise WebImportError(
             "This video's transcript was too short to study. Try another video or paste the text.",
             code="empty_content",
         )
+
+    pick(is_import_extract_too_short(joined), _too_short, lambda: None)
     return joined
 
 
 def fetch_youtube_transcript(url: str) -> ImportedArticle:
     """Return an ImportedArticle built from a YouTube video's transcript."""
     video_id = extract_video_id(url)
-    if not video_id:
+
+    def _bad() -> None:
         raise WebImportError("That doesn't look like a YouTube video link.", code="invalid_url")
+
+    pick(not video_id, _bad, lambda: None)
 
     text = _fetch_transcript_text(video_id)
     title = _fetch_title(video_id) or "YouTube video"

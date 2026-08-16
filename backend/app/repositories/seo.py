@@ -10,12 +10,25 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
 from app.services.chunks import pgvector_literal
 from app.services.seo_gate import (
     RETRYABLE_EDITION_DIGEST_REASONS,
     plan_seo_candidate_query_limit,
     seo_candidate_min_chars,
 )
+
+
+def _maybe_iso(value: Any) -> str | None:
+    return pick(value is not None, lambda: value.isoformat(), lambda: None)
+
+
+def _row_dict(row: Any) -> dict[str, Any] | None:
+    return pick(bool(row), lambda: dict(row), lambda: None)
+
+
+def _count(row: Any) -> int:
+    return pick(bool(row), lambda: int(row[0]), lambda: 0)
 
 
 def get_settings(db: Session) -> dict[str, Any]:
@@ -27,9 +40,11 @@ def get_settings(db: Session) -> dict[str, Any]:
             """
         )
     ).mappings().first()
-    if not row:
-        return {"cook_enabled": False, "soft_max_per_day": 20, "updated_at": None}
-    return dict(row)
+    return pick(
+        not row,
+        lambda: {"cook_enabled": False, "soft_max_per_day": 20, "updated_at": None},
+        lambda: dict(row),
+    )
 
 
 def update_settings(
@@ -39,8 +54,8 @@ def update_settings(
     soft_max_per_day: int | None = None,
 ) -> dict[str, Any]:
     cur = get_settings(db)
-    enabled = cur["cook_enabled"] if cook_enabled is None else bool(cook_enabled)
-    soft = cur["soft_max_per_day"] if soft_max_per_day is None else int(soft_max_per_day)
+    enabled = pick(cook_enabled is None, lambda: cur["cook_enabled"], lambda: bool(cook_enabled))
+    soft = pick(soft_max_per_day is None, lambda: cur["soft_max_per_day"], lambda: int(soft_max_per_day))
     soft = max(1, min(soft, 100))
     db.execute(
         text(
@@ -71,7 +86,7 @@ def count_published_on_day(db: Session, day: date) -> int:
         ),
         {"day": day},
     ).first()
-    return int(row[0] if row else 0)
+    return _count(row)
 
 
 def count_sd_published_on_day(db: Session, day: date) -> int:
@@ -87,7 +102,7 @@ def count_sd_published_on_day(db: Session, day: date) -> int:
         ),
         {"day": day},
     ).first()
-    return int(row[0] if row else 0)
+    return _count(row)
 
 
 def attempt_exists(db: Session, source_kind: str, source_key: str) -> bool:
@@ -118,7 +133,7 @@ def latest_attempt(
         ),
         {"k": source_kind, "s": source_key},
     ).mappings().first()
-    return dict(row) if row else None
+    return _row_dict(row)
 
 
 def edition_digest_may_enqueue(
@@ -126,12 +141,15 @@ def edition_digest_may_enqueue(
 ) -> bool:
     """True when no cook ran yet, or the last attempt failed transiently."""
     attempt = latest_attempt(db, source_kind, source_key)
-    if not attempt:
-        return True
-    if attempt.get("outcome") == "published":
-        return False
-    reason = str(attempt.get("reason") or "")
-    return reason in RETRYABLE_EDITION_DIGEST_REASONS
+    return pick(
+        not attempt,
+        lambda: True,
+        lambda: pick(
+            attempt.get("outcome") == "published",
+            lambda: False,
+            lambda: str(attempt.get("reason") or "") in RETRYABLE_EDITION_DIGEST_REASONS,
+        ),
+    )
 
 
 def record_attempt(
@@ -180,7 +198,7 @@ def next_author_name(db: Session) -> str:
             """
         )
     ).first()
-    return str(row[0]) if row else "Benito JD"
+    return pick(bool(row), lambda: str(row[0]), lambda: "Benito JD")
 
 
 def fingerprint_taken(db: Session, fingerprint: str) -> bool:
@@ -212,7 +230,7 @@ def get_published_post_by_fingerprint(
         ),
         {"fp": fingerprint},
     ).mappings().first()
-    return dict(row) if row else None
+    return _row_dict(row)
 
 
 def slug_taken(db: Session, slug: str) -> bool:
@@ -223,9 +241,7 @@ def slug_taken(db: Session, slug: str) -> bool:
     return row is not None
 
 
-def max_published_cosine(db: Session, embedding: list[float]) -> float:
-    if not embedding:
-        return 0.0
+def _max_cosine(db: Session, embedding: list[float]) -> float:
     vec = pgvector_literal(embedding)
     row = db.execute(
         text(
@@ -240,7 +256,19 @@ def max_published_cosine(db: Session, embedding: list[float]) -> float:
         ),
         {"vec": vec},
     ).first()
-    return float(row[0] if row and row[0] is not None else 0.0)
+    return pick(
+        bool(row) and row[0] is not None,
+        lambda: float(row[0]),
+        lambda: 0.0,
+    )
+
+
+def max_published_cosine(db: Session, embedding: list[float]) -> float:
+    return pick(
+        not embedding,
+        lambda: 0.0,
+        lambda: _max_cosine(db, embedding),
+    )
 
 
 def insert_post(
@@ -263,8 +291,8 @@ def insert_post(
     status: str = "published",
 ) -> uuid.UUID:
     post_id = uuid.uuid4()
-    emb = pgvector_literal(embedding) if embedding else None
-    embedding_sql = "CAST(:emb AS vector)" if emb else "NULL"
+    emb = pick(bool(embedding), lambda: pgvector_literal(embedding), lambda: None)
+    embedding_sql = pick(bool(emb), lambda: "CAST(:emb AS vector)", lambda: "NULL")
     db.execute(
         text(
             f"""
@@ -293,7 +321,7 @@ def insert_post(
             "author": author_name,
             "status": status,
             "fp": topic_fingerprint,
-            **({"emb": emb} if emb else {}),
+            **pick(bool(emb), lambda: {"emb": emb}, lambda: {}),
             "sk": source_kind,
             "sref": json.dumps(source_ref),
             "faq": json.dumps(faq_jsonld or []),
@@ -313,8 +341,8 @@ def update_post_content(
     body_md: str,
     embedding: list[float] | None,
 ) -> None:
-    emb = pgvector_literal(embedding) if embedding else None
-    embedding_sql = "embedding = CAST(:emb AS vector)," if emb else ""
+    emb = pick(bool(embedding), lambda: pgvector_literal(embedding), lambda: None)
+    embedding_sql = pick(bool(emb), lambda: "embedding = CAST(:emb AS vector),", lambda: "")
     db.execute(
         text(
             f"""
@@ -332,7 +360,7 @@ def update_post_content(
             "title": title,
             "lede": lede,
             "body": body_md,
-            **({"emb": emb} if emb else {}),
+            **pick(bool(emb), lambda: {"emb": emb}, lambda: {}),
         },
     )
 
@@ -369,8 +397,10 @@ def set_post_artifact(db: Session, post_id: uuid.UUID, artifact_id: uuid.UUID) -
 
 
 def set_post_status(db: Session, post_id: uuid.UUID, status: str) -> dict[str, Any] | None:
-    if status not in {"published", "unpublished", "draft"}:
+    def _bad_status() -> None:
         raise ValueError("invalid status")
+
+    pick(status not in {"published", "unpublished", "draft"}, _bad_status, lambda: None)
     db.execute(
         text(
             """
@@ -398,21 +428,27 @@ def get_post_by_id(
         text("SELECT * FROM qb.seo_post WHERE id = :id"),
         {"id": post_id},
     ).mappings().first()
-    if not row:
-        return None
-    return _public_post(dict(row), include_internal=include_internal)
+    return pick(
+        not row,
+        lambda: None,
+        lambda: _public_post(dict(row), include_internal=include_internal),
+    )
 
 
 def get_post_by_slug(
     db: Session, slug: str, *, published_only: bool = True
 ) -> dict[str, Any] | None:
-    q = "SELECT * FROM qb.seo_post WHERE slug = :s"
-    if published_only:
-        q += " AND status = 'published'"
+    q = pick(
+        published_only,
+        lambda: "SELECT * FROM qb.seo_post WHERE slug = :s AND status = 'published'",
+        lambda: "SELECT * FROM qb.seo_post WHERE slug = :s",
+    )
     row = db.execute(text(q), {"s": slug}).mappings().first()
-    if not row:
-        return None
-    return _public_post(dict(row), include_internal=False)
+    return pick(
+        not row,
+        lambda: None,
+        lambda: _public_post(dict(row), include_internal=False),
+    )
 
 
 def list_published(
@@ -426,9 +462,11 @@ def list_published(
     offset = max(0, offset)
     where = ["status = 'published'"]
     params: dict[str, Any] = {"lim": limit, "off": offset}
-    if stream in {"general", "system_design"}:
-        where.append("stream = :stream")
-        params["stream"] = stream
+    pick(
+        stream in {"general", "system_design"},
+        lambda: (where.append("stream = :stream"), params.__setitem__("stream", stream)),
+        lambda: None,
+    )
     clause = " AND ".join(where)
     total = db.execute(
         text(f"SELECT COUNT(*)::int FROM qb.seo_post WHERE {clause}"),
@@ -456,7 +494,7 @@ def list_published(
             "format": r["format"],
             "stream": r["stream"],
             "author_name": r["author_name"],
-            "published_at": r["published_at"].isoformat() if r.get("published_at") else None,
+            "published_at": _maybe_iso(r.get("published_at")),
             "cta_kind": r["cta_kind"],
         }
         for r in rows
@@ -486,8 +524,8 @@ def list_admin_posts(db: Session, *, limit: int = 40) -> list[dict[str, Any]]:
             "status": r["status"],
             "author_name": r["author_name"],
             "source_kind": r["source_kind"],
-            "published_at": r["published_at"].isoformat() if r.get("published_at") else None,
-            "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+            "published_at": _maybe_iso(r.get("published_at")),
+            "created_at": _maybe_iso(r.get("created_at")),
             "topic_fingerprint": r["topic_fingerprint"],
         }
         for r in rows
@@ -504,39 +542,46 @@ def list_post_questions(db: Session, slug: str, *, limit: int = 20) -> dict[str,
         ),
         {"s": slug},
     ).mappings().first()
-    if not post:
+    def _empty() -> dict[str, Any]:
         return {"post": None, "items": []}
-    rows = db.execute(
-        text(
-            """
-            SELECT a.id, a.payload
-            FROM qb.seo_post_assertion spa
-            JOIN intel.assertion a ON a.id = spa.assertion_id
-            WHERE spa.post_id = :pid AND a.status = 'active'
-            ORDER BY spa.position ASC
-            LIMIT :lim
-            """
-        ),
-        {"pid": post["id"], "lim": max(1, min(limit, 40))},
-    ).mappings().all()
-    items = []
-    for r in rows:
-        payload = r["payload"] if isinstance(r["payload"], dict) else {}
-        options = payload.get("options") or []
-        if isinstance(options, dict):
-            options = [options[k] for k in sorted(options.keys())]
-        items.append(
-            {
-                "id": str(r["id"]),
-                "question": payload.get("stem") or payload.get("question") or "",
-                "options": list(options),
-                "is_multi": bool(payload.get("is_multi") or payload.get("multi")),
-            }
-        )
-    return {
-        "post": {"id": str(post["id"]), "slug": post["slug"], "title": post["title"]},
-        "items": items,
-    }
+
+    def _items() -> dict[str, Any]:
+        rows = db.execute(
+            text(
+                """
+                SELECT a.id, a.payload
+                FROM qb.seo_post_assertion spa
+                JOIN intel.assertion a ON a.id = spa.assertion_id
+                WHERE spa.post_id = :pid AND a.status = 'active'
+                ORDER BY spa.position ASC
+                LIMIT :lim
+                """
+            ),
+            {"pid": post["id"], "lim": max(1, min(limit, 40))},
+        ).mappings().all()
+        items = []
+        for r in rows:
+            payload = pick(isinstance(r["payload"], dict), lambda: r["payload"], lambda: {})
+            options = payload.get("options") or []
+            options = pick(
+                isinstance(options, dict),
+                lambda: [options[k] for k in sorted(options.keys())],
+                lambda: options,
+            )
+            items.append(
+                {
+                    "id": str(r["id"]),
+                    "question": payload.get("stem") or payload.get("question") or "",
+                    "options": list(options),
+                    "is_multi": bool(payload.get("is_multi") or payload.get("multi")),
+                }
+            )
+        return {
+            "post": {"id": str(post["id"]), "slug": post["slug"], "title": post["title"]},
+            "items": items,
+        }
+
+    return pick(not post, _empty, _items)
 
 
 def pick_topic_queue(db: Session, stream: str = "system_design") -> dict[str, Any] | None:
@@ -557,7 +602,7 @@ def pick_topic_queue(db: Session, stream: str = "system_design") -> dict[str, An
         ),
         {"stream": stream},
     ).mappings().first()
-    return dict(row) if row else None
+    return _row_dict(row)
 
 
 def mark_topic_used(db: Session, topic_id: uuid.UUID) -> None:
@@ -593,7 +638,7 @@ def pick_unused_sd_problem(db: Session) -> dict[str, Any] | None:
             """
         )
     ).mappings().first()
-    return dict(row) if row else None
+    return _row_dict(row)
 
 
 def list_newspaper_cook_candidates(db: Session, *, limit: int = 8) -> list[dict[str, Any]]:
@@ -675,9 +720,11 @@ def list_upload_candidates(db: Session, *, limit: int = 5) -> list[dict[str, Any
     out = []
     for r in rows:
         text_body = (r.get("text") or "").strip()
-        if len(text_body) < seo_candidate_min_chars("upload"):
-            continue
-        out.append(dict(r))
+        pick(
+            len(text_body) >= seo_candidate_min_chars("upload"),
+            lambda: out.append(dict(r)),
+            lambda: None,
+        )
     return out
 
 
@@ -722,7 +769,7 @@ def aggregate_document_text(db: Session, document_id: uuid.UUID) -> str:
         ),
         {"d": document_id},
     ).first()
-    return str(row[0] if row and row[0] else "")
+    return pick(bool(row) and bool(row[0]), lambda: str(row[0]), lambda: "")
 
 
 def list_document_page_texts(
@@ -766,15 +813,19 @@ def get_edition_blog_post(
         ),
         {"slug": paper_slug, "day": edition_date},
     ).mappings().first()
-    if not row:
+    def _missing() -> None:
         return None
-    post = _public_post(dict(row), include_internal=False)
-    post["edition_id"] = str(row["edition_id"])
-    post["paper_slug"] = paper_slug
-    post["paper_title"] = row.get("paper_title") or paper_slug
-    post["edition_date"] = row["edition_date"].isoformat()
-    post["practice_href"] = f"/practice/newspaper/e/{row['edition_id']}"
-    return post
+
+    def _post() -> dict[str, Any]:
+        post = _public_post(dict(row), include_internal=False)
+        post["edition_id"] = str(row["edition_id"])
+        post["paper_slug"] = paper_slug
+        post["paper_title"] = row.get("paper_title") or paper_slug
+        post["edition_date"] = row["edition_date"].isoformat()
+        post["practice_href"] = f"/practice/newspaper/e/{row['edition_id']}"
+        return post
+
+    return pick(not row, _missing, _post)
 
 
 def list_edition_blog_archive(
@@ -806,9 +857,7 @@ def list_edition_blog_archive(
             "slug": r["slug"],
             "title": r["title"],
             "lede": r["lede"],
-            "published_at": r["blog_published_at"].isoformat()
-            if r.get("blog_published_at")
-            else None,
+            "published_at": _maybe_iso(r.get("blog_published_at")),
             "href": f"/learn/newspaper/{paper_slug}/{r['edition_date'].isoformat()}",
         }
         for r in rows
@@ -828,12 +877,27 @@ def _public_post(row: dict[str, Any], *, include_internal: bool) -> dict[str, An
         "status": row["status"],
         "faq_jsonld": row.get("faq_jsonld") or [],
         "cta_kind": row.get("cta_kind") or "practice",
-        "published_at": row["published_at"].isoformat() if row.get("published_at") else None,
-        "created_at": row["created_at"].isoformat() if isinstance(row.get("created_at"), datetime) else row.get("created_at"),
+        "published_at": _maybe_iso(row.get("published_at")),
+        "created_at": pick(
+            isinstance(row.get("created_at"), datetime),
+            lambda: row["created_at"].isoformat(),
+            lambda: row.get("created_at"),
+        ),
     }
-    if include_internal:
-        out["topic_fingerprint"] = row.get("topic_fingerprint")
-        out["source_kind"] = row.get("source_kind")
-        out["source_ref"] = row.get("source_ref") or {}
-        out["artifact_id"] = str(row["artifact_id"]) if row.get("artifact_id") else None
+    pick(
+        include_internal,
+        lambda: out.update(
+            {
+                "topic_fingerprint": row.get("topic_fingerprint"),
+                "source_kind": row.get("source_kind"),
+                "source_ref": row.get("source_ref") or {},
+                "artifact_id": pick(
+                    bool(row.get("artifact_id")),
+                    lambda: str(row["artifact_id"]),
+                    lambda: None,
+                ),
+            }
+        ),
+        lambda: None,
+    )
     return out

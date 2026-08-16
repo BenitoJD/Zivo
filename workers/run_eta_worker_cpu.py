@@ -12,6 +12,7 @@ import logging
 import signal
 import threading
 
+from app.engine_runtime import pick
 from app.eta.worker import run_eta_worker
 
 logging.basicConfig(level=logging.INFO)
@@ -30,5 +31,8 @@ def main() -> None:
     run_eta_worker(should_stop=stop_event.is_set)
 
 
-if __name__ == "__main__":
+def _cli() -> None:
     main()
+
+
+pick(__name__ == "__main__", _cli, lambda: None)

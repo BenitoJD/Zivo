@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
+from app.engine_runtime import pick
 from app.models import Account
 from app.repositories.intel import (
     count_concept_questions,
@@ -47,21 +48,28 @@ class SearchOut(BaseModel):
     results: list[ConceptSummary]
 
 
+def _raise_http(status: int, detail: str) -> None:
+    raise HTTPException(status_code=status, detail=detail)
+
+
 def _ensure_practice_enabled() -> None:
-    """Kill switch — flips the whole feature off via config."""
-    if not get_settings().practice_enabled:
-        raise HTTPException(status_code=404, detail="Practice library is disabled")
+    """Kill switch: flips the whole feature off via config."""
+    pick(
+        get_settings().practice_enabled,
+        lambda: None,
+        lambda: _raise_http(404, "Practice library is disabled"),
+    )
 
 
 def _sanitize_payload(payload: dict | None) -> dict:
     """Strip private/keys the public UI should never see. Mirrors assertions.py."""
-    if not isinstance(payload, dict):
-        return {}
-    out = dict(payload)
-    # Drop internal/private keys.
-    for key in ("artifact_id", "_assertion_id", "page_content_hash", "reused_from_shared"):
-        out.pop(key, None)
-    return out
+    def _strip() -> dict:
+        out = dict(payload)
+        for key in ("artifact_id", "_assertion_id", "page_content_hash", "reused_from_shared"):
+            out.pop(key, None)
+        return out
+
+    return pick(isinstance(payload, dict), _strip, lambda: {})
 
 
 def _run_async(coro):
@@ -69,16 +77,15 @@ def _run_async(coro):
     import asyncio
     import concurrent.futures
 
-    try:
-        asyncio.get_running_loop()
-        in_loop = True
-    except RuntimeError:
-        in_loop = False
-
-    if in_loop:
+    def _in_loop():
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(asyncio.run, coro).result()
-    return asyncio.run(coro)
+
+    try:
+        asyncio.get_running_loop()
+        return _in_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
 
 
 @router.get("/search")
@@ -112,14 +119,16 @@ def get_concept(qid: str, db: Session = Depends(get_db)) -> ConceptOut:
     """Concept detail: label, description (from Wikidata), question count, hierarchy."""
     _ensure_practice_enabled()
     qid = qid.strip().upper()
-    if not qid.startswith("Q"):
-        raise HTTPException(status_code=400, detail="Invalid QID")
+    pick(qid.startswith("Q"), lambda: None, lambda: _raise_http(400, "Invalid QID"))
 
     entity_id = get_concept_entity_by_qid(db, qid)
-    count = count_concept_questions(db, entity_id) if entity_id else 0
+    count = pick(
+        bool(entity_id),
+        lambda: count_concept_questions(db, entity_id),
+        lambda: 0,
+    )
 
-    # Label + description from Wikidata (always fresh; cheap cached-ish call).
-    label = get_concept_label(db, entity_id) if entity_id else qid
+    label = pick(bool(entity_id), lambda: get_concept_label(db, entity_id), lambda: qid)
     description = ""
     parents: list[ConceptSummary] = []
     children: list[ConceptSummary] = []
@@ -130,21 +139,17 @@ def get_concept(qid: str, db: Session = Depends(get_db)) -> ConceptOut:
         for p in detail.parents:
             parents.append(ConceptSummary(qid=p.qid, label=p.label, description=p.description))
     except wikidata.WikidataError:
-        # Network/lookup failure is non-fatal for a read; show what we have.
         pass
 
-    # Children come from our own relation graph (materialized at generation time).
-    if entity_id:
+    def _load_children() -> None:
         for c in get_concept_relations(db, entity_id, direction="children"):
             children.append(
                 ConceptSummary(qid=c.get("qid") or "", label=c.get("label") or "", description="")
             )
 
-    # Only claim "generating" when a generate.questions job is actually queued/running
-    # for this practice QID. Entity-with-zero-questions used to stick the UI forever
-    # after a failed or abandoned generation.
-    is_generating = False
-    if entity_id is not None and count == 0:
+    pick(bool(entity_id), _load_children, lambda: None)
+
+    def _check_generating() -> bool:
         from sqlalchemy import text as sa_text
 
         active = db.execute(
@@ -165,7 +170,13 @@ def get_concept(qid: str, db: Session = Depends(get_db)) -> ConceptOut:
             ),
             {"qid": qid},
         ).scalar()
-        is_generating = active is not None
+        return active is not None
+
+    is_generating = pick(
+        entity_id is not None and count == 0,
+        _check_generating,
+        lambda: False,
+    )
 
     return ConceptOut(
         qid=qid,
@@ -183,7 +194,7 @@ class QuestionItem(BaseModel):
     question: str
     options: list[str] = []
     # True when the item is select-all-that-apply. Answers/explanations are
-    # intentionally omitted here — grade via /api/mcq/grade.
+    # intentionally omitted here: grade via /api/mcq/grade.
     is_multi: bool = False
 
 
@@ -216,46 +227,57 @@ def list_questions(
     _ensure_practice_enabled()
     qid = qid.strip().upper()
     entity_id = get_concept_entity_by_qid(db, qid)
-    if not entity_id:
+
+    def _empty() -> QuestionsOut:
         return QuestionsOut(qid=qid, question_count=0, items=[])
-    owner_id = user.id if user else None
-    total = count_concept_questions(db, entity_id, public_only=True, owner_account_id=owner_id)
-    rows = get_concept_questions(
-        db, entity_id, limit=limit, offset=offset, public_only=True, owner_account_id=owner_id
-    )
-    items: list[QuestionItem] = []
-    item_ids: list[str] = []
-    for row in rows:
-        payload = _sanitize_payload(row.get("payload") if isinstance(row.get("payload"), dict) else {})
-        raw_ci = payload.get("correct_indices")
-        is_multi = isinstance(raw_ci, list) and len(raw_ci) >= 2
-        item_id = str(row["id"])
-        item_ids.append(item_id)
-        items.append(
-            QuestionItem(
-                id=item_id,
-                question=payload.get("question") or row.get("title") or "",
-                options=list(payload.get("options") or []),
-                is_multi=is_multi,
+
+    def _with_entity() -> QuestionsOut:
+        owner_id = pick(user is not None, lambda: user.id, lambda: None)
+        total = count_concept_questions(
+            db, entity_id, public_only=True, owner_account_id=owner_id
+        )
+        rows = get_concept_questions(
+            db, entity_id, limit=limit, offset=offset, public_only=True, owner_account_id=owner_id
+        )
+        items: list[QuestionItem] = []
+        item_ids: list[str] = []
+        for row in rows:
+            payload = _sanitize_payload(row.get("payload"))
+            raw_ci = payload.get("correct_indices")
+            is_multi = isinstance(raw_ci, list) and len(raw_ci) >= 2
+            item_id = str(row["id"])
+            item_ids.append(item_id)
+            items.append(
+                QuestionItem(
+                    id=item_id,
+                    question=payload.get("question") or row.get("title") or "",
+                    options=list(payload.get("options") or []),
+                    is_multi=is_multi,
+                )
             )
+
+        answered_ids: list[str] = []
+        resume_index = 0
+        subject_entity_id = resolve_subject_entity(db, user, guest_id)
+
+        def _fill_answered() -> None:
+            nonlocal answered_ids, resume_index
+            answered_set = answered_assertion_ids(db, subject_entity_id, item_ids)
+            answered_ids = list(filter(lambda item_id: item_id in answered_set, item_ids))
+            while resume_index < len(items) and items[resume_index].id in answered_set:
+                resume_index += 1
+
+        pick(bool(subject_entity_id) and bool(item_ids), _fill_answered, lambda: None)
+
+        return QuestionsOut(
+            qid=qid,
+            question_count=total,
+            items=items,
+            answered_ids=answered_ids,
+            resume_index=resume_index,
         )
 
-    answered_ids: list[str] = []
-    resume_index = 0
-    subject_entity_id = resolve_subject_entity(db, user, guest_id)
-    if subject_entity_id and item_ids:
-        answered_set = answered_assertion_ids(db, subject_entity_id, item_ids)
-        answered_ids = [item_id for item_id in item_ids if item_id in answered_set]
-        while resume_index < len(items) and items[resume_index].id in answered_set:
-            resume_index += 1
-
-    return QuestionsOut(
-        qid=qid,
-        question_count=total,
-        items=items,
-        answered_ids=answered_ids,
-        resume_index=resume_index,
-    )
+    return pick(not entity_id, _empty, _with_entity)
 
 
 class GenerateOut(BaseModel):

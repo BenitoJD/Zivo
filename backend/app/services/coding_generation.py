@@ -28,6 +28,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
 from app.repositories.intel import _concept_id, _source_id
 from app.services.code_execution import DEFAULT_LANGUAGE_ID, LANGUAGES, run_tests
 from app.services.llm_router import acomplete_chat
@@ -38,6 +39,7 @@ from app.services.open_response import (
     evaluate_coding_reference_verify,
     plan_coding_page_input_tokens,
     plan_coding_test_visibility,
+    resolve_coding_language_id,
     should_record_coding_solve,
 )
 from app.services.question_budget import plan_coding_page_yield
@@ -104,28 +106,51 @@ def generate_coding_for_page(
     Returns the persisted public payloads (no hidden tests, no reference solution) so
     the caller (ETA job) can log what landed. Always commits what it persisted.
     """
-    persisted: list[dict[str, Any]] = []
-    if not page_text or not page_text.strip():
-        return persisted
+    return pick(
+        not page_text or not page_text.strip(),
+        lambda: [],
+        lambda: _generate_loop(db, document_id, page_number, page_text, count),
+    )
 
+
+def _generate_loop(
+    db: Session,
+    document_id: uuid.UUID,
+    page_number: int,
+    page_text: str,
+    count: int | None,
+) -> list[dict[str, Any]]:
     excerpt = truncate_to_tokens(page_text, plan_coding_page_input_tokens())
     target = plan_coding_page_yield(count)
+    persisted: list[dict[str, Any]] = []
 
-    for _ in range(target):
+    def go(n: int) -> list[dict[str, Any]]:
+        return pick(n <= 0, lambda: persisted, lambda: step(n))
+
+    def step(n: int) -> list[dict[str, Any]]:
         problem = _generate_and_verify(db, excerpt)
-        if not problem:
-            break
+        return pick(not problem, lambda: persisted, lambda: add(n, problem))
+
+    def add(n: int, problem: dict[str, Any]) -> list[dict[str, Any]]:
         sequence = _next_sequence(db, document_id, page_number)
         payload = _persist(db, document_id, page_number, sequence, problem)
-        if payload:
-            persisted.append(payload)
+        pick(bool(payload), lambda: persisted.append(payload), lambda: None)
+        return go(n - 1)
 
-    if persisted:
-        db.commit()
-        logger.info(
-            "coding generation: doc=%s page=%s persisted=%d",
-            document_id, page_number, len(persisted),
-        )
+    go(target)
+    pick(
+        bool(persisted),
+        lambda: (
+            db.commit(),
+            logger.info(
+                "coding generation: doc=%s page=%s persisted=%d",
+                document_id,
+                page_number,
+                len(persisted),
+            ),
+        ),
+        lambda: None,
+    )
     return persisted
 
 
@@ -137,47 +162,55 @@ def _generate_and_verify(db: Session, page_excerpt: str) -> dict[str, Any] | Non
     truth — if the reference fails, the tests or the solution are wrong; either way
     the problem is unusable.
     """
-    last_problem: dict[str, Any] | None = None
-    for _ in range(_MAX_VERIFY_ATTEMPTS):
+    last: dict[str, Any] = {"p": None}
+
+    def attempt() -> dict[str, Any] | None:
         problem = _llm_generate(db, page_excerpt)
-        if not problem:
-            continue
-        last_problem = problem
-        language_id = int(problem.get("language_id") or DEFAULT_LANGUAGE_ID)
-        if language_id not in LANGUAGES:
-            language_id = DEFAULT_LANGUAGE_ID
-            problem["language_id"] = language_id
-        tests = problem.get("tests") or []
-        reference = problem.get("reference_solution") or ""
-        sandbox_error = False
-        passed = 0
-        total = 0
-        if tests and reference:
-            try:
-                sandbox = run_coro_in_worker(run_tests(reference, language_id, tests))
-            except Exception:
-                logger.debug("coding verify: sandbox error; retrying", exc_info=True)
-                sandbox_error = True
-            else:
-                sandbox_error = bool(sandbox.get("error"))
-                passed = int(sandbox.get("passed") or 0)
-                total = int(sandbox.get("total") or 0)
-        gate = evaluate_coding_reference_verify(
-            has_tests=bool(tests),
-            has_reference=bool(reference),
-            sandbox_error=sandbox_error,
-            passed=passed,
-            total=total,
-        )
-        if gate.persist:
-            return problem
-        logger.debug("coding verify: %s; retrying", gate.reason)
-    if last_problem:
-        logger.info(
+        return pick(not problem, lambda: None, lambda: _verify_one(problem, last))
+
+    result = next(filter(None, (attempt() for _ in range(_MAX_VERIFY_ATTEMPTS))), None)
+    pick(
+        result is None and last["p"] is not None,
+        lambda: logger.info(
             "coding generation: discarding problem '%s' — reference failed verify gate",
-            last_problem.get("title", "?"),
-        )
-    return None
+            last["p"].get("title", "?"),
+        ),
+        lambda: None,
+    )
+    return result
+
+
+def _verify_one(problem: dict[str, Any], last: dict[str, Any]) -> dict[str, Any] | None:
+    last["p"] = problem
+    language_id = resolve_coding_language_id(
+        problem.get("language_id"), LANGUAGES, default=DEFAULT_LANGUAGE_ID
+    )
+    problem["language_id"] = language_id
+    tests = problem.get("tests") or []
+    reference = problem.get("reference_solution") or ""
+    box = {"sandbox_error": False, "passed": 0, "total": 0}
+
+    def _run_sandbox() -> None:
+        try:
+            sandbox = run_coro_in_worker(run_tests(reference, language_id, tests))
+        except Exception:
+            logger.debug("coding verify: sandbox error; retrying", exc_info=True)
+            box["sandbox_error"] = True
+            return
+        box["sandbox_error"] = bool(sandbox.get("error"))
+        box["passed"] = int(sandbox.get("passed") or 0)
+        box["total"] = int(sandbox.get("total") or 0)
+
+    pick(bool(tests) and bool(reference), _run_sandbox, lambda: None)
+    gate = evaluate_coding_reference_verify(
+        has_tests=bool(tests),
+        has_reference=bool(reference),
+        sandbox_error=box["sandbox_error"],
+        passed=box["passed"],
+        total=box["total"],
+    )
+    pick(not gate.persist, lambda: logger.debug("coding verify: %s; retrying", gate.reason), lambda: None)
+    return pick(gate.persist, lambda: problem, lambda: None)
 
 
 def _llm_generate(db: Session, page_excerpt: str) -> dict[str, Any] | None:
@@ -187,9 +220,16 @@ def _llm_generate(db: Session, page_excerpt: str) -> dict[str, Any] | None:
 
     draft_key = content_hash_key("coding_draft", page_excerpt)
     hit = cache_get(db, kind="coding_draft", cache_key=draft_key)
-    if isinstance(hit, dict) and hit.get("statement"):
-        return dict(hit)
+    return pick(
+        isinstance(hit, dict) and bool(hit.get("statement")),
+        lambda: dict(hit),
+        lambda: _llm_generate_fresh(db, page_excerpt, draft_key, cache_put),
+    )
 
+
+def _llm_generate_fresh(
+    db: Session, page_excerpt: str, draft_key: str, cache_put: Any
+) -> dict[str, Any] | None:
     user = (
         f"SOURCE MATERIAL (a page the learner uploaded — apply its concept, do not copy):\n"
         f"{page_excerpt}\n\n"
@@ -211,41 +251,49 @@ def _llm_generate(db: Session, page_excerpt: str) -> dict[str, Any] | None:
         logger.debug("coding generation: LLM call failed", exc_info=True)
         return None
     problem = _parse_problem_json(raw)
-    if problem:
-        cache_put(db, kind="coding_draft", cache_key=draft_key, value=problem)
+    pick(
+        bool(problem),
+        lambda: cache_put(db, kind="coding_draft", cache_key=draft_key, value=problem),
+        lambda: None,
+    )
     return problem
 
 
 def _parse_problem_json(raw: str) -> dict[str, Any] | None:
     """Extract the JSON object from an LLM response and validate its shape."""
-    if not raw or not raw.strip():
-        return None
-    block = raw.strip()
-    # Tolerate ```json fenced responses.
+    return pick(not raw or not raw.strip(), lambda: None, lambda: _parse_problem_block(raw.strip()))
+
+
+def _parse_problem_block(block: str) -> dict[str, Any] | None:
     import re
 
     fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", block, re.DOTALL)
-    if fence:
-        block = fence.group(1)
-    else:
-        start = block.find("{")
-        end = block.rfind("}")
-        if start < 0 or end <= start:
-            return None
-        block = block[start : end + 1]
+    extracted = pick(bool(fence), lambda: fence.group(1), lambda: _from_braces(block))
+    return pick(extracted is None, lambda: None, lambda: _loads_problem(extracted))
+
+
+def _from_braces(block: str) -> str | None:
+    start = block.find("{")
+    end = block.rfind("}")
+    return pick(start < 0 or end <= start, lambda: None, lambda: block[start : end + 1])
+
+
+def _loads_problem(block: str) -> dict[str, Any] | None:
     try:
         problem = json.loads(block)
     except json.JSONDecodeError:
         return None
-    if not isinstance(problem, dict):
-        return None
-    # Required fields for a gradeable problem.
     required = ("statement", "starter_code", "reference_solution", "tests")
-    if not all(problem.get(k) for k in required):
-        return None
-    if not isinstance(problem.get("tests"), list):
-        return None
-    # Default language to Python 3 if the model omitted it.
+    return pick(
+        not isinstance(problem, dict)
+        or not all(problem.get(k) for k in required)
+        or not isinstance(problem.get("tests"), list),
+        lambda: None,
+        lambda: _with_default_language(problem),
+    )
+
+
+def _with_default_language(problem: dict[str, Any]) -> dict[str, Any]:
     problem.setdefault("language_id", DEFAULT_LANGUAGE_ID)
     return problem
 
@@ -283,20 +331,49 @@ def _persist(
     Returns the *public* payload (sample tests only, no reference/hidden) for logging.
     """
     bank = evaluate_coding_bank_item(problem)
-    if not bank.ok:
-        return None
+    return pick(not bank.ok, lambda: None, lambda: _persist_verified(
+        db, document_id, page_number, sequence, problem, bank
+    ))
 
+
+def _persist_verified(
+    db: Session,
+    document_id: uuid.UUID,
+    page_number: int,
+    sequence: int,
+    problem: dict[str, Any],
+    bank: Any,
+) -> dict[str, Any] | None:
     sample_tests, hidden_tests = _split_tests(problem.get("tests") or [])
-    if not hidden_tests:
-        return None
+    return pick(
+        not hidden_tests,
+        lambda: None,
+        lambda: _insert_coding_rows(
+            db, document_id, page_number, sequence, problem, bank, sample_tests, hidden_tests
+        ),
+    )
+
+
+def _insert_coding_rows(
+    db: Session,
+    document_id: uuid.UUID,
+    page_number: int,
+    sequence: int,
+    problem: dict[str, Any],
+    bank: Any,
+    sample_tests: list[dict[str, str]],
+    hidden_tests: list[dict[str, str]],
+) -> dict[str, Any] | None:
+    from app.services.open_response import normalize_coding_difficulty
 
     assertion_id = uuid.uuid4()
     title = bank.resolved_title[:200]
-    difficulty = (str(problem.get("difficulty") or "medium").strip().lower() or "medium")
-    language_id = int(problem.get("language_id") or DEFAULT_LANGUAGE_ID)
+    difficulty = normalize_coding_difficulty(problem.get("difficulty"))
+    language_id = resolve_coding_language_id(
+        problem.get("language_id"), LANGUAGES, default=DEFAULT_LANGUAGE_ID
+    )
     statement = str(problem.get("statement") or "")
 
-    # Full payload — internal, never shipped wholesale to the client.
     full_payload = {
         "format": "qb.coding.v1",
         "artifact_id": str(document_id),
@@ -310,18 +387,18 @@ def _persist(
         "difficulty": difficulty,
         "sample_tests": sample_tests,
         "hidden_tests": hidden_tests,
-        # Reference solution kept for editorial/debug only; API never returns it.
         "editor_solution": problem.get("reference_solution") or "",
         "concept": problem.get("concept") or "",
         "tags": problem.get("tags") or [],
         "origin": "generated",
     }
 
-    tags = [
-        str(t).strip().lower()[:40]
-        for t in (problem.get("tags") or [])
-        if str(t).strip()
-    ][:12]
+    tags = list(
+        map(
+            lambda t: str(t).strip().lower()[:40],
+            filter(lambda t: str(t).strip(), problem.get("tags") or []),
+        )
+    )[:12]
 
     try:
         db.execute(
@@ -392,7 +469,6 @@ def _persist(
         )
         return None
 
-    # Public view (what the API returns): no hidden tests, no reference solution.
     return {
         "assertion_id": str(assertion_id),
         "title": title,
@@ -452,8 +528,31 @@ def record_coding_submit(
 
     The per-case breakdown for the first SOLVE is captured in value_json for analytics.
     """
-    if not should_record_coding_solve(has_subject=subject_entity_id is not None, passed=passed):
-        return
+    pick(
+        not should_record_coding_solve(
+            has_subject=subject_entity_id is not None, passed=passed
+        ),
+        lambda: None,
+        lambda: _insert_coding_measurement(
+            db,
+            assertion_id=assertion_id,
+            passed_count=passed_count,
+            total_count=total_count,
+            language_id=language_id,
+            subject_entity_id=subject_entity_id,
+        ),
+    )
+
+
+def _insert_coding_measurement(
+    db: Session,
+    *,
+    assertion_id: uuid.UUID,
+    passed_count: int,
+    total_count: int,
+    language_id: int,
+    subject_entity_id: uuid.UUID | None,
+) -> None:
     value_json = {
         "passed_count": int(passed_count),
         "total_count": int(total_count),

@@ -11,6 +11,7 @@ from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.engine_runtime import pick
 from app.models import Account, DemoUsage, UsageDaily
 from app.services.request_ip import client_ip
 
@@ -27,19 +28,34 @@ def _ip_hash(request: Request) -> str:
     return hashlib.sha256(client_ip(request).encode()).hexdigest()
 
 
-def ensure_demo_cookie(response: Response | None, cookie_id: str | None) -> str:
-    if cookie_id:
-        return cookie_id
-    new_id = uuid.uuid4().hex
-    if response is not None:
-        from app.services.auth import cookie_set_kwargs
+def _limit() -> None:
+    raise HTTPException(status_code=429, detail="Daily message limit reached")
 
-        response.set_cookie(
-            key=DEMO_COOKIE,
-            value=new_id,
-            **cookie_set_kwargs(max_age=86400 * 30),
-        )
-    return new_id
+
+def _guest_limit() -> None:
+    raise HTTPException(
+        status_code=429,
+        detail=f"Message limit reached ({settings.guest_message_limit}) — sign in to continue",
+    )
+
+
+def ensure_demo_cookie(response: Response | None, cookie_id: str | None) -> str:
+    def _new() -> str:
+        new_id = uuid.uuid4().hex
+        pick(response is not None, lambda: _set_cookie(response, new_id), lambda: None)
+        return new_id
+
+    return pick(bool(cookie_id), lambda: cookie_id, _new)
+
+
+def _set_cookie(response: Response, new_id: str) -> None:
+    from app.services.auth import cookie_set_kwargs
+
+    response.set_cookie(
+        key=DEMO_COOKIE,
+        value=new_id,
+        **cookie_set_kwargs(max_age=86400 * 30),
+    )
 
 
 def _guest_usage_total(db: Session, *, ip_h: str, cookie: str, today: datetime) -> int:
@@ -62,24 +78,26 @@ def check_message_allowed(
     demo_cookie: str | None,
 ) -> None:
     today = _today()
-    if user:
+
+    def _user() -> None:
         row = (
             db.query(UsageDaily)
             .filter(UsageDaily.account_id == user.id, UsageDaily.usage_date == today)
             .first()
         )
-        count = row.message_count if row else 0
-        if count >= settings.daily_message_limit:
-            raise HTTPException(status_code=429, detail="Daily message limit reached")
-        return
+        count = pick(bool(row), lambda: row.message_count, lambda: 0)
+        pick(count >= settings.daily_message_limit, _limit, lambda: None)
 
-    ip_h = _ip_hash(request)
-    cookie = demo_cookie or ""
-    if _guest_usage_total(db, ip_h=ip_h, cookie=cookie, today=today) >= settings.guest_message_limit:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Message limit reached ({settings.guest_message_limit}) — sign in to continue",
+    def _guest() -> None:
+        ip_h = _ip_hash(request)
+        cookie = demo_cookie or ""
+        pick(
+            _guest_usage_total(db, ip_h=ip_h, cookie=cookie, today=today) >= settings.guest_message_limit,
+            _guest_limit,
+            lambda: None,
         )
+
+    pick(bool(user), _user, _guest)
 
 
 def _atomic_increment_daily(db: Session, account_id: uuid.UUID, today: datetime) -> int:
@@ -100,43 +118,44 @@ def _atomic_increment_daily(db: Session, account_id: uuid.UUID, today: datetime)
             "limit": settings.daily_message_limit,
         },
     ).first()
-    if row:
-        return int(row[0])
 
-    inserted = db.execute(
-        text(
-            """
-            INSERT INTO usage_daily (id, account_id, usage_date, message_count)
-            VALUES (gen_random_uuid(), :account_id, :usage_date, 1)
-            ON CONFLICT (account_id, usage_date) DO NOTHING
-            RETURNING message_count
-            """
-        ),
-        {"account_id": account_id, "usage_date": today},
-    ).first()
-    if inserted:
-        return int(inserted[0])
+    def _insert() -> int:
+        inserted = db.execute(
+            text(
+                """
+                INSERT INTO usage_daily (id, account_id, usage_date, message_count)
+                VALUES (gen_random_uuid(), :account_id, :usage_date, 1)
+                ON CONFLICT (account_id, usage_date) DO NOTHING
+                RETURNING message_count
+                """
+            ),
+            {"account_id": account_id, "usage_date": today},
+        ).first()
 
-    row = db.execute(
-        text(
-            """
-            UPDATE usage_daily
-            SET message_count = message_count + 1
-            WHERE account_id = :account_id
-              AND usage_date = :usage_date
-              AND message_count < :limit
-            RETURNING message_count
-            """
-        ),
-        {
-            "account_id": account_id,
-            "usage_date": today,
-            "limit": settings.daily_message_limit,
-        },
-    ).first()
-    if not row:
-        raise HTTPException(status_code=429, detail="Daily message limit reached")
-    return int(row[0])
+        def _retry() -> int:
+            row2 = db.execute(
+                text(
+                    """
+                    UPDATE usage_daily
+                    SET message_count = message_count + 1
+                    WHERE account_id = :account_id
+                      AND usage_date = :usage_date
+                      AND message_count < :limit
+                    RETURNING message_count
+                    """
+                ),
+                {
+                    "account_id": account_id,
+                    "usage_date": today,
+                    "limit": settings.daily_message_limit,
+                },
+            ).first()
+            pick(not row2, _limit, lambda: None)
+            return int(row2[0])
+
+        return pick(bool(inserted), lambda: int(inserted[0]), _retry)
+
+    return pick(bool(row), lambda: int(row[0]), _insert)
 
 
 def _atomic_increment_demo(
@@ -146,11 +165,11 @@ def _atomic_increment_demo(
     cookie: str,
     today: datetime,
 ) -> None:
-    if _guest_usage_total(db, ip_h=ip_h, cookie=cookie, today=today) >= settings.guest_message_limit:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Message limit reached ({settings.guest_message_limit}) — sign in to continue",
-        )
+    pick(
+        _guest_usage_total(db, ip_h=ip_h, cookie=cookie, today=today) >= settings.guest_message_limit,
+        _guest_limit,
+        lambda: None,
+    )
 
     row = db.execute(
         text(
@@ -164,13 +183,9 @@ def _atomic_increment_demo(
         ),
         {"ip_hash": ip_h, "cookie_id": cookie, "usage_date": today},
     ).first()
-    if not row:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Message limit reached ({settings.guest_message_limit}) — sign in to continue",
-        )
+    pick(not row, _guest_limit, lambda: None)
 
-    if _guest_usage_total(db, ip_h=ip_h, cookie=cookie, today=today) > settings.guest_message_limit:
+    def _over() -> None:
         db.execute(
             text(
                 """
@@ -184,10 +199,13 @@ def _atomic_increment_demo(
             ),
             {"ip_hash": ip_h, "cookie_id": cookie, "usage_date": today},
         )
-        raise HTTPException(
-            status_code=429,
-            detail=f"Message limit reached ({settings.guest_message_limit}) — sign in to continue",
-        )
+        _guest_limit()
+
+    pick(
+        _guest_usage_total(db, ip_h=ip_h, cookie=cookie, today=today) > settings.guest_message_limit,
+        _over,
+        lambda: None,
+    )
 
 
 def reserve_message_slot(
@@ -199,9 +217,11 @@ def reserve_message_slot(
 ) -> None:
     """Atomically reserve one message slot before LLM dispatch."""
     today = _today()
-    if user:
+
+    def _user() -> None:
         count = _atomic_increment_daily(db, user.id, today)
-        if count > settings.daily_message_limit:
+
+        def _rollback() -> None:
             db.execute(
                 text(
                     """
@@ -214,14 +234,18 @@ def reserve_message_slot(
                 ),
                 {"account_id": user.id, "usage_date": today},
             )
-            raise HTTPException(status_code=429, detail="Daily message limit reached")
-        db.commit()
-        return
+            _limit()
 
-    ip_h = _ip_hash(request)
-    cookie = demo_cookie or ""
-    _atomic_increment_demo(db, ip_h=ip_h, cookie=cookie, today=today)
-    db.commit()
+        pick(count > settings.daily_message_limit, _rollback, lambda: None)
+        db.commit()
+
+    def _guest() -> None:
+        ip_h = _ip_hash(request)
+        cookie = demo_cookie or ""
+        _atomic_increment_demo(db, ip_h=ip_h, cookie=cookie, today=today)
+        db.commit()
+
+    pick(bool(user), _user, _guest)
 
 
 def increment_message_count(

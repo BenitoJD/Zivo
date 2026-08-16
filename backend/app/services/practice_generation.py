@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import choose, pick
 from app.models import Document, DocumentChunk
 from app.repositories.intel import (
     count_concept_questions,
@@ -53,9 +54,9 @@ def concept_status(db: Session, qid: str) -> EnsureOutcome:
     """
     qid = (qid or "").strip().upper()
     entity_id = get_concept_entity_by_qid(db, qid)
-    count = count_concept_questions(db, entity_id) if entity_id else 0
+    count = pick(bool(entity_id), lambda: count_concept_questions(db, entity_id), lambda: 0)
     return EnsureOutcome(
-        status="ready" if count > 0 else "empty",
+        status=choose(count > 0, "ready", "empty"),
         qid=qid,
         label="",
         question_count=count,
@@ -79,69 +80,94 @@ def ensure_concept_questions(
          so the existing pipeline — quality gate, dedup, tagging — runs unchanged.
     """
     qid = (qid or "").strip().upper()
-    if not qid.startswith("Q"):
+
+    def _invalid() -> EnsureOutcome:
         return EnsureOutcome(status="ready", qid=qid, label="", question_count=0, error="invalid_qid")
 
-    # 1. Resolve concept + hierarchy from Wikidata (network).
-    try:
-        detail = _run_async(wikidata.get_concept(qid))
-    except wikidata.WikidataError as exc:
-        return EnsureOutcome(status="ready", qid=qid, label="", question_count=0, error=str(exc))
+    def _ensure() -> EnsureOutcome:
+        try:
+            detail = _run_async(wikidata.get_concept(qid))
+        except wikidata.WikidataError as exc:
+            return EnsureOutcome(status="ready", qid=qid, label="", question_count=0, error=str(exc))
 
-    concept_entity_id = get_or_create_concept_entity(db, qid, detail.label, detail.description)
-    for parent in detail.parents:
-        parent_entity_id = get_or_create_concept_entity(db, parent.qid, parent.label, parent.description)
-        link_concept_parent(db, concept_entity_id, parent_entity_id)
-    db.flush()
+        concept_entity_id = get_or_create_concept_entity(db, qid, detail.label, detail.description)
+        for parent in detail.parents:
+            parent_entity_id = get_or_create_concept_entity(
+                db, parent.qid, parent.label, parent.description
+            )
+            link_concept_parent(db, concept_entity_id, parent_entity_id)
+        db.flush()
 
-    # 2. Enough questions already?
-    existing = count_concept_questions(db, concept_entity_id)
-    if plan_practice_concept_ready(existing=existing, min_count=min_count):
-        return EnsureOutcome(
-            status="ready", qid=qid, label=detail.label, question_count=existing
+        existing = count_concept_questions(db, concept_entity_id)
+
+        def _ready() -> EnsureOutcome:
+            return EnsureOutcome(
+                status="ready", qid=qid, label=detail.label, question_count=existing
+            )
+
+        def _generate() -> EnsureOutcome:
+            doc = _find_public_doc_for_qid(db, qid)
+
+            def _create() -> Document:
+                try:
+                    article = _run_async(wikidata.get_wikipedia_article(qid))
+                except wikidata.WikidataError as exc:
+                    raise _ReadyError(
+                        EnsureOutcome(
+                            status="ready",
+                            qid=qid,
+                            label=detail.label,
+                            question_count=existing,
+                            error=str(exc),
+                        )
+                    ) from exc
+                return _create_public_doc_from_article(db, article)
+
+            try:
+                resolved = pick(doc is None, _create, lambda: doc)
+            except _ReadyError as exc:
+                return exc.outcome
+
+            activity_id = create_activity(
+                db,
+                type_uri="/vocab/activity/generate_practice",
+                agent="api.practice.generate",
+                source_slug="wikipedia",
+                stats={"qid": qid, "label": detail.label, "document_id": str(resolved.id)},
+            )
+            job = enqueue_generate(
+                db,
+                document_id=resolved.id,
+                account_id=None,
+                activity_id=activity_id,
+                options={
+                    "mode": "page_batch",
+                    "page_number": 1,
+                    "batch_size": min_count,
+                    "practice_qid": qid,
+                },
+            )
+            db.commit()
+            return EnsureOutcome(
+                status="generating",
+                qid=qid,
+                label=detail.label,
+                question_count=existing,
+                job_id=str(job.id),
+            )
+
+        return pick(
+            bool(plan_practice_concept_ready(existing=existing, min_count=min_count)),
+            _ready,
+            _generate,
         )
 
-    # 3. Find or create a public Document sourced from the Wikipedia article.
-    doc = _find_public_doc_for_qid(db, qid)
-    if doc is None:
-        try:
-            article = _run_async(wikidata.get_wikipedia_article(qid))
-        except wikidata.WikidataError as exc:
-            return EnsureOutcome(
-                status="ready", qid=qid, label=detail.label,
-                question_count=existing, error=str(exc),
-            )
-        doc = _create_public_doc_from_article(db, article)
+    return pick(not qid.startswith("Q"), _invalid, _ensure)
 
-    # 4. Enqueue generation. The job runs the full quality pipeline; the
-    #    pinned_qid flows into _persist_assertions so every output is tagged.
-    activity_id = create_activity(
-        db,
-        type_uri="/vocab/activity/generate_practice",
-        agent="api.practice.generate",
-        source_slug="wikipedia",
-        stats={"qid": qid, "label": detail.label, "document_id": str(doc.id)},
-    )
-    job = enqueue_generate(
-        db,
-        document_id=doc.id,
-        account_id=None,
-        activity_id=activity_id,
-        options={
-            "mode": "page_batch",
-            "page_number": 1,
-            "batch_size": min_count,
-            "practice_qid": qid,
-        },
-    )
-    db.commit()
-    return EnsureOutcome(
-        status="generating",
-        qid=qid,
-        label=detail.label,
-        question_count=existing,
-        job_id=str(job.id),
-    )
+
+class _ReadyError(Exception):
+    def __init__(self, outcome: EnsureOutcome) -> None:
+        self.outcome = outcome
 
 
 def _find_public_doc_for_qid(db: Session, qid: str) -> Document | None:
@@ -160,9 +186,7 @@ def _find_public_doc_for_qid(db: Session, qid: str) -> Document | None:
         ),
         {"qid": qid},
     ).first()
-    if not row:
-        return None
-    return db.get(Document, row[0])
+    return pick(not row, lambda: None, lambda: db.get(Document, row[0]))
 
 
 def _create_public_doc_from_article(db: Session, article: wikidata.WikipediaArticle) -> Document:
@@ -170,10 +194,8 @@ def _create_public_doc_from_article(db: Session, article: wikidata.WikipediaArti
     doc_id = uuid.uuid4()
     safe_title = (article.title or article.qid).replace(" ", "-").lower()[:80]
     text_body = article.text or ""
-    # Split into page-sized chunks so the page-scoped generator has something to chew on.
     chunks = _split_text(text_body, plan_practice_source_chunk_chars())
-    if not chunks:
-        chunks = [text_body]
+    chunks = pick(not chunks, lambda: [text_body], lambda: chunks)
 
     doc = Document(
         id=doc_id,
@@ -211,21 +233,28 @@ def _create_public_doc_from_article(db: Session, article: wikidata.WikipediaArti
 
 def _split_text(text: str, max_chars: int) -> list[str]:
     """Split on paragraph boundaries, then merge until ~max_chars per chunk."""
-    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-    if not paragraphs:
-        return [text] if text.strip() else []
-    chunks: list[str] = []
-    buf: list[str] = []
-    size = 0
-    for para in paragraphs:
-        if size + len(para) > max_chars and buf:
-            chunks.append("\n\n".join(buf))
-            buf, size = [], 0
-        buf.append(para)
-        size += len(para)
-    if buf:
-        chunks.append("\n\n".join(buf))
-    return chunks
+    paragraphs = list(filter(None, (p.strip() for p in text.split("\n\n"))))
+
+    def _empty() -> list[str]:
+        return pick(bool(text.strip()), lambda: [text], lambda: [])
+
+    def _merge() -> list[str]:
+        chunks: list[str] = []
+        buf: list[str] = []
+        size = 0
+        for para in paragraphs:
+            def _flush() -> None:
+                nonlocal buf, size
+                chunks.append("\n\n".join(buf))
+                buf, size = [], 0
+
+            pick(size + len(para) > max_chars and bool(buf), _flush, lambda: None)
+            buf.append(para)
+            size += len(para)
+        pick(bool(buf), lambda: chunks.append("\n\n".join(buf)), lambda: None)
+        return chunks
+
+    return pick(not paragraphs, _empty, _merge)
 
 
 def _run_async(coro):
@@ -240,14 +269,14 @@ def _run_async(coro):
         loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = None
-    if loop is not None:
-        # We're inside an existing loop (e.g. async endpoint). This sync helper
-        # shouldn't be called from there; fall back to a thread to avoid blocking.
+
+    def _thread():
         import concurrent.futures
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(asyncio.run, coro).result()
-    return asyncio.run(coro)
+
+    return pick(loop is not None, _thread, lambda: asyncio.run(coro))
 
 
 __all__ = [

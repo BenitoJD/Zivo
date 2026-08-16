@@ -15,9 +15,11 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.engine_runtime import apply, pick
 from app.repositories import newspaper as newspaper_repo
 from app.repositories import seo as seo_repo
 from app.services.auth import require_admin, require_csrf
+from app.services.presence import evaluate_presence
 
 router = APIRouter()
 
@@ -31,6 +33,41 @@ class SettingsIn(BaseModel):
     soft_max_per_day: int | None = Field(default=None, ge=1, le=100)
 
 
+def _raise_http(status: int, detail: str) -> None:
+    raise HTTPException(status_code=status, detail=detail)
+
+
+def _require_present(value, detail: str) -> None:
+    apply(
+        evaluate_presence(value).action,
+        {
+            "missing": lambda: _raise_http(404, detail),
+            "empty": lambda: _raise_http(404, detail),
+            "ok": lambda: None,
+        },
+    )
+
+
+def _iso(value):
+    return pick(bool(value), lambda: value.isoformat(), lambda: None)
+
+
+def _strip_internal(post: dict) -> dict:
+    post.pop("source_kind", None)
+    post.pop("source_ref", None)
+    post.pop("topic_fingerprint", None)
+    post.pop("artifact_id", None)
+    return post
+
+
+def _strip_answers(out: dict) -> dict:
+    for item in out["items"]:
+        item.pop("correct_index", None)
+        item.pop("correct_indices", None)
+        item.pop("explanation", None)
+    return out
+
+
 @router.get("/posts")
 def list_posts(
     stream: str | None = Query(default=None),
@@ -38,22 +75,19 @@ def list_posts(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ) -> dict:
-    if stream is not None and stream not in {"general", "system_design"}:
-        raise HTTPException(status_code=400, detail="Invalid stream")
+    pick(
+        stream is not None and stream not in {"general", "system_design"},
+        lambda: _raise_http(400, "Invalid stream"),
+        lambda: None,
+    )
     return seo_repo.list_published(db, stream=stream, limit=limit, offset=offset)
 
 
 @router.get("/posts/{slug}")
 def get_post(slug: str, db: Session = Depends(get_db)) -> dict:
     post = seo_repo.get_post_by_slug(db, slug, published_only=True)
-    if not post:
-        raise HTTPException(status_code=404, detail="Post not found")
-    # Strip any accidental internal keys
-    post.pop("source_kind", None)
-    post.pop("source_ref", None)
-    post.pop("topic_fingerprint", None)
-    post.pop("artifact_id", None)
-    return post
+    _require_present(post, "Post not found")
+    return _strip_internal(post)
 
 
 @router.get("/posts/{slug}/questions")
@@ -63,14 +97,8 @@ def post_questions(
     db: Session = Depends(get_db),
 ) -> dict:
     out = seo_repo.list_post_questions(db, slug, limit=limit)
-    if out["post"] is None:
-        raise HTTPException(status_code=404, detail="Post not found")
-    # Defense in depth — never leak answer keys
-    for item in out["items"]:
-        item.pop("correct_index", None)
-        item.pop("correct_indices", None)
-        item.pop("explanation", None)
-    return out
+    pick(out["post"] is None, lambda: _raise_http(404, "Post not found"), lambda: None)
+    return _strip_answers(out)
 
 
 @router.get("/sitemap-slugs")
@@ -81,8 +109,8 @@ def sitemap_slugs(db: Session = Depends(get_db)) -> dict:
         "items": [
             {
                 "slug": r["slug"],
-                "published_at": r["published_at"].isoformat() if r.get("published_at") else None,
-                "updated_at": r["updated_at"].isoformat() if r.get("updated_at") else None,
+                "published_at": _iso(r.get("published_at")),
+                "updated_at": _iso(r.get("updated_at")),
             }
             for r in rows
         ],
@@ -90,10 +118,8 @@ def sitemap_slugs(db: Session = Depends(get_db)) -> dict:
             {
                 "paper_slug": r["paper_slug"],
                 "edition_date": r["edition_date"].isoformat(),
-                "published_at": r["blog_published_at"].isoformat()
-                if r.get("blog_published_at")
-                else None,
-                "updated_at": r["updated_at"].isoformat() if r.get("updated_at") else None,
+                "published_at": _iso(r.get("blog_published_at")),
+                "updated_at": _iso(r.get("updated_at")),
             }
             for r in newspaper_rows
         ],
@@ -102,8 +128,11 @@ def sitemap_slugs(db: Session = Depends(get_db)) -> dict:
 
 @router.get("/newspaper/{paper_slug}")
 def newspaper_blog_archive(paper_slug: str, db: Session = Depends(get_db)) -> dict:
-    if not newspaper_repo.is_brand_allowed(db, paper_slug):
-        raise HTTPException(status_code=404, detail="Paper not found")
+    pick(
+        newspaper_repo.is_brand_allowed(db, paper_slug),
+        lambda: None,
+        lambda: _raise_http(404, "Paper not found"),
+    )
     items = seo_repo.list_edition_blog_archive(db, paper_slug=paper_slug)
     row = db.execute(
         text(
@@ -116,7 +145,7 @@ def newspaper_blog_archive(paper_slug: str, db: Session = Depends(get_db)) -> di
         ),
         {"slug": paper_slug},
     ).first()
-    title = str(row[0]) if row and row[0] else paper_slug
+    title = pick(bool(row) and bool(row[0]), lambda: str(row[0]), lambda: paper_slug)
     return {
         "paper_slug": paper_slug,
         "paper_title": title,
@@ -130,18 +159,16 @@ def get_newspaper_edition_blog(
     edition_date: date,
     db: Session = Depends(get_db),
 ) -> dict:
-    if not newspaper_repo.is_brand_allowed(db, paper_slug):
-        raise HTTPException(status_code=404, detail="Edition not found")
+    pick(
+        newspaper_repo.is_brand_allowed(db, paper_slug),
+        lambda: None,
+        lambda: _raise_http(404, "Edition not found"),
+    )
     post = seo_repo.get_edition_blog_post(
         db, paper_slug=paper_slug, edition_date=edition_date
     )
-    if not post:
-        raise HTTPException(status_code=404, detail="Edition not found")
-    post.pop("source_kind", None)
-    post.pop("source_ref", None)
-    post.pop("topic_fingerprint", None)
-    post.pop("artifact_id", None)
-    return post
+    _require_present(post, "Edition not found")
+    return _strip_internal(post)
 
 
 @router.get("/newspaper/{paper_slug}/{edition_date}/questions")
@@ -154,16 +181,10 @@ def newspaper_edition_questions(
     post = seo_repo.get_edition_blog_post(
         db, paper_slug=paper_slug, edition_date=edition_date
     )
-    if not post:
-        raise HTTPException(status_code=404, detail="Edition not found")
+    _require_present(post, "Edition not found")
     out = seo_repo.list_post_questions(db, post["slug"], limit=limit)
-    if out["post"] is None:
-        raise HTTPException(status_code=404, detail="Edition not found")
-    for item in out["items"]:
-        item.pop("correct_index", None)
-        item.pop("correct_indices", None)
-        item.pop("explanation", None)
-    return out
+    pick(out["post"] is None, lambda: _raise_http(404, "Edition not found"), lambda: None)
+    return _strip_answers(out)
 
 
 @router.get("/admin/settings", dependencies=[Depends(require_admin)])
@@ -172,7 +193,7 @@ def get_settings(db: Session = Depends(get_db)) -> dict:
     return {
         "cook_enabled": bool(s.get("cook_enabled")),
         "soft_max_per_day": int(s.get("soft_max_per_day") or 20),
-        "updated_at": s["updated_at"].isoformat() if s.get("updated_at") else None,
+        "updated_at": _iso(s.get("updated_at")),
     }
 
 
@@ -186,7 +207,7 @@ def patch_settings(body: SettingsIn, db: Session = Depends(get_db)) -> dict:
     return {
         "cook_enabled": bool(s.get("cook_enabled")),
         "soft_max_per_day": int(s.get("soft_max_per_day") or 20),
-        "updated_at": s["updated_at"].isoformat() if s.get("updated_at") else None,
+        "updated_at": _iso(s.get("updated_at")),
     }
 
 
@@ -208,6 +229,5 @@ def admin_patch_post(
     db: Session = Depends(get_db),
 ) -> dict:
     post = seo_repo.set_post_status(db, post_id, body.status)
-    if not post:
-        raise HTTPException(status_code=404, detail="Post not found")
+    _require_present(post, "Post not found")
     return post

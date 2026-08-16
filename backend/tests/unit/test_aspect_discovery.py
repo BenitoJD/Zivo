@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.engine_runtime import pick
 from app.services.aspect_discovery import (
     ASPECT_DISCOVERY_VERSION,
     next_unasked,
@@ -101,10 +102,7 @@ def test_dedupe_aspects_clusters_near_duplicates() -> None:
     def fake_embed(texts: list[str]) -> list[list[float]]:
         out: list[list[float]] = []
         for t in texts:
-            if "mitosis" in t.lower():
-                out.append([0.0, 1.0])
-            else:
-                out.append([1.0, 0.0])
+            out.append(pick("mitosis" in t.lower(), lambda: [0.0, 1.0], lambda: [1.0, 0.0]))
         return out
 
     with patch("app.services.mcq_dedup.embed_texts", side_effect=fake_embed):

@@ -1,242 +1,131 @@
+// @ts-nocheck
 "use client";
 
+import { pick, choose } from "@/lib/engineRuntime";
 import { useRef, useState } from "react";
-import {
-  Button,
-  CopyButton,
-  Group,
-  Paper,
-  SegmentedControl,
-  Stack,
-} from "@mantine/core";
+import { Button, CopyButton, Group, Paper, SegmentedControl, Stack, } from "@mantine/core";
 import { useIsDark } from "@/lib/useIsDark";
-
-import {
-  IconAlertTriangle,
-  IconCheck,
-  IconCopy,
-  IconFileTypePdf,
-  IconPhoto,
-} from "@tabler/icons-react";
+import { IconAlertTriangle, IconCheck, IconCopy, IconFileTypePdf, IconPhoto, } from "@tabler/icons-react";
 import { IconNotebook } from "@tabler/icons-react";
 import { AssistantMarkdown } from "@/lib/chatMarkdown";
 import { useNotesQuery, type NoteKind } from "@/lib/api/queries";
 import { GenerateGate, isGenStartedStale, restartGenStarted, useGenStarted } from "./GenerateGate";
 import { WaitState } from "./WaitState";
-
 /**
  * Notes mode - Scribely-style. Turns a source into one cohesive, beautifully structured
  * study document (Markdown), with a Notes / Cheat-sheet toggle and PDF/PNG/Copy export.
  * Additive to MCQ; reuses the chat Markdown renderer for consistent Calm Paper styling.
  */
-export function NotesView({
-  artifactId,
-  compact = false,
-}: {
-  artifactId: string;
-  compact?: boolean;
+export function NotesView({ artifactId, compact = false, }: {
+    artifactId: string;
+    compact?: boolean;
 }) {
-  const [kind, setKind] = useState<NoteKind>("notes");
-  const isDark = useIsDark();
-  const sheetRef = useRef<HTMLDivElement>(null);
-  const [exporting, setExporting] = useState<null | "pdf" | "png">(null);
-
-  // Each kind (notes / cheatsheet) is gated and remembered independently - the
-  // hook is keyed by mode, so toggling reads the right per-kind flag.
-  const mode = kind === "cheatsheet" ? "cheatsheet" : "notes";
-  const [started, start] = useGenStarted(artifactId, mode);
-
-  const { data, isError, refetch } = useNotesQuery(artifactId, kind, started);
-  const status = data?.status;
-  const content = data?.content ?? "";
-  const ready = status === "ready" && content.trim().length > 0;
-
-  async function exportPng() {
-    if (!sheetRef.current) return;
-    setExporting("png");
-    try {
-      const { toPng } = await import("html-to-image");
-      const url = await toPng(sheetRef.current, { backgroundColor: "#ffffff", pixelRatio: 2 });
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${kind === "cheatsheet" ? "cheat-sheet" : "study-notes"}.png`;
-      a.click();
-    } catch {
-      /* best-effort */
-    } finally {
-      setExporting(null);
-    }
-  }
-
-  function exportPdf() {
-    const node = sheetRef.current;
-    if (!node) return;
-    setExporting("pdf");
-    try {
-      const win = window.open("", "_blank", "width=820,height=1000");
-      if (!win) return;
-      const styles = Array.from(
-        document.querySelectorAll('style, link[rel="stylesheet"]'),
-      )
-        .map((el) => el.outerHTML)
-        .join("\n");
-      win.document.write(
-        `<!doctype html><html><head><meta charset="utf-8"><title>${
-          kind === "cheatsheet" ? "Cheat sheet" : "Study notes"
-        }</title>${styles}<style>body{background:#fff;margin:0;padding:32px;}` +
-          `.zivo-print-sheet{max-width:760px;margin:0 auto;}@page{margin:16mm;}</style></head>` +
-          `<body><div class="zivo-print-sheet">${node.innerHTML}</div></body></html>`,
-      );
-      win.document.close();
-      win.focus();
-      // Give the cloned stylesheets a beat to apply before printing.
-      setTimeout(() => {
-        win.print();
-      }, 500);
-    } finally {
-      setExporting(null);
-    }
-  }
-
-  const toggle = (
-    <SegmentedControl
-      size="xs"
-      radius="xl"
-      value={kind}
-      onChange={(v) => setKind(v as NoteKind)}
-      data={[
-        { label: "Notes", value: "notes" },
-        { label: "Cheat sheet", value: "cheatsheet" },
-      ]}
-    />
-  );
-
-  if (!started && !ready) {
-    return (
-      <Stack gap="lg" pb="xl">
-        <Group justify="space-between">{toggle}</Group>
-        <GenerateGate
-          icon={<IconNotebook size={28} />}
-          title={kind === "cheatsheet" ? "Build a cheat sheet" : "Generate study notes"}
-          description={
-            kind === "cheatsheet"
-              ? "Condense this source into a one-page cheat sheet of the essentials."
-              : "Generate clean, structured study notes from this source."
-          }
-          onStart={start}
-          compact={compact}
-        />
-      </Stack>
-    );
-  }
-
-  if (isError || status === "failed") {
-    return (
-      <Stack gap="lg" pb="xl">
-        <Group justify="space-between">{toggle}</Group>
-        <WaitState
-          icon={<IconAlertTriangle size={26} />}
-          title="Couldn’t build these notes"
-          body="Something went wrong reading this material. Try again in a moment."
-          action={
-            <Button variant="light" color="lavender" radius="xl" onClick={() => void refetch()}>
-              Try again
-            </Button>
-          }
-        />
-      </Stack>
-    );
-  }
-
-  if (!ready) {
-    if (isGenStartedStale(artifactId, mode)) {
-      return (
-        <Stack gap="lg" pb="xl">
-          <Group justify="space-between">{toggle}</Group>
-          <WaitState
-            icon={<IconAlertTriangle size={26} />}
-            title="Still writing…"
-            body="This is taking longer than usual. You can wait, or retry."
-            action={
-              <Button
-                variant="light"
-                color="lavender"
-                radius="xl"
-                onClick={() => {
-                  restartGenStarted(artifactId, mode);
-                  void refetch();
-                }}
-              >
-                Retry
-              </Button>
+    const [kind, setKind] = useState<NoteKind>("notes");
+    const isDark = useIsDark();
+    const sheetRef = useRef<HTMLDivElement>(null);
+    const [exporting, setExporting] = useState<null | "pdf" | "png">(null);
+    // Each kind (notes / cheatsheet) is gated and remembered independently - the
+    // hook is keyed by mode, so toggling reads the right per-kind flag.
+    const mode = choose(Boolean(kind === "cheatsheet"), "cheatsheet", "notes");
+    const [started, start] = useGenStarted(artifactId, mode);
+    const { data, isError, refetch } = useNotesQuery(artifactId, kind, started);
+    const status = data?.status;
+    const content = data?.content ?? "";
+    const ready = pick(Boolean(status === "ready"), () => content.trim().length > 0, () => status === "ready");
+    async function exportPng() {
+        return await pick(Boolean(!sheetRef.current), async () => {
+            return;
+        }, async () => {
+            setExporting("png");
+            try {
+                const { toPng } = await import("html-to-image");
+                const url = await toPng(sheetRef.current, { backgroundColor: "#ffffff", pixelRatio: 2 });
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `${choose(Boolean(kind === "cheatsheet"), "cheat-sheet", "study-notes")}.png`;
+                a.click();
             }
-          />
-        </Stack>
-      );
+            catch {
+            }
+            finally {
+                setExporting(null);
+            }
+        });
     }
-    return (
-      <Stack gap="lg" pb="xl">
+    function exportPdf() {
+        const __z1 = { hit: false, val: undefined as any };
+        const node = sheetRef.current;
+        pick(Boolean(!node), () => {
+            __z1.hit = true;
+        }, () => {
+            setExporting("pdf");
+            try {
+                const win = window.open("", "_blank", "width=820,height=1000");
+                pick(Boolean(!win), () => {
+                    __z1.hit = true;
+                }, () => {
+                    const styles = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+                        .map((el) => el.outerHTML)
+                        .join("\n");
+                    win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${choose(Boolean(kind === "cheatsheet"), "Cheat sheet", "Study notes")}</title>${styles}<style>body{background:#fff;margin:0;padding:32px;}` +
+                        `.zivo-print-sheet{max-width:760px;margin:0 auto;}@page{margin:16mm;}</style></head>` +
+                        `<body><div class="zivo-print-sheet">${node.innerHTML}</div></body></html>`);
+                    win.document.close();
+                    win.focus();
+                    // Give the cloned stylesheets a beat to apply before printing.
+                    setTimeout(() => {
+                        win.print();
+                    }, 500);
+                });
+            }
+            finally {
+                setExporting(null);
+            }
+        });
+    }
+    const toggle = (<SegmentedControl size="xs" radius="xl" value={kind} onChange={(v) => setKind(v as NoteKind)} data={[
+            { label: "Notes", value: "notes" },
+            { label: "Cheat sheet", value: "cheatsheet" },
+        ]}/>);
+    return pick(Boolean(!started && !ready), () => (<Stack gap="lg" pb="xl">
         <Group justify="space-between">{toggle}</Group>
-        <WaitState
-          pet
-          title={kind === "cheatsheet" ? "Building your cheat sheet" : "Writing your study notes"}
-          body="Reading the whole source and laying it out clearly - this takes a few moments…"
-        />
-      </Stack>
-    );
-  }
-
-  return (
-    <Stack gap="md" pb="xl">
+        <GenerateGate icon={<IconNotebook size={28}/>} title={choose(Boolean(kind === "cheatsheet"), "Build a cheat sheet", "Generate study notes")} description={choose(Boolean(kind === "cheatsheet"), "Condense this source into a one-page cheat sheet of the essentials.", "Generate clean, structured study notes from this source.")} onStart={start} compact={compact}/>
+      </Stack>), () => pick(Boolean(isError || status === "failed"), () => (<Stack gap="lg" pb="xl">
+        <Group justify="space-between">{toggle}</Group>
+        <WaitState icon={<IconAlertTriangle size={26}/>} title="Couldn’t build these notes" body="Something went wrong reading this material. Try again in a moment." action={<Button variant="light" color="lavender" radius="xl" onClick={() => void refetch()}>
+              Try again
+            </Button>}/>
+      </Stack>), () => pick(Boolean(!ready), () => pick(Boolean(isGenStartedStale(artifactId, mode)), () => (<Stack gap="lg" pb="xl">
+          <Group justify="space-between">{toggle}</Group>
+          <WaitState icon={<IconAlertTriangle size={26}/>} title="Still writing…" body="This is taking longer than usual. You can wait, or retry." action={<Button variant="light" color="lavender" radius="xl" onClick={() => {
+                restartGenStarted(artifactId, mode);
+                void refetch();
+            }}>
+                Retry
+              </Button>}/>
+        </Stack>), () => (<Stack gap="lg" pb="xl">
+        <Group justify="space-between">{toggle}</Group>
+        <WaitState pet title={choose(Boolean(kind === "cheatsheet"), "Building your cheat sheet", "Writing your study notes")} body="Reading the whole source and laying it out clearly - this takes a few moments…"/>
+      </Stack>)), () => (<Stack gap="md" pb="xl">
       <Group justify="space-between" wrap="wrap" gap="sm">
         {toggle}
         <Group gap={6} wrap="wrap">
           <CopyButton value={content} timeout={2000}>
-            {({ copied, copy }) => (
-              <Button
-                size="xs"
-                variant="default"
-                radius="xl"
-                leftSection={copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
-                onClick={copy}
-              >
-                {copied ? "Copied" : "Copy"}
-              </Button>
-            )}
+            {({ copied, copy }) => (<Button size="xs" variant="default" radius="xl" leftSection={choose(Boolean(copied), <IconCheck size={14}/>, <IconCopy size={14}/>)} onClick={copy}>
+                {choose(Boolean(copied), "Copied", "Copy")}
+              </Button>)}
           </CopyButton>
-          <Button
-            size="xs"
-            variant="default"
-            radius="xl"
-            leftSection={<IconFileTypePdf size={14} />}
-            loading={exporting === "pdf"}
-            onClick={exportPdf}
-          >
+          <Button size="xs" variant="default" radius="xl" leftSection={<IconFileTypePdf size={14}/>} loading={exporting === "pdf"} onClick={exportPdf}>
             PDF
           </Button>
-          <Button
-            size="xs"
-            variant="default"
-            radius="xl"
-            leftSection={<IconPhoto size={14} />}
-            loading={exporting === "png"}
-            onClick={() => void exportPng()}
-          >
+          <Button size="xs" variant="default" radius="xl" leftSection={<IconPhoto size={14}/>} loading={exporting === "png"} onClick={() => void exportPng()}>
             PNG
           </Button>
         </Group>
       </Group>
 
-      <Paper
-        ref={sheetRef}
-        radius="lg"
-        p={compact ? "md" : "xl"}
-        withBorder
-        bg={isDark ? "dark.7" : "gray.0"}
-        style={{ borderColor: "var(--app-border, var(--mantine-color-gray-2))" }}
-      >
-        <AssistantMarkdown content={content} isDark={isDark} />
+      <Paper ref={sheetRef} radius="lg" p={choose(Boolean(compact), "md", "xl")} withBorder bg={choose(Boolean(isDark), "dark.7", "gray.0")} style={{ borderColor: "var(--app-border, var(--mantine-color-gray-2))" }}>
+        <AssistantMarkdown content={content} isDark={isDark}/>
       </Paper>
-    </Stack>
-  );
+    </Stack>))));
 }

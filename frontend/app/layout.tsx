@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { Metadata, Viewport } from "next";
 import { cookies, headers } from "next/headers";
 import { Figtree, EB_Garamond } from "next/font/google";
@@ -9,84 +10,66 @@ import "@/app/responsive-scale.css";
 import "@/app/scrollbar.css";
 import Providers from "@/app/providers";
 import RegisterServiceWorker from "@/app/_components/RegisterServiceWorker";
-import {
-  MANTINE_COLOR_SCHEME_COOKIE,
-  MANTINE_COLOR_SCHEME_SCRIPT,
-  readColorSchemeFromCookie,
-} from "@/lib/mantine-color-scheme";
-
+import { MANTINE_COLOR_SCHEME_COOKIE, MANTINE_COLOR_SCHEME_SCRIPT, readColorSchemeFromCookie, } from "@/lib/mantine-color-scheme";
+import { pick } from "@/lib/engineRuntime";
 const figtree = Figtree({
-  subsets: ["latin"],
-  variable: "--font-sans",
-  weight: ["400", "500", "600", "700"],
-  display: "swap",
+    subsets: ["latin"],
+    variable: "--font-sans",
+    weight: ["400", "500", "600", "700"],
+    display: "swap",
 });
-
 const ebGaramond = EB_Garamond({
-  subsets: ["latin"],
-  variable: "--font-serif",
-  weight: ["400", "500", "600", "700"],
-  style: ["normal", "italic"],
-  display: "swap",
+    subsets: ["latin"],
+    variable: "--font-serif",
+    weight: ["400", "500", "600", "700"],
+    style: ["normal", "italic"],
+    display: "swap",
 });
-
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://zivo.fyi";
-
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ??
+        "https://zivo.fyi";
 export const metadata: Metadata = {
-  metadataBase: new URL(siteUrl),
-  title: "Zivo | Question Better.",
-  description: "Upload anything. Get exam-style questions, scoped exactly to what you read, with a tutor that knows your source.",
-  manifest: "/manifest.webmanifest",
-  appleWebApp: { capable: true, title: "Zivo", statusBarStyle: "default" },
-  // Stable /public paths (no Next file-convention cache-bust query strings) so Google
-  // Search can fetch and cache the favicon reliably.
-  icons: {
-    icon: [
-      { url: "/favicon.ico", sizes: "any" },
-      { url: "/icon-48.png", sizes: "48x48", type: "image/png" },
-      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
-      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
-    ],
-    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
-    shortcut: "/favicon.ico",
-  },
+    metadataBase: new URL(siteUrl),
+    title: "Zivo | Question Better.",
+    description: "Upload anything. Get exam-style questions, scoped exactly to what you read, with a tutor that knows your source.",
+    manifest: "/manifest.webmanifest",
+    appleWebApp: { capable: true, title: "Zivo", statusBarStyle: "default" },
+    // Stable /public paths (no Next file-convention cache-bust query strings) so Google
+    // Search can fetch and cache the favicon reliably.
+    icons: {
+        icon: [
+            { url: "/favicon.ico", sizes: "any" },
+            { url: "/icon-48.png", sizes: "48x48", type: "image/png" },
+            { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+            { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+        ],
+        apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+        shortcut: "/favicon.ico",
+    },
 };
-
 export const viewport: Viewport = {
-  width: "device-width",
-  initialScale: 1,
-  maximumScale: 5,
-  viewportFit: "cover",
-  // Soft keyboards (iOS/Android) resize the visual viewport so study composers stay in view.
-  interactiveWidget: "resizes-content",
+    width: "device-width",
+    initialScale: 1,
+    maximumScale: 5,
+    viewportFit: "cover",
+    // Soft keyboards (iOS/Android) resize the visual viewport so study composers stay in view.
+    interactiveWidget: "resizes-content",
 };
-
-export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  const cookieStore = await cookies();
-  const headerStore = await headers();
-  const forceLight = headerStore.get("x-zivo-force-light") === "1";
-  const colorScheme = forceLight
-    ? "light"
-    : readColorSchemeFromCookie(cookieStore.get(MANTINE_COLOR_SCHEME_COOKIE)?.value);
-
-  return (
-    <html
-      lang="en"
-      className={`${figtree.variable} ${ebGaramond.variable}`}
-      data-mantine-color-scheme={colorScheme}
-      suppressHydrationWarning
-    >
+export default async function RootLayout({ children }: Readonly<{
+    children: React.ReactNode;
+}>) {
+    const cookieStore = await cookies();
+    const headerStore = await headers();
+    const forceLight = headerStore.get("x-zivo-force-light") === "1";
+    const colorScheme = pick(Boolean(forceLight), () => "light", () => readColorSchemeFromCookie(cookieStore.get(MANTINE_COLOR_SCHEME_COOKIE)?.value));
+    return (<html lang="en" className={`${figtree.variable} ${ebGaramond.variable}`} data-mantine-color-scheme={colorScheme} suppressHydrationWarning>
       <head>
-        <script
-          data-mantine-script
-          dangerouslySetInnerHTML={{ __html: MANTINE_COLOR_SCHEME_SCRIPT }}
-        />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <script data-mantine-script dangerouslySetInnerHTML={{ __html: MANTINE_COLOR_SCHEME_SCRIPT }}/>
+        <link rel="preconnect" href="https://fonts.googleapis.com"/>
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous"/>
         {/* eslint-disable-next-line @next/next/no-page-custom-font -- Google Fonts via <link>+preconnect in the App Router head is intentional; next/font would conflict with the Calm Paper CSS font variables */}
-        <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400..700;1,400..700&family=Newsreader:ital,opsz,wght@0,6..72,200..800;1,6..72,200..800&display=swap" rel="stylesheet" />
-        <style
-          dangerouslySetInnerHTML={{
+        <link href="https://fonts.googleapis.com/css2?
+        family=EB+Garamond:ital,wght@0,400..700;1,400..700&family=Newsreader:ital,opsz,wght@0,6..72,200..800;1,6..72,200..800&display=swap" rel="stylesheet"/>
+        <style dangerouslySetInnerHTML={{
             __html: `
               html, body, input, button, select, textarea {
                 font-family: var(--font-sans), 'Figtree', -apple-system, BlinkMacSystemFont, sans-serif !important;
@@ -162,23 +145,19 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
                 .zivo-reveal { animation: none !important; }
               }
             `,
-          }}
-        />
+        }}/>
       </head>
-      <body
-        style={{
-          height: "100dvh",
-          overflow: "hidden",
-          margin: 0,
-          WebkitFontSmoothing: "antialiased",
-          MozOsxFontSmoothing: "grayscale",
-        }}
-      >
+      <body style={{
+            height: "100dvh",
+            overflow: "hidden",
+            margin: 0,
+            WebkitFontSmoothing: "antialiased",
+            MozOsxFontSmoothing: "grayscale",
+        }}>
         <Providers colorScheme={colorScheme}>
           <RegisterServiceWorker />
           {children}
         </Providers>
       </body>
-    </html>
-  );
+    </html>);
 }

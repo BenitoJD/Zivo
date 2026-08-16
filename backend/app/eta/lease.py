@@ -5,7 +5,7 @@ treat it as orphaned) and ``heartbeat_at`` (renewed by the worker while it runs)
 The worker calls :func:`renew_lease_sync` / :func:`renew_lease_async` every
 :data:`HEARTBEAT_INTERVAL` seconds; each renewal pushes ``lease_deadline`` out by
 :data:`LEASE_DURATION_SECONDS`. If the worker dies, the lease simply expires and
-the reaper (see :mod:`app.eta.stale_jobs`) requeues the job — no time-guessing,
+the reaper (see :mod:`app.eta.stale_jobs`) requeues the job: no time-guessing,
 no false positives on long-running jobs.
 
 Layered on top of the existing ``FOR UPDATE SKIP LOCKED`` claim; it does not
@@ -23,6 +23,7 @@ from sqlalchemy import func, update
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.engine_runtime import Pred, Rule, apply, first_match
 from app.models import Job, JobStatus
 
 # --- Timing (env-overridable) -------------------------------------------------
@@ -38,18 +39,24 @@ STALE_THRESHOLD_SECONDS = float(os.getenv("ETA_STALE_THRESHOLD_SECONDS", "90"))
 # Watchdog: the longest a single job may run before its lease stops being
 # renewed, even if the handler is still alive. A handler that hangs (provider
 # call that never returns, network stall, infinite loop) would otherwise keep
-# heartbeating forever and the reaper would never reclaim it — the UI sits at
+# heartbeating forever and the reaper would never reclaim it: the UI sits at
 # "Processing…" indefinitely. Once the lease stops renewing, the reaper
 # requeues (retry) or fails (attempts exhausted) the job within
 # STALE_THRESHOLD_SECONDS. Must be larger than any legitimate job; tune per
 # deployment via env. 0 disables the watchdog.
 JOB_MAX_DURATION_SECONDS = float(os.getenv("ETA_JOB_MAX_DURATION_SECONDS", "3600"))
 
+_DURATION_RULES = (
+    Rule(when=(Pred("disabled", "truthy"),), action="no"),
+    Rule(when=(Pred("no_start", "truthy"),), action="no"),
+    Rule(when=(), action="check"),
+)
+
 
 def lease_deadline_from(now: datetime | None = None) -> datetime:
     """Deadline for a lease taken/renewed *now*."""
-    now = now or datetime.now(timezone.utc)
-    return now + timedelta(seconds=LEASE_DURATION_SECONDS)
+    resolved = now or datetime.now(timezone.utc)
+    return resolved + timedelta(seconds=LEASE_DURATION_SECONDS)
 
 
 def job_duration_exceeded(started_at: datetime | None, now: datetime | None = None) -> bool:
@@ -59,18 +66,25 @@ def job_duration_exceeded(started_at: datetime | None, now: datetime | None = No
     renewing the lease so the stale reaper reclaims the job (hang → retry/fail
     instead of "Processing…" forever). ``started_at`` is the job's ``locked_at``.
     """
-    if JOB_MAX_DURATION_SECONDS <= 0:
-        return False
-    if started_at is None:
-        return False
-    now = now or datetime.now(timezone.utc)
-    return (now - started_at).total_seconds() > JOB_MAX_DURATION_SECONDS
+    hit = first_match(
+        _DURATION_RULES,
+        {
+            "disabled": JOB_MAX_DURATION_SECONDS <= 0,
+            "no_start": started_at is None,
+        },
+    )
+
+    def _check() -> bool:
+        resolved = now or datetime.now(timezone.utc)
+        return (resolved - started_at).total_seconds() > JOB_MAX_DURATION_SECONDS
+
+    return apply(hit.action, {"no": lambda: False, "check": _check})
 
 
 def stale_heartbeat_cutoff(now: datetime | None = None) -> datetime:
     """Heartbeats older than this are considered orphaned (worker died)."""
-    now = now or datetime.now(timezone.utc)
-    return now - timedelta(seconds=STALE_THRESHOLD_SECONDS)
+    resolved = now or datetime.now(timezone.utc)
+    return resolved - timedelta(seconds=STALE_THRESHOLD_SECONDS)
 
 
 def renew_lease_sync(db: Session, job_id: object) -> bool:

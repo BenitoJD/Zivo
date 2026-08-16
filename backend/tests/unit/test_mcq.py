@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.engine_runtime import pick
 from app.graphs.mcq_graph import _check_answer, grade_mcq_answer, try_grade_mcq_fast
 from app.schemas.mcq import McqQuestion
 
@@ -248,7 +249,7 @@ def test_grade_mcq_answer_multi_select_all_or_nothing() -> None:
                 question="Which apply?",
                 options=["A", "B", "C", "D"],
                 correct_index=0,
-                selected_index=selected[0] if selected else -1,
+                selected_index=pick(bool(selected), lambda: selected[0], lambda: -1),
                 correct_indices=[0, 2],
                 selected_indices=selected,
                 explanation="",
@@ -338,20 +339,32 @@ def test_grade_stream_yields_verdict_before_bookkeeping() -> None:
             )
             agen = response.body_iterator
             async for chunk in agen:
-                if isinstance(chunk, dict):
-                    events.append((chunk.get("event"), json.loads(chunk.get("data") or "{}")))
-                elif isinstance(chunk, (bytes, str)):
-                    text = chunk.decode() if isinstance(chunk, bytes) else chunk
-                    # sse-starlette may format as "event: x\ndata: y\n\n"
-                    ev = None
-                    data = None
+                def _as_dict(c=chunk) -> None:
+                    events.append((c.get("event"), json.loads(c.get("data") or "{}")))
+
+                def _as_text(c=chunk) -> None:
+                    text = pick(isinstance(c, bytes), lambda: c.decode(), lambda: c)
+                    ev = [None]
+                    data = [None]
                     for line in text.splitlines():
-                        if line.startswith("event:"):
-                            ev = line.split(":", 1)[1].strip()
-                        elif line.startswith("data:"):
-                            data = json.loads(line.split(":", 1)[1].strip())
-                    if ev:
-                        events.append((ev, data or {}))
+                        pick(
+                            line.startswith("event:"),
+                            lambda ln=line: ev.__setitem__(0, ln.split(":", 1)[1].strip()),
+                            lambda ln=line: pick(
+                                ln.startswith("data:"),
+                                lambda: data.__setitem__(
+                                    0, json.loads(ln.split(":", 1)[1].strip())
+                                ),
+                                lambda: None,
+                            ),
+                        )
+                    pick(bool(ev[0]), lambda: events.append((ev[0], data[0] or {})), lambda: None)
+
+                pick(
+                    isinstance(chunk, dict),
+                    _as_dict,
+                    lambda: pick(isinstance(chunk, (bytes, str)), _as_text, lambda: None),
+                )
 
         import asyncio
 
@@ -365,8 +378,10 @@ def test_grade_stream_yields_verdict_before_bookkeeping() -> None:
     names = [e[0] for e in events]
     assert "verdict" in names
     assert names.index("verdict") == 0
-    if "next" in names:
+    def _next_after_verdict() -> None:
         assert names.index("next") > names.index("verdict")
         assert events[names.index("next")][1]["next_assertion_id"] == next_id
+
+    pick("next" in names, _next_after_verdict, lambda: None)
     assert "feedback" in names
     assert names.index("feedback") > names.index("verdict")

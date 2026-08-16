@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
 from app.models import Document
 from app.repositories import seo as seo_repo
 from app.services.mcq_quality import generate_quality_mcq
@@ -29,24 +30,28 @@ def find_related_assertions(
     document_id: uuid.UUID | None,
     limit: int | None = None,
 ) -> list[uuid.UUID]:
-    if not document_id:
+    def _empty() -> list[uuid.UUID]:
         return []
-    rows = db.execute(
-        text(
-            """
-            SELECT a.id
-            FROM intel.assertion a
-            JOIN intel.concept c ON c.id = a.type_concept_id
-            WHERE a.payload->>'artifact_id' = :aid
-              AND a.status = 'active'
-              AND c.uri = '/vocab/assertion/question.mcq'
-            ORDER BY a.recorded_at ASC
-            LIMIT :lim
-            """
-        ),
-        {"aid": str(document_id), "lim": plan_seo_related_mcq_query_limit(limit)},
-    ).all()
-    return [uuid.UUID(str(r[0])) for r in rows]
+
+    def _query() -> list[uuid.UUID]:
+        rows = db.execute(
+            text(
+                """
+                SELECT a.id
+                FROM intel.assertion a
+                JOIN intel.concept c ON c.id = a.type_concept_id
+                WHERE a.payload->>'artifact_id' = :aid
+                  AND a.status = 'active'
+                  AND c.uri = '/vocab/assertion/question.mcq'
+                ORDER BY a.recorded_at ASC
+                LIMIT :lim
+                """
+            ),
+            {"aid": str(document_id), "lim": plan_seo_related_mcq_query_limit(limit)},
+        ).all()
+        return [uuid.UUID(str(r[0])) for r in rows]
+
+    return pick(not document_id, _empty, _query)
 
 
 def find_diverse_edition_assertions(
@@ -72,20 +77,23 @@ def find_diverse_edition_assertions(
         ),
         {"aid": str(document_id)},
     ).mappings().all()
-    if not rows:
+
+    def _empty() -> list[uuid.UUID]:
         return []
 
-    from app.services.seo_gate import plan_seo_mcq_attach, plan_seo_mcq_attach_defaults
+    def _plan() -> list[uuid.UUID]:
+        from app.services.seo_gate import plan_seo_mcq_attach, plan_seo_mcq_attach_defaults
 
-    attach = plan_seo_mcq_attach_defaults()
-    lo = attach.min_count if min_count is None else int(min_count)
-    hi = attach.max_count if max_count is None else int(max_count)
-    planned = plan_seo_mcq_attach(
-        [(uuid.UUID(str(row["id"])), str(row["ck"] or "")) for row in rows],
-        min_count=lo,
-        max_count=hi,
-    )
-    return planned
+        attach = plan_seo_mcq_attach_defaults()
+        lo = pick(min_count is None, lambda: attach.min_count, lambda: int(min_count))
+        hi = pick(max_count is None, lambda: attach.max_count, lambda: int(max_count))
+        return plan_seo_mcq_attach(
+            [(uuid.UUID(str(row["id"])), str(row["ck"] or "")) for row in rows],
+            min_count=lo,
+            max_count=hi,
+        )
+
+    return pick(not rows, _empty, _plan)
 
 
 def ensure_public_artifact(
@@ -106,42 +114,46 @@ def ensure_public_artifact(
         ),
         {"pid": str(post_id)},
     ).first()
-    if existing:
+
+    def _existing() -> uuid.UUID:
         return uuid.UUID(str(existing[0]))
 
-    doc_id = uuid.uuid4()
-    doc = Document(
-        id=doc_id,
-        account_id=None,
-        slug=f"seo-{slug}"[:64],
-        filename=f"{slug}.md",
-        content_type="text/markdown",
-        size_bytes=len(body_md.encode("utf-8")),
-        storage_key=f"seo/{post_id}/{slug}.md",
-        status="ready",
-        index_progress=100,
-        meta={
-            "is_public": True,
-            "hide_source": True,
-            "seo_blog": True,
-            "seo_post_id": str(post_id),
-            "title": slug,
-            "page_count": 1,
-        },
-    )
-    db.add(doc)
-    db.flush()
-    db.execute(
-        text(
-            """
-            INSERT INTO qb.document_chunks (document_id, page_start, page_end, text, meta)
-            VALUES (:d, 1, 1, :t, '{}'::jsonb)
-            """
-        ),
-        {"d": doc_id, "t": body_md[:20000]},
-    )
-    seo_repo.set_post_artifact(db, post_id, doc_id)
-    return doc_id
+    def _create() -> uuid.UUID:
+        doc_id = uuid.uuid4()
+        doc = Document(
+            id=doc_id,
+            account_id=None,
+            slug=f"seo-{slug}"[:64],
+            filename=f"{slug}.md",
+            content_type="text/markdown",
+            size_bytes=len(body_md.encode("utf-8")),
+            storage_key=f"seo/{post_id}/{slug}.md",
+            status="ready",
+            index_progress=100,
+            meta={
+                "is_public": True,
+                "hide_source": True,
+                "seo_blog": True,
+                "seo_post_id": str(post_id),
+                "title": slug,
+                "page_count": 1,
+            },
+        )
+        db.add(doc)
+        db.flush()
+        db.execute(
+            text(
+                """
+                INSERT INTO qb.document_chunks (document_id, page_start, page_end, text, meta)
+                VALUES (:d, 1, 1, :t, '{}'::jsonb)
+                """
+            ),
+            {"d": doc_id, "t": body_md[:20000]},
+        )
+        seo_repo.set_post_artifact(db, post_id, doc_id)
+        return doc_id
+
+    return pick(bool(existing), _existing, _create)
 
 
 def _persist_mcq(
@@ -161,9 +173,11 @@ def _persist_mcq(
         "page_number": 1,
         "sequence": sequence,
     }
-    # Normalize stem key
-    if "question" in payload and "stem" not in payload:
-        payload["stem"] = payload["question"]
+    pick(
+        "question" in payload and "stem" not in payload,
+        lambda: payload.__setitem__("stem", payload["question"]),
+        lambda: None,
+    )
     db.execute(
         text(
             """
@@ -202,43 +216,48 @@ def attach_or_generate_mcqs(
 ) -> list[uuid.UUID]:
     """Prefer existing related assertions; else generate from rewritten post."""
     attach = plan_seo_mcq_attach_defaults()
-    n = attach.target_count if target_count is None else int(target_count)
+    n = pick(target_count is None, lambda: attach.target_count, lambda: int(target_count))
     attached = find_related_assertions(
         db, document_id=source_document_id, limit=n
     )
-    if evaluate_seo_mcq_attach_ready(len(attached)):
+
+    def _attach_existing() -> list[uuid.UUID]:
         seo_repo.attach_assertions(db, post_id, attached[:n])
         return attached[:n]
 
-    artifact_id = ensure_public_artifact(
-        db, post_id=post_id, slug=slug, body_md=body_md
-    )
-    ids = list(attached)
-    prior: list[dict[str, Any]] = []
-    for seq in range(len(ids) + 1, n + 1):
-        try:
-            draft = generate_quality_mcq(
-                db,
-                page_text=body_md[: plan_seo_mcq_page_chars()],
-                page_number=1,
-                sequence=seq,
-                prior_mcqs=prior,
-                max_attempts=attach.generation_attempts,
-            )
-        except Exception:
-            logger.exception("seo mcq generate failed seq=%s", seq)
-            draft = None
-        if not draft:
-            continue
-        prior.append(draft)
-        try:
-            aid = _persist_mcq(db, document_id=artifact_id, draft=draft, sequence=seq)
-            ids.append(aid)
-        except Exception:
-            logger.exception("seo mcq persist failed")
-    if ids:
-        seo_repo.attach_assertions(db, post_id, ids)
-    return ids
+    def _generate() -> list[uuid.UUID]:
+        artifact_id = ensure_public_artifact(
+            db, post_id=post_id, slug=slug, body_md=body_md
+        )
+        ids = list(attached)
+        prior: list[dict[str, Any]] = []
+        for seq in range(len(ids) + 1, n + 1):
+            try:
+                draft = generate_quality_mcq(
+                    db,
+                    page_text=body_md[: plan_seo_mcq_page_chars()],
+                    page_number=1,
+                    sequence=seq,
+                    prior_mcqs=prior,
+                    max_attempts=attach.generation_attempts,
+                )
+            except Exception:
+                logger.exception("seo mcq generate failed seq=%s", seq)
+                draft = None
+
+            def _persist() -> None:
+                prior.append(draft)
+                try:
+                    aid = _persist_mcq(db, document_id=artifact_id, draft=draft, sequence=seq)
+                    ids.append(aid)
+                except Exception:
+                    logger.exception("seo mcq persist failed")
+
+            pick(not draft, lambda: None, _persist)
+        pick(bool(ids), lambda: seo_repo.attach_assertions(db, post_id, ids), lambda: None)
+        return ids
+
+    return pick(evaluate_seo_mcq_attach_ready(len(attached)), _attach_existing, _generate)
 
 
 def attach_edition_mcqs(
@@ -251,14 +270,13 @@ def attach_edition_mcqs(
 ) -> list[uuid.UUID]:
     """Attach concept-diverse MCQs from the edition assertion pool."""
     attach = plan_seo_mcq_attach_defaults()
-    lo = attach.min_count if min_count is None else int(min_count)
-    hi = attach.max_count if max_count is None else int(max_count)
+    lo = pick(min_count is None, lambda: attach.min_count, lambda: int(min_count))
+    hi = pick(max_count is None, lambda: attach.max_count, lambda: int(max_count))
     ids = find_diverse_edition_assertions(
         db,
         document_id=document_id,
         min_count=lo,
         max_count=hi,
     )
-    if ids:
-        seo_repo.attach_assertions(db, post_id, ids)
+    pick(bool(ids), lambda: seo_repo.attach_assertions(db, post_id, ids), lambda: None)
     return ids

@@ -5,8 +5,13 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import psycopg
+
+from app.engine_runtime import pick
 
 CONCEPTS = [
     ("/vocab/assertion/question.mcq", "assertion_type", "Multiple-choice question"),
@@ -60,6 +65,10 @@ def database_url() -> str:
     return url.replace("postgresql+psycopg://", "postgresql://")
 
 
+def _raise(exc: BaseException) -> None:
+    raise exc
+
+
 def seed() -> None:
     with psycopg.connect(database_url()) as conn:
         with conn.cursor() as cur:
@@ -76,8 +85,11 @@ def seed() -> None:
                 "SELECT id FROM intel.concept WHERE uri = '/vocab/domain/user_learning'"
             )
             domain_row = cur.fetchone()
-            if not domain_row:
-                raise RuntimeError("user_learning domain concept missing")
+            pick(
+                not domain_row,
+                lambda: _raise(RuntimeError("user_learning domain concept missing")),
+                lambda: None,
+            )
             domain_id = domain_row[0]
             for slug, name in SOURCES:
                 cur.execute(
@@ -92,9 +104,12 @@ def seed() -> None:
     print("Vocabulary seeds applied.")
 
 
-if __name__ == "__main__":
+def _cli() -> None:
     try:
         seed()
     except Exception as exc:
         print(f"seed failed: {exc}", file=sys.stderr)
         sys.exit(1)
+
+
+pick(__name__ == "__main__", _cli, lambda: None)

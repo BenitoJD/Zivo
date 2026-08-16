@@ -15,6 +15,7 @@ import pytest
 from sqlalchemy import select, text
 
 from app.db import SessionLocal
+from app.engine_runtime import pick
 from app.models import Document
 
 GUEST_ID = "e" * 32
@@ -90,8 +91,7 @@ def _cleanup(doc_id: str, edition_id: str) -> None:
         db.execute(text("DELETE FROM qb.jobs WHERE payload->>'document_id' = :d"), {"d": doc_id})
         db.execute(text("DELETE FROM qb.newspaper_edition WHERE id = :id"), {"id": edition_id})
         doc = db.get(Document, uuid.UUID(doc_id))
-        if doc:
-            db.delete(doc)
+        pick(bool(doc), lambda: db.delete(doc), lambda: None)
         db.commit()
     finally:
         db.close()

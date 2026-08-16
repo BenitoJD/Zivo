@@ -6,6 +6,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
 from app.models import Document, Job, JobWorkload
 from app.services.open_response import plan_debug_cook_yield
 from app.services.question_budget import plan_coding_page_yield
@@ -15,13 +16,17 @@ from app.services.question_pool import enqueue_initial_pool
 def enqueue_generate_if_needed(db: Session, document_id: uuid.UUID) -> Job | None:
     """Start the first page batch once indexing reaches ready."""
     doc = db.get(Document, document_id)
-    if not doc or doc.status != "ready":
-        return None
-    from app.services.background_prep import is_background_prep
 
-    if is_background_prep(doc):
-        return None
-    return enqueue_initial_pool(db, document_id)
+    def _maybe_pool() -> Job | None:
+        from app.services.background_prep import is_background_prep
+
+        return pick(
+            is_background_prep(doc),
+            lambda: None,
+            lambda: enqueue_initial_pool(db, document_id),
+        )
+
+    return pick(not doc or doc.status != "ready", lambda: None, _maybe_pool)
 
 
 def enqueue_coding_generation_for_page(
@@ -77,4 +82,3 @@ def enqueue_debug_generation_for_page(
         },
         account_id=account_id,
     )
-

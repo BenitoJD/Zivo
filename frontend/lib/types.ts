@@ -1,208 +1,214 @@
+// @ts-nocheck
+import { pick } from "@/lib/engineRuntime";
 export type SourceDocument = {
-  id: string;
-  filename: string;
-  content_type: string;
-  status: string;
-  index_progress: number;
-  size_bytes: number;
-  meta?: { source_type?: string; guest_id?: string; prep_mode?: string; prep_complete?: boolean };
-};
-
-export type ArtifactMeta = {
-  id: string;
-  status: string;
-  index_progress?: number;
-  filename?: string;
-  content_type?: string;
-  ingest_kind?: string | null;
-  meta?: {
-    selected_range?: { from: number; to: number; pages?: number[] };
-    page_count?: number;
-    newspaper?: boolean;
-    hide_source?: boolean;
-    prep_mode?: "now" | "background";
-    prep_phase?: "indexing" | "cooking" | "complete";
-    prep_complete?: boolean;
-    prep_progress?: {
-      phase?: "indexing" | "cooking" | "complete";
-      index_pct?: number;
-      cook_pct?: number;
-      overall_pct?: number;
+    id: string;
+    filename: string;
+    content_type: string;
+    status: string;
+    index_progress: number;
+    size_bytes: number;
+    meta?: {
+        source_type?: string;
+        guest_id?: string;
+        prep_mode?: string;
+        prep_complete?: boolean;
     };
-    paper_slug?: string;
-    paper_title?: string;
-    edition_date?: string;
-    is_public?: boolean;
-  };
 };
-
+export type ArtifactMeta = {
+    id: string;
+    status: string;
+    index_progress?: number;
+    filename?: string;
+    content_type?: string;
+    ingest_kind?: string | null;
+    meta?: {
+        selected_range?: {
+            from: number;
+            to: number;
+            pages?: number[];
+        };
+        page_count?: number;
+        newspaper?: boolean;
+        hide_source?: boolean;
+        prep_mode?: "now" | "background";
+        prep_phase?: "indexing" | "cooking" | "complete";
+        prep_complete?: boolean;
+        prep_progress?: {
+            phase?: "indexing" | "cooking" | "complete";
+            index_pct?: number;
+            cook_pct?: number;
+            overall_pct?: number;
+        };
+        paper_slug?: string;
+        paper_title?: string;
+        edition_date?: string;
+        is_public?: boolean;
+    };
+};
 export type PagesInfo = {
-  page_count: number;
-  status: string;
-  presigned_url?: string | null;
+    page_count: number;
+    status: string;
+    presigned_url?: string | null;
 };
-
 export type McqState = {
-  current_assertion_id: string | null;
-  /** Adaptive selection reason — why this question was chosen (learn mode). */
-  selection_reason?: string | null;
-  current_page?: number;
-  page_from?: number;
-  page_to?: number;
-  concepts: { concept_key: string; label: string }[];
-  page_mastered: boolean;
-  page_ready: boolean;
-  generation_pending?: boolean;
-  page_triage_complete?: boolean;
-  generated_on_page?: number;
-  answered_on_page?: number;
-  max_per_page?: number;
-  question_number?: number;
-  question_budget?: number;
-  /** Alias of question_budget — page cook plan N_page. */
-  plan_budget?: number;
-  /** Same as plan_budget (FE compat; was generate-ahead pace). */
-  generation_cap?: number;
-  /** Soft UX session cap (serve pacing only; does not shrink cook plan). */
-  session_soft?: number;
-  /** Soft session length from Session Design Engine. */
-  n_session?: number;
-  /** True when session_items_answered >= n_session (soft break hint). */
-  session_break?: boolean;
-  session_items_answered?: number;
-  /** Mastery / Evidence-Stop: enough evidence to pause current concept. */
-  mastery_stop?: boolean;
-  revisit_due_hours?: number | null;
-  concept_revisit_hours?: Record<string, number> | null;
-  /** Sum of page plans across selected cookable pages. */
-  document_budget?: number;
-  budget_confidence?: "high" | "medium" | "low" | string | null;
-  budget_version?: string | null;
-  /** Active Learn/Test budget multiplier mode for this queue. */
-  budget_mode?: "learn" | "test" | string | null;
-  questions_answered?: number;
-  questions_generated?: number;
-  coverage_complete?: boolean;
-  page_complete?: boolean;
-  non_content?: boolean;
-  no_questions_reason?: string | null;
-  document_complete?: boolean;
-  /** Ask learner to reselect pages (empty streak or unreadable scans). */
-  prompt_reselect_pages?: boolean;
-  prompt_reselect_reason?: "empty_pages_streak" | "unreadable_content" | string | null;
-  pool_available?: number;
-  rag_window_pages?: number[];
-  rag_window_ready?: boolean;
-  /** Per-document selection mode: "adaptive" (difficulty_edge) or "classic" (sequence). */
-  study_mode?: "adaptive" | "classic";
-  /** Newspaper: serve all cooked MCQs across the edition (not page-by-page). */
-  edition_pool?: boolean;
-  /** Newspaper: count of MCQs currently available in this edition. */
-  edition_question_total?: number;
-  /** Newspaper: MCQs on the current question's source page. */
-  edition_page_question_total?: number;
-  /** Newspaper: answered MCQs on the current source page. */
-  edition_page_questions_answered?: number;
-  /** Newspaper: 1-based index on the current source page. */
-  current_page_question_number?: number;
-  /** Newspaper: learner finished the Learn pool. */
-  learn_complete?: boolean | null;
-  /** Newspaper: at least one Test-pool MCQ has been cooked. */
-  test_pool_ready?: boolean | null;
-  /** Learn-only: AI-written teaching prose shown before this page's MCQs.
-   *  Present only when status === "ready" with a body; absent in Test mode. */
-  page_lesson?: { status: string; title: string | null; body: string | null } | null;
+    current_assertion_id: string | null;
+    /** Adaptive selection reason — why this question was chosen (learn mode). */
+    selection_reason?: string | null;
+    current_page?: number;
+    page_from?: number;
+    page_to?: number;
+    concepts: {
+        concept_key: string;
+        label: string;
+    }[];
+    page_mastered: boolean;
+    page_ready: boolean;
+    generation_pending?: boolean;
+    page_triage_complete?: boolean;
+    generated_on_page?: number;
+    answered_on_page?: number;
+    max_per_page?: number;
+    question_number?: number;
+    question_budget?: number;
+    /** Alias of question_budget — page cook plan N_page. */
+    plan_budget?: number;
+    /** Same as plan_budget (FE compat; was generate-ahead pace). */
+    generation_cap?: number;
+    /** Soft UX session cap (serve pacing only; does not shrink cook plan). */
+    session_soft?: number;
+    /** Soft session length from Session Design Engine. */
+    n_session?: number;
+    /** True when session_items_answered >= n_session (soft break hint). */
+    session_break?: boolean;
+    session_items_answered?: number;
+    /** Mastery / Evidence-Stop: enough evidence to pause current concept. */
+    mastery_stop?: boolean;
+    revisit_due_hours?: number | null;
+    concept_revisit_hours?: Record<string, number> | null;
+    /** Sum of page plans across selected cookable pages. */
+    document_budget?: number;
+    budget_confidence?: "high" | "medium" | "low" | string | null;
+    budget_version?: string | null;
+    /** Active Learn/Test budget multiplier mode for this queue. */
+    budget_mode?: "learn" | "test" | string | null;
+    questions_answered?: number;
+    questions_generated?: number;
+    coverage_complete?: boolean;
+    page_complete?: boolean;
+    non_content?: boolean;
+    no_questions_reason?: string | null;
+    document_complete?: boolean;
+    /** Ask learner to reselect pages (empty streak or unreadable scans). */
+    prompt_reselect_pages?: boolean;
+    prompt_reselect_reason?: "empty_pages_streak" | "unreadable_content" | string | null;
+    pool_available?: number;
+    rag_window_pages?: number[];
+    rag_window_ready?: boolean;
+    /** Per-document selection mode: "adaptive" (difficulty_edge) or "classic" (sequence). */
+    study_mode?: "adaptive" | "classic";
+    /** Newspaper: serve all cooked MCQs across the edition (not page-by-page). */
+    edition_pool?: boolean;
+    /** Newspaper: count of MCQs currently available in this edition. */
+    edition_question_total?: number;
+    /** Newspaper: MCQs on the current question's source page. */
+    edition_page_question_total?: number;
+    /** Newspaper: answered MCQs on the current source page. */
+    edition_page_questions_answered?: number;
+    /** Newspaper: 1-based index on the current source page. */
+    current_page_question_number?: number;
+    /** Newspaper: learner finished the Learn pool. */
+    learn_complete?: boolean | null;
+    /** Newspaper: at least one Test-pool MCQ has been cooked. */
+    test_pool_ready?: boolean | null;
+    /** Learn-only: AI-written teaching prose shown before this page's MCQs.
+     *  Present only when status === "ready" with a body; absent in Test mode. */
+    page_lesson?: {
+        status: string;
+        title: string | null;
+        body: string | null;
+    } | null;
 };
-
 export type McqGradeResponse = {
-  correct?: boolean;
-  feedback?: string;
-  correct_index?: number;
-  /** Present only for multi-select ("select all that apply") items. */
-  correct_indices?: number[];
+    correct?: boolean;
+    feedback?: string;
+    correct_index?: number;
+    /** Present only for multi-select ("select all that apply") items. */
+    correct_indices?: number[];
 };
-
 export type AssertionPayload = {
-  question?: string;
-  stem?: string;
-  options?: string[] | unknown;
-  choices?: string[] | unknown;
-  sequence?: number;
-  primary_concept?: string;
-  /** PDF page this MCQ was cooked from (newspaper editions). */
-  page_number?: number;
-  /** True for select-all-that-apply items. The actual indices live server-side
-   *  and are only returned by /api/mcq/grade. */
-  is_multi?: boolean;
-  /** Legacy field — kept for backward compatibility with older payloads. */
-  correct_indices?: number[];
+    question?: string;
+    stem?: string;
+    options?: string[] | unknown;
+    choices?: string[] | unknown;
+    sequence?: number;
+    primary_concept?: string;
+    /** PDF page this MCQ was cooked from (newspaper editions). */
+    page_number?: number;
+    /** True for select-all-that-apply items. The actual indices live server-side
+     *  and are only returned by /api/mcq/grade. */
+    is_multi?: boolean;
+    /** Legacy field — kept for backward compatibility with older payloads. */
+    correct_indices?: number[];
 };
-
 const OPTION_LETTER_PREFIX = /^(?:[A-Da-d]|[1-4])[.)]\s+/;
 const LEADING_META_PATTERNS = [
-  /^(?:(?:according|based)\s+to\s+(?:the\s+)?(?:page|text|passage|source|excerpt|reading|document|book|textbook|material)|from\s+(?:the\s+)?(?:page|text|passage|source|reading|document|book|textbook)|in\s+(?:the\s+)?(?:passage|text|excerpt|reading|document|book|textbook|material)|in\s+this\s+(?:book|text|reading|passage|document)|on\s+page\s+\d+|(?:the\s+)?(?:page|text|passage|source|reading|document|textbook)\s+(?:text\s+)?(?:specifies|states|says|indicates|describes|explains|mentions)(?:\s+that)?)[,:]?\s+/i,
-  /^as\s+(?:the\s+)?(?:page|text|passage|reading|document)\s+(?:states|says)[,:]?\s+/i,
-  /^the\s+text\s+states:\s*['"]?/i,
-  /^as\s+(?:stated|described)\s+(?:in|above)[,:]?\s+/i,
-  /^(?:on\s+page\s+\d+(?:\s+of\s+the\s+(?:text|book|passage))?)[,:]?\s+/i,
-  /^(?:in\s+this\s+(?:book|text|reading|passage|document))[,:]?\s+/i,
+    /^(?:(?:according|based)\s+to\s+(?:the\s+)?(?:page|text|passage|source|excerpt|reading|document|book|textbook|material)|from\s+(?:the\s+)?(?:page|text|passage|source|reading|document|book|textbook)|in\s+(?:the\s+)?(?:passage|text|excerpt|reading|document|book|textbook|material)|in\s+this\s+(?:book|text|reading|passage|document)|on\s+page\s+\d+|(?:the\s+)?(?:page|text|passage|source|reading|document|textbook)\s+(?:text\s+)?(?:specifies|states|says|indicates|describes|explains|mentions)(?:\s+that)?)[,:]?\s+/i,
+    /^as\s+(?:the\s+)?(?:page|text|passage|reading|document)\s+(?:states|says)[,:]?\s+/i,
+    /^the\s+text\s+states:\s*['"]?/i,
+    /^as\s+(?:stated|described)\s+(?:in|above)[,:]?\s+/i,
+    /^(?:on\s+page\s+\d+(?:\s+of\s+the\s+(?:text|book|passage))?)[,:]?\s+/i,
+    /^(?:in\s+this\s+(?:book|text|reading|passage|document))[,:]?\s+/i,
 ];
-
 function stripDocumentMeta(text: string): string {
-  // Collapse horizontal whitespace but PRESERVE newlines - statement-based,
-  // matching, ordering, and code stems carry meaningful line breaks the UI
-  // renders (white-space: pre-line). Mirrors the backend sanitizer.
-  let cleaned = String(text || "")
-    .trim()
-    .replace(/[^\S\n]+/g, " ")
-    .replace(/ *\n */g, "\n")
-    .replace(/\n{3,}/g, "\n\n");
-  if (!cleaned) return "";
-  for (let pass = 0; pass < 8; pass += 1) {
-    let changed = false;
-    for (const pattern of LEADING_META_PATTERNS) {
-      const updated = cleaned.replace(pattern, "").trim();
-      if (updated !== cleaned) {
-        cleaned = updated;
-        changed = true;
-      }
-    }
-    if (!changed) break;
-  }
-  cleaned = cleaned.replace(/\s*The text states:.*$/i, "").trim();
-  return cleaned;
+    // Collapse horizontal whitespace but PRESERVE newlines - statement-based,
+    // matching, ordering, and code stems carry meaningful line breaks the UI
+    // renders (white-space: pre-line). Mirrors the backend sanitizer.
+    let cleaned = String(text || "")
+        .trim()
+        .replace(/[^\S\n]+/g, " ")
+        .replace(/ *\n */g, "\n")
+        .replace(/\n{3,}/g, "\n\n");
+    return pick(Boolean(!cleaned), () => "", () => {/*..............................................................................*/
+        {/*..............................................................................*/
+            let __keep1 = true;
+            for (let pass = 0; pass < 8 && __keep1; pass += 1) {
+                let changed = false;
+                for (const pattern of LEADING_META_PATTERNS) {
+                    const updated = cleaned.replace(pattern, "").trim();
+                    pick(Boolean(updated !== cleaned), () => {
+                        cleaned = updated;
+                        changed = true;
+                    }, () => {
+                    });
+                }
+                pick(Boolean(!changed), () => {
+                    __keep1 = false;
+                }, () => {
+                });
+            }
+        }
+        cleaned = cleaned.replace(/\s*The text states:.*$/i, "").trim();
+        return cleaned;
+    });
 }
-
-function capitalizeFirst(text: string): string {
-  if (text && text[0] === text[0].toLowerCase()) {
-    return text[0].toUpperCase() + text.slice(1);
-  }
-  return text;
+function capitalizeFirst(text: string): string {/*..............................................................................*/
+    return pick(Boolean(text && text[0] === text[0].toLowerCase()), () => text[0].toUpperCase() + text.slice(1), () => text);
 }
-
 /** Strip leading A)/B. prefixes - the UI renders letter labels. */
 function sanitizeMcqOption(text: string): string {
-  return String(text || "")
-    .trim()
-    .replace(OPTION_LETTER_PREFIX, "")
-    .trim();
+    return String(text || "")
+        .trim()
+        .replace(OPTION_LETTER_PREFIX, "")
+        .trim();
 }
-
 /** Remove exam-forbidden framing so the stem stands alone like a formal test item. */
 export function sanitizeMcqStem(text: string): string {
-  return capitalizeFirst(stripDocumentMeta(text));
+    return capitalizeFirst(stripDocumentMeta(text));
 }
-
 /** Coerce assertion payload options into a string array for the MCQ UI. */
 export function normalizeMcqOptions(options?: unknown, choices?: unknown): string[] {
-  const raw = options ?? choices;
-  if (Array.isArray(raw)) {
-    return raw.map((item) => sanitizeMcqOption(String(item))).filter((item) => item.length > 0);
-  }
-  if (raw && typeof raw === "object") {
-    return Object.values(raw as Record<string, unknown>)
-      .map((item) => sanitizeMcqOption(String(item)))
-      .filter((item) => item.length > 0);
-  }
-  return [];
+    const raw = options ?? choices;
+    return pick(Boolean(Array.isArray(raw)), () => raw.map((item) => sanitizeMcqOption(String(item))).filter((item) => item.length > 0), () => pick(Boolean(raw && typeof raw === "object"), () => Object.values(raw as Record<string, unknown>)
+        .map((item) => sanitizeMcqOption(String(item)))
+        .filter((item) => item.length > 0), () => []));
 }

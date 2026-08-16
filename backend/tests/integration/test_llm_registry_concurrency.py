@@ -23,6 +23,7 @@ import pytest
 from sqlalchemy import select
 
 from app.db import SessionLocal
+from app.engine_runtime import pick
 from app.models.llm import LlmModel, LlmModelKind
 from app.services.llm_registry import (
     _REGISTRY_LOCK_KEY,
@@ -64,17 +65,22 @@ def _restore_default():
     )
     db.close()
     yield
-    if original is not None:
+    def _restore() -> None:
         db = SessionLocal()
         target = db.get(LlmModel, original.id)
-        if target is not None:
+
+        def _apply() -> None:
             _acquire_registry_lock(db)
             db.query(LlmModel).filter(
                 LlmModel.kind == LlmModelKind.chat, LlmModel.is_default.is_(True)
             ).update({"is_default": False}, synchronize_session="fetch")
             target.is_default = True
             db.commit()
+
+        pick(target is not None, _apply, lambda: None)
         db.close()
+
+    pick(original is not None, _restore, lambda: None)
 
 
 def test_concurrent_default_flips_leave_exactly_one() -> None:
@@ -88,7 +94,7 @@ def test_concurrent_default_flips_leave_exactly_one() -> None:
     models = _enabled_chat_models(db)
     db.close()
     # Need at least two non-vision-only chat models to flip between.
-    candidates = [m for m in models if not m.vision_only]
+    candidates = list(filter(lambda m: not m.vision_only, models))
     assert len(candidates) >= 2, "test needs >=2 chat models in the registry"
 
     a_id, b_id = candidates[0].id, candidates[1].id

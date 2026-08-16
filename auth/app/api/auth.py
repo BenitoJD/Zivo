@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
+from app.engine_runtime import Pred, Rule, apply, first_match, pick
 from app.models import Account
 from app.services.auth import (
     authenticate_user,
@@ -40,6 +41,10 @@ from app.services.google_oauth import (
 from app.services.rate_limit import rate_limit_dependency
 
 router = APIRouter()
+
+
+def _raise(exc: BaseException) -> None:
+    raise exc
 
 
 class SignUpRequest(BaseModel):
@@ -98,15 +103,23 @@ def signup(
     response: Response,
     db: Session = Depends(get_db),
 ) -> AuthResponse:
-    if not body.accept_terms:
-        raise HTTPException(status_code=400, detail="Terms must be accepted")
-    if body.password != body.confirm_password:
-        raise HTTPException(status_code=400, detail="Passwords do not match")
+    pick(
+        not body.accept_terms,
+        lambda: _raise(HTTPException(status_code=400, detail="Terms must be accepted")),
+        lambda: None,
+    )
+    pick(
+        body.password != body.confirm_password,
+        lambda: _raise(HTTPException(status_code=400, detail="Passwords do not match")),
+        lambda: None,
+    )
     validate_username(body.username)
     validate_password(body.password)
-
-    if db.query(Account).filter(Account.username == body.username).first():
-        raise HTTPException(status_code=409, detail="Username taken")
+    pick(
+        bool(db.query(Account).filter(Account.username == body.username).first()),
+        lambda: _raise(HTTPException(status_code=409, detail="Username taken")),
+        lambda: None,
+    )
 
     user = Account(username=body.username, password_hash=hash_password(body.password))
     try:
@@ -131,9 +144,11 @@ def login(
     db: Session = Depends(get_db),
 ) -> AuthResponse:
     user = authenticate_user(db, body.username, body.password)
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
+    pick(
+        not user,
+        lambda: _raise(HTTPException(status_code=401, detail="Invalid credentials")),
+        lambda: None,
+    )
     token, csrf = create_session_token(
         user.id, int(getattr(user, "session_version", 0) or 0), remember=body.remember_me
     )
@@ -170,45 +185,73 @@ def google_callback(
     zivo_google_oauth_state: str | None = Cookie(default=None, alias=STATE_COOKIE),
 ) -> RedirectResponse:
     settings = get_settings()
-    if error:
-        return _oauth_error_redirect("Google sign-in was cancelled")
-    if not code or not state or not zivo_google_oauth_state or state != zivo_google_oauth_state:
-        return _oauth_error_redirect("Google sign-in failed (invalid state)")
 
-    try:
-        info = exchange_code_for_userinfo(settings, code)
-    except HTTPException as exc:
-        detail = exc.detail if isinstance(exc.detail, str) else "Google sign-in failed"
-        return _oauth_error_redirect(detail)
+    def _exchange() -> RedirectResponse:
+        try:
+            info = exchange_code_for_userinfo(settings, code)
+        except HTTPException as err:
+            caught = err
+            detail = pick(
+                isinstance(caught.detail, str),
+                lambda: caught.detail,
+                lambda: "Google sign-in failed",
+            )
+            return _oauth_error_redirect(detail)
 
-    google_sub = info["google_sub"]
-    email = info["email"]
+        google_sub = info["google_sub"]
+        email = info["email"]
+        existing = db.query(Account).filter(Account.google_sub == google_sub).first()
 
-    existing = db.query(Account).filter(Account.google_sub == google_sub).first()
-    if existing:
-        token, _csrf = create_session_token(
-            existing.id,
-            int(getattr(existing, "session_version", 0) or 0),
-            remember=True,
-        )
-        redirect = RedirectResponse(url=frontend_path(settings, "/workspace"), status_code=302)
-        set_session_cookie(redirect, token, remember=True)
-        _clear_oauth_cookies(redirect)
-        return redirect
+        def _login_existing() -> RedirectResponse:
+            token, _csrf = create_session_token(
+                existing.id,
+                int(getattr(existing, "session_version", 0) or 0),
+                remember=True,
+            )
+            redirect = RedirectResponse(url=frontend_path(settings, "/workspace"), status_code=302)
+            set_session_cookie(redirect, token, remember=True)
+            _clear_oauth_cookies(redirect)
+            return redirect
 
-    email_owner = db.query(Account).filter(Account.email == email).first()
-    if email_owner and not email_owner.google_sub:
-        return _oauth_error_redirect("Email already registered — sign in with password")
+        def _pending() -> RedirectResponse:
+            email_owner = db.query(Account).filter(Account.email == email).first()
 
-    pending = mint_pending_token(settings, google_sub=google_sub, email=email)
-    redirect = RedirectResponse(url=frontend_path(settings, "/signup/google"), status_code=302)
-    redirect.set_cookie(
-        key=PENDING_COOKIE,
-        value=pending,
-        **cookie_set_kwargs(max_age=PENDING_COOKIE_MAX_AGE),
+            def _conflict() -> RedirectResponse:
+                return _oauth_error_redirect("Email already registered — sign in with password")
+
+            def _mint() -> RedirectResponse:
+                pending = mint_pending_token(settings, google_sub=google_sub, email=email)
+                redirect = RedirectResponse(url=frontend_path(settings, "/signup/google"), status_code=302)
+                redirect.set_cookie(
+                    key=PENDING_COOKIE,
+                    value=pending,
+                    **cookie_set_kwargs(max_age=PENDING_COOKIE_MAX_AGE),
+                )
+                redirect.delete_cookie(STATE_COOKIE, **cookie_delete_kwargs())
+                return redirect
+
+            return pick(bool(email_owner) and not email_owner.google_sub, _conflict, _mint)
+
+        return pick(bool(existing), _login_existing, _pending)
+
+    return apply(
+        first_match(
+            (
+                Rule(when=(Pred("error", "truthy"),), action="cancelled"),
+                Rule(when=(Pred("invalid_state", "truthy"),), action="invalid"),
+                Rule(when=(), action="exchange"),
+            ),
+            {
+                "error": error,
+                "invalid_state": not code or not state or not zivo_google_oauth_state or state != zivo_google_oauth_state,
+            },
+        ).action,
+        {
+            "cancelled": lambda: _oauth_error_redirect("Google sign-in was cancelled"),
+            "invalid": lambda: _oauth_error_redirect("Google sign-in failed (invalid state)"),
+            "exchange": _exchange,
+        },
     )
-    redirect.delete_cookie(STATE_COOKIE, **cookie_delete_kwargs())
-    return redirect
 
 
 @router.get("/google/pending")
@@ -217,13 +260,15 @@ def google_pending(
 ) -> dict[str, str | bool]:
     """Probe whether a Google signup is waiting for a username."""
     settings = get_settings()
-    if not zivo_google_pending:
-        return {"pending": False}
-    try:
-        _sub, email = read_pending_token(settings, zivo_google_pending)
-    except HTTPException:
-        return {"pending": False}
-    return {"pending": True, "email": email}
+
+    def _read() -> dict[str, str | bool]:
+        try:
+            _sub, email = read_pending_token(settings, zivo_google_pending)
+        except HTTPException:
+            return {"pending": False}
+        return {"pending": True, "email": email}
+
+    return pick(not zivo_google_pending, lambda: {"pending": False}, _read)
 
 
 @router.post(
@@ -238,20 +283,33 @@ def google_complete(
     zivo_google_pending: str | None = Cookie(default=None, alias=PENDING_COOKIE),
 ) -> AuthResponse:
     settings = get_settings()
-    if not zivo_google_pending:
-        raise HTTPException(status_code=401, detail="Google signup expired — try again")
-    if not body.accept_terms:
-        raise HTTPException(status_code=400, detail="Terms must be accepted")
+    pick(
+        not zivo_google_pending,
+        lambda: _raise(HTTPException(status_code=401, detail="Google signup expired — try again")),
+        lambda: None,
+    )
+    pick(
+        not body.accept_terms,
+        lambda: _raise(HTTPException(status_code=400, detail="Terms must be accepted")),
+        lambda: None,
+    )
     validate_username(body.username)
-
     google_sub, email = read_pending_token(settings, zivo_google_pending)
-
-    if db.query(Account).filter(Account.google_sub == google_sub).first():
-        raise HTTPException(status_code=409, detail="Google account already linked")
-    if db.query(Account).filter(Account.username == body.username).first():
-        raise HTTPException(status_code=409, detail="Username taken")
-    if db.query(Account).filter(Account.email == email).first():
-        raise HTTPException(status_code=409, detail="Email already registered — sign in with password")
+    pick(
+        bool(db.query(Account).filter(Account.google_sub == google_sub).first()),
+        lambda: _raise(HTTPException(status_code=409, detail="Google account already linked")),
+        lambda: None,
+    )
+    pick(
+        bool(db.query(Account).filter(Account.username == body.username).first()),
+        lambda: _raise(HTTPException(status_code=409, detail="Username taken")),
+        lambda: None,
+    )
+    pick(
+        bool(db.query(Account).filter(Account.email == email).first()),
+        lambda: _raise(HTTPException(status_code=409, detail="Email already registered — sign in with password")),
+        lambda: None,
+    )
 
     user = Account(
         username=body.username,
@@ -280,13 +338,18 @@ def get_session(
     user: Account | None = Depends(get_optional_user),
     zivo_session: str | None = Cookie(default=None),
 ) -> SessionResponse:
-    if not zivo_session or user is None:
-        return SessionResponse(authenticated=False)
-    return SessionResponse(
-        authenticated=True,
-        username=user.username,
-        csrf_token=csrf_from_session_token(zivo_session),
-        is_admin=user.is_admin,
+    def _authed() -> SessionResponse:
+        return SessionResponse(
+            authenticated=True,
+            username=user.username,
+            csrf_token=csrf_from_session_token(zivo_session),
+            is_admin=user.is_admin,
+        )
+
+    return pick(
+        not zivo_session or user is None,
+        lambda: SessionResponse(authenticated=False),
+        _authed,
     )
 
 

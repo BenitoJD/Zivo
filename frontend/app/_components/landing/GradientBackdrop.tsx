@@ -1,8 +1,8 @@
 "use client";
 
+import { choose } from "@/lib/engineRuntime";
 import { Box } from "@mantine/core";
 import { useReducedMotion } from "framer-motion";
-
 /**
  * Wispr-Flow-style animated mesh gradient. A few large, heavily-blurred pastel
  * blobs drift slowly behind the hero on the warm oat page, giving the soft
@@ -12,54 +12,35 @@ import { useReducedMotion } from "framer-motion";
  * Colors are pulled from the brand scales (forest teal + lavender) kept faint so
  * ink text and product mock stay perfectly legible on top.
  */
-export function GradientBackdrop({
-  intensity = 1,
-}: {
-  /** Multiplier on blob opacity - dial down for secondary sections. */
-  intensity?: number;
+export function GradientBackdrop({ intensity = 1, }: {
+    /** Multiplier on blob opacity - dial down for secondary sections. */
+    intensity?: number;
 }) {
-  const reduce = useReducedMotion();
-  const o = (v: number) => Math.min(1, v * intensity);
-
-  return (
-    <Box
-      aria-hidden
-      style={{
-        position: "absolute",
-        inset: 0,
-        overflow: "hidden",
-        pointerEvents: "none",
-        zIndex: 0,
-      }}
-    >
-      <Box
-        className="zivo-blob zivo-blob-1"
-        style={{
-          background: `radial-gradient(circle at center, rgba(165, 193, 189, ${o(0.16)}), transparent 72%)`,
-          animationPlayState: reduce ? "paused" : "running",
-        }}
-      />
-      <Box
-        className="zivo-blob zivo-blob-2"
-        style={{
-          background: `radial-gradient(circle at center, rgba(205, 187, 221, ${o(0.15)}), transparent 72%)`,
-          animationPlayState: reduce ? "paused" : "running",
-        }}
-      />
-      <Box
-        className="zivo-blob zivo-blob-3"
-        style={{
-          background: `radial-gradient(circle at center, rgba(127, 163, 158, ${o(0.12)}), transparent 72%)`,
-          animationPlayState: reduce ? "paused" : "running",
-        }}
-      />
-      <Box
-        className="zivo-blob zivo-blob-4"
-        style={{
-          background: `radial-gradient(circle at center, rgba(247, 222, 200, ${o(0.14)}), transparent 72%)`,
-          animationPlayState: reduce ? "paused" : "running",
-        }}
-      />
+    const reduce = useReducedMotion();
+    const o = (v: number) => Math.min(1, v * intensity);
+    return (<Box aria-hidden style={{
+            position: "absolute",
+            inset: 0,
+            overflow: "hidden",
+            pointerEvents: "none",
+            zIndex: 0,
+        }}>
+      <Box className="zivo-blob zivo-blob-1" style={{
+            background: `radial-gradient(circle at center, rgba(165, 193, 189, ${o(0.16)}), transparent 72%)`,
+            animationPlayState: choose(Boolean(reduce), "paused", "running"),
+        }}/>
+      <Box className="zivo-blob zivo-blob-2" style={{
+            background: `radial-gradient(circle at center, rgba(205, 187, 221, ${o(0.15)}), transparent 72%)`,
+            animationPlayState: choose(Boolean(reduce), "paused", "running"),
+        }}/>
+      <Box className="zivo-blob zivo-blob-3" style={{
+            background: `radial-gradient(circle at center, rgba(127, 163, 158, ${o(0.12)}), transparent 72%)`,
+            animationPlayState: choose(Boolean(reduce), "paused", "running"),
+        }}/>
+      <Box className="zivo-blob zivo-blob-4" style={{
+            background: `radial-gradient(circle at center, rgba(247, 222, 200, ${o(0.14)}), transparent 72%)`,
+            animationPlayState: choose(Boolean(reduce), "paused", "running"),
+        }}/>
 
       <style>{`
         .zivo-blob {
@@ -119,6 +100,5 @@ export function GradientBackdrop({
           mix-blend-mode: screen;
         }
       `}</style>
-    </Box>
-  );
+    </Box>);
 }

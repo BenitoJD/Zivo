@@ -12,8 +12,10 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import apply, pick
 from app.services.llm_json import extract_json_obj
 from app.services.llm_router import complete_chat
+from app.services.open_response import evaluate_sd_subject
 
 BUILDING_BLOCKS = [
     "Client",
@@ -398,17 +400,28 @@ def seed_system_design_bank(db: Session) -> dict[str, int]:
     return {"concepts": len(CONCEPTS), "problems": n_problems}
 
 
+def _raise_value(msg: str) -> None:
+    raise ValueError(msg)
+
+
+def _raise_lookup(msg: str) -> None:
+    raise LookupError(msg)
+
+
 def ensure_bank(db: Session) -> None:
     """Idempotent: seed curated bank when empty (prod migrate does not run seed scripts)."""
     n = db.execute(text("SELECT COUNT(*) FROM qb.sd_concept")).scalar() or 0
-    if int(n) == 0:
-        seed_system_design_bank(db)
+    pick(int(n) == 0, lambda: seed_system_design_bank(db), lambda: None)
 
 
 def _subject_filter(account_id: uuid.UUID | None, guest_id: str | None) -> tuple[str, dict[str, Any]]:
-    if account_id is not None:
-        return "account_id = :account_id", {"account_id": account_id}
-    return "guest_id = :guest_id", {"guest_id": guest_id or ""}
+    return apply(
+        evaluate_sd_subject(account_id=account_id),
+        {
+            "account": lambda: ("account_id = :account_id", {"account_id": account_id}),
+            "guest": lambda: ("guest_id = :guest_id", {"guest_id": guest_id or ""}),
+        },
+    )
 
 
 def list_concepts(db: Session) -> list[dict[str, Any]]:
@@ -448,19 +461,30 @@ def _concept_scores_for_subject(
     out: dict[str, list[float]] = {}
 
     for r in rows:
-        scores = r["scores"] or {}
-        dims = scores.get("dimensions") if isinstance(scores, dict) else None
-        vals = None
-        if isinstance(dims, list) and dims:
-            vals = [float(d.get("score") or 2) for d in dims if isinstance(d, dict)]
-        weak = set(r["weak_concepts"] or [])
-        for key in r["concept_keys"] or []:
-            sample = sample_path_mastery(
-                dimension_scores=vals,
-                is_weak=key in weak,
-            )
-            out.setdefault(str(key), []).append(sample)
+        _accumulate_concept_samples(r, out, sample_path_mastery)
     return out
+
+
+def _accumulate_concept_samples(r: Any, out: dict[str, list[float]], sample_path_mastery: Any) -> None:
+    scores = r["scores"] or {}
+    dims = pick(isinstance(scores, dict), lambda: scores.get("dimensions"), lambda: None)
+    vals = pick(
+        isinstance(dims, list) and bool(dims),
+        lambda: list(
+            map(
+                lambda d: float(d.get("score") or 2),
+                filter(lambda d: isinstance(d, dict), dims),
+            )
+        ),
+        lambda: None,
+    )
+    weak = set(r["weak_concepts"] or [])
+    for key in r["concept_keys"] or []:
+        sample = sample_path_mastery(
+            dimension_scores=vals,
+            is_weak=key in weak,
+        )
+        out.setdefault(str(key), []).append(sample)
 
 
 def build_path(
@@ -490,7 +514,10 @@ def build_path(
             }
         )
     focus_key = plan_path_focus(labeled_keys)
-    focus_title = next((i["title"] for i in items if i["key"] == focus_key), "")
+    focus_title = next(
+        map(lambda i: i["title"], filter(lambda i: i["key"] == focus_key, items)),
+        "",
+    )
     return {"concepts": items, "focus_key": focus_key, "focus_title": focus_title}
 
 
@@ -506,14 +533,17 @@ def get_problem(db: Session, problem_id: uuid.UUID, *, include_reference: bool =
         ),
         {"id": problem_id},
     ).mappings().first()
-    if not row:
-        return None
+    return pick(not row, lambda: None, lambda: _problem_payload(row, include_reference))
+
+
+def _problem_payload(row: Any, include_reference: bool) -> dict[str, Any]:
     out = dict(row)
     out["id"] = str(out["id"])
-    if not include_reference:
-        out.pop("reference_design", None)
-    else:
-        out["reference_design"] = out.get("reference_design") or ""
+    pick(
+        not include_reference,
+        lambda: out.pop("reference_design", None),
+        lambda: out.__setitem__("reference_design", out.get("reference_design") or ""),
+    )
     return out
 
 
@@ -522,18 +552,22 @@ def get_problem_by_slug(db: Session, slug: str) -> dict[str, Any] | None:
         text("SELECT id FROM qb.sd_problem WHERE slug = :slug AND published = true"),
         {"slug": slug},
     ).mappings().first()
-    if not row:
-        return None
-    return get_problem(db, row["id"], include_reference=False)
+    return pick(
+        not row,
+        lambda: None,
+        lambda: get_problem(db, row["id"], include_reference=False),
+    )
 
 
 def list_problems(db: Session, *, difficulty: str | None = None) -> list[dict[str, Any]]:
     ensure_bank(db)
     clauses = ["published = true"]
     params: dict[str, Any] = {}
-    if difficulty in ("easy", "medium", "hard"):
-        clauses.append("difficulty = :difficulty")
-        params["difficulty"] = difficulty
+    pick(
+        difficulty in ("easy", "medium", "hard"),
+        lambda: _add_difficulty_filter(clauses, params, difficulty),
+        lambda: None,
+    )
     rows = db.execute(
         text(
             f"""
@@ -551,6 +585,13 @@ def list_problems(db: Session, *, difficulty: str | None = None) -> list[dict[st
         d["id"] = str(d["id"])
         out.append(d)
     return out
+
+
+def _add_difficulty_filter(
+    clauses: list[str], params: dict[str, Any], difficulty: str
+) -> None:
+    clauses.append("difficulty = :difficulty")
+    params["difficulty"] = difficulty
 
 
 def recommend_problem(
@@ -574,7 +615,7 @@ def recommend_problem(
         ).mappings().all()
     }
     problems = list_problems(db)
-    focus_list = [str(focus)] if focus else []
+    focus_list = pick(bool(focus), lambda: [str(focus)], lambda: [])
     cands = [
         PracticeCandidate(
             id=str(p["id"]),
@@ -583,11 +624,12 @@ def recommend_problem(
         )
         for p in problems
     ]
-    pick = pick_next(cands, focus_list, attempted_ids=list(attempted))
-    if not pick.id:
-        return None
-    by_id = {str(p["id"]): p for p in problems}
-    return by_id.get(pick.id)
+    nxt = pick_next(cands, focus_list, attempted_ids=list(attempted))
+    return pick(
+        not nxt.id,
+        lambda: None,
+        lambda: {str(p["id"]): p for p in problems}.get(nxt.id),
+    )
 
 
 def active_session(
@@ -605,9 +647,11 @@ def active_session(
         ),
         params,
     ).mappings().first()
-    if not row:
-        return None
-    return get_session(db, row["id"], account_id, guest_id)
+    return pick(
+        not row,
+        lambda: None,
+        lambda: get_session(db, row["id"], account_id, guest_id),
+    )
 
 
 def start_session(
@@ -616,11 +660,13 @@ def start_session(
     account_id: uuid.UUID | None,
     guest_id: str | None,
 ) -> dict[str, Any]:
-    if account_id is None and not guest_id:
-        raise ValueError("subject required")
+    pick(
+        account_id is None and not guest_id,
+        lambda: _raise_value("subject required"),
+        lambda: None,
+    )
     problem = get_problem(db, problem_id)
-    if not problem:
-        raise LookupError("problem not found")
+    pick(not problem, lambda: _raise_lookup("problem not found"), lambda: None)
     # Close other active sessions for this subject.
     where, params = _subject_filter(account_id, guest_id)
     db.execute(
@@ -664,13 +710,26 @@ def get_session(
         ),
         {"id": session_id},
     ).mappings().first()
-    if not row:
-        return None
-    if account_id is not None:
-        if row["account_id"] != account_id:
-            return None
-    elif row["guest_id"] != guest_id:
-        return None
+    return pick(not row, lambda: None, lambda: _session_if_owned(db, row, account_id, guest_id))
+
+
+def _session_if_owned(
+    db: Session,
+    row: Any,
+    account_id: uuid.UUID | None,
+    guest_id: str | None,
+) -> dict[str, Any] | None:
+    owner_ok = apply(
+        evaluate_sd_subject(account_id=account_id),
+        {
+            "account": lambda: row["account_id"] == account_id,
+            "guest": lambda: row["guest_id"] == guest_id,
+        },
+    )
+    return pick(not owner_ok, lambda: None, lambda: _session_payload(db, row))
+
+
+def _session_payload(db: Session, row: Any) -> dict[str, Any]:
     problem = get_problem(
         db, row["problem_id"], include_reference=(row["status"] == "done")
     )
@@ -683,12 +742,19 @@ def get_session(
         "feedback": row["feedback"] or {},
         "weak_concepts": list(row["weak_concepts"] or []),
         "lesson": row["lesson"] or {},
-        "recommended_next_id": str(row["recommended_next_id"]) if row["recommended_next_id"] else None,
+        "recommended_next_id": pick(
+            bool(row["recommended_next_id"]),
+            lambda: str(row["recommended_next_id"]),
+            lambda: None,
+        ),
         "problem": problem,
         "building_blocks": BUILDING_BLOCKS,
     }
-    if row["status"] == "done" and problem:
-        out["reference_design"] = problem.get("reference_design") or ""
+    pick(
+        row["status"] == "done" and bool(problem),
+        lambda: out.__setitem__("reference_design", problem.get("reference_design") or ""),
+        lambda: None,
+    )
     return out
 
 
@@ -702,17 +768,15 @@ def save_design(
     from app.services.open_response import plan_sd_design_caps
 
     sess = get_session(db, session_id, account_id, guest_id)
-    if not sess:
-        raise LookupError("session not found")
-    if sess["status"] != "active":
-        raise ValueError("session already finished")
+    pick(not sess, lambda: _raise_lookup("session not found"), lambda: None)
+    pick(sess["status"] != "active", lambda: _raise_value("session already finished"), lambda: None)
     caps = plan_sd_design_caps()
     clean = {
         "requirements": str(design.get("requirements") or "")[: caps.field_chars],
         "apis": str(design.get("apis") or "")[: caps.field_chars],
         "data": str(design.get("data") or "")[: caps.field_chars],
         "scale": str(design.get("scale") or "")[: caps.field_chars],
-        "blocks": [str(b) for b in (design.get("blocks") or []) if str(b)][: caps.blocks],
+        "blocks": list(filter(None, map(str, design.get("blocks") or [])))[: caps.blocks],
     }
     db.execute(
         text(
@@ -757,35 +821,13 @@ async def submit_and_grade(
         design_json,
     )
     cached = cache_get(db, kind="sd_grade", cache_key=grade_key)
-    graded: dict[str, Any]
-    if isinstance(cached, dict) and cached.get("mentor_summary") and cached.get("lesson"):
-        graded = cached
-    else:
-        user = (
-            f"Case: {problem.get('title')}\n"
-            f"Prompt: {problem.get('prompt')}\n"
-            f"Constraints: {problem.get('constraints')}\n"
-            f"Concept keys: {', '.join(concept_keys)}\n\n"
-            f"Learner's design JSON:\n{design_json}"
-        )
-        try:
-            raw = await complete_chat(
-                [
-                    {"role": "system", "content": _GRADE_SYSTEM},
-                    {"role": "user", "content": user},
-                ],
-                db,
-                log_tag="sd_grade",
-            )
-            data = extract_json_obj(raw) or {}
-            from app.services.open_response import merge_system_design_grade
-
-            fallback = _heuristic_grade(design_clean, concept_keys)
-            graded = merge_system_design_grade(data, fallback).result
-            cache_put(db, kind="sd_grade", cache_key=grade_key, value=graded)
-        except Exception:
-            # Best-effort LLM grade — heuristic keeps the mastery loop alive.
-            graded = _heuristic_grade(design_clean, concept_keys)
+    graded = pick(
+        isinstance(cached, dict) and bool(cached.get("mentor_summary")) and bool(cached.get("lesson")),
+        lambda: cached,
+        lambda: None,
+    ) or await _grade_system_design(
+        db, problem, concept_keys, design_clean, design_json, grade_key, cache_put
+    )
 
     next_id = _pick_next_problem_id(
         db,
@@ -821,6 +863,42 @@ async def submit_and_grade(
     return get_session(db, session_id, account_id, guest_id) or sess
 
 
+async def _grade_system_design(
+    db: Session,
+    problem: dict[str, Any],
+    concept_keys: list[str],
+    design_clean: dict[str, Any],
+    design_json: str,
+    grade_key: str,
+    cache_put: Any,
+) -> dict[str, Any]:
+    user = (
+        f"Case: {problem.get('title')}\n"
+        f"Prompt: {problem.get('prompt')}\n"
+        f"Constraints: {problem.get('constraints')}\n"
+        f"Concept keys: {', '.join(concept_keys)}\n\n"
+        f"Learner's design JSON:\n{design_json}"
+    )
+    try:
+        raw = await complete_chat(
+            [
+                {"role": "system", "content": _GRADE_SYSTEM},
+                {"role": "user", "content": user},
+            ],
+            db,
+            log_tag="sd_grade",
+        )
+        data = extract_json_obj(raw) or {}
+        from app.services.open_response import merge_system_design_grade
+
+        fallback = _heuristic_grade(design_clean, concept_keys)
+        graded = merge_system_design_grade(data, fallback).result
+        cache_put(db, kind="sd_grade", cache_key=grade_key, value=graded)
+        return graded
+    except Exception:
+        return _heuristic_grade(design_clean, concept_keys)
+
+
 def _pick_next_problem_id(
     db: Session,
     *,
@@ -832,27 +910,33 @@ def _pick_next_problem_id(
     from app.services.practice_selection import pick_from_rows
 
     problems = list_problems(db)
-    attempted: list[str] = []
-    if account_id is not None or guest_id:
-        where, params = _subject_filter(account_id, guest_id)
-        attempted = [
-            str(r["problem_id"])
-            for r in db.execute(
-                text(
-                    f"""
-                    SELECT DISTINCT problem_id FROM qb.sd_session
-                    WHERE status = 'done' AND {where}
-                    """
-                ),
-                params,
-            ).mappings().all()
-        ]
-    pick = pick_from_rows(
+    attempted: list[str] = pick(
+        account_id is not None or bool(guest_id),
+        lambda: _attempted_problem_ids(db, account_id, guest_id),
+        lambda: [],
+    )
+    nxt = pick_from_rows(
         problems,
         concept_keys,
         exclude_id=str(exclude),
         attempted_ids=attempted or None,
     )
-    if not pick.id:
-        return None
-    return uuid.UUID(pick.id)
+    return pick(not nxt.id, lambda: None, lambda: uuid.UUID(nxt.id))
+
+
+def _attempted_problem_ids(
+    db: Session, account_id: uuid.UUID | None, guest_id: str | None
+) -> list[str]:
+    where, params = _subject_filter(account_id, guest_id)
+    return [
+        str(r["problem_id"])
+        for r in db.execute(
+            text(
+                f"""
+                SELECT DISTINCT problem_id FROM qb.sd_session
+                WHERE status = 'done' AND {where}
+                """
+            ),
+            params,
+        ).mappings().all()
+    ]

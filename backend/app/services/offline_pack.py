@@ -33,6 +33,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.engine_runtime import Pred, Rule, apply, first_match, pick
 from app.models import Account, Document
 
 logger = logging.getLogger(__name__)
@@ -119,20 +120,22 @@ def _strip_internal_keys(payload: dict[str, Any]) -> dict[str, Any]:
     primary_concept(_key), tags, page_number, serve_mode. Removes only
     generation bookkeeping + quality metadata that would bloat the pack.
     """
-    if not isinstance(payload, dict):
-        return {}
     internal = {
         "quality", "quality_codes", "qa_metadata", "fingerprint", "canonical_uri",
         "draft_source", "candidate_index", "solve_back", "verdict",
     }
-    return {k: v for k, v in payload.items() if k not in internal}
+    return pick(
+        isinstance(payload, dict),
+        lambda: dict(filter(lambda kv: kv[0] not in internal, payload.items())),
+        lambda: {},
+    )
 
 
 # --------------------------------------------------------------------------- #
 # DB helpers — raw SQL, bound params (CONVENTIONS 2.2).
 # --------------------------------------------------------------------------- #
 def _owner_params(account_id: uuid.UUID | None, guest_id: str | None) -> dict[str, Any]:
-    return {"account_id": str(account_id) if account_id else None, "guest_id": guest_id}
+    return {"account_id": pick(bool(account_id), lambda: str(account_id), lambda: None), "guest_id": guest_id}
 
 
 def create_pack(
@@ -147,8 +150,10 @@ def create_pack(
     Exactly one of account_id / guest_id must be set (enforced by the table's
     CHECK constraint). TTL comes from ``Settings.offline_pack_ttl_days``.
     """
-    if (account_id is None) == (guest_id is None):
+    def _bad_owner() -> None:
         raise ValueError("exactly one of account_id / guest_id must be set")
+
+    pick((account_id is None) == (guest_id is None), _bad_owner, lambda: None)
     expires_at = datetime.now(timezone.utc) + timedelta(days=get_settings().offline_pack_ttl_days)
     row = db.execute(
         text(
@@ -170,43 +175,52 @@ def create_pack(
 
 def _assertion_rows(db: Session, assertion_ids: list[str]) -> list[dict[str, Any]]:
     """Load raw assertion rows (payload WITH answer key), in the given order."""
-    if not assertion_ids:
+    def _empty() -> list[dict[str, Any]]:
         return []
-    rows = db.execute(
-        text(
-            """
-            SELECT id::text, title, summary, payload
-            FROM intel.assertion
-            WHERE id = ANY(CAST(:ids AS uuid[]))
-            """
-        ),
-        {"ids": assertion_ids},
-    ).mappings().all()
-    by_id = {
-        r["id"]: {
-            "id": r["id"],
-            "title": r["title"],
-            "summary": r["summary"],
-            "payload": r["payload"] if isinstance(r["payload"], dict) else json.loads(r["payload"]),
+
+    def _load() -> list[dict[str, Any]]:
+        rows = db.execute(
+            text(
+                """
+                SELECT id::text, title, summary, payload
+                FROM intel.assertion
+                WHERE id = ANY(CAST(:ids AS uuid[]))
+                """
+            ),
+            {"ids": assertion_ids},
+        ).mappings().all()
+        by_id = {
+            r["id"]: {
+                "id": r["id"],
+                "title": r["title"],
+                "summary": r["summary"],
+                "payload": pick(
+                    isinstance(r["payload"], dict),
+                    lambda: r["payload"],
+                    lambda: json.loads(r["payload"]),
+                ),
+            }
+            for r in rows
         }
-        for r in rows
-    }
-    return [by_id[i] for i in assertion_ids if i in by_id]
+        return list(map(lambda i: by_id[i], filter(lambda i: i in by_id, assertion_ids)))
+
+    return pick(not assertion_ids, _empty, _load)
 
 
 def _artifact_meta(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
     """Minimal artifact metadata the client needs to render the pack source."""
     doc = db.get(Document, document_id)
-    if doc is None:
-        return {}
-    meta = doc.meta or {}
-    return {
-        "id": str(document_id),
-        "filename": getattr(doc, "filename", None),
-        "content_type": getattr(doc, "content_type", None),
-        "ingest_kind": getattr(doc, "ingest_kind", None),
-        "meta": meta,
-    }
+    return pick(
+        doc is None,
+        lambda: {},
+        lambda: {
+            "id": str(document_id),
+            "filename": getattr(doc, "filename", None),
+            "content_type": getattr(doc, "content_type", None),
+            "ingest_kind": getattr(doc, "ingest_kind", None),
+            "meta": doc.meta or {},
+        },
+    )
 
 
 def build_pack(db: Session, pack_id: uuid.UUID) -> None:
@@ -235,92 +249,90 @@ def build_pack(db: Session, pack_id: uuid.UUID) -> None:
         ),
         {"id": str(pack_id)},
     ).first()
-    if pack is None:
+    def _missing() -> None:
         logger.warning("offline pack %s not found", pack_id)
-        return
-    document_id = uuid.UUID(str(pack[0]))
-    account_id = uuid.UUID(str(pack[1])) if pack[1] else None
-    guest_id = pack[2]
 
-    _set_status(db, pack_id, "building")
-    try:
-        doc = db.get(Document, document_id)
-        if doc is None:
-            raise RuntimeError("artifact not found")
+    def _build() -> None:
+        document_id = uuid.UUID(str(pack[0]))
+        account_id = pick(bool(pack[1]), lambda: uuid.UUID(str(pack[1])), lambda: None)
+        guest_id = pack[2]
 
-        # Resolve the learner so answered_ids / mastery reflect THIS learner.
-        user = db.get(Account, account_id) if account_id else None
-        lk = learner_key_for(user, guest_id)
-        serve_mode = serve_budget_mode(doc, learner_key=lk)
+        _set_status(db, pack_id, "building")
+        try:
+            doc = db.get(Document, document_id)
 
-        # 1. Backfill per-option feedback for any page that still lacks it, so
-        #    the offline grade path has coaching for every single-answer item.
-        #    Idempotent (coach_page_assertions only touches assertions without
-        #    option_feedback). Multi-select items keep the live grade path and
-        #    are simply not pre-baked.
-        pages = selected_page_list(doc)
-        total_pages = max(len(pages), 1)
-        for i, page in enumerate(pages, 1):
-            try:
-                coach_page_assertions(db, document_id=document_id, page_number=page)
-            except Exception:
-                logger.debug("coach page %s failed for pack %s", page, pack_id, exc_info=True)
-            _set_status(db, pack_id, "building", progress=round(20 * i / total_pages, 2))
+            def _no_doc() -> None:
+                raise RuntimeError("artifact not found")
 
-        # 2. Re-read the deck after coaching so payloads include fresh feedback.
-        assertion_ids = edition_assertion_ids(db, document_id, doc, serve_mode=serve_mode)
-        assertions = _assertion_rows(db, assertion_ids)
-        _set_status(db, pack_id, "building", progress=70)
+            pick(doc is None, _no_doc, lambda: None)
 
-        # 3. Mastery snapshot the client seeds its local state from.
-        progress = get_progress(doc, learner_key=lk) if lk else {}
-        mastery = {
-            "answered_ids": [str(x) for x in progress.get("answered_ids") or []],
-            "current_page": int(progress.get("current_page") or 1),
-            "budget_serve_mode": str(progress.get("budget_serve_mode") or serve_mode),
-        }
+            user = pick(bool(account_id), lambda: db.get(Account, account_id), lambda: None)
+            lk = learner_key_for(user, guest_id)
+            serve_mode = serve_budget_mode(doc, learner_key=lk)
 
-        expires_at = datetime.now(timezone.utc) + timedelta(days=get_settings().offline_pack_ttl_days)
-        pack_payload = assemble_pack(
-            document_id=document_id,
-            artifact=_artifact_meta(db, document_id),
-            assertions=assertions,
-            mastery=mastery,
-            serve_mode=str(serve_mode),
-            expires_at=expires_at,
-        )
-        signature = sign_pack(pack_payload)
+            pages = selected_page_list(doc)
+            total_pages = max(len(pages), 1)
+            for i, page in enumerate(pages, 1):
+                try:
+                    coach_page_assertions(db, document_id=document_id, page_number=page)
+                except Exception:
+                    logger.debug("coach page %s failed for pack %s", page, pack_id, exc_info=True)
+                _set_status(db, pack_id, "building", progress=round(20 * i / total_pages, 2))
 
-        db.execute(
-            text(
-                """
-                UPDATE qb.offline_packs
-                SET pack_payload = CAST(:payload AS jsonb),
-                    signature = :signature,
-                    question_count = :count,
-                    status = 'ready',
-                    progress = 100,
-                    expires_at = :expires_at,
-                    error = NULL,
-                    updated_at = now()
-                WHERE id = :id
-                """
-            ),
-            {
-                "id": str(pack_id),
-                "payload": json.dumps(pack_payload),
-                "signature": signature,
-                "count": len(assertions),
-                "expires_at": expires_at,
-            },
-        )
-        db.commit()
-        logger.info("offline pack %s ready (%d questions)", pack_id, len(assertions))
-    except Exception as exc:
-        logger.exception("offline pack %s build failed", pack_id)
-        _set_status(db, pack_id, "failed", error=str(exc)[:500])
-        db.commit()
-        raise
+            assertion_ids = edition_assertion_ids(db, document_id, doc, serve_mode=serve_mode)
+            assertions = _assertion_rows(db, assertion_ids)
+            _set_status(db, pack_id, "building", progress=70)
+
+            progress = pick(bool(lk), lambda: get_progress(doc, learner_key=lk), lambda: {})
+            mastery = {
+                "answered_ids": [str(x) for x in progress.get("answered_ids") or []],
+                "current_page": int(progress.get("current_page") or 1),
+                "budget_serve_mode": str(progress.get("budget_serve_mode") or serve_mode),
+            }
+
+            expires_at = datetime.now(timezone.utc) + timedelta(days=get_settings().offline_pack_ttl_days)
+            pack_payload = assemble_pack(
+                document_id=document_id,
+                artifact=_artifact_meta(db, document_id),
+                assertions=assertions,
+                mastery=mastery,
+                serve_mode=str(serve_mode),
+                expires_at=expires_at,
+            )
+            signature = sign_pack(pack_payload)
+
+            db.execute(
+                text(
+                    """
+                    UPDATE qb.offline_packs
+                    SET pack_payload = CAST(:payload AS jsonb),
+                        signature = :signature,
+                        question_count = :count,
+                        status = 'ready',
+                        progress = 100,
+                        expires_at = :expires_at,
+                        error = NULL,
+                        updated_at = now()
+                    WHERE id = :id
+                    """
+                ),
+                {
+                    "id": str(pack_id),
+                    "payload": json.dumps(pack_payload),
+                    "signature": signature,
+                    "count": len(assertions),
+                    "expires_at": expires_at,
+                },
+            )
+            db.commit()
+            logger.info("offline pack %s ready (%d questions)", pack_id, len(assertions))
+        except Exception as exc:
+            logger.exception("offline pack %s build failed", pack_id)
+            _set_status(db, pack_id, "failed", error=str(exc)[:500])
+            db.commit()
+            raise
+
+    pick(pack is None, _missing, _build)
 
 
 def _set_status(
@@ -333,12 +345,16 @@ def _set_status(
 ) -> None:
     clauses = ["status = :status", "updated_at = now()"]
     params: dict[str, Any] = {"id": str(pack_id), "status": status}
-    if progress is not None:
-        clauses.append("progress = :progress")
-        params["progress"] = float(progress)
-    if error is not None:
-        clauses.append("error = :error")
-        params["error"] = error
+    pick(
+        progress is not None,
+        lambda: (clauses.append("progress = :progress"), params.__setitem__("progress", float(progress))),
+        lambda: None,
+    )
+    pick(
+        error is not None,
+        lambda: (clauses.append("error = :error"), params.__setitem__("error", error)),
+        lambda: None,
+    )
     db.execute(
         text(f"UPDATE qb.offline_packs SET {', '.join(clauses)} WHERE id = :id"),
         params,
@@ -359,8 +375,7 @@ def get_pack(
         "id::text", "document_id::text", "status", "progress",
         "question_count", "expires_at", "created_at", "updated_at", "error",
     ]
-    if include_payload:
-        cols += ["pack_payload", "signature"]
+    pick(include_payload, lambda: cols.extend(["pack_payload", "signature"]), lambda: None)
     owner_clause, owner_params = _owner_filter(account_id, guest_id)
     row = db.execute(
         text(
@@ -371,9 +386,7 @@ def get_pack(
         ),
         {"id": str(pack_id), **owner_params},
     ).mappings().first()
-    if row is None:
-        return None
-    return dict(row)
+    return pick(row is None, lambda: None, lambda: dict(row))
 
 
 def list_packs(
@@ -386,9 +399,11 @@ def list_packs(
     """A learner's packs (optionally for one source) — metadata only, no payload."""
     where = ["status IS NOT NULL"]
     params: dict[str, Any] = {}
-    if document_id is not None:
-        where.append("document_id = :document_id")
-        params["document_id"] = str(document_id)
+    pick(
+        document_id is not None,
+        lambda: (where.append("document_id = :document_id"), params.__setitem__("document_id", str(document_id))),
+        lambda: None,
+    )
     owner_clause, owner_params = _owner_filter(account_id, guest_id)
     where.append(owner_clause)
     params.update(owner_params)
@@ -427,21 +442,41 @@ def revoke_pack(
 def _owner_filter(
     account_id: uuid.UUID | None, guest_id: str | None
 ) -> tuple[str, dict[str, Any]]:
-    if account_id is not None:
-        return "account_id = :account_id", {"account_id": str(account_id)}
-    if guest_id is not None:
-        return "guest_id = :guest_id", {"guest_id": guest_id}
-    # No owner → match nothing (safe default; never returns others' packs).
-    return "FALSE", {}
+    rule = first_match(
+        [
+            Rule(when=(Pred("account", "truthy"),), action="account"),
+            Rule(when=(Pred("guest", "truthy"),), action="guest"),
+        ],
+        {"account": account_id is not None, "guest": guest_id is not None},
+        default=Rule(when=(), action="none"),
+    )
+    return apply(
+        rule.action,
+        {
+            "account": lambda: ("account_id = :account_id", {"account_id": str(account_id)}),
+            "guest": lambda: ("guest_id = :guest_id", {"guest_id": guest_id}),
+            "none": lambda: ("FALSE", {}),
+        },
+    )
 
 
 def is_expired(row: dict[str, Any]) -> bool:
     """True if the pack row is past its ``expires_at``."""
     exp = row.get("expires_at")
-    if exp is None:
+    def _missing() -> bool:
         return True
-    if isinstance(exp, str):
-        exp = datetime.fromisoformat(exp.replace("Z", "+00:00"))
-    if exp.tzinfo is None:
-        exp = exp.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) > exp
+
+    def _check() -> bool:
+        parsed = pick(
+            isinstance(exp, str),
+            lambda: datetime.fromisoformat(exp.replace("Z", "+00:00")),
+            lambda: exp,
+        )
+        parsed = pick(
+            parsed.tzinfo is None,
+            lambda: parsed.replace(tzinfo=timezone.utc),
+            lambda: parsed,
+        )
+        return datetime.now(timezone.utc) > parsed
+
+    return pick(exp is None, _missing, _check)

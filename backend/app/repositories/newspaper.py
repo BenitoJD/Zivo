@@ -10,6 +10,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import apply, choose, pick
+
 RETENTION_DAYS = 30
 
 
@@ -27,7 +29,8 @@ def get_settings(db: Session) -> dict[str, Any]:
             """
         )
     ).mappings().first()
-    if not row:
+
+    def _defaults() -> dict[str, Any]:
         db.execute(
             text(
                 """
@@ -45,9 +48,13 @@ def get_settings(db: Session) -> dict[str, Any]:
             "allowlist_only": False,
             "updated_at": None,
         }
-    out = dict(row)
-    out["allowlist_only"] = bool(out.get("allowlist_only"))
-    return out
+
+    def _from_row() -> dict[str, Any]:
+        out = dict(row)
+        out["allowlist_only"] = bool(out.get("allowlist_only"))
+        return out
+
+    return pick(not row, _defaults, _from_row)
 
 
 def set_channel(db: Session, *, channel_ref: str, channel_label: str = "") -> dict[str, Any]:
@@ -74,32 +81,40 @@ def update_channel_ref_keep_cursor(
 ) -> dict[str, Any]:
     """Persist a discovered peer id without wiping sync_cursor (unlike set_channel)."""
     ref = channel_ref.strip()
-    if not ref:
+
+    def _do() -> dict[str, Any]:
+        def _ref_only() -> None:
+            db.execute(
+                text(
+                    """
+                    UPDATE qb.newspaper_settings
+                    SET channel_ref = :ref, updated_at = now()
+                    WHERE id = 1
+                    """
+                ),
+                {"ref": ref},
+            )
+
+        def _with_label() -> None:
+            db.execute(
+                text(
+                    """
+                    UPDATE qb.newspaper_settings
+                    SET channel_ref = :ref, channel_label = :label, updated_at = now()
+                    WHERE id = 1
+                    """
+                ),
+                {"ref": ref, "label": channel_label.strip()},
+            )
+
+        apply(
+            choose(channel_label is None, "ref_only", "with_label"),
+            {"ref_only": _ref_only, "with_label": _with_label},
+        )
+        db.commit()
         return get_settings(db)
-    if channel_label is None:
-        db.execute(
-            text(
-                """
-                UPDATE qb.newspaper_settings
-                SET channel_ref = :ref, updated_at = now()
-                WHERE id = 1
-                """
-            ),
-            {"ref": ref},
-        )
-    else:
-        db.execute(
-            text(
-                """
-                UPDATE qb.newspaper_settings
-                SET channel_ref = :ref, channel_label = :label, updated_at = now()
-                WHERE id = 1
-                """
-            ),
-            {"ref": ref, "label": channel_label.strip()},
-        )
-    db.commit()
-    return get_settings(db)
+
+    return pick(not ref, lambda: get_settings(db), _do)
 
 
 def set_sync_cursor(db: Session, cursor: int | None) -> None:
@@ -112,49 +127,53 @@ def set_sync_cursor(db: Session, cursor: int | None) -> None:
 
 def resolve_alias(db: Session, raw_key: str) -> tuple[str, str] | None:
     key = re.sub(r"[^a-z0-9]+", "", (raw_key or "").lower())
-    if not key:
-        return None
-    row = db.execute(
-        text(
-            """
-            SELECT paper_slug, paper_title FROM qb.newspaper_paper_alias
-            WHERE alias_key = :k
-            """
-        ),
-        {"k": key},
-    ).first()
-    if not row:
-        return None
-    return str(row[0]), str(row[1])
+
+    def _lookup() -> tuple[str, str] | None:
+        row = db.execute(
+            text(
+                """
+                SELECT paper_slug, paper_title FROM qb.newspaper_paper_alias
+                WHERE alias_key = :k
+                """
+            ),
+            {"k": key},
+        ).first()
+        return pick(not row, lambda: None, lambda: (str(row[0]), str(row[1])))
+
+    return pick(not key, lambda: None, _lookup)
 
 
 def upsert_alias(db: Session, *, alias_key: str, paper_slug: str, paper_title: str) -> None:
     key = re.sub(r"[^a-z0-9]+", "", alias_key.lower())
-    if not key:
-        return
-    db.execute(
-        text(
-            """
-            INSERT INTO qb.newspaper_paper_alias (alias_key, paper_slug, paper_title, updated_at)
-            VALUES (:k, :slug, :title, now())
-            ON CONFLICT (alias_key) DO UPDATE SET
-              paper_slug = EXCLUDED.paper_slug,
-              paper_title = EXCLUDED.paper_title,
-              updated_at = now()
-            """
-        ),
-        {"k": key, "slug": paper_slug, "title": paper_title},
-    )
+
+    def _write() -> None:
+        db.execute(
+            text(
+                """
+                INSERT INTO qb.newspaper_paper_alias (alias_key, paper_slug, paper_title, updated_at)
+                VALUES (:k, :slug, :title, now())
+                ON CONFLICT (alias_key) DO UPDATE SET
+                  paper_slug = EXCLUDED.paper_slug,
+                  paper_title = EXCLUDED.paper_title,
+                  updated_at = now()
+                """
+            ),
+            {"k": key, "slug": paper_slug, "title": paper_title},
+        )
+
+    pick(not key, lambda: None, _write)
 
 
 def delete_alias(db: Session, alias_key: str) -> None:
     key = re.sub(r"[^a-z0-9]+", "", (alias_key or "").lower())
-    if not key:
-        return
-    db.execute(
-        text("DELETE FROM qb.newspaper_paper_alias WHERE alias_key = :k"),
-        {"k": key},
-    )
+
+    def _delete() -> None:
+        db.execute(
+            text("DELETE FROM qb.newspaper_paper_alias WHERE alias_key = :k"),
+            {"k": key},
+        )
+
+    pick(not key, lambda: None, _delete)
 
 
 def delete_all_aliases(db: Session) -> int:
@@ -181,7 +200,7 @@ def get_edition(db: Session, edition_id: uuid.UUID) -> dict[str, Any] | None:
         ),
         {"id": edition_id},
     ).mappings().first()
-    return dict(row) if row else None
+    return pick(row is None, lambda: None, lambda: dict(row))
 
 
 def list_existing_paper_days(db: Session) -> set[tuple[str, date]]:
@@ -217,8 +236,7 @@ def repair_edition_blog_links(db: Session) -> int:
         )
     )
     n = int(result.rowcount or 0)
-    if n:
-        db.commit()
+    pick(bool(n), lambda: db.commit(), lambda: None)
     return n
 
 
@@ -237,7 +255,7 @@ def get_edition_by_paper_day(
         ),
         {"slug": paper_slug, "d": edition_date},
     ).mappings().first()
-    return dict(row) if row else None
+    return pick(row is None, lambda: None, lambda: dict(row))
 
 
 def insert_edition(
@@ -284,7 +302,7 @@ def update_edition_status(
     status: str,
     document_id: uuid.UUID | None = None,
 ) -> None:
-    if document_id is not None:
+    def _with_doc() -> None:
         db.execute(
             text(
                 """
@@ -295,7 +313,8 @@ def update_edition_status(
             ),
             {"id": edition_id, "status": status, "doc": document_id},
         )
-    else:
+
+    def _status_only() -> None:
         db.execute(
             text(
                 """
@@ -306,6 +325,11 @@ def update_edition_status(
             ),
             {"id": edition_id, "status": status},
         )
+
+    apply(
+        choose(document_id is not None, "with_doc", "status_only"),
+        {"with_doc": _with_doc, "status_only": _status_only},
+    )
 
 
 def list_days_for_paper(db: Session, *, paper_slug: str, since: date) -> list[dict[str, Any]]:
@@ -404,7 +428,7 @@ def list_expired_ready(db: Session, *, before: date) -> list[dict[str, Any]]:
 
 def retention_cutoff(now: datetime | None = None, *, days: int | None = None) -> date:
     now = now or datetime.now(timezone.utc)
-    span = int(days) if days is not None else RETENTION_DAYS
+    span = choose(days is not None, int(days or 0), RETENTION_DAYS)
     return (now.astimezone(timezone.utc) - timedelta(days=span)).date()
 
 
@@ -470,7 +494,7 @@ def set_brand_enabled(db: Session, *, paper_slug: str, enabled: bool) -> dict[st
         ),
         {"slug": paper_slug},
     ).mappings().first()
-    return dict(row) if row else None
+    return pick(row is None, lambda: None, lambda: dict(row))
 
 
 def list_brands(db: Session) -> list[dict[str, Any]]:
@@ -489,30 +513,37 @@ def list_brands(db: Session) -> list[dict[str, Any]]:
 def is_brand_allowed(db: Session, paper_slug: str) -> bool:
     """When allowlist_only is off → all papers allowed. When on → must be enabled."""
     settings = get_settings(db)
-    if not settings.get("allowlist_only"):
-        return True
-    row = db.execute(
-        text(
-            """
-            SELECT enabled FROM qb.newspaper_brand WHERE paper_slug = :slug
-            """
-        ),
-        {"slug": paper_slug},
-    ).first()
-    return bool(row and row[0])
+
+    def _allowlisted() -> bool:
+        row = db.execute(
+            text(
+                """
+                SELECT enabled FROM qb.newspaper_brand WHERE paper_slug = :slug
+                """
+            ),
+            {"slug": paper_slug},
+        ).first()
+        return bool(row and row[0])
+
+    return pick(not settings.get("allowlist_only"), lambda: True, _allowlisted)
 
 
 def list_papers(db: Session, *, since: date, allowlist_only: bool | None = None) -> list[dict[str, Any]]:
-    if allowlist_only is None:
-        allowlist_only = bool(get_settings(db).get("allowlist_only"))
-    filter_sql = ""
-    if allowlist_only:
-        filter_sql = """
+    allowlist_only = pick(
+        allowlist_only is None,
+        lambda: bool(get_settings(db).get("allowlist_only")),
+        lambda: allowlist_only,
+    )
+    filter_sql = choose(
+        bool(allowlist_only),
+        """
               AND EXISTS (
                 SELECT 1 FROM qb.newspaper_brand b
                 WHERE b.paper_slug = e.paper_slug AND b.enabled = true
               )
-        """
+        """,
+        "",
+    )
     rows = db.execute(
         text(
             f"""

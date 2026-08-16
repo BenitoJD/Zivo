@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import choose, pick
 from app.models import Account
 from app.repositories.intel import concept_id
 from app.services.calibration import record_outcome
@@ -37,15 +38,22 @@ def resolve_subject_entity(
     still feed calibration and the report card without an account. None only if
     neither identity is available.
     """
-    if user:
+
+    def _from_user() -> uuid.UUID:
         from app.repositories.intel import get_or_create_account_entity
 
         return get_or_create_account_entity(db, user.id, user.username)
-    if not guest_id:
-        return None
-    from app.repositories.intel import get_or_create_concept_entity
 
-    return get_or_create_concept_entity(db, f"guest:{guest_id}", f"Guest {guest_id[:8]}")
+    def _from_guest() -> uuid.UUID | None:
+        from app.repositories.intel import get_or_create_concept_entity
+
+        return pick(
+            not guest_id,
+            lambda: None,
+            lambda: get_or_create_concept_entity(db, f"guest:{guest_id}", f"Guest {guest_id[:8]}"),
+        )
+
+    return pick(bool(user), _from_user, _from_guest)
 
 
 def answered_assertion_ids(
@@ -58,10 +66,11 @@ def answered_assertion_ids(
         "entity_id": subject_entity_id,
         "metric_id": concept_id(db, ANSWER_CORRECT_METRIC_URI),
     }
-    filter_sql = ""
-    if assertion_ids:
-        params["assertion_ids"] = assertion_ids
-        filter_sql = "AND source_assertion_id::text = ANY(:assertion_ids)"
+    filter_sql = pick(
+        bool(assertion_ids),
+        lambda: (params.__setitem__("assertion_ids", assertion_ids), "AND source_assertion_id::text = ANY(:assertion_ids)")[1],
+        lambda: "",
+    )
     rows = db.execute(
         text(
             f"""
@@ -122,13 +131,13 @@ def record_answer_signal(
     O(1) and LLM-free. The caller commits.
     """
     value_json: dict[str, object] = {"choice_index": int(choice_index)}
-    if guest_id:
-        value_json["guest_id"] = guest_id
-        value_json["mode"] = mode
-    if latency_ms is not None:
-        value_json["latency_ms"] = int(latency_ms)
-    if confidence is not None:
-        value_json["confidence"] = int(confidence)
+    pick(
+        bool(guest_id),
+        lambda: (value_json.__setitem__("guest_id", guest_id), value_json.__setitem__("mode", mode)),
+        lambda: None,
+    )
+    pick(latency_ms is not None, lambda: value_json.__setitem__("latency_ms", int(latency_ms)), lambda: None)
+    pick(confidence is not None, lambda: value_json.__setitem__("confidence", int(confidence)), lambda: None)
 
     row = db.execute(
         text(
@@ -149,7 +158,7 @@ def record_answer_signal(
             "metric_id": concept_id(db, ANSWER_CORRECT_METRIC_URI),
             "entity_id": subject_entity_id,
             "assertion_id": assertion_id,
-            "correct": 1 if correct else 0,
+            "correct": choose(correct, 1, 0),
             "value_json": json.dumps(value_json),
         },
     ).first()
@@ -167,10 +176,10 @@ def record_answer_signal(
     revisit_hours: float | None = None
     revisit_ease: float | None = None
     revisit_repetitions: int | None = None
-    if inserted and calibrate:
-        # Best-effort: the immutable measurement row is already written, so a
-        # calibration failure must never break grading — degrade to "no estimate
-        # this turn" (selection falls back gracefully) rather than 500 the answer.
+
+    def _calibrate() -> None:
+        nonlocal ability, difficulty, ability_se, mastery_stop
+        nonlocal revisit_hours, revisit_ease, revisit_repetitions
         try:
             from app.services.calibration_engine import get_ability
 
@@ -186,17 +195,19 @@ def record_answer_signal(
                 ability=ability, n=n, se_theta=ability_se, mode=mode
             )
             mastery_stop = stop.stop
-            # Spaced Revisit: callers pass prior ease/reps via optional progress;
-            # when absent, engine defaults. Wire-through happens in record_confirmed.
             plan = plan_revisit(
                 last_correct=correct,
-                prior_interval_hours=(
-                    float(prior_interval_hours)
-                    if prior_interval_hours is not None
-                    else 24.0
+                prior_interval_hours=pick(
+                    prior_interval_hours is not None,
+                    lambda: float(prior_interval_hours),
+                    lambda: 24.0,
                 ),
-                ease=float(prior_ease) if prior_ease is not None else 2.5,
-                repetitions=int(prior_repetitions) if prior_repetitions is not None else 0,
+                ease=pick(prior_ease is not None, lambda: float(prior_ease), lambda: 2.5),
+                repetitions=pick(
+                    prior_repetitions is not None,
+                    lambda: int(prior_repetitions),
+                    lambda: 0,
+                ),
             )
             revisit_hours = plan.next_due_hours
             revisit_ease = plan.ease
@@ -205,6 +216,8 @@ def record_answer_signal(
             logger.warning(
                 "calibration failed for assertion %s; measurement kept", assertion_id, exc_info=True
             )
+
+    pick(inserted and calibrate, _calibrate, lambda: None)
 
     return AnswerSignal(
         inserted=inserted,

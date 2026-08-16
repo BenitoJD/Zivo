@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import choose, pick
 from app.services.open_response import (
     evaluate_debug_cook_input,
     plan_debug_cook_store_caps,
@@ -32,13 +33,16 @@ def create_cook_job(
     source_ref: str | None = None,
     origin: str = "contributed",
 ) -> dict[str, Any]:
-    st = source_type if source_type in _VALID_SOURCE_TYPES else "paste"
-    og = origin if origin in _VALID_ORIGINS else "contributed"
+    st = choose(source_type in _VALID_SOURCE_TYPES, source_type, "paste")
+    og = choose(origin in _VALID_ORIGINS, origin, "contributed")
     count = plan_debug_cook_yield(scenario_count)
     material_clean = (material or "").strip()
     intake = evaluate_debug_cook_input(material=material_clean, brief=brief)
-    if not intake.ok:
+
+    def _bad() -> None:
         raise ValueError("Provide material or a cook brief")
+
+    pick(not intake.ok, _bad, lambda: None)
 
     store = plan_debug_cook_store_caps()
     job_id = uuid.uuid4()
@@ -82,8 +86,11 @@ def get_cook_job(db: Session, job_id: uuid.UUID) -> dict[str, Any]:
         ),
         {"id": job_id},
     ).first()
-    if not row:
+
+    def _missing() -> None:
         raise LookupError("Cook job not found")
+
+    pick(not row, _missing, lambda: None)
     m = row._mapping
     scenario_ids = db.execute(
         text(
@@ -98,7 +105,7 @@ def get_cook_job(db: Session, job_id: uuid.UUID) -> dict[str, Any]:
     ).scalars().all()
     return {
         "id": str(m["id"]),
-        "owner_user_id": str(m["owner_user_id"]) if m["owner_user_id"] else None,
+        "owner_user_id": pick(bool(m["owner_user_id"]), lambda: str(m["owner_user_id"]), lambda: None),
         "source_type": m["source_type"],
         "source_ref": m["source_ref"],
         "brief": m["brief"],
@@ -108,8 +115,8 @@ def get_cook_job(db: Session, job_id: uuid.UUID) -> dict[str, Any]:
         "review_status": m["review_status"],
         "published": bool(m["published"]),
         "error": m["error"],
-        "created_at": m["created_at"].isoformat() if m["created_at"] else None,
-        "completed_at": m["completed_at"].isoformat() if m["completed_at"] else None,
+        "created_at": pick(bool(m["created_at"]), lambda: m["created_at"].isoformat(), lambda: None),
+        "completed_at": pick(bool(m["completed_at"]), lambda: m["completed_at"].isoformat(), lambda: None),
         "scenario_ids": list(scenario_ids),
         "material_preview": (m["material"] or "")[:500],
     }
@@ -122,7 +129,7 @@ def set_cook_job_status(
     *,
     error: str | None = None,
 ) -> None:
-    completed = ", completed_at = now()" if status in ("done", "failed") else ""
+    completed = choose(status in ("done", "failed"), ", completed_at = now()", "")
     db.execute(
         text(
             f"""
@@ -137,10 +144,15 @@ def set_cook_job_status(
 
 def submit_job_to_library(db: Session, job_id: uuid.UUID, owner_user_id: uuid.UUID) -> dict[str, Any]:
     job = get_cook_job(db, job_id)
-    if job["owner_user_id"] and job["owner_user_id"] != str(owner_user_id):
+
+    def _perm() -> None:
         raise PermissionError("Not your cook job")
-    if job["status"] != "done":
+
+    def _incomplete() -> None:
         raise ValueError("Cook job is not complete")
+
+    pick(bool(job["owner_user_id"] and job["owner_user_id"] != str(owner_user_id)), _perm, lambda: None)
+    pick(job["status"] != "done", _incomplete, lambda: None)
     db.execute(
         text(
             """

@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import choose, pick
 from app.services.llm_json import extract_json_obj
 from app.services.llm_router import acomplete_chat
 from app.services.llm_sync import run_coro_in_worker
@@ -45,7 +46,7 @@ def write_article(
     format_override: str | None = None,
 ) -> dict[str, Any] | None:
     """Rewrite scrubbed source into public article fields."""
-    stream = stream if stream in {"general", "system_design"} else "general"
+    stream = choose(stream in {"general", "system_design"}, stream, "general")
     presentation = plan_article_presentation(stream, format_override=format_override)
     fmt = presentation.format
     cta_kind = presentation.cta_kind
@@ -97,37 +98,44 @@ MATERIAL (already PII-scrubbed; do not reveal origin):
     title = str(parsed.get("title") or title_hint or "Untitled").strip()
     lede = str(parsed.get("lede") or "").strip()
     body = str(parsed.get("body_md") or "").strip()
-    if not title or not body:
+
+    def _none() -> None:
         return None
 
-    fields = humanize_fields(title=title, lede=lede, body_md=body)
-    faq_items = parsed.get("faq_items") if fmt == "faq" else []
-    if not isinstance(faq_items, list):
-        faq_items = []
-    faq_clean = []
-    for item in faq_items[: plan_seo_faq_item_cap()]:
-        if not isinstance(item, dict):
-            continue
-        q = humanize_fields(
-            title=str(item.get("question") or ""),
-            lede="",
-            body_md=str(item.get("answer") or ""),
-        )
-        if q["title"] and q["body_md"]:
-            faq_clean.append({"question": q["title"], "answer": q["body_md"]})
+    def _fields() -> dict[str, Any]:
+        fields = humanize_fields(title=title, lede=lede, body_md=body)
+        faq_items = pick(fmt == "faq", lambda: parsed.get("faq_items"), lambda: [])
+        faq_items = pick(isinstance(faq_items, list), lambda: faq_items, lambda: [])
+        faq_clean = []
+        for item in faq_items[: plan_seo_faq_item_cap()]:
+            def _add() -> None:
+                q = humanize_fields(
+                    title=str(item.get("question") or ""),
+                    lede="",
+                    body_md=str(item.get("answer") or ""),
+                )
+                pick(
+                    bool(q["title"] and q["body_md"]),
+                    lambda: faq_clean.append({"question": q["title"], "answer": q["body_md"]}),
+                    lambda: None,
+                )
 
-    return {
-        "title": fields["title"],
-        "lede": fields["lede"],
-        "body_md": fields["body_md"],
-        "format": fmt,
-        "stream": stream,
-        "cta_kind": cta_kind,
-        "topic_fingerprint_hint": str(
-            parsed.get("topic_fingerprint_hint") or fields["title"]
-        ).strip(),
-        "faq_jsonld": faq_clean,
-    }
+            pick(isinstance(item, dict), _add, lambda: None)
+
+        return {
+            "title": fields["title"],
+            "lede": fields["lede"],
+            "body_md": fields["body_md"],
+            "format": fmt,
+            "stream": stream,
+            "cta_kind": cta_kind,
+            "topic_fingerprint_hint": str(
+                parsed.get("topic_fingerprint_hint") or fields["title"]
+            ).strip(),
+            "faq_jsonld": faq_clean,
+        }
+
+    return pick(not title or not body, _none, _fields)
 
 
 _EDITION_SYSTEM = """You write daily edition digests for learners preparing for Indian competitive exams.
@@ -187,12 +195,15 @@ EDITION MATERIAL (PII-scrubbed; do not reveal origin):
             "seo_digest", _EDITION_SYSTEM, edition_date, title_hint, excerpt
         )
         hit = cache_get(db, kind="seo_digest", cache_key=digest_key)
-        if isinstance(hit, str) and hit.strip():
-            parsed = extract_json_obj(hit)
-            title = str(parsed.get("title") or title_hint or "Edition digest").strip()
-            lede = str(parsed.get("lede") or "").strip()
-            body = str(parsed.get("body_md") or "").strip()
-            if title and body:
+        parsed = None
+
+        def _from_cache() -> dict[str, Any] | None:
+            cached = extract_json_obj(hit)
+            title = str(cached.get("title") or title_hint or "Edition digest").strip()
+            lede = str(cached.get("lede") or "").strip()
+            body = str(cached.get("body_md") or "").strip()
+
+            def _hit() -> dict[str, Any]:
                 fields = humanize_fields(title=title, lede=lede, body_md=body)
                 return {
                     "title": fields["title"],
@@ -202,45 +213,72 @@ EDITION MATERIAL (PII-scrubbed; do not reveal origin):
                     "stream": "general",
                     "cta_kind": "practice",
                     "topic_fingerprint_hint": str(
-                        parsed.get("topic_fingerprint_hint") or fields["title"]
+                        cached.get("topic_fingerprint_hint") or fields["title"]
                     ).strip(),
                     "faq_jsonld": [],
                 }
-        raw = _complete(
-            db,
-            [
-                {"role": "system", "content": _EDITION_SYSTEM},
-                {"role": "user", "content": user},
-            ],
+
+            return pick(bool(title and body), _hit, lambda: None)
+
+        cached_out = pick(
+            isinstance(hit, str) and bool(hit.strip()),
+            _from_cache,
+            lambda: None,
         )
-        parsed = extract_json_obj(raw)
-        if parsed.get("title") and parsed.get("body_md"):
-            cache_put(db, kind="seo_digest", cache_key=digest_key, value=raw)
+
+        def _generate() -> dict[str, Any] | None:
+            nonlocal parsed
+            raw = _complete(
+                db,
+                [
+                    {"role": "system", "content": _EDITION_SYSTEM},
+                    {"role": "user", "content": user},
+                ],
+            )
+            parsed = extract_json_obj(raw)
+            pick(
+                bool(parsed.get("title") and parsed.get("body_md")),
+                lambda: cache_put(db, kind="seo_digest", cache_key=digest_key, value=raw),
+                lambda: None,
+            )
+            return None
+
+        pick(cached_out is not None, lambda: None, _generate)
     except Exception:
         logger.exception("edition digest write failed")
         return None
 
-    title = str(parsed.get("title") or title_hint or "Edition digest").strip()
-    lede = str(parsed.get("lede") or "").strip()
-    body = str(parsed.get("body_md") or "").strip()
-    if not title or not body:
-        logger.warning(
-            "edition digest write returned empty fields title=%r body_len=%s",
-            title,
-            len(body),
-        )
-        return None
+    def _cached() -> dict[str, Any] | None:
+        return cached_out
 
-    fields = humanize_fields(title=title, lede=lede, body_md=body)
-    return {
-        "title": fields["title"],
-        "lede": fields["lede"],
-        "body_md": fields["body_md"],
-        "format": "explainer",
-        "stream": "general",
-        "cta_kind": "practice",
-        "topic_fingerprint_hint": str(
-            parsed.get("topic_fingerprint_hint") or fields["title"]
-        ).strip(),
-        "faq_jsonld": [],
-    }
+    def _from_parsed() -> dict[str, Any] | None:
+        title = str(parsed.get("title") or title_hint or "Edition digest").strip()
+        lede = str(parsed.get("lede") or "").strip()
+        body = str(parsed.get("body_md") or "").strip()
+
+        def _empty() -> None:
+            logger.warning(
+                "edition digest write returned empty fields title=%r body_len=%s",
+                title,
+                len(body),
+            )
+            return None
+
+        def _ok() -> dict[str, Any]:
+            fields = humanize_fields(title=title, lede=lede, body_md=body)
+            return {
+                "title": fields["title"],
+                "lede": fields["lede"],
+                "body_md": fields["body_md"],
+                "format": "explainer",
+                "stream": "general",
+                "cta_kind": "practice",
+                "topic_fingerprint_hint": str(
+                    parsed.get("topic_fingerprint_hint") or fields["title"]
+                ).strip(),
+                "faq_jsonld": [],
+            }
+
+        return pick(not title or not body, _empty, _ok)
+
+    return pick(cached_out is not None, _cached, _from_parsed)

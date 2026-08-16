@@ -6,10 +6,17 @@ import logging
 import uuid
 
 from app.config import get_settings
+from app.engine_runtime import Pred, Rule, apply, first_match
 
 logger = logging.getLogger(__name__)
 
 _LEARN_NOTIFY_PREFIX = "zivo_learn_"
+
+_CONNINFO_RULES = (
+    Rule(when=(Pred("url", "startswith", "postgresql+psycopg://"),), action="psycopg"),
+    Rule(when=(Pred("url", "startswith", "postgresql+asyncpg://"),), action="asyncpg"),
+    Rule(when=(), action="raw"),
+)
 
 
 def learn_notify_channel(document_id: uuid.UUID) -> str:
@@ -18,11 +25,15 @@ def learn_notify_channel(document_id: uuid.UUID) -> str:
 
 def _conninfo() -> str:
     url = get_settings().database_url
-    if url.startswith("postgresql+psycopg://"):
-        return url.replace("postgresql+psycopg://", "postgresql://", 1)
-    if url.startswith("postgresql+asyncpg://"):
-        return url.replace("postgresql+asyncpg://", "postgresql://", 1)
-    return url
+    hit = first_match(_CONNINFO_RULES, {"url": url})
+    return apply(
+        hit.action,
+        {
+            "psycopg": lambda: url.replace("postgresql+psycopg://", "postgresql://", 1),
+            "asyncpg": lambda: url.replace("postgresql+asyncpg://", "postgresql://", 1),
+            "raw": lambda: url,
+        },
+    )
 
 
 def wait_learn_notify(document_id: uuid.UUID, *, timeout: float) -> bool:

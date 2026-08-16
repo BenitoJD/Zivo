@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select, text
 
 from app.db import SessionLocal
+from app.engine_runtime import pick
 from app.models import Document, User
 from app.services.auth import create_session_token, hash_password
 from app.services.guest_session import GUEST_ID_HEADER
@@ -66,8 +67,7 @@ def test_guest_upload_then_fetch_with_header_only(client: TestClient) -> None:
         db = SessionLocal()
         for doc_id in created_ids:
             doc = db.get(Document, doc_id)
-            if doc:
-                db.delete(doc)
+            pick(bool(doc), lambda d=doc: db.delete(d), lambda: None)
         db.commit()
         db.close()
 
@@ -101,8 +101,7 @@ def test_guest_can_upload_image_after_non_image_cap(client: TestClient) -> None:
         db = SessionLocal()
         for doc_id in created_ids:
             doc = db.get(Document, doc_id)
-            if doc:
-                db.delete(doc)
+            pick(bool(doc), lambda d=doc: db.delete(d), lambda: None)
         db.commit()
         db.close()
 
@@ -162,12 +161,12 @@ def test_guest_upload_claimed_on_login(client: TestClient) -> None:
         db = SessionLocal()
         for doc_id in created_ids:
             doc = db.get(Document, doc_id)
-            if doc:
-                db.delete(doc)
-        if user_id:
+            pick(bool(doc), lambda d=doc: db.delete(d), lambda: None)
+        def _wipe_user() -> None:
             db.execute(text("DELETE FROM auth.account WHERE id = :id"), {"id": user_id})
             user = db.get(User, user_id)
-            if user:
-                db.delete(user)
+            pick(bool(user), lambda: db.delete(user), lambda: None)
+
+        pick(bool(user_id), _wipe_user, lambda: None)
         db.commit()
         db.close()

@@ -12,6 +12,7 @@ from botocore.client import Config
 from botocore.exceptions import ClientError
 
 from app.config import get_settings
+from app.engine_runtime import choose, pick
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -20,7 +21,7 @@ settings = get_settings()
 def _s3_client(*, endpoint: str, secure: bool):
     return boto3.client(
         "s3",
-        endpoint_url=f"{'https' if secure else 'http'}://{endpoint}",
+        endpoint_url=f"{choose(secure, 'https', 'http')}://{endpoint}",
         aws_access_key_id=settings.minio_access_key,
         aws_secret_access_key=settings.minio_secret_key,
         config=Config(signature_version="s3v4"),
@@ -55,7 +56,7 @@ def safe_storage_filename(filename: str) -> str:
 
 
 def build_storage_key(account_id: uuid.UUID | None, filename: str) -> str:
-    prefix = f"users/{account_id}" if account_id else "demo"
+    prefix = choose(account_id is not None, f"users/{account_id}", "demo")
     return f"{prefix}/{uuid.uuid4()}/{safe_storage_filename(filename)}"
 
 
@@ -138,10 +139,9 @@ def object_exists(storage_key: str) -> bool:
         return True
     except ClientError as exc:
         code = exc.response.get("Error", {}).get("Code", "")
-        if code in {"404", "NoSuchKey", "NotFound"}:
-            return False
-        logger.debug("head_object failed for %s", storage_key, exc_info=True)
-        return False
+        return pick(code in {"404", "NoSuchKey", "NotFound"}, lambda: False, lambda: (
+            logger.debug("head_object failed for %s", storage_key, exc_info=True) or False
+        ))
     except Exception:
         logger.debug("head_object failed for %s", storage_key, exc_info=True)
         return False

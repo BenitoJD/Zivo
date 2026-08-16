@@ -1,7 +1,7 @@
 "use client";
 
+import { pick } from "@/lib/engineRuntime";
 import { useEffect } from "react";
-
 /**
  * Registers the Offline Mode service worker (ADR 0006).
  *
@@ -10,17 +10,23 @@ import { useEffect } from "react";
  * no signal doesn't white-screen; offline content lives in IndexedDB (Dexie).
  */
 export default function RegisterServiceWorker() {
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (!("serviceWorker" in navigator)) return;
-    // Register after load so it never competes with first-paint resources.
-    const register = () => {
-      navigator.serviceWorker.register("/sw.js").catch(() => {
-        // Registration is best-effort; offline reload support degrades silently.
-      });
-    };
-    if (document.readyState === "complete") register();
-    else window.addEventListener("load", register, { once: true });
-  }, []);
-  return null;
+    useEffect(() => {
+        return pick(Boolean(typeof window === "undefined"), () => {
+            return;
+        }, () => pick(Boolean(!("serviceWorker" in navigator)), () => {
+            return;
+        }, () => {
+            // Register after load so it never competes with first-paint resources.
+            const register = () => {
+                navigator.serviceWorker.register("/sw.js").catch(() => {
+                });
+            };
+            pick(Boolean(document.readyState === "complete"), () => {
+                register();
+            }, () => {
+                window.addEventListener("load", register, { once: true });
+            });
+        }));
+    }, []);
+    return null;
 }

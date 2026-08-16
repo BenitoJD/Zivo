@@ -40,7 +40,7 @@ def test_finalize_assigns_unique_slug_keys() -> None:
 def test_finalize_dedupes_identical_titles_and_caps() -> None:
     topics = [{"title": "Same", "summary": ""}] * 3 + [{"title": f"T{i}", "summary": ""} for i in range(20)]
     out = _finalize(topics)
-    assert sum(1 for t in out if t["title"] == "Same") == 1
+    assert len(list(filter(lambda t: t["title"] == "Same", out))) == 1
     assert len(out) <= 15
 
 

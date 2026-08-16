@@ -10,6 +10,7 @@ from sqlalchemy import delete, text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.engine_runtime import pick
 from app.models import Document, DocumentChunk
 from app.services.session_design import plan_auxiliary_chunk_load_limit
 
@@ -80,17 +81,19 @@ def load_document_chunk_texts(
     Shared by every longform generation graph (summarize / topics / notes / cards /
     palace / quiz), which all need the same ordered chunk text feed for map-reduce.
     """
-    if not db.get(Document, document_id):
-        return []
-    n = plan_auxiliary_chunk_load_limit() if limit is None else int(limit)
-    rows = (
-        db.query(DocumentChunk)
-        .filter(DocumentChunk.document_id == document_id)
-        .order_by(DocumentChunk.page_start.asc())
-        .limit(n)
-        .all()
-    )
-    return [r.text for r in rows if r.text]
+
+    def _load() -> list[str]:
+        n = pick(limit is None, plan_auxiliary_chunk_load_limit, lambda: int(limit))
+        rows = (
+            db.query(DocumentChunk)
+            .filter(DocumentChunk.document_id == document_id)
+            .order_by(DocumentChunk.page_start.asc())
+            .limit(n)
+            .all()
+        )
+        return list(filter(None, (r.text for r in rows)))
+
+    return pick(not db.get(Document, document_id), lambda: [], _load)
 
 
 def indexed_pages_for_document(db: Session, document_id: uuid.UUID) -> set[int]:
@@ -103,17 +106,21 @@ def delete_chunks_outside_pages(
     document_id: uuid.UUID,
     allowed_pages: set[int],
 ) -> int:
-    if not allowed_pages:
+    def _delete_all() -> int:
         db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
         return 0
-    result = db.execute(
-        _DELETE_OUTSIDE_PAGES_SQL,
-        {
-            "document_id": str(document_id),
-            "allowed": [int(p) for p in sorted(allowed_pages)],
-        },
-    )
-    return result.rowcount or 0
+
+    def _delete_outside() -> int:
+        result = db.execute(
+            _DELETE_OUTSIDE_PAGES_SQL,
+            {
+                "document_id": str(document_id),
+                "allowed": [int(p) for p in sorted(allowed_pages)],
+            },
+        )
+        return result.rowcount or 0
+
+    return pick(not allowed_pages, _delete_all, _delete_outside)
 
 
 def upsert_page_chunks(
@@ -123,46 +130,51 @@ def upsert_page_chunks(
     chunks: list[dict],
     embeddings: list[list[float]],
 ) -> int:
-    if chunks and embeddings:
+    def _unchanged_count() -> int | None:
         existing = db.execute(
             _EXISTING_PAGE_CHUNKS_SQL,
             {"document_id": str(document_id), "page": int(page)},
         ).mappings().all()
-        if len(existing) == len(chunks):
-            unchanged = True
+        unchanged = len(existing) == len(chunks)
+
+        def _compare() -> None:
+            nonlocal unchanged
             for row, chunk in zip(existing, chunks, strict=True):
                 new_hash = _chunk_content_hash(chunk.get("text") or "")
                 old_hash = row.get("content_hash") or _chunk_content_hash(row.get("text") or "")
-                if new_hash != old_hash:
-                    unchanged = False
-                    break
-            if unchanged:
-                return len(chunks)
+                unchanged = unchanged and new_hash == old_hash
 
-    db.execute(
-        _DELETE_PAGE_CHUNKS_SQL,
-        {"document_id": str(document_id), "page": int(page)},
-    )
-    rows = [
-        {
-            "id": str(uuid.uuid4()),
-            "document_id": str(document_id),
-            "page_start": chunk["page_start"],
-            "page_end": chunk["page_end"],
-            "text": chunk["text"],
-            "embedding": pgvector_literal(embedding),
-            "meta": json.dumps(
-                {
-                    **(chunk.get("meta") or {}),
-                    "content_hash": _chunk_content_hash(chunk.get("text") or ""),
-                }
-            ),
-        }
-        for chunk, embedding in zip(chunks, embeddings, strict=True)
-    ]
-    if rows:
-        db.execute(_INSERT_CHUNK_SQL, rows)
-    return len(rows)
+        pick(unchanged, _compare, lambda: None)
+        return pick(unchanged, lambda: len(chunks), lambda: None)
+
+    skip = pick(bool(chunks and embeddings), _unchanged_count, lambda: None)
+
+    def _write() -> int:
+        db.execute(
+            _DELETE_PAGE_CHUNKS_SQL,
+            {"document_id": str(document_id), "page": int(page)},
+        )
+        rows = [
+            {
+                "id": str(uuid.uuid4()),
+                "document_id": str(document_id),
+                "page_start": chunk["page_start"],
+                "page_end": chunk["page_end"],
+                "text": chunk["text"],
+                "embedding": pgvector_literal(embedding),
+                "meta": json.dumps(
+                    {
+                        **(chunk.get("meta") or {}),
+                        "content_hash": _chunk_content_hash(chunk.get("text") or ""),
+                    }
+                ),
+            }
+            for chunk, embedding in zip(chunks, embeddings, strict=True)
+        ]
+        pick(bool(rows), lambda: db.execute(_INSERT_CHUNK_SQL, rows), lambda: None)
+        return len(rows)
+
+    return pick(skip is not None, lambda: skip, _write)
 
 
 def replace_document_chunks(
@@ -172,8 +184,6 @@ def replace_document_chunks(
     embeddings: list[list[float]],
 ) -> int:
     db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
-    # Single executemany (one round-trip) instead of N per-row inserts.
-    # For ~400 chunks (100 pages) this cuts the DB stage from seconds to <1s.
     rows = [
         {
             "id": str(uuid.uuid4()),
@@ -186,8 +196,7 @@ def replace_document_chunks(
         }
         for chunk, embedding in zip(chunks, embeddings, strict=True)
     ]
-    if rows:
-        db.execute(_INSERT_CHUNK_SQL, rows)
+    pick(bool(rows), lambda: db.execute(_INSERT_CHUNK_SQL, rows), lambda: None)
     return len(rows)
 
 
@@ -198,47 +207,61 @@ def persist_document_index(
     embeddings: list[list[float]],
 ) -> int:
     """Write chunk rows and mark the document ready (single transaction)."""
-    if not chunks:
+
+    def _mark_empty() -> int:
         doc = db.get(Document, document_id)
-        if doc:
+
+        def _ready() -> None:
             meta = dict(doc.meta or {})
             meta["no_searchable_text"] = True
             doc.meta = meta
             doc.status = "ready"
             doc.index_progress = 100
+
+        pick(bool(doc), _ready, lambda: None)
         db.commit()
         return 0
 
-    try:
-        count = replace_document_chunks(db, document_id, chunks, embeddings)
-        doc = db.get(Document, document_id)
-        if doc:
-            doc.status = "ready"
-            doc.index_progress = 100
-        db.commit()
-        return count
-    except Exception:
-        db.rollback()
-        doc = db.get(Document, document_id)
-        if doc:
-            doc.status = "failed"
-            doc.index_progress = 0
+    def _write() -> int:
+        try:
+            count = replace_document_chunks(db, document_id, chunks, embeddings)
+            doc = db.get(Document, document_id)
+
+            def _ready() -> None:
+                doc.status = "ready"
+                doc.index_progress = 100
+
+            pick(bool(doc), _ready, lambda: None)
             db.commit()
-        raise
+            return count
+        except Exception:
+            db.rollback()
+            doc = db.get(Document, document_id)
+
+            def _fail() -> None:
+                doc.status = "failed"
+                doc.index_progress = 0
+                db.commit()
+
+            pick(bool(doc), _fail, lambda: None)
+            raise
+
+    return pick(not chunks, _mark_empty, _write)
 
 
 def finalize_image_document(db: Session, document_id: uuid.UUID) -> None:
     """Mark an uploaded image ready without text embedding."""
     doc = db.get(Document, document_id)
-    if not doc:
-        return
-    meta = dict(doc.meta or {})
-    meta["is_image"] = True
-    doc.meta = meta
-    doc.status = "ready"
-    doc.index_progress = 100
-    db.commit()
 
-    from app.services.question_generation import enqueue_generate_if_needed
+    def _go() -> None:
+        meta = dict(doc.meta or {})
+        meta["is_image"] = True
+        doc.meta = meta
+        doc.status = "ready"
+        doc.index_progress = 100
+        db.commit()
+        from app.services.question_generation import enqueue_generate_if_needed
 
-    enqueue_generate_if_needed(db, document_id)
+        enqueue_generate_if_needed(db, document_id)
+
+    pick(not doc, lambda: None, _go)

@@ -87,7 +87,9 @@ def test_paginate_reader_text_keeps_toc_parts_together() -> None:
         + ("Real section body with plenty of words for studying this topic. " * 40)
     )
     pages = paginate_reader_text(text, chars_per_page=5000)
-    toc_only = [p for p in pages if p["text"].startswith("Part ") and len(p["text"]) < 80]
+    toc_only = list(
+        filter(lambda p: p["text"].startswith("Part ") and len(p["text"]) < 80, pages)
+    )
     assert toc_only == []
 
 

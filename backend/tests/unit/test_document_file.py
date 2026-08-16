@@ -8,13 +8,13 @@ import pytest
 from pathlib import Path
 import sys
 
+from app.engine_runtime import pick
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 _REPO = Path(__file__).resolve().parents[3]
 _LIB = str(_REPO / "library")
-if _LIB not in sys.path:
-    sys.path.insert(0, _LIB)
+pick(_LIB not in sys.path, lambda: sys.path.insert(0, _LIB), lambda: None)
 
 from app.db import SessionLocal
 from app.models import Document
@@ -78,10 +78,10 @@ def test_document_file_redirects_to_public_https(client: TestClient) -> None:
         assert res.headers["location"] == PUBLIC_URL
         assert res.headers["location"].startswith("https://s3.zivo.example/")
     finally:
-        if doc_id:
+        def _wipe() -> None:
             db = SessionLocal()
             row = db.get(Document, doc_id)
-            if row:
-                db.delete(row)
-                db.commit()
+            pick(bool(row), lambda: (db.delete(row), db.commit()), lambda: None)
             db.close()
+
+        pick(bool(doc_id), _wipe, lambda: None)

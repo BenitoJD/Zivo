@@ -12,7 +12,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.engine_runtime import Pred, Rule, apply, first_match, pick
 from app.services.mcq_dedup import has_document_meta_reference, stems_match
+from app.services.presence import evaluate_presence
 
 FATAL_FLAW_CODES = frozenset(
     {
@@ -86,6 +88,30 @@ _INVENTED_LABEL_RE = re.compile(
     re.IGNORECASE,
 )
 
+_STRUCT_RULES = (
+    Rule(when=(Pred("no_q_or_opts", "truthy"),), action="missing"),
+    Rule(when=(Pred("multi_invalid", "truthy"),), action="multi_invalid"),
+    Rule(when=(Pred("multi_range", "truthy"),), action="multi_range"),
+    Rule(when=(Pred("ci_invalid", "truthy"),), action="ci_invalid"),
+    Rule(when=(Pred("ci_range", "truthy"),), action="ci_range"),
+    Rule(when=(), action="ok"),
+)
+
+_COMBO_RULES = (
+    Rule(when=(Pred("not_statement", "truthy"),), action="no"),
+    Rule(when=(Pred("too_few", "truthy"),), action="no"),
+    Rule(when=(Pred("ci_invalid", "truthy"),), action="no"),
+    Rule(when=(Pred("ci_range", "truthy"),), action="no"),
+    Rule(when=(Pred("all_keyed", "truthy"),), action="yes"),
+    Rule(when=(), action="no"),
+)
+
+_INVENTED_RULES = (
+    Rule(when=(Pred("empty_page", "truthy"),), action="none"),
+    Rule(when=(Pred("has_hit", "truthy"),), action="hit"),
+    Rule(when=(), action="none"),
+)
+
 
 def _norm_compact(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").lower()).strip()
@@ -96,15 +122,41 @@ def _label_suffix_in_source(page_text: str, label: str, suffix: str, window: int
     page_lower = page_text.lower()
     label_lower = label.lower()
     suffix_lower = suffix.lower()
-    start = 0
-    while True:
+
+    def find_from(start: int) -> bool:
         idx = page_lower.find(label_lower, start)
-        if idx == -1:
-            return False
-        snippet = page_lower[idx : idx + len(label_lower) + window]
-        if suffix_lower in snippet:
-            return True
-        start = idx + 1
+
+        def at_idx() -> bool:
+            snippet = page_lower[idx : idx + len(label_lower) + window]
+            return pick(
+                suffix_lower in snippet,
+                lambda: True,
+                lambda: find_from(idx + 1),
+            )
+
+        return pick(idx == -1, lambda: False, at_idx)
+
+    return find_from(0)
+
+
+def _invented_match_flaw(match: re.Match[str], page_text: str, page_norm: str) -> dict[str, str] | None:
+    full = match.group(0)
+    full_norm = _norm_compact(full)
+    return pick(
+        full_norm in page_norm,
+        lambda: None,
+        lambda: pick(
+            _label_suffix_in_source(page_text, match.group(1), match.group(2)),
+            lambda: None,
+            lambda: {
+                "code": "invented_entity",
+                "message": (
+                    f"Label '{full}' is not used in the source — "
+                    "do not attach exam/scheme words to acronyms the article does not combine"
+                ),
+            },
+        ),
+    )
 
 
 def find_invented_entity_flaws(
@@ -112,8 +164,6 @@ def find_invented_entity_flaws(
     page_text: str,
 ) -> list[dict[str, str]]:
     """Reject exam/scheme compounds not grounded in the page text."""
-    if not (page_text or "").strip():
-        return []
     combined = "\n".join(
         [
             str(mcq.get("question") or mcq.get("stem") or ""),
@@ -121,25 +171,24 @@ def find_invented_entity_flaws(
         ]
     )
     page_norm = _norm_compact(page_text)
-    for match in _INVENTED_LABEL_RE.finditer(combined):
-        full = match.group(0)
-        full_norm = _norm_compact(full)
-        if full_norm in page_norm:
-            continue
-        label = match.group(1)
-        suffix = match.group(2)
-        if _label_suffix_in_source(page_text, label, suffix):
-            continue
-        return [
-            {
-                "code": "invented_entity",
-                "message": (
-                    f"Label '{full}' is not used in the source — "
-                    "do not attach exam/scheme words to acronyms the article does not combine"
-                ),
-            }
-        ]
-    return []
+    hit = next(
+        filter(
+            None,
+            map(
+                lambda m: _invented_match_flaw(m, page_text, page_norm),
+                _INVENTED_LABEL_RE.finditer(combined),
+            ),
+        ),
+        None,
+    )
+    rule = first_match(
+        _INVENTED_RULES,
+        {
+            "empty_page": evaluate_presence((page_text or "").strip()).action != "ok",
+            "has_hit": hit is not None,
+        },
+    )
+    return apply(rule.action, {"none": lambda: [], "hit": lambda: [hit]})
 
 
 _STATEMENT_STEM_RE = re.compile(r"consider the following statements", re.IGNORECASE)
@@ -157,20 +206,30 @@ def _numbers_in_text(text: str) -> set[int]:
 def is_all_statements_correct_combination(mcq: dict[str, Any]) -> bool:
     """True when a statement-based item keys every numbered statement as correct."""
     question = str(mcq.get("question") or mcq.get("stem") or "").strip()
-    if not _STATEMENT_STEM_RE.search(question):
-        return False
     stmt_nums = _statement_numbers_in_stem(question)
-    if len(stmt_nums) < 2:
-        return False
     options = mcq.get("options") or mcq.get("choices") or []
     try:
         ci = int(mcq.get("correct_index", 0))
+        ci_invalid = False
     except (TypeError, ValueError):
-        return False
-    if not (0 <= ci < len(options)):
-        return False
-    chosen = _numbers_in_text(str(options[ci]))
-    return set(stmt_nums) == chosen and len(chosen) == len(stmt_nums)
+        ci = 0
+        ci_invalid = True
+    chosen = pick(
+        not ci_invalid and 0 <= ci < len(options),
+        lambda: _numbers_in_text(str(options[ci])),
+        lambda: set(),
+    )
+    hit = first_match(
+        _COMBO_RULES,
+        {
+            "not_statement": not _STATEMENT_STEM_RE.search(question),
+            "too_few": len(stmt_nums) < 2,
+            "ci_invalid": ci_invalid,
+            "ci_range": not (0 <= ci < len(options)),
+            "all_keyed": set(stmt_nums) == chosen and len(chosen) == len(stmt_nums),
+        },
+    )
+    return hit.action == "yes"
 
 
 def find_all_statements_combination_bias_flaws(
@@ -178,25 +237,58 @@ def find_all_statements_combination_bias_flaws(
     prior_mcqs: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, str]]:
     """Reject a second 'all statements correct' combo on the same page."""
-    if not is_all_statements_correct_combination(mcq):
-        return []
     priors = prior_mcqs or []
-    prior_all_correct = sum(1 for p in priors if is_all_statements_correct_combination(p))
-    if prior_all_correct >= 1:
-        return [
-            {
-                "code": "all_statements_combination_bias",
-                "message": (
-                    "This page already has an all-statements-correct item — "
-                    "key a different combination (1 only, 2 only, 1 and 3 only, etc.)"
-                ),
-            }
-        ]
-    return []
+    prior_all_correct = sum(
+        1 for _p in filter(is_all_statements_correct_combination, priors)
+    )
+    return pick(
+        not is_all_statements_correct_combination(mcq),
+        lambda: [],
+        lambda: pick(
+            prior_all_correct >= 1,
+            lambda: [
+                {
+                    "code": "all_statements_combination_bias",
+                    "message": (
+                        "This page already has an all-statements-correct item — "
+                        "key a different combination (1 only, 2 only, 1 and 3 only, etc.)"
+                    ),
+                }
+            ],
+            lambda: [],
+        ),
+    )
 
 
 def _is_assertion_reason(question: str) -> bool:
     return bool(_ASSERTION_REASON_RE.search(question))
+
+
+def _parse_multi_indices(
+    raw_multi: Any, n_options: int
+) -> tuple[list[int] | None, bool, bool]:
+    """Return (indices_or_none, invalid, out_of_range)."""
+
+    def parsed() -> tuple[list[int] | None, bool, bool]:
+        try:
+            cand = sorted({int(i) for i in raw_multi})
+        except (TypeError, ValueError):
+            return None, True, False
+        return pick(
+            any(i < 0 or i >= n_options for i in cand),
+            lambda: (cand, False, True),
+            lambda: (cand, False, False),
+        )
+
+    return pick(
+        isinstance(raw_multi, list) and len(raw_multi) >= 2,
+        parsed,
+        lambda: (None, False, False),
+    )
+
+
+def _append(flaws: list[dict[str, str]], flag: bool, flaw: dict[str, str]) -> None:
+    pick(flag, lambda: flaws.append(flaw), lambda: None)
 
 
 def run_heuristic_checks(
@@ -205,142 +297,190 @@ def run_heuristic_checks(
     prior_mcqs: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, str]]:
     """Fast rule-based IWF checks before the LLM critic."""
-    flaws: list[dict[str, str]] = []
-
     question = (mcq.get("question") or mcq.get("stem") or "").strip()
-    options = [str(o).strip() for o in (mcq.get("options") or mcq.get("choices") or []) if str(o).strip()]
+    options = list(
+        filter(
+            None,
+            (str(o).strip() for o in (mcq.get("options") or mcq.get("choices") or [])),
+        )
+    )
     correct_index = mcq.get("correct_index")
-
-    if not question or len(options) < 2:
-        flaws.append({"code": "invalid_structure", "message": "Question or options missing"})
-        return flaws
-
-    # Multi-select ("select all that apply") items key on correct_indices; validate
-    # the set and remember it so single-answer-only checks (longest option) skip.
     raw_multi = mcq.get("correct_indices")
-    multi_indices: list[int] | None = None
-    if isinstance(raw_multi, list) and len(raw_multi) >= 2:
-        try:
-            cand = sorted({int(i) for i in raw_multi})
-        except (TypeError, ValueError):
-            flaws.append({"code": "invalid_structure", "message": "correct_indices invalid"})
-            return flaws
-        if any(i < 0 or i >= len(options) for i in cand):
-            flaws.append({"code": "invalid_structure", "message": "correct_indices out of range"})
-            return flaws
-        multi_indices = cand
-
+    multi_indices, multi_invalid, multi_range = _parse_multi_indices(raw_multi, len(options))
     try:
         ci = int(correct_index)
+        ci_invalid = False
     except (TypeError, ValueError):
-        flaws.append({"code": "invalid_structure", "message": "correct_index invalid"})
-        return flaws
+        ci = 0
+        ci_invalid = True
+    hit = first_match(
+        _STRUCT_RULES,
+        {
+            "no_q_or_opts": not question or len(options) < 2,
+            "multi_invalid": multi_invalid,
+            "multi_range": multi_range,
+            "ci_invalid": ci_invalid,
+            "ci_range": ci < 0 or ci >= len(options),
+        },
+    )
 
-    if ci < 0 or ci >= len(options):
-        flaws.append({"code": "invalid_structure", "message": "correct_index out of range"})
-        return flaws
+    def structural(msg: str) -> list[dict[str, str]]:
+        return [{"code": "invalid_structure", "message": msg}]
 
-    lowered = [o.lower() for o in options]
-    if len(set(lowered)) != len(lowered):
-        flaws.append({"code": "ambiguous_unclear", "message": "Duplicate answer options"})
-
-    for opt in options:
-        if _NONE_ALL_RE.search(opt):
-            flaws.append({"code": "none_or_all_of_above", "message": "Option uses none/all of the above"})
-            break
-
-    if _NONE_ALL_RE.search(question):
-        flaws.append({"code": "none_or_all_of_above", "message": "Stem references none/all of the above"})
-
-    if has_document_meta_reference(question):
-        flaws.append(
+    def rest() -> list[dict[str, str]]:
+        flaws: list[dict[str, str]] = []
+        lowered = [o.lower() for o in options]
+        _append(
+            flaws,
+            len(set(lowered)) != len(lowered),
+            {"code": "ambiguous_unclear", "message": "Duplicate answer options"},
+        )
+        none_opt = next(filter(_NONE_ALL_RE.search, options), None)
+        _append(
+            flaws,
+            none_opt is not None,
+            {"code": "none_or_all_of_above", "message": "Option uses none/all of the above"},
+        )
+        _append(
+            flaws,
+            bool(_NONE_ALL_RE.search(question)),
+            {"code": "none_or_all_of_above", "message": "Stem references none/all of the above"},
+        )
+        _append(
+            flaws,
+            has_document_meta_reference(question),
             {
                 "code": "meta_page_reference",
                 "message": "Stem uses exam-forbidden book/page/passage framing instead of asking the concept directly",
-            }
+            },
         )
-
-    for opt in options:
-        if has_document_meta_reference(opt):
-            flaws.append(
-                {
-                    "code": "meta_page_reference",
-                    "message": "Option references a book, page, passage, or document",
-                }
-            )
-            break
-
-    # Self-contained check — the question must be answerable without the source.
-    if _NOT_SELF_CONTAINED_RE.search(question):
-        flaws.append(
+        meta_opt = next(filter(has_document_meta_reference, options), None)
+        _append(
+            flaws,
+            meta_opt is not None,
+            {
+                "code": "meta_page_reference",
+                "message": "Option references a book, page, passage, or document",
+            },
+        )
+        _append(
+            flaws,
+            bool(_NOT_SELF_CONTAINED_RE.search(question)),
             {
                 "code": "not_self_contained",
                 "message": "Stem dangles a reference (figure/above/example/text) only visible in the source",
-            }
+            },
         )
-    for opt in options:
-        if _NOT_SELF_CONTAINED_RE.search(opt):
-            flaws.append(
-                {
-                    "code": "not_self_contained",
-                    "message": "Option dangles a reference only visible in the source",
-                }
+        dang_opt = next(filter(_NOT_SELF_CONTAINED_RE.search, options), None)
+        _append(
+            flaws,
+            dang_opt is not None,
+            {
+                "code": "not_self_contained",
+                "message": "Option dangles a reference only visible in the source",
+            },
+        )
+        blanks = _BLANK_RE.findall(question)
+        _append(
+            flaws,
+            len(blanks) > 1 or bool(_ELLIPSIS_OR_BRACKET_BLANK_RE.search(question)),
+            {"code": "unfocused_stem", "message": "Malformed blank (multiple ___, trailing …, or [ ])"},
+        )
+        _append(
+            flaws,
+            bool(_NEGATIVE_STEM_RE.search(question))
+            and not _CAPITALIZED_NEGATIVE_RE.search(question),
+            {
+                "code": "negative_wording",
+                "message": "Hidden lowercase negative in stem (capitalize NOT/EXCEPT or rephrase)",
+            },
+        )
+
+        def longest_check() -> None:
+            correct_len = len(options[ci])
+            other_lens = list(
+                map(
+                    lambda pair: len(pair[1]),
+                    filter(lambda pair: pair[0] != ci, enumerate(options)),
+                )
             )
-            break
 
-    # Cloze (exactly one ___ blank) is a valid exam format; multiple blanks,
-    # trailing ellipses, and empty brackets remain flaws.
-    blanks = _BLANK_RE.findall(question)
-    if len(blanks) > 1 or _ELLIPSIS_OR_BRACKET_BLANK_RE.search(question):
-        flaws.append({"code": "unfocused_stem", "message": "Malformed blank (multiple ___, trailing …, or [ ])"})
-
-    if _NEGATIVE_STEM_RE.search(question) and not _CAPITALIZED_NEGATIVE_RE.search(question):
-        flaws.append({"code": "negative_wording", "message": "Hidden lowercase negative in stem (capitalize NOT/EXCEPT or rephrase)"})
-
-    # The "longest option is the answer" give-away only makes sense for a single
-    # correct option — skip it for multi-select, where several options are correct.
-    if multi_indices is None:
-        correct_len = len(options[ci])
-        other_lens = [len(o) for i, o in enumerate(options) if i != ci]
-        if other_lens:
-            avg_other = sum(other_lens) / len(other_lens)
-            if avg_other > 0 and correct_len > avg_other * 1.6 and correct_len - avg_other > 12:
-                flaws.append(
+            def vs_avg() -> None:
+                avg_other = sum(other_lens) / len(other_lens)
+                _append(
+                    flaws,
+                    avg_other > 0
+                    and correct_len > avg_other * 1.6
+                    and correct_len - avg_other > 12,
                     {
                         "code": "longest_option_correct",
                         "message": "Correct option noticeably longer than distractors",
-                    }
+                    },
                 )
 
-    if _ABSOLUTE_RE.search(options[ci]):
-        for i, opt in enumerate(options):
-            if i != ci and _ABSOLUTE_RE.search(opt):
-                flaws.append(
-                    {
-                        "code": "grammatical_cues",
-                        "message": "Absolute terms appear on multiple options",
-                    }
-                )
-                break
+            pick(bool(other_lens), vs_avg, lambda: None)
 
-    if not question.endswith("?") and not _is_assertion_reason(question) and len(blanks) != 1:
-        flaws.append({"code": "unfocused_stem", "message": "Stem should be a clear question ending with ?"})
+        pick(multi_indices is None, longest_check, lambda: None)
 
-    if prior_mcqs:
-        for prior in prior_mcqs:
-            if stems_match(question, str(prior.get("question") or "")):
-                flaws.append(
-                    {
-                        "code": "too_similar_to_prior",
-                        "message": "Stem matches a prior question on this page",
-                    }
-                )
-                break
+        def absolute_cues() -> None:
+            other_abs = next(
+                filter(
+                    lambda pair: pair[0] != ci and _ABSOLUTE_RE.search(pair[1]),
+                    enumerate(options),
+                ),
+                None,
+            )
+            _append(
+                flaws,
+                other_abs is not None,
+                {
+                    "code": "grammatical_cues",
+                    "message": "Absolute terms appear on multiple options",
+                },
+            )
 
-    for combo_bias in find_all_statements_combination_bias_flaws(mcq, prior_mcqs):
-        flaws.append(combo_bias)
+        pick(bool(_ABSOLUTE_RE.search(options[ci])), absolute_cues, lambda: None)
+        _append(
+            flaws,
+            not question.endswith("?")
+            and not _is_assertion_reason(question)
+            and len(blanks) != 1,
+            {"code": "unfocused_stem", "message": "Stem should be a clear question ending with ?"},
+        )
 
-    return flaws
+        def prior_stem_check() -> None:
+            match = next(
+                filter(
+                    lambda prior: stems_match(question, str(prior.get("question") or "")),
+                    prior_mcqs or [],
+                ),
+                None,
+            )
+            _append(
+                flaws,
+                match is not None,
+                {
+                    "code": "too_similar_to_prior",
+                    "message": "Stem matches a prior question on this page",
+                },
+            )
+
+        pick(bool(prior_mcqs), prior_stem_check, lambda: None)
+        for combo_bias in find_all_statements_combination_bias_flaws(mcq, prior_mcqs):
+            flaws.append(combo_bias)
+        return flaws
+
+    return apply(
+        hit.action,
+        {
+            "missing": lambda: structural("Question or options missing"),
+            "multi_invalid": lambda: structural("correct_indices invalid"),
+            "multi_range": lambda: structural("correct_indices out of range"),
+            "ci_invalid": lambda: structural("correct_index invalid"),
+            "ci_range": lambda: structural("correct_index out of range"),
+            "ok": rest,
+        },
+    )
 
 
 def has_fatal_heuristic_flaws(flaws: list[dict[str, str]]) -> bool:

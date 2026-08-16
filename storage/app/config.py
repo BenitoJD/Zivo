@@ -3,9 +3,15 @@ from functools import lru_cache
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
+
 _DEV_SECRET_KEYS = {"dev-secret-change-me"}
 _DEV_CSRF_SECRET = "dev-csrf-change-me"
 _GB = 1024 * 1024 * 1024
+
+
+def _raise(exc: BaseException) -> None:
+    raise exc
 
 
 class Settings(BaseSettings):
@@ -39,11 +45,14 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
-        origins = [o.strip().rstrip("/") for o in self.cors_origins.split(",") if o.strip()]
+        origins = [o.strip().rstrip("/") for o in filter(None, map(str.strip, self.cors_origins.split(",")))]
         frontend = self.frontend_url.strip().rstrip("/")
-        if frontend and frontend not in origins:
+
+        def _append() -> list[str]:
             origins.append(frontend)
-        return origins
+            return origins
+
+        return pick(bool(frontend) and frontend not in origins, _append, lambda: origins)
 
     @property
     def is_production(self) -> bool:
@@ -52,9 +61,7 @@ class Settings(BaseSettings):
     @field_validator("minio_public_secure", mode="before")
     @classmethod
     def _empty_public_secure(cls, value: object) -> object:
-        if value == "":
-            return None
-        return value
+        return choose(value == "", None, value)
 
     @property
     def minio_presign_endpoint(self) -> str:
@@ -62,21 +69,41 @@ class Settings(BaseSettings):
 
     @property
     def minio_presign_secure(self) -> bool:
-        if self.minio_public_secure is not None:
-            return self.minio_public_secure
-        return self.minio_secure
+        return choose(self.minio_public_secure is not None, self.minio_public_secure, self.minio_secure)
 
     @model_validator(mode="after")
     def _reject_dev_secrets_outside_development(self) -> "Settings":
-        if self.environment == "development":
+        def _check() -> Settings:
+            apply(
+                first_match(
+                    (
+                        Rule(when=(Pred("bad_secret", "truthy"),), action="secret"),
+                        Rule(when=(Pred("bad_csrf", "truthy"),), action="csrf"),
+                        Rule(when=(Pred("csrf_off", "truthy"),), action="csrf_disabled"),
+                        Rule(when=(), action="ok"),
+                    ),
+                    {
+                        "bad_secret": self.secret_key in _DEV_SECRET_KEYS,
+                        "bad_csrf": self.csrf_secret == _DEV_CSRF_SECRET,
+                        "csrf_off": self.csrf_disabled,
+                    },
+                ).action,
+                {
+                    "secret": lambda: _raise(
+                        ValueError("SECRET_KEY must be set when ENVIRONMENT != 'development'")
+                    ),
+                    "csrf": lambda: _raise(
+                        ValueError("CSRF_SECRET must be set when ENVIRONMENT != 'development'")
+                    ),
+                    "csrf_disabled": lambda: _raise(
+                        ValueError("CSRF_DISABLED cannot be true when ENVIRONMENT != 'development'")
+                    ),
+                    "ok": lambda: None,
+                },
+            )
             return self
-        if self.secret_key in _DEV_SECRET_KEYS:
-            raise ValueError("SECRET_KEY must be set when ENVIRONMENT != 'development'")
-        if self.csrf_secret == _DEV_CSRF_SECRET:
-            raise ValueError("CSRF_SECRET must be set when ENVIRONMENT != 'development'")
-        if self.csrf_disabled:
-            raise ValueError("CSRF_DISABLED cannot be true when ENVIRONMENT != 'development'")
-        return self
+
+        return pick(self.environment == "development", lambda: self, _check)
 
 
 @lru_cache

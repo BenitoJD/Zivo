@@ -18,25 +18,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from app.engine_runtime import pick as choose_branch
+
 AUDIOBOOK_VERSION = "qb.audiobook.v1"
 
-# Speakable chunk budget. ~150 wpm → 700 chars ≈ 3 minutes of audio; long
-# enough to feel like a chapter section, short enough that a TTS failure only
-# re-renders one chunk.
 _CHUNK_TARGET_CHARS = 700
 _CHUNK_MAX_CHARS = 1100
 
-# Piper voice profile. Multiple profiles can be registered; the engine picks by
-# document kind (default → study narration). Voice names are Piper model ids.
 DEFAULT_VOICE = "en_US-lessac-medium"
 VOICES = ("en_US-lessac-medium", "en_US-amy-medium", "en_GB-alan-medium")
 
-# Target speech rate (Piper --length_scale; lower = faster). 0.92 ≈ natural
-# study narration pace.
 DEFAULT_LENGTH_SCALE = 0.92
 
-# A paragraph shorter than this is dropped as boilerplate (headings, "Hi.",
-# page furniture). Real sentences are longer than ~20 chars.
 _MIN_PARAGRAPH_CHARS = 20
 
 
@@ -67,40 +60,50 @@ def plan_audiobook(text: str, *, voice: str | None = None) -> ChunkPlan:
     the voice profile the render step should use.
     """
     resolved_voice = voice or pick_voice()
-    paragraphs = [
-        _clean(p)
-        for p in (text or "").split("\n\n")
-        if len(_clean(p)) >= _MIN_PARAGRAPH_CHARS
-    ]
-    if not paragraphs:
-        return ChunkPlan(chunks=[], voice=resolved_voice)
+    paragraphs = list(
+        filter(
+            lambda p: len(p) >= _MIN_PARAGRAPH_CHARS,
+            (_clean(p) for p in (text or "").split("\n\n")),
+        )
+    )
 
-    chunks: list[str] = []
-    current = ""
-    for para in paragraphs:
-        if len(para) > _CHUNK_MAX_CHARS:
-            # Flush what's pending, then hard-split the long paragraph.
-            if current:
-                chunks.append(current)
-                current = ""
+    def _merge() -> ChunkPlan:
+        chunks: list[str] = []
+        current = ""
+
+        def _flush_long(para: str) -> None:
+            nonlocal current
+            choose_branch(bool(current), lambda: chunks.append(current), lambda: None)
+            current = ""
             chunks.extend(_split_long_paragraph(para))
-            continue
-        if current and len(current) + len(para) + 1 > _CHUNK_TARGET_CHARS:
-            chunks.append(current)
-            current = para
-        else:
-            current = f"{current} {para}".strip() if current else para
-    if current:
-        chunks.append(current)
 
-    # A chunk must never exceed the hard cap — safety net for odd inputs.
-    final: list[str] = []
-    for c in chunks:
-        if len(c) <= _CHUNK_MAX_CHARS:
-            final.append(c)
-        else:
-            final.extend(_split_long_paragraph(c))
-    return ChunkPlan(chunks=final, voice=resolved_voice)
+        def _merge_para(para: str) -> None:
+            nonlocal current
+            overflow = bool(current) and len(current) + len(para) + 1 > _CHUNK_TARGET_CHARS
+            choose_branch(
+                overflow,
+                lambda: (chunks.append(current), None),
+                lambda: None,
+            )
+            current = choose_branch(
+                overflow,
+                lambda: para,
+                lambda: choose_branch(bool(current), lambda: f"{current} {para}".strip(), lambda: para),
+            )
+
+        for para in paragraphs:
+            choose_branch(len(para) > _CHUNK_MAX_CHARS, lambda: _flush_long(para), lambda: _merge_para(para))
+        choose_branch(bool(current), lambda: chunks.append(current), lambda: None)
+        final: list[str] = []
+        for c in chunks:
+            choose_branch(
+                len(c) <= _CHUNK_MAX_CHARS,
+                lambda: final.append(c),
+                lambda: final.extend(_split_long_paragraph(c)),
+            )
+        return ChunkPlan(chunks=final, voice=resolved_voice)
+
+    return choose_branch(not paragraphs, lambda: ChunkPlan(chunks=[], voice=resolved_voice), _merge)
 
 
 def _split_long_paragraph(para: str) -> list[str]:
@@ -111,18 +114,21 @@ def _split_long_paragraph(para: str) -> list[str]:
     out: list[str] = []
     current = ""
     for s in sentences:
-        if current and len(current) + len(s) + 1 > _CHUNK_MAX_CHARS:
-            out.append(current)
-            current = s
-        else:
-            current = f"{current} {s}".strip() if current else s
-    if current:
-        out.append(current)
+        overflow = bool(current) and len(current) + len(s) + 1 > _CHUNK_MAX_CHARS
+        choose_branch(overflow, lambda: out.append(current), lambda: None)
+        current = choose_branch(
+            overflow,
+            lambda: s,
+            lambda: choose_branch(bool(current), lambda: f"{current} {s}".strip(), lambda: s),
+        )
+    choose_branch(bool(current), lambda: out.append(current), lambda: None)
     return out
 
 
 def chunk_progress(done: int, total: int) -> int:
     """0..100 render progress for the orchestrator."""
-    if total <= 0:
-        return 100
-    return max(0, min(100, int(100 * done / total)))
+    return choose_branch(
+        total <= 0,
+        lambda: 100,
+        lambda: max(0, min(100, int(100 * done / total))),
+    )

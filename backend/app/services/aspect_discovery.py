@@ -11,7 +11,10 @@ paragraph targets when triage has not landed yet, and next-unasked slice.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import islice
 from typing import Any, Literal, Sequence
+
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 
 ASPECT_DISCOVERY_VERSION = "qb.aspect_discovery.v1"
 DEFAULT_POLICY = "aspect_discovery_v1"
@@ -28,11 +31,35 @@ FALLBACK_MIN_SUBSTANTIAL_WORDS = 12
 
 Centrality = Literal["central", "support", "skip"]
 
+_POLICY_ALIASES = ("default", "aspect", "discovery", "triage")
+_CENTRALITY = {
+    "central": "central",
+    "support": "support",
+    "skip": "skip",
+    "peripheral": "support",
+    "side": "support",
+    "minor": "support",
+    "secondary": "support",
+}
+
+_COOK_TARGET_RULES = (
+    Rule(when=(Pred("has_unasked", "truthy"),), action="cook_unasked"),
+    Rule(
+        when=(Pred("spec_none", "truthy"), Pred("exhausted", "truthy")),
+        action="close_coverage",
+    ),
+    Rule(when=(Pred("spec_none", "truthy"),), action="try_speculative"),
+    Rule(when=(Pred("has_spec", "truthy"),), action="cook_spec"),
+    Rule(when=(), action="none"),
+)
+
 
 def split_paragraphs(page_text: str | None) -> list[str]:
-    if not page_text:
-        return []
-    return [p.strip() for p in page_text.split("\n\n") if p.strip()]
+    return pick(
+        not page_text,
+        lambda: [],
+        lambda: [p.strip() for p in filter(str.strip, page_text.split("\n\n"))],
+    )
 
 
 def substantial_paragraphs(
@@ -42,7 +69,7 @@ def substantial_paragraphs(
 ) -> list[str]:
     """Paragraphs dense enough to count as a testable idea."""
     floor = max(1, int(min_words))
-    return [p for p in split_paragraphs(page_text) if len(p.split()) >= floor]
+    return list(filter(lambda p: len(p.split()) >= floor, split_paragraphs(page_text)))
 
 
 @dataclass(frozen=True)
@@ -76,9 +103,7 @@ class AspectAbandonVerdict:
 
 def normalize_policy(policy: str | None) -> str:
     p = (policy or DEFAULT_POLICY).strip().lower()
-    if p in ("default", "aspect", "discovery", "triage"):
-        return DEFAULT_POLICY
-    return p or DEFAULT_POLICY
+    return choose(p in _POLICY_ALIASES, DEFAULT_POLICY, p or DEFAULT_POLICY)
 
 
 def should_abandon_aspect(
@@ -112,36 +137,33 @@ def heuristic_fallback_aspects(
     ~one idea / ``words_per_aspect`` words; substantial paragraphs as labels.
     Budget still owns N via ``plan_page_budget`` after units are built.
     """
+    from app.services.mcq_dedup import short_concept_label
+
     pol = normalize_policy(policy)
-    words = len(page_text.split()) if page_text else 0
+    words = len((page_text or "").split())
     paragraphs = split_paragraphs(page_text)
     substantial = substantial_paragraphs(page_text, min_words=min_substantial_words)
     word_estimate = words // max(1, words_per_aspect)
-    if words > 0 and word_estimate == 0:
-        word_estimate = 1
-    if substantial:
-        aspect_count = min(len(substantial), word_estimate)
-    elif words > 0:
-        aspect_count = word_estimate
-    else:
-        aspect_count = 0
-    labels = substantial if substantial else paragraphs
-    aspects: list[dict[str, Any]] = []
-    for i, para in enumerate(labels[:aspect_count]):
-        from app.services.mcq_dedup import short_concept_label
-
-        label = short_concept_label(para.replace("\n", " "), max_chars=72)
-        aspects.append(
-            {
-                "key": f"page-{page_number}-p{i + 1}",
-                "label": label,
-                "centrality": "central",
-                "asked": False,
-                "answered": False,
-            }
-        )
-    if not aspects and words > 0:
-        aspects = [
+    word_estimate = choose(words > 0 and word_estimate == 0, 1, word_estimate)
+    aspect_count = pick(
+        bool(substantial),
+        lambda: min(len(substantial), word_estimate),
+        lambda: choose(words > 0, word_estimate, 0),
+    )
+    labels = choose(bool(substantial), substantial, paragraphs)
+    aspects = [
+        {
+            "key": f"page-{page_number}-p{i + 1}",
+            "label": short_concept_label(para.replace("\n", " "), max_chars=72),
+            "centrality": "central",
+            "asked": False,
+            "answered": False,
+        }
+        for i, para in enumerate(labels[:aspect_count])
+    ]
+    aspects = pick(
+        not aspects and words > 0,
+        lambda: [
             {
                 "key": f"page-{page_number}-main",
                 "label": "Main ideas on this page",
@@ -149,7 +171,9 @@ def heuristic_fallback_aspects(
                 "asked": False,
                 "answered": False,
             }
-        ]
+        ],
+        lambda: aspects,
+    )
     return AspectPickVerdict(
         aspects=tuple(aspects),
         n_requested=aspect_count,
@@ -157,14 +181,10 @@ def heuristic_fallback_aspects(
         policy=pol,
     )
 
+
 def parse_centrality(raw: Any) -> Centrality:
     value = str(raw or "central").strip().lower()
-    if value in ("central", "support", "skip"):
-        return value  # type: ignore[return-value]
-    # LLM / legacy aliases — peripheral is support, never promote to central.
-    if value in ("peripheral", "side", "minor", "secondary"):
-        return "support"
-    return "central"
+    return _CENTRALITY.get(value, "central")  # type: ignore[return-value]
 
 
 def dedupe_aspects(
@@ -182,41 +202,48 @@ def dedupe_aspects(
     pol = normalize_policy(policy)
     aspect_list = list(aspects)
     raw_count = len(aspect_list)
-    if raw_count <= 1:
+
+    def _cluster() -> AspectDedupeVerdict:
+        signatures = [aspect_signature(a) for a in aspect_list]
+        vectors = embed_texts(signatures)
+        kept: list[dict[str, Any]] = []
+        kept_vectors: list[list[float]] = []
+        merged_keys: list[str] = []
+
+        def _consider(aspect: dict[str, Any], vec: list[float]) -> None:
+            is_dup = any(
+                cosine_similarity(vec, kept_vec) >= threshold for kept_vec in kept_vectors
+            )
+            pick(
+                is_dup,
+                lambda: merged_keys.append(
+                    str(aspect.get("key") or aspect.get("label") or "")
+                ),
+                lambda: (kept.append(aspect), kept_vectors.append(vec)),
+            )
+
+        for aspect, vec in zip(aspect_list, vectors, strict=True):
+            _consider(aspect, vec)
         return AspectDedupeVerdict(
+            aspects=tuple(kept),
+            raw_count=raw_count,
+            deduped_count=len(kept),
+            merged_keys=tuple(merged_keys),
+            threshold=threshold,
+            policy=pol,
+        )
+
+    return pick(
+        raw_count <= 1,
+        lambda: AspectDedupeVerdict(
             aspects=tuple(aspect_list),
             raw_count=raw_count,
             deduped_count=raw_count,
             merged_keys=(),
             threshold=threshold,
             policy=pol,
-        )
-
-    signatures = [aspect_signature(a) for a in aspect_list]
-    vectors = embed_texts(signatures)
-
-    kept: list[dict[str, Any]] = []
-    kept_vectors: list[list[float]] = []
-    merged_keys: list[str] = []
-
-    for aspect, vec in zip(aspect_list, vectors, strict=True):
-        duplicate = False
-        for kept_vec in kept_vectors:
-            if cosine_similarity(vec, kept_vec) >= threshold:
-                duplicate = True
-                merged_keys.append(str(aspect.get("key") or aspect.get("label") or ""))
-                break
-        if not duplicate:
-            kept.append(aspect)
-            kept_vectors.append(vec)
-
-    return AspectDedupeVerdict(
-        aspects=tuple(kept),
-        raw_count=raw_count,
-        deduped_count=len(kept),
-        merged_keys=tuple(merged_keys),
-        threshold=threshold,
-        policy=pol,
+        ),
+        _cluster,
     )
 
 
@@ -228,12 +255,18 @@ def pick_for_plan(
 ) -> AspectPickVerdict:
     """Prefer central units; keep enough aspects for coverage without exceeding plan."""
     pol = normalize_policy(policy)
-    cookable = [a for a in aspects if parse_centrality(a.get("centrality")) != "skip"]
-    centrals = [a for a in cookable if parse_centrality(a.get("centrality")) == "central"]
-    supports = [a for a in cookable if parse_centrality(a.get("centrality")) == "support"]
+    cookable = list(
+        filter(lambda a: parse_centrality(a.get("centrality")) != "skip", aspects)
+    )
+    centrals = list(
+        filter(lambda a: parse_centrality(a.get("centrality")) == "central", cookable)
+    )
+    supports = list(
+        filter(lambda a: parse_centrality(a.get("centrality")) == "support", cookable)
+    )
     ordered = centrals + supports
     keep = max(int(n_page), len(centrals))
-    selected = ordered[:keep] if keep else list(ordered)
+    selected = pick(bool(keep), lambda: ordered[:keep], lambda: list(ordered))
     return AspectPickVerdict(
         aspects=tuple(selected),
         n_requested=int(n_page),
@@ -251,12 +284,10 @@ def next_unasked(
     """Next up-to-n aspects that have not been asked yet (coverage order)."""
     pol = normalize_policy(policy)
     n = max(0, int(n))
-    out: list[dict[str, Any]] = []
-    for aspect in aspects:
-        if not aspect.get("asked"):
-            out.append(dict(aspect))
-            if len(out) >= n:
-                break
+    out = [
+        dict(aspect)
+        for aspect in islice(filter(lambda a: not a.get("asked"), aspects), n)
+    ]
     return AspectPickVerdict(
         aspects=tuple(out),
         n_requested=n,
@@ -275,36 +306,43 @@ def speculative_targets(
     """Lightweight paragraph aspects when triage has not landed yet."""
     pol = normalize_policy(policy)
     n = max(1, int(n))
-    if not page_text:
-        return AspectPickVerdict(aspects=(), n_requested=n, n_kept=0, policy=pol)
-    paragraphs = [p.strip() for p in page_text.split("\n\n") if p.strip()]
-    targets: list[dict[str, Any]] = []
-    for i, para in enumerate(paragraphs[:n]):
-        label = para[:120].replace("\n", " ")
-        targets.append(
+
+    def _from_text() -> AspectPickVerdict:
+        paragraphs = [p.strip() for p in filter(str.strip, page_text.split("\n\n"))]
+        targets = [
             {
                 "key": f"page-{page_number}-spec-{i + 1}",
-                "label": label,
+                "label": para[:120].replace("\n", " "),
                 "asked": False,
                 "answered": False,
                 "speculative": True,
             }
+            for i, para in enumerate(paragraphs[:n])
+        ]
+        targets = pick(
+            bool(targets),
+            lambda: targets,
+            lambda: [
+                {
+                    "key": f"page-{page_number}-spec-main",
+                    "label": "Main ideas on this page",
+                    "asked": False,
+                    "answered": False,
+                    "speculative": True,
+                }
+            ],
         )
-    if not targets:
-        targets.append(
-            {
-                "key": f"page-{page_number}-spec-main",
-                "label": "Main ideas on this page",
-                "asked": False,
-                "answered": False,
-                "speculative": True,
-            }
+        return AspectPickVerdict(
+            aspects=tuple(targets),
+            n_requested=n,
+            n_kept=len(targets),
+            policy=pol,
         )
-    return AspectPickVerdict(
-        aspects=tuple(targets),
-        n_requested=n,
-        n_kept=len(targets),
-        policy=pol,
+
+    return pick(
+        not page_text,
+        lambda: AspectPickVerdict(aspects=(), n_requested=n, n_kept=0, policy=pol),
+        _from_text,
     )
 
 
@@ -327,17 +365,35 @@ def plan_cook_target_fallback(
     speculative: Sequence[dict[str, Any]] | None = None,
 ) -> CookTargetPlan:
     """Unasked first; if none, close coverage or fall back to speculative."""
-    if unasked:
-        return CookTargetPlan("cook", tuple(dict(t) for t in unasked), "unasked")
-    if speculative is None:
-        from app.services.kc_coverage import evaluate_aspect_exhaustion_close
+    from app.services.kc_coverage import evaluate_aspect_exhaustion_close
 
-        if evaluate_aspect_exhaustion_close(has_aspects=has_aspects, unasked_count=0):
-            return CookTargetPlan("close_coverage", (), "exhausted")
-        return CookTargetPlan("try_speculative", (), "need_speculative")
-    if speculative:
-        return CookTargetPlan("cook", tuple(dict(t) for t in speculative), "speculative")
-    return CookTargetPlan("none", (), "none")
+    hit = first_match(
+        _COOK_TARGET_RULES,
+        {
+            "has_unasked": bool(unasked),
+            "spec_none": speculative is None,
+            "exhausted": evaluate_aspect_exhaustion_close(
+                has_aspects=has_aspects, unasked_count=0
+            ),
+            "has_spec": bool(speculative),
+        },
+    )
+    return apply(
+        hit.action,
+        {
+            "cook_unasked": lambda: CookTargetPlan(
+                "cook", tuple(dict(t) for t in unasked), "unasked"
+            ),
+            "close_coverage": lambda: CookTargetPlan("close_coverage", (), "exhausted"),
+            "try_speculative": lambda: CookTargetPlan(
+                "try_speculative", (), "need_speculative"
+            ),
+            "cook_spec": lambda: CookTargetPlan(
+                "cook", tuple(dict(t) for t in speculative or ()), "speculative"
+            ),
+            "none": lambda: CookTargetPlan("none", (), "none"),
+        },
+    )
 
 
 def plan_stalled_aspect_keys(
@@ -346,9 +402,5 @@ def plan_stalled_aspect_keys(
 ) -> tuple[str, ...]:
     """Targeted aspects that still have no saved question after this batch."""
     asked = {str(k) for k in asked_keys}
-    out: list[str] = []
-    for target in targets:
-        key = str(target.get("key") or "")
-        if key and key not in asked:
-            out.append(key)
-    return tuple(out)
+    keys = (str(target.get("key") or "") for target in targets)
+    return tuple(filter(lambda key: key and key not in asked, keys))

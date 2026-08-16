@@ -2,15 +2,14 @@
 
 Design: docs/ADAPTIVE_SELECTION_ENGINE.md (practice sibling; same ADR 0004 seam)
 Version: qb.practice_sel.v1
-
-Owns overlap×difficulty ranking and attempt bias. Callers must not cram if-else
-score ladders.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Mapping, Sequence
+
+from app.engine_runtime import Pred, Rule, apply, first_match, pick
 
 PRACTICE_SEL_VERSION = "qb.practice_sel.v1"
 DEFAULT_POLICY = "overlap_v1"
@@ -41,6 +40,18 @@ class PracticePick:
     policy_version: str = PRACTICE_SEL_VERSION
 
 
+_ATTEMPT_BIAS_RULES = (
+    Rule(when=(Pred("unknown", "truthy"),), action="none"),
+    Rule(when=(Pred("attempted", "truthy"),), action="penalty"),
+    Rule(when=(), action="bonus"),
+)
+
+_PICK_NEXT_RULES = (
+    Rule(when=(Pred("empty", "truthy"),), action="none"),
+    Rule(when=(), action="best"),
+)
+
+
 def score_candidate(
     candidate: PracticeCandidate,
     focus: Sequence[str],
@@ -48,14 +59,22 @@ def score_candidate(
     attempted: bool | None = None,
 ) -> int:
     """Overlap×difficulty; optional attempt bias (+bonus unattempted / −penalty done)."""
-    focus_set = {str(x).strip().lower() for x in focus if str(x).strip()}
-    keys = {str(x).strip().lower() for x in candidate.concept_keys if str(x).strip()}
-    overlap = len(focus_set & keys) if focus_set else 0
+    focus_set = {str(x).strip().lower() for x in filter(lambda x: str(x).strip(), focus)}
+    keys = {str(x).strip().lower() for x in filter(lambda x: str(x).strip(), candidate.concept_keys)}
+    overlap = len(focus_set & keys)
     diff = _DIFF_SCORE.get((candidate.difficulty or "").strip().lower(), 0)
     base = overlap * 10 + diff
-    if attempted is None:
-        return base
-    return base + (ATTEMPT_BONUS if not attempted else -ATTEMPT_PENALTY)
+    return apply(
+        first_match(
+            _ATTEMPT_BIAS_RULES,
+            {"unknown": attempted is None, "attempted": bool(attempted)},
+        ).action,
+        {
+            "none": lambda: base,
+            "penalty": lambda: base - ATTEMPT_PENALTY,
+            "bonus": lambda: base + ATTEMPT_BONUS,
+        },
+    )
 
 
 def pick_next(
@@ -68,23 +87,39 @@ def pick_next(
 ) -> PracticePick:
     """Pick highest overlap×difficulty (+ attempt bias when attempted_ids given)."""
     pol = (policy or DEFAULT_POLICY).strip().lower() or DEFAULT_POLICY
-    attempted_set = (
-        {str(x) for x in attempted_ids} if attempted_ids is not None else None
+    attempted_set = pick(
+        attempted_ids is None,
+        lambda: None,
+        lambda: {str(x) for x in attempted_ids},
     )
-    best_id: str | None = None
-    best_score = -1
-    for c in candidates:
-        if exclude_id and str(c.id) == str(exclude_id):
-            continue
-        attempted = None if attempted_set is None else str(c.id) in attempted_set
-        s = score_candidate(c, focus, attempted=attempted)
-        if s > best_score:
-            best_score = s
-            best_id = c.id
-    return PracticePick(
-        id=best_id,
-        score=max(0, best_score),
-        policy=pol,
+    ranked = tuple(
+        filter(
+            lambda c: not (exclude_id and str(c.id) == str(exclude_id)),
+            candidates,
+        )
+    )
+    scored = tuple(
+        (
+            c,
+            score_candidate(
+                c,
+                focus,
+                attempted=pick(
+                    attempted_set is None,
+                    lambda: None,
+                    lambda: str(c.id) in attempted_set,
+                ),
+            ),
+        )
+        for c in ranked
+    )
+    best = max(scored, key=lambda pair: pair[1], default=None)
+    return apply(
+        first_match(_PICK_NEXT_RULES, {"empty": best is None}).action,
+        {
+            "none": lambda: PracticePick(id=None, score=0, policy=pol),
+            "best": lambda: PracticePick(id=best[0].id, score=max(0, best[1]), policy=pol),
+        },
     )
 
 
@@ -98,20 +133,21 @@ def pick_from_rows(
     exclude_id: str | None = None,
     attempted_ids: Sequence[str] | None = None,
 ) -> PracticePick:
-    cands: list[PracticeCandidate] = []
-    for r in rows:
-        raw_keys = r.get(concepts_key) or ()
-        if isinstance(raw_keys, str):
-            keys: tuple[str, ...] = (raw_keys,)
-        else:
-            keys = tuple(str(x) for x in raw_keys)  # type: ignore[arg-type]
-        cands.append(
-            PracticeCandidate(
-                id=str(r[id_key]),
-                concept_keys=keys,
-                difficulty=str(r.get(difficulty_key) or "") or None,
-            )
+    def keys_of(raw_keys: object) -> tuple[str, ...]:
+        return pick(
+            isinstance(raw_keys, str),
+            lambda: (str(raw_keys),),
+            lambda: tuple(str(x) for x in (raw_keys or ())),
         )
+
+    cands = [
+        PracticeCandidate(
+            id=str(r[id_key]),
+            concept_keys=keys_of(r.get(concepts_key) or ()),
+            difficulty=str(r.get(difficulty_key) or "") or None,
+        )
+        for r in rows
+    ]
     return pick_next(
         cands,
         focus,

@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from app.engine_runtime import apply, pick
 from app.models import Document, JobWorkload
 from app.eta.stale_jobs import (
     ACTIVE_JOB_LIVENESS_SQL,
@@ -72,9 +73,11 @@ _HAS_ACTIVE_INGEST_JOBS_SQL = text(
 
 def ingested_pages_for_document(doc: Document) -> set[int]:
     raw = (doc.meta or {}).get(_INGESTED_PAGES_KEY) or []
-    if not isinstance(raw, list):
-        return set()
-    return {int(p) for p in raw if int(p) >= 1}
+    return pick(
+        not isinstance(raw, list),
+        lambda: set(),
+        lambda: set(map(int, filter(lambda p: int(p) >= 1, raw))),
+    )
 
 
 def has_active_ingest_jobs(db: Session, document_id: uuid.UUID) -> bool:
@@ -93,8 +96,10 @@ def has_active_ingest_jobs(db: Session, document_id: uuid.UUID) -> bool:
 def enqueue_missing_page_ingests(
     db: Session, document_id: uuid.UUID, pages: list[int]
 ) -> None:
-    if not pages:
-        return
+    pick(not pages, lambda: None, lambda: _enqueue_pages(db, document_id, pages))
+
+
+def _enqueue_pages(db: Session, document_id: uuid.UUID, pages: list[int]) -> None:
     from app.services.jobs import batch_enqueue_jobs
 
     batch_enqueue_jobs(
@@ -124,16 +129,22 @@ def mark_page_ingested(db: Session, doc: Document, page: int) -> None:
     each other's pages (lost-update on doc.meta left RAG windows stuck at 50%).
     """
     page = int(page)
-    if page < 1:
-        return
-    if page in ingested_pages_for_document(doc):
-        return
+    pick(
+        page < 1 or page in ingested_pages_for_document(doc),
+        lambda: None,
+        lambda: _write_ingested_page(db, doc, page),
+    )
+
+
+def _write_ingested_page(db: Session, doc: Document, page: int) -> None:
     row = db.execute(
         _MARK_PAGE_INGESTED_SQL,
         {"document_id": doc.id, "page": page},
     ).mappings().first()
-    if not row:
-        return
+    pick(not row, lambda: None, lambda: _apply_ingested_meta(db, doc, row))
+
+
+def _apply_ingested_meta(db: Session, doc: Document, row: Any) -> None:
     doc.meta = dict(row["meta"] or {})
     flag_modified(doc, "meta")
     db.add(doc)
@@ -143,12 +154,9 @@ def pages_ready_for_document(
     db: Session, document_id: uuid.UUID, doc: Document | None = None
 ) -> set[int]:
     """Pages ingest has finished for: embedded chunks ∪ empty-but-ingested."""
-    if doc is None:
-        doc = db.get(Document, document_id)
+    resolved = pick(doc is None, lambda: db.get(Document, document_id), lambda: doc)
     indexed = indexed_pages_for_document(db, document_id)
-    if not doc:
-        return indexed
-    return indexed | ingested_pages_for_document(doc)
+    return pick(not resolved, lambda: indexed, lambda: indexed | ingested_pages_for_document(resolved))
 
 
 def chat_rag_window(
@@ -161,9 +169,7 @@ def chat_rag_window(
 
     Policy lives in Tutor Retrieval Engine (``plan_rag_window``).
     """
-    return list(
-        plan_rag_window(current_page, study_pages, max_pages=max_pages).pages
-    )
+    return list(plan_rag_window(current_page, study_pages, max_pages=max_pages).pages)
 
 
 def rag_window_meta(pages: list[int]) -> dict[str, Any]:
@@ -179,11 +185,14 @@ def rag_window_meta(pages: list[int]) -> dict[str, Any]:
 def get_rag_window(doc: Document) -> list[int]:
     raw = (doc.meta or {}).get("rag_window") or {}
     pages = raw.get("pages")
-    if isinstance(pages, list) and pages:
-        return sorted({int(p) for p in pages})
-    progress = get_progress(doc)
-    current = int(progress.get("current_page") or 1)
-    return chat_rag_window(current, selected_page_list(doc))
+    return pick(
+        isinstance(pages, list) and bool(pages),
+        lambda: sorted({int(p) for p in pages}),
+        lambda: chat_rag_window(
+            int((get_progress(doc) or {}).get("current_page") or 1),
+            selected_page_list(doc),
+        ),
+    )
 
 
 def save_rag_window(db: Session, doc: Document, pages: list[int]) -> None:
@@ -207,22 +216,24 @@ def sync_rag_window(
     """
     allowed = {int(p) for p in target_pages}
     ready = pages_ready_for_document(db, document_id)
-    return sorted(p for p in allowed if p not in ready)
+    return sorted(filter(lambda p: p not in ready, allowed))
 
 
 def rag_window_index_progress(db: Session, document_id: uuid.UUID, target_pages: list[int]) -> int:
-    if not target_pages:
-        return 100
-    ready = pages_ready_for_document(db, document_id)
-    done = sum(1 for p in target_pages if p in ready)
-    return int(100 * done / len(target_pages))
+    def pct() -> int:
+        ready = pages_ready_for_document(db, document_id)
+        done = sum(map(lambda p: int(p in ready), target_pages))
+        return int(100 * done / len(target_pages))
+
+    return pick(not target_pages, lambda: 100, pct)
 
 
 def is_rag_window_ready(db: Session, document_id: uuid.UUID, doc: Document | None = None) -> bool:
-    if doc is None:
-        doc = db.get(Document, document_id)
-    if not doc:
-        return False
+    resolved = pick(doc is None, lambda: db.get(Document, document_id), lambda: doc)
+    return pick(not resolved, lambda: False, lambda: _ready_for_doc(db, document_id, resolved))
+
+
+def _ready_for_doc(db: Session, document_id: uuid.UUID, doc: Document) -> bool:
     meta = doc.meta or {}
     current = int((get_progress(doc) or {}).get("current_page") or 0)
     verdict = evaluate_rag_window_ready(
@@ -238,58 +249,95 @@ def is_rag_window_ready(db: Session, document_id: uuid.UUID, doc: Document | Non
 
 def maybe_recover_stuck_indexing(db: Session, doc: Document) -> None:
     """Re-queue missing RAG-window pages when indexing stalled with no active jobs."""
-    if doc.status != "indexing":
-        return
-    if has_active_ingest_jobs(db, doc.id):
-        return
-    target = get_rag_window(doc)
-    if not target:
-        from app.services.jobs import enqueue_rag_window
+    pick(
+        doc.status != "indexing",
+        lambda: None,
+        lambda: pick(
+            has_active_ingest_jobs(db, doc.id),
+            lambda: None,
+            lambda: _recover_without_jobs(db, doc),
+        ),
+    )
 
-        enqueue_rag_window(
-            db,
-            doc.id,
-            account_id=doc.account_id,
-            current_page=int((get_progress(doc) or {}).get("current_page") or 1),
-        )
-        db.commit()
-        return
-    if is_rag_window_ready(db, doc.id, doc):
-        refresh_rag_window_status(db, doc.id)
-        return
+
+def _recover_without_jobs(db: Session, doc: Document) -> None:
+    target = get_rag_window(doc)
+    pick(not target, lambda: _enqueue_fresh_window(db, doc), lambda: _recover_with_target(db, doc, target))
+
+
+def _enqueue_fresh_window(db: Session, doc: Document) -> None:
+    from app.services.jobs import enqueue_rag_window
+
+    enqueue_rag_window(
+        db,
+        doc.id,
+        account_id=doc.account_id,
+        current_page=int((get_progress(doc) or {}).get("current_page") or 1),
+    )
+    db.commit()
+
+
+def _recover_with_target(db: Session, doc: Document, target: list[int]) -> None:
+    pick(
+        is_rag_window_ready(db, doc.id, doc),
+        lambda: refresh_rag_window_status(db, doc.id),
+        lambda: _enqueue_missing_if_any(db, doc, target),
+    )
+
+
+def _enqueue_missing_if_any(db: Session, doc: Document, target: list[int]) -> None:
     missing = sync_rag_window(db, doc.id, target)
-    if missing:
-        enqueue_missing_page_ingests(db, doc.id, missing)
-        db.commit()
+    pick(
+        bool(missing),
+        lambda: (enqueue_missing_page_ingests(db, doc.id, missing), db.commit())[1],
+        lambda: None,
+    )
 
 
 def refresh_rag_window_status(db: Session, document_id: uuid.UUID) -> bool:
     """Update index_progress and ready flag; return True when window fully indexed."""
     doc = db.get(Document, document_id)
-    if not doc:
-        return False
+    return pick(not doc, lambda: False, lambda: _refresh_doc(db, document_id, doc))
+
+
+def _refresh_doc(db: Session, document_id: uuid.UUID, doc: Document) -> bool:
     target = get_rag_window(doc)
     pct = rag_window_index_progress(db, document_id, target)
     doc.index_progress = pct
     ready = is_rag_window_ready(db, document_id, doc)
-    if not ready:
-        missing = sync_rag_window(db, document_id, target)
-        if missing and not has_active_ingest_jobs(db, document_id):
-            enqueue_missing_page_ingests(db, document_id, missing)
-            ready = False
+    pick(not ready, lambda: _maybe_enqueue_missing(db, document_id, target), lambda: None)
     meta = dict(doc.meta or {})
-    if ready:
-        doc.status = "ready"
-        meta["rag_window_ready"] = True
+    pick(ready, lambda: _mark_window_ready(doc, meta), lambda: None)
     doc.meta = meta
     flag_modified(doc, "meta")
     db.commit()
-    if ready:
-        from app.services.background_prep import is_background_prep
-        from app.services.question_generation import enqueue_generate_if_needed
-
-        if not is_background_prep(doc):
-            # Newspaper catalog "ready" waits for the first cooked MCQ (see
-            # maybe_mark_newspaper_edition_ready) — not merely RAG index complete.
-            enqueue_generate_if_needed(db, document_id)
+    pick(ready, lambda: _maybe_enqueue_generate(db, document_id, doc), lambda: None)
     return ready
+
+
+def _maybe_enqueue_missing(db: Session, document_id: uuid.UUID, target: list[int]) -> None:
+    missing = sync_rag_window(db, document_id, target)
+    pick(
+        bool(missing) and not has_active_ingest_jobs(db, document_id),
+        lambda: enqueue_missing_page_ingests(db, document_id, missing),
+        lambda: None,
+    )
+
+
+def _mark_window_ready(doc: Document, meta: dict[str, Any]) -> None:
+    doc.status = "ready"
+    meta["rag_window_ready"] = True
+
+
+def _maybe_enqueue_generate(db: Session, document_id: uuid.UUID, doc: Document) -> None:
+    from app.services.background_prep import is_background_prep
+    from app.services.question_generation import enqueue_generate_if_needed
+    from app.services.session_design import evaluate_rag_ready_cook_spawn
+
+    apply(
+        evaluate_rag_ready_cook_spawn(background_prep=is_background_prep(doc)),
+        {
+            "skip": lambda: None,
+            "enqueue": lambda: enqueue_generate_if_needed(db, document_id),
+        },
+    )

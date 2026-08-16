@@ -19,6 +19,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
 from app.models import Document, DocumentChunk
 from app.services.llm_json import extract_json_obj
 from app.services.llm_router import complete_chat
@@ -66,17 +67,21 @@ def load_resume(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
         text("SELECT analysis, status, error, review_requested FROM qb.document_resume WHERE document_id = :id"),
         {"id": document_id},
     ).mappings().first()
-    if not row:
+
+    def _missing() -> dict[str, Any]:
         return {"status": "missing", "analysis": {}, "review_requested": False, "error": None}
-    analysis = row["analysis"]
-    if isinstance(analysis, str):
-        analysis = json.loads(analysis)
-    return {
-        "status": row["status"],
-        "analysis": analysis or {},
-        "review_requested": bool(row["review_requested"]),
-        "error": row["error"],
-    }
+
+    def _ok() -> dict[str, Any]:
+        analysis = row["analysis"]
+        analysis = pick(isinstance(analysis, str), lambda: json.loads(analysis), lambda: analysis)
+        return {
+            "status": row["status"],
+            "analysis": analysis or {},
+            "review_requested": bool(row["review_requested"]),
+            "error": row["error"],
+        }
+
+    return pick(not row, _missing, _ok)
 
 
 def _save(db: Session, document_id: uuid.UUID, *, analysis: dict, status: str, error: str | None = None) -> None:
@@ -98,91 +103,127 @@ def _save(db: Session, document_id: uuid.UUID, *, analysis: dict, status: str, e
 async def ensure_ats(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
     """Return the cached ATS analysis, computing it once on first request."""
     state = load_resume(db, document_id)
-    if state["status"] == "ready" and state["analysis"]:
+
+    async def _cached() -> dict[str, Any]:
         return state
 
-    resume = _resume_text(db, document_id)
-    if not resume.strip():
-        _save(db, document_id, analysis={}, status="failed", error="empty_resume")
-        return load_resume(db, document_id)
+    async def _compute() -> dict[str, Any]:
+        resume = _resume_text(db, document_id)
 
-    checks = deterministic_checks(resume)
-    det_score = round(100 * sum(c["pass"] for c in checks) / len(checks))
+        async def _empty() -> dict[str, Any]:
+            _save(db, document_id, analysis={}, status="failed", error="empty_resume")
+            return load_resume(db, document_id)
 
-    content_score, strengths, improvements, structured = 50, [], [], {}
-    try:
-        raw = await complete_chat(
-            [
-                {"role": "system", "content": _ANALYZE_SYSTEM},
-                {"role": "user", "content": f"RESUME:\n{truncate_to_tokens(resume, plan_resume_input_tokens())}"},
-            ],
-            db, log_tag="resume_ats",
-        )
-        data = _parse_json_obj(raw)
-        content_score = _clamp(data.get("content_score"), 50)
-        caps = plan_resume_analysis_caps()
-        strengths = [str(s) for s in (data.get("strengths") or [])][: caps.strengths]
-        improvements = [str(s) for s in (data.get("improvements") or [])][: caps.improvements]
-        structured = data.get("structured") if isinstance(data.get("structured"), dict) else {}
-    except Exception:
-        pass  # deterministic checks still give a usable score
+        async def _analyze() -> dict[str, Any]:
+            checks = deterministic_checks(resume)
+            det_score = round(100 * sum(c["pass"] for c in checks) / len(checks))
 
-    overall = plan_resume_ats_score(det_score=det_score, content_score=content_score)
-    analysis = {
-        "score": overall,
-        "det_score": det_score,
-        "content_score": content_score,
-        "checks": checks,
-        "strengths": strengths,
-        "improvements": improvements,
-        "structured": structured,
-    }
-    _save(db, document_id, analysis=analysis, status="ready")
-    return load_resume(db, document_id)
+            content_score, strengths, improvements, structured = 50, [], [], {}
+            try:
+                raw = await complete_chat(
+                    [
+                        {"role": "system", "content": _ANALYZE_SYSTEM},
+                        {"role": "user", "content": f"RESUME:\n{truncate_to_tokens(resume, plan_resume_input_tokens())}"},
+                    ],
+                    db, log_tag="resume_ats",
+                )
+                data = _parse_json_obj(raw)
+                content_score = _clamp(data.get("content_score"), 50)
+                caps = plan_resume_analysis_caps()
+                strengths = [str(s) for s in (data.get("strengths") or [])][: caps.strengths]
+                improvements = [str(s) for s in (data.get("improvements") or [])][: caps.improvements]
+                structured = pick(
+                    isinstance(data.get("structured"), dict),
+                    lambda: data.get("structured"),
+                    lambda: {},
+                )
+            except Exception:
+                pass
+
+            overall = plan_resume_ats_score(det_score=det_score, content_score=content_score)
+            analysis = {
+                "score": overall,
+                "det_score": det_score,
+                "content_score": content_score,
+                "checks": checks,
+                "strengths": strengths,
+                "improvements": improvements,
+                "structured": structured,
+            }
+            _save(db, document_id, analysis=analysis, status="ready")
+            return load_resume(db, document_id)
+
+        return await pick(not resume.strip(), _empty, _analyze)
+
+    return await pick(state["status"] == "ready" and bool(state["analysis"]), _cached, _compute)
 
 
 async def optimize(db: Session, document_id: uuid.UUID, job_description: str = "") -> dict[str, Any]:
     """Rewrite bullets ATS-friendly, optionally aligned to a job description."""
     resume = _resume_text(db, document_id)
-    if not resume.strip():
-        return {"summary": "", "bullets": [], "missing_keywords": [], "notes": "No resume text found."}
-    jd = (job_description or "").strip()
-    from app.services.chunk_map_cache import content_hash_key
-    from app.services.generation_cache import get as cache_get, put as cache_put
 
-    opt_key = content_hash_key(
-        "resume_opt",
-        truncate_to_tokens(resume, plan_resume_input_tokens()),
-        truncate_to_tokens(jd, plan_resume_jd_input_tokens()) if jd else "",
-    )
-    hit = cache_get(db, kind="resume_optimize", cache_key=opt_key)
-    if isinstance(hit, dict) and ("bullets" in hit or "summary" in hit):
-        return hit
-    user = f"RESUME:\n{truncate_to_tokens(resume, plan_resume_input_tokens())}"
-    if jd:
-        user += f"\n\nTARGET JOB DESCRIPTION:\n{truncate_to_tokens(jd, plan_resume_jd_input_tokens())}"
-    try:
-        raw = await complete_chat(
-            [{"role": "system", "content": _OPTIMIZE_SYSTEM}, {"role": "user", "content": user}],
-            db, log_tag="resume_optimize",
+    async def _empty() -> dict[str, Any]:
+        return {"summary": "", "bullets": [], "missing_keywords": [], "notes": "No resume text found."}
+
+    async def _run() -> dict[str, Any]:
+        jd = (job_description or "").strip()
+        from app.services.chunk_map_cache import content_hash_key
+        from app.services.generation_cache import get as cache_get, put as cache_put
+
+        opt_key = content_hash_key(
+            "resume_opt",
+            truncate_to_tokens(resume, plan_resume_input_tokens()),
+            pick(
+                bool(jd),
+                lambda: truncate_to_tokens(jd, plan_resume_jd_input_tokens()),
+                lambda: "",
+            ),
         )
-        data = _parse_json_obj(raw)
-        opt_caps = plan_resume_optimize_caps()
-        out = {
-            "summary": str(data.get("summary") or ""),
-            "bullets": [
-                {"original": str(b.get("original", "")), "improved": str(b.get("improved", ""))}
-                for b in (data.get("bullets") or []) if isinstance(b, dict) and b.get("improved")
-            ][: opt_caps.bullets],
-            "missing_keywords": [
-                str(k) for k in (data.get("missing_keywords") or [])
-            ][: opt_caps.missing_keywords],
-            "notes": str(data.get("notes") or ""),
-        }
-        cache_put(db, kind="resume_optimize", cache_key=opt_key, value=out)
-        return out
-    except Exception as exc:
-        return {"summary": "", "bullets": [], "missing_keywords": [], "notes": f"Optimization unavailable: {exc}"}
+        hit = cache_get(db, kind="resume_optimize", cache_key=opt_key)
+
+        async def _hit() -> dict[str, Any]:
+            return hit
+
+        async def _generate() -> dict[str, Any]:
+            user = f"RESUME:\n{truncate_to_tokens(resume, plan_resume_input_tokens())}"
+            user = pick(
+                bool(jd),
+                lambda: user + f"\n\nTARGET JOB DESCRIPTION:\n{truncate_to_tokens(jd, plan_resume_jd_input_tokens())}",
+                lambda: user,
+            )
+            try:
+                raw = await complete_chat(
+                    [{"role": "system", "content": _OPTIMIZE_SYSTEM}, {"role": "user", "content": user}],
+                    db, log_tag="resume_optimize",
+                )
+                data = _parse_json_obj(raw)
+                opt_caps = plan_resume_optimize_caps()
+                out = {
+                    "summary": str(data.get("summary") or ""),
+                    "bullets": [
+                        {"original": str(b.get("original", "")), "improved": str(b.get("improved", ""))}
+                        for b in filter(
+                            lambda b: isinstance(b, dict) and b.get("improved"),
+                            data.get("bullets") or [],
+                        )
+                    ][: opt_caps.bullets],
+                    "missing_keywords": [
+                        str(k) for k in (data.get("missing_keywords") or [])
+                    ][: opt_caps.missing_keywords],
+                    "notes": str(data.get("notes") or ""),
+                }
+                cache_put(db, kind="resume_optimize", cache_key=opt_key, value=out)
+                return out
+            except Exception as exc:
+                return {"summary": "", "bullets": [], "missing_keywords": [], "notes": f"Optimization unavailable: {exc}"}
+
+        return await pick(
+            isinstance(hit, dict) and ("bullets" in hit or "summary" in hit),
+            _hit,
+            _generate,
+        )
+
+    return await pick(not resume.strip(), _empty, _run)
 
 
 def request_review(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
@@ -202,19 +243,23 @@ def request_review(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
     return load_resume(db, document_id)
 
 
-# ---------------------------------------------------------------- helpers
 def _resume_text(db: Session, document_id: uuid.UUID) -> str:
     doc = db.get(Document, document_id)
-    if not doc:
+
+    def _empty() -> str:
         return ""
-    rows = (
-        db.query(DocumentChunk)
-        .filter(DocumentChunk.document_id == document_id)
-        .order_by(DocumentChunk.page_start.asc())
-        .limit(plan_resume_chunk_limit())
-        .all()
-    )
-    return "\n\n".join(r.text for r in rows if r.text)
+
+    def _join() -> str:
+        rows = (
+            db.query(DocumentChunk)
+            .filter(DocumentChunk.document_id == document_id)
+            .order_by(DocumentChunk.page_start.asc())
+            .limit(plan_resume_chunk_limit())
+            .all()
+        )
+        return "\n\n".join(filter(None, (r.text for r in rows)))
+
+    return pick(not doc, _empty, _join)
 
 
 def _clamp(v: Any, default: int) -> int:
@@ -224,12 +269,10 @@ def _clamp(v: Any, default: int) -> int:
         return default
 
 
-# Tolerant LLM-JSON extraction lives in app.services.llm_json (shared with interview.py).
 _parse_json_obj = extract_json_obj
 
 
-if __name__ == "__main__":  # pragma: no cover
-    # ponytail: pure self-check — deterministic checks + score math + JSON parse.
+def _self_check() -> None:
     good = (
         "Jane Doe\njane@example.com  +1 415 555 1234\n"
         "Experience\n- Led a team that improved latency by 40%\n- Built and shipped 3 services\n"
@@ -237,7 +280,7 @@ if __name__ == "__main__":  # pragma: no cover
     )
     checks = deterministic_checks(good)
     passed = sum(c["pass"] for c in checks)
-    assert passed >= 8, [c for c in checks if not c["pass"]]
+    assert passed >= 8, list(filter(lambda c: not c["pass"], checks))
 
     bad = "i am a hard working person and i want a job. my email is missing."
     assert sum(c["pass"] for c in deterministic_checks(bad)) <= 4
@@ -245,3 +288,6 @@ if __name__ == "__main__":  # pragma: no cover
     assert _clamp(150, 0) == 100 and _clamp(-5, 0) == 0 and _clamp("x", 42) == 42
     assert _parse_json_obj('```json\n{"content_score":80}\n```')["content_score"] == 80
     print("resume self-check OK")
+
+
+pick(__name__ == "__main__", _self_check, lambda: None)

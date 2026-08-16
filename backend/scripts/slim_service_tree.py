@@ -12,7 +12,11 @@ from __future__ import annotations
 import argparse
 import ast
 import shutil
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app.engine_runtime import Pred, Rule, apply, first_match, pick  # noqa: E402
 
 API_KEEP: dict[str, set[str]] = {
     "worker": set(),
@@ -124,22 +128,37 @@ MIGRATE_KEEP_SCRIPTS = {"run_alembic_with_lock.py", "seed_question_vocab.py"}
 LOCAL_ROOTS = ("app",) + HTTP_PACKAGES
 
 
+def _raise(exc: BaseException) -> None:
+    raise exc
+
+
 def _rm(path: Path) -> None:
-    if path.is_dir():
-        shutil.rmtree(path)
-    elif path.exists():
-        path.unlink()
+    apply(
+        first_match(
+            (
+                Rule(when=(Pred("isdir", "truthy"),), action="dir"),
+                Rule(when=(Pred("exists", "truthy"),), action="file"),
+                Rule(when=(), action="skip"),
+            ),
+            {"isdir": path.is_dir(), "exists": path.exists()},
+        ).action,
+        {
+            "dir": lambda: shutil.rmtree(path),
+            "file": lambda: path.unlink(),
+            "skip": lambda: None,
+        },
+    )
 
 
 def _module_path(root: Path, dotted: str) -> Path | None:
     parts = dotted.split(".")
     as_file = root.joinpath(*parts).with_suffix(".py")
     as_pkg = root.joinpath(*parts) / "__init__.py"
-    if as_file.is_file():
-        return as_file
-    if as_pkg.is_file():
-        return as_pkg
-    return None
+    return pick(
+        as_file.is_file(),
+        lambda: as_file,
+        lambda: pick(as_pkg.is_file(), lambda: as_pkg, lambda: None),
+    )
 
 
 def _file_to_module(root: Path, path: Path) -> str | None:
@@ -147,53 +166,74 @@ def _file_to_module(root: Path, path: Path) -> str | None:
         rel = path.relative_to(root)
     except ValueError:
         return None
-    if rel.suffix != ".py":
-        return None
-    parts = list(rel.with_suffix("").parts)
-    if parts[-1] == "__init__":
-        parts = parts[:-1]
-    if not parts:
-        return None
-    return ".".join(parts)
+    return pick(
+        rel.suffix != ".py",
+        lambda: None,
+        lambda: _parts_to_module(list(rel.with_suffix("").parts)),
+    )
+
+
+def _parts_to_module(parts: list[str]) -> str | None:
+    parts = pick(parts[-1] == "__init__", lambda: parts[:-1], lambda: parts)
+    return pick(not parts, lambda: None, lambda: ".".join(parts))
 
 
 def _walk_imports(path: Path, module: str) -> set[str]:
     tree = ast.parse(path.read_text(), filename=str(path))
     found: set[str] = set()
     pkg_parts = module.split(".")
-    if path.name == "__init__.py":
-        current_pkg = module
-    else:
-        current_pkg = ".".join(pkg_parts[:-1])
+    current_pkg = pick(path.name == "__init__.py", lambda: module, lambda: ".".join(pkg_parts[:-1]))
+
+    def _on_import(node: ast.Import) -> None:
+        for alias in node.names:
+            found.add(alias.name)
+
+    def _on_from(node: ast.ImportFrom) -> None:
+        def _relative() -> None:
+            base_parts = pick(bool(current_pkg), lambda: current_pkg.split("."), lambda: [])
+            parent = pick(
+                node.level > len(base_parts) + 1,
+                lambda: "",
+                lambda: ".".join(base_parts[: len(base_parts) - node.level + 1]),
+            )
+            abs_mod = pick(
+                bool(node.module),
+                lambda: pick(bool(parent), lambda: f"{parent}.{node.module}", lambda: node.module),
+                lambda: parent,
+            )
+
+            def _add() -> None:
+                found.add(abs_mod)
+
+                def _aliases() -> None:
+                    for alias in node.names:
+                        pick(
+                            alias.name == "*",
+                            lambda: None,
+                            lambda: found.add(f"{abs_mod}.{alias.name}"),
+                        )
+
+                pick(bool(node.module or node.names), _aliases, lambda: None)
+
+            pick(bool(abs_mod), _add, lambda: None)
+
+        def _absolute() -> None:
+            found.add(node.module)
+            for alias in node.names:
+                pick(
+                    alias.name == "*",
+                    lambda: None,
+                    lambda: found.add(f"{node.module}.{alias.name}"),
+                )
+
+        pick(bool(node.level), _relative, lambda: pick(bool(node.module), _absolute, lambda: None))
 
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                found.add(alias.name)
-        elif isinstance(node, ast.ImportFrom):
-            if node.level:
-                base_parts = current_pkg.split(".") if current_pkg else []
-                if node.level > len(base_parts) + 1:
-                    parent = ""
-                else:
-                    parent = ".".join(base_parts[: len(base_parts) - node.level + 1])
-                if node.module:
-                    abs_mod = f"{parent}.{node.module}" if parent else node.module
-                else:
-                    abs_mod = parent
-                if abs_mod:
-                    found.add(abs_mod)
-                    if node.module or node.names:
-                        for alias in node.names:
-                            if alias.name == "*":
-                                continue
-                            found.add(f"{abs_mod}.{alias.name}")
-            elif node.module:
-                found.add(node.module)
-                for alias in node.names:
-                    if alias.name == "*":
-                        continue
-                    found.add(f"{node.module}.{alias.name}")
+        pick(
+            isinstance(node, ast.Import),
+            lambda n=node: _on_import(n),
+            lambda n=node: pick(isinstance(n, ast.ImportFrom), lambda: _on_from(n), lambda: None),
+        )
     return found
 
 
@@ -208,33 +248,40 @@ def reachable_modules(root: Path, entrypoints: tuple[str, ...]) -> set[Path]:
     queue: list[str] = []
     for rel in entrypoints:
         path = root / rel
-        if not path.is_file():
-            raise SystemExit(f"slim: missing entrypoint {rel}")
+        pick(
+            not path.is_file(),
+            lambda r=rel: _raise(SystemExit(f"slim: missing entrypoint {r}")),
+            lambda: None,
+        )
         mod = _file_to_module(root, path)
-        if mod:
-            queue.append(mod)
-        else:
-            queue.append(rel.replace("/", ".").removesuffix(".py"))
+        queue.append(pick(bool(mod), lambda: mod, lambda r=rel: r.replace("/", ".").removesuffix(".py")))
 
     seen: set[str] = set()
     kept: set[Path] = set()
 
     while queue:
         dotted = queue.pop()
-        if dotted in seen:
-            continue
-        seen.add(dotted)
-        path = _module_path(root, dotted)
-        if path is None:
-            # ``from app.models import Account``: Account is a symbol, not a module.
-            parent = dotted.rsplit(".", 1)[0] if "." in dotted else ""
-            if parent and parent not in seen:
-                queue.append(parent)
-            continue
-        kept.add(path)
-        for imported in _walk_imports(path, dotted):
-            if _is_local_module(imported) and imported not in seen:
-                queue.append(imported)
+
+        def _visit() -> None:
+            seen.add(dotted)
+            path = _module_path(root, dotted)
+
+            def _missing() -> None:
+                parent = pick("." in dotted, lambda: dotted.rsplit(".", 1)[0], lambda: "")
+                pick(bool(parent) and parent not in seen, lambda: queue.append(parent), lambda: None)
+
+            def _keep() -> None:
+                kept.add(path)
+                for imported in _walk_imports(path, dotted):
+                    pick(
+                        _is_local_module(imported) and imported not in seen,
+                        lambda name=imported: queue.append(name),
+                        lambda: None,
+                    )
+
+            pick(path is None, _missing, _keep)
+
+        pick(dotted in seen, lambda: None, _visit)
     return kept
 
 
@@ -242,87 +289,100 @@ def forbidden_leftovers(root: Path, profile: str) -> list[str]:
     """Paths that must never ship in this process image."""
     leftovers: list[str] = []
     own_pkg = OWN_HTTP_PACKAGE.get(profile)
-    own_main = f"{profile}_main.py" if profile in OWN_HTTP_PACKAGE else None
+    own_main = pick(profile in OWN_HTTP_PACKAGE, lambda: f"{profile}_main.py", lambda: None)
 
     for name in FORBIDDEN_DIRS:
-        if name == "tests" and profile == "migrate":
-            # dropped structurally; still forbidden if present
-            pass
-        if (root / name).exists():
-            leftovers.append(name)
+        pick((root / name).exists(), lambda n=name: leftovers.append(n), lambda: None)
 
     for pkg in HTTP_PACKAGES:
-        if pkg == own_pkg:
-            continue
-        if (root / pkg).exists():
-            leftovers.append(pkg)
+        pick(
+            pkg != own_pkg and (root / pkg).exists(),
+            lambda p=pkg: leftovers.append(p),
+            lambda: None,
+        )
 
     for main in HTTP_MAINS:
-        if main == own_main:
-            continue
-        if (root / main).exists():
-            leftovers.append(main)
+        pick(
+            main != own_main and (root / main).exists(),
+            lambda m=main: leftovers.append(m),
+            lambda: None,
+        )
 
     api_dir = root / "app" / "api"
-    if api_dir.is_dir():
+
+    def _scan_api() -> None:
         for child in api_dir.iterdir():
-            if child.name in PRODUCT_ROUTER_FILES:
-                leftovers.append(f"app/api/{child.name}")
+            pick(
+                child.name in PRODUCT_ROUTER_FILES,
+                lambda c=child: leftovers.append(f"app/api/{c.name}"),
+                lambda: None,
+            )
 
-    if profile in {"worker", "migrate"} and (root / "app" / "api").exists():
-        leftovers.append("app/api")
-    if (root / "app" / "main.py").exists():
-        leftovers.append("app/main.py")
-
+    pick(api_dir.is_dir(), _scan_api, lambda: None)
+    pick(
+        profile in {"worker", "migrate"} and (root / "app" / "api").exists(),
+        lambda: leftovers.append("app/api"),
+        lambda: None,
+    )
+    pick(
+        (root / "app" / "main.py").exists(),
+        lambda: leftovers.append("app/main.py"),
+        lambda: None,
+    )
     return leftovers
 
 
 def _drop_unreached_app_modules(root: Path, keep_files: set[Path]) -> None:
     app_dir = root / "app"
-    if not app_dir.is_dir():
-        return
-    for path in sorted(app_dir.rglob("*.py"), reverse=True):
-        if path not in keep_files:
-            path.unlink()
-    for dirpath in sorted((p for p in app_dir.rglob("*") if p.is_dir()), reverse=True):
-        try:
-            next(dirpath.iterdir())
-        except StopIteration:
-            dirpath.rmdir()
+
+    def _drop() -> None:
+        for path in sorted(app_dir.rglob("*.py"), reverse=True):
+            pick(path not in keep_files, path.unlink, lambda: None)
+        for dirpath in sorted(filter(Path.is_dir, app_dir.rglob("*")), reverse=True):
+            try:
+                next(dirpath.iterdir())
+            except StopIteration:
+                dirpath.rmdir()
+
+    pick(app_dir.is_dir(), _drop, lambda: None)
 
 
 def slim(root: Path, profile: str) -> None:
-    if profile not in API_KEEP:
-        raise SystemExit(f"unknown profile {profile!r}; choose from {sorted(API_KEEP)}")
+    pick(
+        profile not in API_KEEP,
+        lambda: _raise(SystemExit(f"unknown profile {profile!r}; choose from {sorted(API_KEEP)}")),
+        lambda: None,
+    )
 
     api_dir = root / "app" / "api"
     keep = API_KEEP[profile]
-    if api_dir.is_dir():
-        if not keep:
-            _rm(api_dir)
-        else:
-            for child in api_dir.iterdir():
-                if child.name not in keep:
-                    _rm(child)
 
+    def _trim_api() -> None:
+        pick(not keep, lambda: _rm(api_dir), lambda: None)
+        pick(
+            bool(keep),
+            lambda: [
+                pick(child.name not in keep, lambda c=child: _rm(c), lambda: None)
+                for child in api_dir.iterdir()
+            ],
+            lambda: None,
+        )
+
+    pick(api_dir.is_dir(), _trim_api, lambda: None)
     _rm(root / "app" / "main.py")
-    if profile != "migrate":
-        _rm(root / "alembic")
-        _rm(root / "alembic.ini")
-        _rm(root / "schema")
-
-    if profile != "worker":
-        for name in WORKER_ENTRYPOINTS:
-            _rm(root / name)
+    pick(profile != "migrate", lambda: (_rm(root / "alembic"), _rm(root / "alembic.ini"), _rm(root / "schema")), lambda: None)
+    pick(
+        profile != "worker",
+        lambda: [_rm(root / name) for name in WORKER_ENTRYPOINTS],
+        lambda: None,
+    )
 
     own_pkg = OWN_HTTP_PACKAGE.get(profile)
-    own_main = f"{profile}_main.py" if own_pkg else None
+    own_main = pick(bool(own_pkg), lambda: f"{profile}_main.py", lambda: None)
     for pkg in HTTP_PACKAGES:
-        if pkg != own_pkg:
-            _rm(root / pkg)
+        pick(pkg != own_pkg, lambda p=pkg: _rm(root / p), lambda: None)
     for main in HTTP_MAINS:
-        if main != own_main:
-            _rm(root / main)
+        pick(main != own_main, lambda m=main: _rm(root / m), lambda: None)
 
     for name in FORBIDDEN_DIRS:
         _rm(root / name)
@@ -330,35 +390,43 @@ def slim(root: Path, profile: str) -> None:
         _rm(cache)
     for pyc in list(root.rglob("*.pyc")):
         _rm(pyc)
-
     for name in ALWAYS_DROP_ROOT_FILES:
         _rm(root / name)
 
     scripts = root / "scripts"
-    if scripts.is_dir():
-        if profile == "migrate":
+
+    def _trim_scripts() -> None:
+        def _migrate_scripts() -> None:
             for child in scripts.iterdir():
-                if child.name not in MIGRATE_KEEP_SCRIPTS:
-                    _rm(child)
-        else:
-            _rm(scripts)
+                pick(child.name not in MIGRATE_KEEP_SCRIPTS, lambda c=child: _rm(c), lambda: None)
+
+        pick(profile == "migrate", _migrate_scripts, lambda: _rm(scripts))
+
+    pick(scripts.is_dir(), _trim_scripts, lambda: None)
 
     entrypoints = ENTRYPOINTS[profile]
-    if profile == "migrate":
+
+    def _migrate_extra() -> tuple[str, ...]:
         versions = root / "alembic" / "versions"
-        extra = tuple(
-            str(path.relative_to(root))
-            for path in sorted(versions.glob("*.py"))
-            if path.is_file()
-        ) if versions.is_dir() else ()
-        entrypoints = entrypoints + extra
+        extra = pick(
+            versions.is_dir(),
+            lambda: tuple(
+                str(path.relative_to(root))
+                for path in sorted(filter(Path.is_file, versions.glob("*.py")))
+            ),
+            lambda: (),
+        )
+        return entrypoints + extra
+
+    entrypoints = pick(profile == "migrate", _migrate_extra, lambda: entrypoints)
     keep_files = reachable_modules(root, entrypoints)
     _drop_unreached_app_modules(root, keep_files)
-
     leftovers = forbidden_leftovers(root, profile)
-    if leftovers:
-        raise SystemExit(f"slim {profile}: forbidden leftovers remain: {leftovers}")
-
+    pick(
+        bool(leftovers),
+        lambda: _raise(SystemExit(f"slim {profile}: forbidden leftovers remain: {leftovers}")),
+        lambda: None,
+    )
     print(f"slimmed {root} as {profile}", flush=True)
 
 
@@ -371,5 +439,8 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
+def _cli() -> None:
     raise SystemExit(main())
+
+
+pick(__name__ == "__main__", _cli, lambda: None)

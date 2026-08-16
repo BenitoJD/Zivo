@@ -13,6 +13,7 @@ from functools import lru_cache
 from fastembed.rerank.cross_encoder import TextCrossEncoder
 
 from app.config import get_settings
+from app.engine_runtime import pick
 
 # Smallest model in FastEmbed TextCrossEncoder.list_supported_models() (~0.08 GB).
 DEFAULT_RERANK_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2"
@@ -23,21 +24,7 @@ def get_reranker(model_name: str) -> TextCrossEncoder:
     return TextCrossEncoder(model_name=model_name)
 
 
-def rerank_chunks(
-    query: str,
-    chunks: list[dict],
-    *,
-    top_n: int = 4,
-) -> list[dict]:
-    """Rerank chunks by query relevance, return the top_n.
-
-    Falls back to the input order (truncated) if reranking fails or the input
-    is small — never blocks retrieval on a reranker error.
-    """
-    if not get_settings().rerank_enabled:
-        return chunks[:top_n]
-    if len(chunks) <= top_n:
-        return chunks
+def _rerank(query: str, chunks: list[dict], top_n: int) -> list[dict]:
     try:
         reranker = get_reranker(get_settings().rerank_model)
         texts = [c.get("text") or "" for c in chunks]
@@ -54,3 +41,21 @@ def rerank_chunks(
     except Exception:
         # Reranker is an optimization, not a correctness requirement.
         return chunks[:top_n]
+
+
+def rerank_chunks(
+    query: str,
+    chunks: list[dict],
+    *,
+    top_n: int = 4,
+) -> list[dict]:
+    """Rerank chunks by query relevance, return the top_n.
+
+    Falls back to the input order (truncated) if reranking fails or the input
+    is small — never blocks retrieval on a reranker error.
+    """
+    return pick(
+        not get_settings().rerank_enabled,
+        lambda: chunks[:top_n],
+        lambda: pick(len(chunks) <= top_n, lambda: chunks, lambda: _rerank(query, chunks, top_n)),
+    )

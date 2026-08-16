@@ -12,6 +12,8 @@ from contextlib import asynccontextmanager, contextmanager
 
 from sqlalchemy import text
 
+from app.engine_runtime import Pred, Rule, apply, first_match, pick
+
 logger = logging.getLogger(__name__)
 
 LLM_MAX_CONCURRENT = int(os.getenv("LLM_MAX_CONCURRENT", "8"))
@@ -45,7 +47,7 @@ async def llm_slot_async():
 # provider's ceiling is changed in the registry, not in a redeploy.
 #
 # The in-process semaphore below is only the first gate: N pods each get their
-# own, so 7 pods x 8 still shows Step Fun 56 concurrent calls (measured — the
+# own, so 7 pods x 8 still shows Step Fun 56 concurrent calls (measured: the
 # 429s continued after the per-process cap shipped). The cluster-wide gate is
 # _global_slot(), which claims one of `limit` Postgres advisory-lock slots, so
 # the ceiling holds across every pod.
@@ -56,11 +58,11 @@ _provider_lock = threading.Lock()
 
 def _provider_semaphore(slug: str, limit: int) -> threading.Semaphore:
     with _provider_lock:
-        # Rebuild when the registry value changes, so an admin edit takes effect
-        # without a restart (in-flight holders drain against the old object).
-        if _provider_limits.get(slug) != limit:
+        def _rebuild() -> None:
             _provider_limits[slug] = limit
             _provider_semaphores[slug] = threading.Semaphore(limit)
+
+        pick(_provider_limits.get(slug) != limit, _rebuild, lambda: None)
         return _provider_semaphores[slug]
 
 
@@ -71,10 +73,33 @@ def _slot_key(slug: str) -> int:
 
 
 # How long to keep trying for a free slot before giving up and calling anyway.
-# Fail-OPEN on purpose: a coordination hiccup must never wedge generation — the
+# Fail-OPEN on purpose: a coordination hiccup must never wedge generation. The
 # provider's own 429 is a survivable outcome, a permanently blocked worker isn't.
 GLOBAL_SLOT_WAIT_SECONDS = float(os.getenv("LLM_GLOBAL_SLOT_WAIT", "45"))
 _GLOBAL_SLOT_POLL_SECONDS = 0.25
+
+_SLOT_ROUND_RULES = (
+    Rule(when=(Pred("acquired", "truthy"),), action="hold"),
+    Rule(when=(Pred("expired", "truthy"),), action="open"),
+    Rule(when=(), action="retry"),
+)
+
+
+def _try_slot(conn, key: int, slot: int) -> int | None:
+    got = conn.execute(
+        text("SELECT pg_try_advisory_lock(:k, :s)"), {"k": key, "s": slot}
+    ).scalar()
+    return pick(bool(got), lambda: slot, lambda: None)
+
+
+def _lock_one(conn, key: int, limit: int) -> int | None:
+    return next(
+        filter(
+            lambda held: held is not None,
+            map(lambda slot: _try_slot(conn, key, slot), range(limit)),
+        ),
+        None,
+    )
 
 
 @contextmanager
@@ -82,7 +107,7 @@ def _global_slot(slug: str, limit: int):
     """Hold one of ``limit`` cluster-wide slots for a provider.
 
     Postgres advisory locks are SESSION-scoped, so a crashed pod releases its
-    slot automatically — no lease table, no stale-slot reaper. Waiters poll on a
+    slot automatically: no lease table, no stale-slot reaper. Waiters poll on a
     connection they close between attempts, so only actual holders (<= limit
     cluster-wide) tie up a connection.
     """
@@ -91,42 +116,58 @@ def _global_slot(slug: str, limit: int):
     key = _slot_key(slug)
     deadline = time.monotonic() + GLOBAL_SLOT_WAIT_SECONDS
     conn = None
+    acquired = False
+    outcome = "retry"
+
+    def _close_conn() -> None:
+        nonlocal conn
+        holder = conn
+        conn = None
+        pick(holder is None, lambda: None, lambda: holder.close())
+
+    def _try_round() -> None:
+        nonlocal conn, acquired
+        conn = engine.connect()
+        acquired = _lock_one(conn, key, limit) is not None
+        pick(acquired, lambda: None, _close_conn)
+
     try:
-        while True:
+        while outcome == "retry":
             try:
-                conn = engine.connect()
-                for slot in range(limit):
-                    got = conn.execute(
-                        text("SELECT pg_try_advisory_lock(:k, :s)"), {"k": key, "s": slot}
-                    ).scalar()
-                    if got:
-                        yield
-                        return
-                conn.close()
-                conn = None
+                _try_round()
             except Exception:
-                # DB unreachable / pool exhausted: don't block the LLM call on the
-                # limiter. The in-process semaphore still applies.
                 logger.debug("global provider slot unavailable for %s", slug, exc_info=True)
-                if conn is not None:
-                    conn.close()
-                    conn = None
+                _close_conn()
                 yield
                 return
-            if time.monotonic() >= deadline:
-                logger.warning(
-                    "provider %s: no free slot after %ss (limit=%s) — proceeding uncapped",
-                    slug,
-                    GLOBAL_SLOT_WAIT_SECONDS,
-                    limit,
-                )
-                yield
-                return
-            time.sleep(_GLOBAL_SLOT_POLL_SECONDS)
+            hit = first_match(
+                _SLOT_ROUND_RULES,
+                {
+                    "acquired": acquired,
+                    "expired": time.monotonic() >= deadline,
+                },
+            )
+            outcome = hit.action
+            apply(
+                outcome,
+                {
+                    "hold": lambda: None,
+                    "open": lambda: logger.warning(
+                        "provider %s: no free slot after %ss (limit=%s) — proceeding uncapped",
+                        slug,
+                        GLOBAL_SLOT_WAIT_SECONDS,
+                        limit,
+                    ),
+                    "retry": lambda: time.sleep(_GLOBAL_SLOT_POLL_SECONDS),
+                },
+            )
+        yield
     finally:
-        # Closing the session releases whichever advisory lock it held.
-        if conn is not None:
-            conn.close()
+        _close_conn()
+
+
+def _skip_provider(slug: str | None, limit: int | None) -> bool:
+    return (not slug) or (not limit) or (limit <= 0)
 
 
 @contextmanager
@@ -134,16 +175,24 @@ def provider_slot_sync(slug: str | None, limit: int | None):
     """Cap concurrent calls to one provider, per-process AND cluster-wide.
     No limit -> no-op.
     """
-    if not slug or not limit or limit <= 0:
+
+    def _noop():
         yield
-        return
-    sem = _provider_semaphore(slug, int(limit))
-    sem.acquire()
-    try:
-        with _global_slot(slug, int(limit)):
-            yield
-    finally:
-        sem.release()
+
+    def _gated():
+        sem = _provider_semaphore(slug, int(limit))
+        sem.acquire()
+        try:
+            with _global_slot(slug, int(limit)):
+                yield
+        finally:
+            sem.release()
+
+    yield from pick(_skip_provider(slug, limit), _noop, _gated)
+
+
+async def _async_noop() -> None:
+    return None
 
 
 @asynccontextmanager
@@ -153,17 +202,19 @@ async def provider_slot_async(slug: str | None, limit: int | None):
     The blocking waits (semaphore + advisory-lock poll) run on worker threads so
     the event loop keeps serving while this call queues for a slot.
     """
-    if not slug or not limit or limit <= 0:
-        yield
-        return
-    sem = _provider_semaphore(slug, int(limit))
-    await asyncio.to_thread(sem.acquire)
-    slot = _global_slot(slug, int(limit))
+    skip = _skip_provider(slug, limit)
+    sem = pick(skip, lambda: None, lambda: _provider_semaphore(slug, int(limit)))
+    slot = pick(skip, lambda: None, lambda: _global_slot(slug, int(limit)))
+    await pick(skip, _async_noop, lambda: asyncio.to_thread(sem.acquire))
     try:
-        await asyncio.to_thread(slot.__enter__)
+        await pick(skip, _async_noop, lambda: asyncio.to_thread(slot.__enter__))
         try:
             yield
         finally:
-            await asyncio.to_thread(slot.__exit__, None, None, None)
+            await pick(
+                skip,
+                _async_noop,
+                lambda: asyncio.to_thread(slot.__exit__, None, None, None),
+            )
     finally:
-        await asyncio.to_thread(sem.release)
+        await pick(skip, _async_noop, lambda: asyncio.to_thread(sem.release))

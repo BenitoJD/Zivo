@@ -1,7 +1,8 @@
 import type { MetadataRoute } from "next";
 
 function siteOrigin(): string {
-  return process.env.NEXT_PUBLIC_SITE_URL ?? "https://zivo.fyi";
+  return process.env.NEXT_PUBLIC_SITE_URL ??
+        "https://zivo.fyi";
 }
 
 export default function robots(): MetadataRoute.Robots {

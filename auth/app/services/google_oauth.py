@@ -19,6 +19,7 @@ from fastapi import HTTPException
 from jose import JWTError, jwt
 
 from app.config import Settings
+from app.engine_runtime import pick
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -30,13 +31,24 @@ PENDING_TTL_MINUTES = 15
 PENDING_COOKIE_MAX_AGE = PENDING_TTL_MINUTES * 60
 
 
+def _raise(exc: BaseException) -> None:
+    raise exc
+
+
+def _raise_from(cause: BaseException, wrapped: BaseException) -> None:
+    raise wrapped from cause
+
+
 def google_oauth_configured(settings: Settings) -> bool:
     return bool(settings.google_client_id.strip() and settings.google_client_secret.strip())
 
 
 def require_google_oauth(settings: Settings) -> None:
-    if not google_oauth_configured(settings):
-        raise HTTPException(status_code=503, detail="Google sign-in is not configured")
+    pick(
+        not google_oauth_configured(settings),
+        lambda: _raise(HTTPException(status_code=503, detail="Google sign-in is not configured")),
+        lambda: None,
+    )
 
 
 def build_google_authorize_url(settings: Settings, state: str) -> str:
@@ -73,15 +85,24 @@ def read_pending_token(settings: Settings, token: str) -> tuple[str, str]:
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
     except JWTError as exc:
-        raise HTTPException(status_code=401, detail="Google signup expired — try again") from exc
-    if payload.get("typ") != "google_pending":
-        raise HTTPException(status_code=401, detail="Invalid Google signup token")
+        _raise_from(exc, HTTPException(status_code=401, detail="Google signup expired — try again"))
+    pick(
+        payload.get("typ") != "google_pending",
+        lambda: _raise(HTTPException(status_code=401, detail="Invalid Google signup token")),
+        lambda: None,
+    )
     google_sub = payload.get("sub")
     email = payload.get("email")
-    if not isinstance(google_sub, str) or not google_sub:
-        raise HTTPException(status_code=401, detail="Invalid Google signup token")
-    if not isinstance(email, str) or not email:
-        raise HTTPException(status_code=401, detail="Google account has no email")
+    pick(
+        not isinstance(google_sub, str) or not google_sub,
+        lambda: _raise(HTTPException(status_code=401, detail="Invalid Google signup token")),
+        lambda: None,
+    )
+    pick(
+        not isinstance(email, str) or not email,
+        lambda: _raise(HTTPException(status_code=401, detail="Google account has no email")),
+        lambda: None,
+    )
     return google_sub, email.lower()
 
 
@@ -103,8 +124,13 @@ def exchange_code_for_userinfo(settings: Settings, code: str) -> dict[str, Any]:
         token_res.raise_for_status()
         token_body = token_res.json()
         access_token = token_body.get("access_token")
-        if not isinstance(access_token, str) or not access_token:
-            raise HTTPException(status_code=502, detail="Google token response missing access_token")
+        pick(
+            not isinstance(access_token, str) or not access_token,
+            lambda: _raise(
+                HTTPException(status_code=502, detail="Google token response missing access_token")
+            ),
+            lambda: None,
+        )
 
         info_res = httpx.get(
             GOOGLE_USERINFO_URL,
@@ -114,21 +140,29 @@ def exchange_code_for_userinfo(settings: Settings, code: str) -> dict[str, Any]:
         info_res.raise_for_status()
         info = info_res.json()
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail="Google authentication failed") from exc
+        _raise_from(exc, HTTPException(status_code=502, detail="Google authentication failed"))
 
     google_sub = info.get("sub")
     email = info.get("email")
-    if not isinstance(google_sub, str) or not google_sub:
-        raise HTTPException(status_code=502, detail="Google profile missing subject")
-    if not isinstance(email, str) or not email:
-        raise HTTPException(status_code=400, detail="Google account must share an email")
-    if info.get("email_verified") is False:
-        raise HTTPException(status_code=400, detail="Google email is not verified")
+    pick(
+        not isinstance(google_sub, str) or not google_sub,
+        lambda: _raise(HTTPException(status_code=502, detail="Google profile missing subject")),
+        lambda: None,
+    )
+    pick(
+        not isinstance(email, str) or not email,
+        lambda: _raise(HTTPException(status_code=400, detail="Google account must share an email")),
+        lambda: None,
+    )
+    pick(
+        info.get("email_verified") is False,
+        lambda: _raise(HTTPException(status_code=400, detail="Google email is not verified")),
+        lambda: None,
+    )
     return {"google_sub": google_sub, "email": email.lower()}
 
 
 def frontend_path(settings: Settings, path: str) -> str:
     base = settings.frontend_url.rstrip("/")
-    if not path.startswith("/"):
-        path = f"/{path}"
-    return f"{base}{path}"
+    resolved = pick(path.startswith("/"), lambda: path, lambda: f"/{path}")
+    return f"{base}{resolved}"

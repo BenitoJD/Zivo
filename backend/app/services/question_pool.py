@@ -9,9 +9,11 @@ from typing import Any, Literal
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 from app.models import Document
 from app.services.document_learn_state import load_progress as load_learn_state_row
 from app.services.document_learn_state import save_progress_row
+from app.services.presence import evaluate_presence
 from app.services.document_learner_state import (
     document_uses_learner_overlay,
     learner_key_for_user,
@@ -86,21 +88,75 @@ _LEARNER_PROGRESS_KEYS = frozenset(
 
 _SERVE_MODE_SQL = "COALESCE(payload->>'serve_mode', 'learn')"
 
+_ANSWERED_RULES = (
+    Rule(when=(Pred("has_scoped", "truthy"),), action="scoped"),
+    Rule(when=(Pred("learn_legacy", "truthy"),), action="legacy"),
+    Rule(when=(), action="empty"),
+)
+
+_OVERLAY_KEY_RULES = (
+    Rule(when=(Pred("in_overlay", "truthy"),), action="from_overlay"),
+    Rule(when=(Pred("is_current_page", "truthy"),), action="default_page"),
+    Rule(when=(Pred("in_defaults", "truthy"),), action="from_defaults"),
+    Rule(when=(), action="pop"),
+)
+
+_SAVE_PROGRESS_RULES = (
+    Rule(when=(Pred("overlay", "truthy"), Pred("has_key", "truthy")), action="split"),
+    Rule(when=(Pred("overlay", "truthy"),), action="shared_only"),
+    Rule(when=(), action="full"),
+)
+
+_MERGE_RULES = (
+    Rule(when=(Pred("coverage", "truthy"), Pred("keep_existing", "truthy")), action="skip"),
+    Rule(when=(Pred("coverage", "truthy"),), action="merge_coverage"),
+    Rule(when=(), action="assign"),
+)
+
+
+def _as_str_list(values: Any) -> list[str]:
+    return [str(x) for x in values]
+
+
+def _budget_confidence(raw: Any) -> Literal["high", "medium", "low"] | None:
+    return choose(raw in ("high", "medium", "low"), raw, None)
+
+
+def _int_or_none(value: Any) -> int | None:
+    return pick(value is not None, lambda: int(value), lambda: None)
+
+
+def _list_or_none(value: Any) -> list[Any] | None:
+    return choose(isinstance(value, list), value, None)
+
+
+def _str_or_none(value: Any) -> str | None:
+    return choose(isinstance(value, str), value, None)
+
 
 def answered_ids_storage_key(mode: Mode) -> str:
-    return "learn_answered_ids" if mode == "learn" else "test_answered_ids"
+    return choose(mode == "learn", "learn_answered_ids", "test_answered_ids")
 
 
 def mode_answered_ids(progress: dict[str, Any], mode: Mode) -> list[str]:
     key = answered_ids_storage_key(mode)
     scoped = progress.get(key)
-    if isinstance(scoped, list) and scoped:
-        return [str(x) for x in scoped]
-    if mode == "learn":
-        legacy = progress.get("answered_ids")
-        if isinstance(legacy, list) and legacy:
-            return [str(x) for x in legacy]
-    return []
+    legacy = progress.get("answered_ids")
+    hit = first_match(
+        _ANSWERED_RULES,
+        {
+            "has_scoped": isinstance(scoped, list) and bool(scoped),
+            "learn_legacy": mode == "learn" and isinstance(legacy, list) and bool(legacy),
+        },
+    )
+    return apply(
+        hit.action,
+        {
+            "scoped": lambda: _as_str_list(scoped),
+            "legacy": lambda: _as_str_list(legacy),
+            "empty": lambda: [],
+        },
+    )
 
 
 def overlay_mode_answered_ids(progress: dict[str, Any], mode: Mode) -> dict[str, Any]:
@@ -111,13 +167,17 @@ def overlay_mode_answered_ids(progress: dict[str, Any], mode: Mode) -> dict[str,
 
 
 def learner_key_for(user: Any | None, guest_id: str | None) -> str | None:
-    user_id = getattr(user, "id", None) if user is not None else None
+    user_id = pick(user is not None, lambda: getattr(user, "id", None), lambda: None)
     return learner_key_for_user(user_id, guest_id)
 
 
 def default_progress(doc: Document) -> dict[str, Any]:
     study_pages = selected_page_list(doc)
-    first_page = study_pages[0] if study_pages else int((doc.meta or {}).get("selected_range", {}).get("from") or 1)
+    first_page = pick(
+        bool(study_pages),
+        lambda: study_pages[0],
+        lambda: int((doc.meta or {}).get("selected_range", {}).get("from") or 1),
+    )
     return {
         "current_page": first_page,
         "answered_ids": [],
@@ -148,18 +208,21 @@ def _apply_progress_defaults(progress: dict[str, Any], doc: Document) -> dict[st
 
 def _load_shared_progress(doc: Document) -> dict[str, Any]:
     meta = dict(doc.meta or {})
-    progress: dict[str, Any] | None = None
-    if isinstance(doc, Document):
+
+    def try_row() -> dict[str, Any] | None:
         session = Session.object_session(doc)
-        if session is not None:
+
+        def load() -> dict[str, Any] | None:
             try:
-                progress = load_learn_state_row(session, doc.id)
+                return load_learn_state_row(session, doc.id)
             except Exception:
-                progress = None
-    if not isinstance(progress, dict):
-        progress = meta.get("question_progress")
-    if not isinstance(progress, dict):
-        progress = default_progress(doc)
+                return None
+
+        return pick(session is not None, load, lambda: None)
+
+    row = pick(isinstance(doc, Document), try_row, lambda: None)
+    from_meta = pick(isinstance(row, dict), lambda: row, lambda: meta.get("question_progress"))
+    progress = pick(isinstance(from_meta, dict), lambda: from_meta, lambda: default_progress(doc))
     return _apply_progress_defaults(dict(progress), doc)
 
 
@@ -175,49 +238,79 @@ def _learner_progress_defaults() -> dict[str, Any]:
     }
 
 
+def _apply_overlay_key(
+    progress: dict[str, Any],
+    key: str,
+    overlay: dict[str, Any],
+    learner_defaults: dict[str, Any],
+    doc: Document,
+) -> None:
+    hit = first_match(
+        _OVERLAY_KEY_RULES,
+        {
+            "in_overlay": key in overlay,
+            "is_current_page": key == "current_page",
+            "in_defaults": key in learner_defaults,
+        },
+    )
+    apply(
+        hit.action,
+        {
+            "from_overlay": lambda: progress.__setitem__(key, overlay[key]),
+            "default_page": lambda: progress.__setitem__(
+                key, default_progress(doc)["current_page"]
+            ),
+            "from_defaults": lambda: progress.__setitem__(key, learner_defaults[key]),
+            "pop": lambda: progress.pop(key, None),
+        },
+    )
+
+
 def get_progress(doc: Document, *, learner_key: str | None = None) -> dict[str, Any]:
     progress = _load_shared_progress(doc)
-    if not document_uses_learner_overlay(doc):
-        return progress
 
-    session = Session.object_session(doc)
-    learner_defaults = _learner_progress_defaults()
-    if learner_key and session is not None:
-        overlay = load_learner_progress(session, doc.id, learner_key) or {}
+    def overlay_path() -> dict[str, Any]:
+        session = Session.object_session(doc)
+        learner_defaults = _learner_progress_defaults()
+        overlay = pick(
+            bool(learner_key) and session is not None,
+            lambda: load_learner_progress(session, doc.id, learner_key) or {},
+            lambda: {},
+        )
         for key in _LEARNER_PROGRESS_KEYS:
-            if key in overlay:
-                progress[key] = overlay[key]
-            elif key == "current_page":
-                progress[key] = default_progress(doc)["current_page"]
-            elif key in learner_defaults:
-                progress[key] = learner_defaults[key]
-            else:
-                progress.pop(key, None)
-    else:
-        for key in _LEARNER_PROGRESS_KEYS:
-            if key == "current_page":
-                progress[key] = default_progress(doc)["current_page"]
-            elif key in learner_defaults:
-                progress[key] = learner_defaults[key]
-            else:
-                progress.pop(key, None)
-    serve_mode = parse_budget_mode(
-        progress.get("budget_serve_mode")
-        if isinstance(progress.get("budget_serve_mode"), str)
-        else None
+            _apply_overlay_key(progress, key, overlay, learner_defaults, doc)
+        serve_mode = parse_budget_mode(_str_or_none(progress.get("budget_serve_mode")))
+        return overlay_mode_answered_ids(progress, serve_mode)
+
+    return pick(
+        not document_uses_learner_overlay(doc),
+        lambda: progress,
+        overlay_path,
     )
-    return overlay_mode_answered_ids(progress, serve_mode)
 
 
 def _merge_progress(existing: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     merged = dict(existing)
     for key, value in patch.items():
-        if key == "page_coverage" and isinstance(value, dict) and isinstance(merged.get(key), dict):
-            if not value and merged[key]:
-                continue
-            merged[key] = {**merged[key], **value}
-        else:
-            merged[key] = value
+        hit = first_match(
+            _MERGE_RULES,
+            {
+                "coverage": key == "page_coverage"
+                and isinstance(value, dict)
+                and isinstance(merged.get(key), dict),
+                "keep_existing": not value and bool(merged.get(key)),
+            },
+        )
+        apply(
+            hit.action,
+            {
+                "skip": lambda: None,
+                "merge_coverage": lambda k=key, v=value: merged.__setitem__(
+                    k, {**merged[k], **v}
+                ),
+                "assign": lambda k=key, v=value: merged.__setitem__(k, v),
+            },
+        )
     return merged
 
 
@@ -231,43 +324,76 @@ def save_progress(
     db.flush()
     db.refresh(doc, with_for_update=True)
     shared_doc = document_uses_learner_overlay(doc)
-    if shared_doc and learner_key:
-        learner_patch = {k: v for k, v in progress.items() if k in _LEARNER_PROGRESS_KEYS}
-        shared_patch = {k: v for k, v in progress.items() if k not in _LEARNER_PROGRESS_KEYS}
-        if shared_patch:
+    hit = first_match(
+        _SAVE_PROGRESS_RULES,
+        {"overlay": shared_doc, "has_key": bool(learner_key)},
+    )
+
+    def split() -> None:
+        learner_patch = {
+            k: v
+            for k, v in filter(
+                lambda kv: kv[0] in _LEARNER_PROGRESS_KEYS, progress.items()
+            )
+        }
+        shared_patch = {
+            k: v
+            for k, v in filter(
+                lambda kv: kv[0] not in _LEARNER_PROGRESS_KEYS, progress.items()
+            )
+        }
+
+        def save_shared() -> None:
             merged_shared = _merge_progress(get_progress(doc), shared_patch)
             save_progress_row(db, doc.id, merged_shared)
-        if learner_patch:
+
+        def save_learner() -> None:
             merged_learner = _merge_progress(
                 get_progress(doc, learner_key=learner_key), learner_patch
             )
             learner_only = {
-                k: merged_learner[k] for k in _LEARNER_PROGRESS_KEYS if k in merged_learner
+                k: merged_learner[k]
+                for k in filter(lambda key: key in merged_learner, _LEARNER_PROGRESS_KEYS)
             }
             save_learner_progress_row(db, doc.id, learner_key, learner_only)
-        return
-    if shared_doc:
-        shared_patch = {k: v for k, v in progress.items() if k not in _LEARNER_PROGRESS_KEYS}
-        if not shared_patch:
-            return
-        merged = _merge_progress(get_progress(doc), shared_patch)
-        save_progress_row(db, doc.id, merged)
-        return
 
-    merged = _merge_progress(get_progress(doc, learner_key=learner_key), progress)
-    save_progress_row(db, doc.id, merged)
-    user = doc.account_id
-    if user:
-        captured = doc.artifact_captured_at or doc.created_at
-        workspace_repo.upsert_workspace(
-            db,
-            account_id=user,
-            artifact_id=doc.id,
-            artifact_captured_at=captured,
-            current_page=merged.get("current_page"),
-            pool_available_count=_count_available(db, doc.id, merged),
-            pool_target=REFILL_BATCH_SIZE,
-        )
+        pick(bool(shared_patch), save_shared, lambda: None)
+        pick(bool(learner_patch), save_learner, lambda: None)
+
+    def shared_only() -> None:
+        shared_patch = {
+            k: v
+            for k, v in filter(
+                lambda kv: kv[0] not in _LEARNER_PROGRESS_KEYS, progress.items()
+            )
+        }
+
+        def persist() -> None:
+            merged = _merge_progress(get_progress(doc), shared_patch)
+            save_progress_row(db, doc.id, merged)
+
+        pick(not shared_patch, lambda: None, persist)
+
+    def full() -> None:
+        merged = _merge_progress(get_progress(doc, learner_key=learner_key), progress)
+        save_progress_row(db, doc.id, merged)
+        user = doc.account_id
+
+        def upsert() -> None:
+            captured = doc.artifact_captured_at or doc.created_at
+            workspace_repo.upsert_workspace(
+                db,
+                account_id=user,
+                artifact_id=doc.id,
+                artifact_captured_at=captured,
+                current_page=merged.get("current_page"),
+                pool_available_count=_count_available(db, doc.id, merged),
+                pool_target=REFILL_BATCH_SIZE,
+            )
+
+        pick(bool(user), upsert, lambda: None)
+
+    apply(hit.action, {"split": split, "shared_only": shared_only, "full": full})
 
 
 def get_study_mode(doc: Document, *, learner_key: str | None = None) -> str:
@@ -303,7 +429,7 @@ def get_page_coverage(doc: Document, page: int) -> dict[str, Any]:
     progress = get_progress(doc)
     coverage = progress.get("page_coverage") or {}
     entry = coverage.get(_page_key(page))
-    return entry if isinstance(entry, dict) else {}
+    return pick(isinstance(entry, dict), lambda: entry, lambda: {})
 
 
 def save_page_coverage(
@@ -328,8 +454,57 @@ def save_page_coverage(
     test_aspects: list[dict[str, Any]] | None = None,
 ) -> None:
     doc = db.get(Document, document_id)
-    if not doc:
-        return
+    return pick(
+        evaluate_presence(doc).action == "missing",
+        lambda: None,
+        lambda: _save_page_coverage_entry(
+            db,
+            doc,
+            page=page,
+            question_budget=question_budget,
+            aspects=aspects,
+            rationale=rationale,
+            triage_activity_id=triage_activity_id,
+            aspect_dedup=aspect_dedup,
+            content_type=content_type,
+            non_content=non_content,
+            programmable=programmable,
+            debuggable=debuggable,
+            budget_confidence=budget_confidence,
+            budget_mode=budget_mode,
+            budget_version=budget_version,
+            n_cov=n_cov,
+            test_question_budget=test_question_budget,
+            test_aspects=test_aspects,
+        ),
+    )
+
+
+def _put_if(entry: dict[str, Any], flag: bool, key: str, value: Any) -> None:
+    pick(flag, lambda: entry.__setitem__(key, value), lambda: None)
+
+
+def _save_page_coverage_entry(
+    db: Session,
+    doc: Document,
+    *,
+    page: int,
+    question_budget: int,
+    aspects: list[dict[str, Any]],
+    rationale: str,
+    triage_activity_id: str | None,
+    aspect_dedup: dict[str, Any] | None,
+    content_type: str | None,
+    non_content: bool,
+    programmable: bool,
+    debuggable: bool,
+    budget_confidence: str | None,
+    budget_mode: str | None,
+    budget_version: str | None,
+    n_cov: float | None,
+    test_question_budget: int | None,
+    test_aspects: list[dict[str, Any]] | None,
+) -> None:
     entry: dict[str, Any] = {
         "question_budget": question_budget,
         "aspects": aspects,
@@ -345,20 +520,13 @@ def save_page_coverage(
         "programmable": bool(programmable),
         "debuggable": bool(debuggable),
     }
-    if aspect_dedup:
-        entry["aspect_dedup"] = aspect_dedup
-    if budget_confidence is not None:
-        entry["budget_confidence"] = budget_confidence
-    if budget_mode is not None:
-        entry["budget_mode"] = budget_mode
-    if budget_version is not None:
-        entry["budget_version"] = budget_version
-    if n_cov is not None:
-        entry["n_cov"] = n_cov
-    if test_question_budget is not None:
-        entry["test_question_budget"] = test_question_budget
-    if test_aspects is not None:
-        entry["test_aspects"] = test_aspects
+    _put_if(entry, bool(aspect_dedup), "aspect_dedup", aspect_dedup)
+    _put_if(entry, budget_confidence is not None, "budget_confidence", budget_confidence)
+    _put_if(entry, budget_mode is not None, "budget_mode", budget_mode)
+    _put_if(entry, budget_version is not None, "budget_version", budget_version)
+    _put_if(entry, n_cov is not None, "n_cov", n_cov)
+    _put_if(entry, test_question_budget is not None, "test_question_budget", test_question_budget)
+    _put_if(entry, test_aspects is not None, "test_aspects", test_aspects)
     save_progress(db, doc, {"page_coverage": {_page_key(page): entry}})
     db.commit()
     db.refresh(doc)
@@ -386,31 +554,40 @@ def note_empty_page_triage(
     from app.services.content_worthiness import plan_empty_page_reselect
 
     doc = db.get(Document, document_id)
-    if not doc:
-        return {}
-    progress = get_progress(doc)
-    verdict = plan_empty_page_reselect(
-        prior_streak=int(progress.get("empty_page_streak") or 0),
-        vision_usable=vision_usable,
-        already_prompted=bool(progress.get("prompt_reselect_pages")),
-        prior_reason=progress.get("prompt_reselect_reason"),
-    )
-    patch: dict[str, Any] = {"empty_page_streak": verdict.streak}
-    if verdict.prompt_reselect:
-        patch["prompt_reselect_pages"] = True
-        patch["prompt_reselect_reason"] = verdict.reason
-    save_progress(db, doc, patch)
-    return patch
+
+    def bump() -> dict[str, Any]:
+        progress = get_progress(doc)
+        verdict = plan_empty_page_reselect(
+            prior_streak=int(progress.get("empty_page_streak") or 0),
+            vision_usable=vision_usable,
+            already_prompted=bool(progress.get("prompt_reselect_pages")),
+            prior_reason=progress.get("prompt_reselect_reason"),
+        )
+        patch: dict[str, Any] = {"empty_page_streak": verdict.streak}
+
+        def mark_prompt() -> None:
+            patch["prompt_reselect_pages"] = True
+            patch["prompt_reselect_reason"] = verdict.reason
+
+        pick(verdict.prompt_reselect, mark_prompt, lambda: None)
+        save_progress(db, doc, patch)
+        return patch
+
+    return pick(evaluate_presence(doc).action == "missing", lambda: {}, bump)
 
 
 def reset_empty_page_streak(db: Session, document_id: uuid.UUID) -> None:
     """A page with real extractable text resets the blank streak."""
     doc = db.get(Document, document_id)
-    if not doc:
-        return
-    if int(get_progress(doc).get("empty_page_streak") or 0) == 0:
-        return
-    save_progress(db, doc, {"empty_page_streak": 0})
+
+    def maybe_reset() -> None:
+        pick(
+            int(get_progress(doc).get("empty_page_streak") or 0) == 0,
+            lambda: None,
+            lambda: save_progress(db, doc, {"empty_page_streak": 0}),
+        )
+
+    pick(evaluate_presence(doc).action == "missing", lambda: None, maybe_reset)
 
 
 def get_test_question_budget(doc: Document, page: int) -> int:
@@ -418,14 +595,10 @@ def get_test_question_budget(doc: Document, page: int) -> int:
     from app.services.question_budget import resolve_test_question_budget
 
     cov = get_page_coverage(doc, page)
-    aspects = cov.get("aspects") if isinstance(cov.get("aspects"), list) else None
-    units = units_from_aspect_dicts(aspects) if aspects else None
-    conf_raw = cov.get("budget_confidence")
-    conf: Literal["high", "medium", "low"] | None = None
-    if conf_raw in ("high", "medium", "low"):
-        conf = conf_raw
-    stored = cov.get("test_question_budget")
-    stored_budget = int(stored) if stored is not None else None
+    aspects = _list_or_none(cov.get("aspects"))
+    units = pick(bool(aspects), lambda: units_from_aspect_dicts(aspects), lambda: None)
+    conf = _budget_confidence(cov.get("budget_confidence"))
+    stored_budget = _int_or_none(cov.get("test_question_budget"))
     return resolve_test_question_budget(
         non_content=bool(cov.get("non_content")),
         stored_test_budget=stored_budget,
@@ -438,23 +611,19 @@ def get_question_budget(doc: Document, page: int, *, mode: Mode | None = None) -
     from app.services.newspaper import is_newspaper_document
 
     cov = get_page_coverage(doc, page)
-    serve_mode = mode if mode is not None else serve_budget_mode(doc)
+    serve_mode = pick(mode is not None, lambda: mode, lambda: serve_budget_mode(doc))
     newspaper = is_newspaper_document(doc)
-    persisted_mode = parse_budget_mode(
-        cov.get("budget_mode") if isinstance(cov.get("budget_mode"), str) else None
-    )
-    aspects = cov.get("aspects") if isinstance(cov.get("aspects"), list) else None
-    units = units_from_aspect_dicts(aspects) if aspects else None
-    conf_raw = cov.get("budget_confidence")
-    conf: Literal["high", "medium", "low"] | None = None
-    if conf_raw in ("high", "medium", "low"):
-        conf = conf_raw
-    stored = cov.get("question_budget")
-    stored_budget = int(stored) if stored is not None else None
+    persisted_mode = parse_budget_mode(_str_or_none(cov.get("budget_mode")))
+    aspects = _list_or_none(cov.get("aspects"))
+    units = pick(bool(aspects), lambda: units_from_aspect_dicts(aspects), lambda: None)
+    conf = _budget_confidence(cov.get("budget_confidence"))
+    stored_budget = _int_or_none(cov.get("question_budget"))
     non_content = bool(cov.get("non_content"))
-    test_n = 0
-    if not non_content and newspaper and serve_mode == "test":
-        test_n = get_test_question_budget(doc, page)
+    test_n = pick(
+        not non_content and newspaper and serve_mode == "test",
+        lambda: get_test_question_budget(doc, page),
+        lambda: 0,
+    )
     n = resolve_page_budget(
         non_content=non_content,
         newspaper_test=newspaper and serve_mode == "test",
@@ -465,14 +634,14 @@ def get_question_budget(doc: Document, page: int, *, mode: Mode | None = None) -
         confidence=conf,
         stored_budget=stored_budget,
     )
-    return 0 if n is None else n
+    return choose(n is None, 0, n)
 
 
 def page_budgets_for_document(doc: Document, *, mode: Mode | None = None) -> list[int]:
     """N_page values for selected cookable pages (missing triage → skip)."""
     from app.services.newspaper import is_newspaper_document
 
-    serve_mode = mode if mode is not None else serve_budget_mode(doc)
+    serve_mode = pick(mode is not None, lambda: mode, lambda: serve_budget_mode(doc))
     newspaper = is_newspaper_document(doc)
     pages = selected_page_list(doc)
     progress = get_progress(doc)
@@ -480,47 +649,41 @@ def page_budgets_for_document(doc: Document, *, mode: Mode | None = None) -> lis
     out: list[int] = []
     for page in pages:
         entry = coverage.get(_page_key(page))
-        if not isinstance(entry, dict):
-            continue
-        aspects = entry.get("aspects") if isinstance(entry.get("aspects"), list) else None
-        persisted_mode = parse_budget_mode(
-            entry.get("budget_mode") if isinstance(entry.get("budget_mode"), str) else None
-        )
-        conf_raw = entry.get("budget_confidence")
-        conf: Literal["high", "medium", "low"] | None = None
-        if conf_raw in ("high", "medium", "low"):
-            conf = conf_raw
-        units = units_from_aspect_dicts(aspects) if aspects else None
-        stored = entry.get("question_budget")
-        stored_budget = int(stored) if stored is not None else None
-        non_content = bool(entry.get("non_content"))
-        newspaper_test = newspaper and serve_mode == "test"
-        test_n = 0
-        if newspaper_test and not non_content:
-            test_n = get_test_question_budget(doc, page)
-        n = resolve_page_budget(
-            non_content=non_content,
-            newspaper_test=newspaper_test,
-            newspaper_test_n=test_n,
-            serve_mode=serve_mode,
-            persisted_mode=persisted_mode,
-            units=units,
-            confidence=conf,
-            stored_budget=stored_budget,
-            missing="omit",
-        )
-        if n is None:
-            continue
-        out.append(n)
+
+        def consider(current_page: int = page, row: Any = entry) -> None:
+            aspects = _list_or_none(row.get("aspects"))
+            persisted_mode = parse_budget_mode(_str_or_none(row.get("budget_mode")))
+            conf = _budget_confidence(row.get("budget_confidence"))
+            units = pick(bool(aspects), lambda: units_from_aspect_dicts(aspects), lambda: None)
+            stored_budget = _int_or_none(row.get("question_budget"))
+            non_content = bool(row.get("non_content"))
+            newspaper_test = newspaper and serve_mode == "test"
+            test_n = pick(
+                newspaper_test and not non_content,
+                lambda: get_test_question_budget(doc, current_page),
+                lambda: 0,
+            )
+            n = resolve_page_budget(
+                non_content=non_content,
+                newspaper_test=newspaper_test,
+                newspaper_test_n=test_n,
+                serve_mode=serve_mode,
+                persisted_mode=persisted_mode,
+                units=units,
+                confidence=conf,
+                stored_budget=stored_budget,
+                missing="omit",
+            )
+            pick(n is None, lambda: None, lambda: out.append(n))
+
+        pick(isinstance(entry, dict), consider, lambda: None)
     return out
 
 
 def serve_budget_mode(doc: Document, *, learner_key: str | None = None) -> Mode:
     """Active Learn/Test budget mode for serve + refill (persisted on progress)."""
     progress = get_progress(doc, learner_key=learner_key)
-    return parse_budget_mode(
-        progress.get("budget_serve_mode") if isinstance(progress.get("budget_serve_mode"), str) else None
-    )
+    return parse_budget_mode(_str_or_none(progress.get("budget_serve_mode")))
 
 
 def set_serve_budget_mode(
@@ -528,12 +691,16 @@ def set_serve_budget_mode(
 ) -> Mode:
     """Remember serve mode so grade/refill paths match learn-queue ?mode=."""
     resolved = parse_budget_mode(mode)
-    if serve_budget_mode(doc, learner_key=learner_key) == resolved:
-        return resolved
-    save_progress(db, doc, {"budget_serve_mode": resolved}, learner_key=learner_key)
-    db.commit()
-    db.refresh(doc)
-    return resolved
+    return pick(
+        serve_budget_mode(doc, learner_key=learner_key) == resolved,
+        lambda: resolved,
+        lambda: (
+            save_progress(db, doc, {"budget_serve_mode": resolved}, learner_key=learner_key),
+            db.commit(),
+            db.refresh(doc),
+            resolved,
+        )[-1],
+    )
 
 
 def effective_question_budget(
@@ -575,17 +742,23 @@ def page_assertion_ids(
     from_facets = page_assertion_ids_from_facets(
         db, document_id, page, serve_mode=serve_mode
     )
-    if from_facets is not None:
-        return from_facets
-    mode_filter = ""
-    params: dict[str, Any] = {"artifact_id": str(document_id), "page": page}
-    if serve_mode is not None:
-        mode_filter = f"AND {_SERVE_MODE_SQL} = :serve_mode"
-        params["serve_mode"] = serve_mode
-    return list(
-        db.execute(
-            text(
-                f"""
+
+    def from_jsonb() -> list[str]:
+        mode_filter = pick(
+            serve_mode is not None,
+            lambda: f"AND {_SERVE_MODE_SQL} = :serve_mode",
+            lambda: "",
+        )
+        params: dict[str, Any] = {"artifact_id": str(document_id), "page": page}
+        pick(
+            serve_mode is not None,
+            lambda: params.__setitem__("serve_mode", serve_mode),
+            lambda: None,
+        )
+        return list(
+            db.execute(
+                text(
+                    f"""
                 SELECT id::text FROM intel.assertion
                 WHERE payload->>'artifact_id' = :artifact_id
                   AND status = 'active'
@@ -593,10 +766,14 @@ def page_assertion_ids(
                   {mode_filter}
                 ORDER BY (payload->>'sequence')::int ASC
                 """
-            ),
-            params,
-        ).scalars().all()
-    )
+                ),
+                params,
+            )
+            .scalars()
+            .all()
+        )
+
+    return pick(from_facets is not None, lambda: from_facets, from_jsonb)
 
 
 def edition_assertion_ids(
@@ -618,10 +795,12 @@ def newspaper_learn_pool_complete(
 ) -> bool:
     """True when every learn-pool MCQ in the edition has been answered."""
     learn_ids = edition_assertion_ids(db, document_id, doc, serve_mode="learn")
-    if not learn_ids:
-        return False
     answered = set(mode_answered_ids(progress, "learn"))
-    return all(row_id in answered for row_id in learn_ids)
+    return pick(
+        not learn_ids,
+        lambda: False,
+        lambda: all(row_id in answered for row_id in learn_ids),
+    )
 
 
 def assertion_page_number(db: Session, assertion_id: str) -> int | None:
@@ -634,7 +813,7 @@ def assertion_page_number(db: Session, assertion_id: str) -> int | None:
         ),
         {"id": assertion_id},
     ).scalar()
-    return int(row) if row is not None else None
+    return pick(row is not None, lambda: int(row), lambda: None)
 
 
 def count_answered_on_page(
@@ -643,22 +822,24 @@ def count_answered_on_page(
     page: int,
     answered_ids: list[str],
 ) -> int:
-    if not answered_ids:
-        return 0
-    return int(
-        db.execute(
-            text(
-                """
+    return pick(
+        not answered_ids,
+        lambda: 0,
+        lambda: int(
+            db.execute(
+                text(
+                    """
                 SELECT COUNT(*)::int FROM intel.assertion
                 WHERE payload->>'artifact_id' = :artifact_id
                   AND status = 'active'
                   AND (payload->>'page_number')::int = :page
                   AND id::text = ANY(:answered)
                 """
-            ),
-            {"artifact_id": str(document_id), "page": page, "answered": answered_ids},
-        ).scalar()
-        or 0
+                ),
+                {"artifact_id": str(document_id), "page": page, "answered": answered_ids},
+            ).scalar()
+            or 0
+        ),
     )
 
 
@@ -671,8 +852,12 @@ def _count_available(
 ) -> int:
     page = int(progress.get("current_page") or 1)
     answered = {str(x) for x in progress.get("answered_ids") or []}
-    rows = page_ids if page_ids is not None else page_assertion_ids(db, document_id, page)
-    return sum(1 for row_id in rows if row_id not in answered)
+    rows = pick(
+        page_ids is not None,
+        lambda: page_ids,
+        lambda: page_assertion_ids(db, document_id, page),
+    )
+    return sum(1 for row_id in filter(lambda rid: rid not in answered, rows))
 
 
 def _concept_keys_for_ids(
@@ -687,8 +872,12 @@ def _concept_signals_for_ids(
     db: Session, ids: list[str]
 ) -> tuple[dict[str, str | None], dict[str, str | None]]:
     """Map assertion id -> (primary_concept_key, primary_concept label)."""
-    if not ids:
-        return {}, {}
+    return pick(not ids, lambda: ({}, {}), lambda: _concept_signals_loaded(db, ids))
+
+
+def _concept_signals_loaded(
+    db: Session, ids: list[str]
+) -> tuple[dict[str, str | None], dict[str, str | None]]:
     rows = db.execute(
         text(
             """
@@ -713,8 +902,10 @@ def _difficulty_for_ids(db: Session, ids: list[str]) -> dict[str, float]:
     calibration row yet are simply absent — the difficulty_edge policy treats them
     as neutral and degrades to sequence order when none are calibrated.
     """
-    if not ids:
-        return {}
+    return pick(not ids, lambda: {}, lambda: _difficulty_loaded(db, ids))
+
+
+def _difficulty_loaded(db: Session, ids: list[str]) -> dict[str, float]:
     from app.repositories.intel import concept_id
     from app.services.calibration import DIFFICULTY_PROJECTION_URI
 
@@ -746,8 +937,10 @@ def _exposure_for_ids(db: Session, ids: list[str]) -> dict[str, int]:
     Missing / unseeded measurement vocabulary → empty map (novelty=1.0 for all).
     Never hard-filters candidates; Adaptive Selection only soft-weights.
     """
-    if not ids:
-        return {}
+    return pick(not ids, lambda: {}, lambda: _exposure_loaded(db, ids))
+
+
+def _exposure_loaded(db: Session, ids: list[str]) -> dict[str, int]:
     try:
         from app.repositories.intel import concept_id
         from app.services.answer_signal import ANSWER_CORRECT_METRIC_URI
@@ -786,25 +979,86 @@ def _load_selection_signals(
     from app.services.adaptive_selection import plan_signal_load
 
     plan = plan_signal_load(policy=policy, state=state)
-    concept_by_id: dict[str, str | None] = {}
-    concept_label_by_id: dict[str, str | None] = {}
-    difficulty_by_id: dict[str, float] = {}
-    lineage_by_id: dict[str, str] = {}
-    exposure_by_id: dict[str, int] = {}
-    if plan.load_concepts:
-        concept_by_id, concept_label_by_id = _concept_signals_for_ids(db, candidates)
-    if plan.load_difficulty:
-        difficulty_by_id = _difficulty_for_ids(db, candidates)
-    if plan.load_lineage and state.last_assertion_id:
-        lineage_by_id = _lineage_successors(db, state.last_assertion_id, candidates)
-    if plan.load_exposure:
-        exposure_by_id = _exposure_for_ids(db, candidates)
+    concepts = pick(
+        plan.load_concepts,
+        lambda: _concept_signals_for_ids(db, candidates),
+        lambda: ({}, {}),
+    )
+    difficulty_by_id = pick(
+        plan.load_difficulty,
+        lambda: _difficulty_for_ids(db, candidates),
+        lambda: {},
+    )
+    lineage_by_id = pick(
+        plan.load_lineage and bool(state.last_assertion_id),
+        lambda: _lineage_successors(db, state.last_assertion_id, candidates),
+        lambda: {},
+    )
+    exposure_by_id = pick(
+        plan.load_exposure,
+        lambda: _exposure_for_ids(db, candidates),
+        lambda: {},
+    )
     return (
+        concepts[0],
+        concepts[1],
+        difficulty_by_id,
+        lineage_by_id,
+        exposure_by_id,
+    )
+
+
+def _unanswered_candidates(
+    db: Session,
+    document_id: uuid.UUID,
+    progress: dict[str, Any],
+    page_ids: list[str] | None,
+) -> list[str]:
+    page = int(progress.get("current_page") or 1)
+    answered = {str(x) for x in progress.get("answered_ids") or []}
+    rows = pick(
+        page_ids is not None,
+        lambda: page_ids,
+        lambda: page_assertion_ids(db, document_id, page),
+    )
+    return list(filter(lambda rid: rid not in answered, rows))
+
+
+def _select_verdict(
+    db: Session,
+    candidates: list[str],
+    progress: dict[str, Any],
+) -> Any:
+    from app.config import get_settings
+    from app.services.adaptive_selection import (
+        build_learner_state,
+        normalize_policy,
+        select_next,
+    )
+
+    policy = normalize_policy(
+        str(progress.get("selection_policy") or "").strip().lower()
+        or (get_settings().selection_policy or "sequence")
+    )
+    serve_mode = parse_budget_mode(_str_or_none(progress.get("budget_serve_mode")))
+    state = build_learner_state(progress)
+    (
         concept_by_id,
         concept_label_by_id,
         difficulty_by_id,
         lineage_by_id,
         exposure_by_id,
+    ) = _load_selection_signals(db, candidates, policy=policy, state=state)
+    return select_next(
+        candidates,
+        state,
+        policy=policy,
+        mode=serve_mode,  # type: ignore[arg-type]
+        concept_by_id=concept_by_id,
+        concept_label_by_id=concept_label_by_id,
+        difficulty_by_id=difficulty_by_id,
+        lineage_by_id=lineage_by_id,
+        exposure_by_id=exposure_by_id,
     )
 
 
@@ -822,57 +1076,13 @@ def select_next_assertion(
     unanswered id. Adaptive policies score the bank; all degrade safely to sequence.
     Orchestration loads signals; focus / mastery / spaced live in ``select_next``.
     """
-    page = int(progress.get("current_page") or 1)
-    answered = {str(x) for x in progress.get("answered_ids") or []}
-    rows = page_ids if page_ids is not None else page_assertion_ids(db, document_id, page)
-    candidates = [rid for rid in rows if rid not in answered]
-    if not candidates:
-        return None
-
-    from app.config import get_settings
-    from app.services.adaptive_selection import (
-        build_learner_state,
-        normalize_policy,
-        select_next,
+    del doc
+    candidates = _unanswered_candidates(db, document_id, progress, page_ids)
+    return pick(
+        not candidates,
+        lambda: None,
+        lambda: _select_verdict(db, candidates, progress).assertion_id,
     )
-
-    # Per-document override (the learner's Adaptive/Classic choice) wins; otherwise
-    # fall back to the global default policy.
-    policy = normalize_policy(
-        str(progress.get("selection_policy") or "").strip().lower()
-        or (get_settings().selection_policy or "sequence")
-    )
-    serve_mode = parse_budget_mode(
-        progress.get("budget_serve_mode") if isinstance(progress.get("budget_serve_mode"), str) else None
-    )
-    state = build_learner_state(progress)
-
-    difficulty_by_id: dict[str, float] = {}
-    lineage_by_id: dict[str, str] = {}
-    concept_by_id: dict[str, str | None] = {}
-    concept_label_by_id: dict[str, str | None] = {}
-    exposure_by_id: dict[str, int] = {}
-
-    (
-        concept_by_id,
-        concept_label_by_id,
-        difficulty_by_id,
-        lineage_by_id,
-        exposure_by_id,
-    ) = _load_selection_signals(db, candidates, policy=policy, state=state)
-
-    verdict = select_next(
-        candidates,
-        state,
-        policy=policy,
-        mode=serve_mode,  # type: ignore[arg-type]
-        concept_by_id=concept_by_id,
-        concept_label_by_id=concept_label_by_id,
-        difficulty_by_id=difficulty_by_id,
-        lineage_by_id=lineage_by_id,
-        exposure_by_id=exposure_by_id,
-    )
-    return verdict.assertion_id
 
 
 def selection_reason_for(
@@ -889,57 +1099,18 @@ def selection_reason_for(
     *why* this card came up (focus concept, spaced revisit, mastery reinforce,
     new page, or plain sequence order). Returns a stable, short label string.
     """
-    page = int(progress.get("current_page") or 1)
-    answered = {str(x) for x in progress.get("answered_ids") or []}
-    rows = page_ids if page_ids is not None else page_assertion_ids(db, document_id, page)
-    candidates = [rid for rid in rows if rid not in answered]
-    if not candidates:
-        return None
+    del doc
+    candidates = _unanswered_candidates(db, document_id, progress, page_ids)
 
-    from app.config import get_settings
-    from app.services.adaptive_selection import (
-        build_learner_state,
-        normalize_policy,
-        select_next,
-    )
+    def reason() -> str | None:
+        verdict = _select_verdict(db, candidates, progress)
+        return pick(
+            not verdict.assertion_id,
+            lambda: None,
+            lambda: human_selection_reason(verdict.rationale, None),
+        )
 
-    policy = normalize_policy(
-        str(progress.get("selection_policy") or "").strip().lower()
-        or (get_settings().selection_policy or "sequence")
-    )
-    serve_mode = parse_budget_mode(
-        progress.get("budget_serve_mode") if isinstance(progress.get("budget_serve_mode"), str) else None
-    )
-    state = build_learner_state(progress)
-
-    concept_by_id: dict[str, str | None] = {}
-    concept_label_by_id: dict[str, str | None] = {}
-    difficulty_by_id: dict[str, float] = {}
-    lineage_by_id: dict[str, str] = {}
-    exposure_by_id: dict[str, int] = {}
-
-    (
-        concept_by_id,
-        concept_label_by_id,
-        difficulty_by_id,
-        lineage_by_id,
-        exposure_by_id,
-    ) = _load_selection_signals(db, candidates, policy=policy, state=state)
-
-    verdict = select_next(
-        candidates,
-        state,
-        policy=policy,
-        mode=serve_mode,  # type: ignore[arg-type]
-        concept_by_id=concept_by_id,
-        concept_label_by_id=concept_label_by_id,
-        difficulty_by_id=difficulty_by_id,
-        lineage_by_id=lineage_by_id,
-        exposure_by_id=exposure_by_id,
-    )
-    if not verdict.assertion_id:
-        return None
-    return human_selection_reason(verdict.rationale, state)
+    return pick(not candidates, lambda: None, reason)
 
 
 def human_selection_reason(rationale: str, state: object | None = None) -> str:
@@ -954,17 +1125,28 @@ def _candidates_matching_concept_label(
     db: Session, candidate_ids: list[str], focus: str
 ) -> list[str]:
     """Keep candidates whose primary_concept / key matches the Progress focus label."""
-    if not candidate_ids or not focus:
-        return []
+    return pick(
+        not candidate_ids or not focus,
+        lambda: [],
+        lambda: _filter_focus_candidates(db, candidate_ids, focus),
+    )
+
+
+def _filter_focus_candidates(
+    db: Session, candidate_ids: list[str], focus: str
+) -> list[str]:
     keys, labels = _concept_signals_for_ids(db, candidate_ids)
     from app.services.adaptive_selection import concept_text_matches
 
     needle = focus.strip()
-    return [
-        cid
-        for cid in candidate_ids
-        if concept_text_matches(needle, key=keys.get(cid), label=labels.get(cid))
-    ]
+    return list(
+        filter(
+            lambda cid: concept_text_matches(
+                needle, key=keys.get(cid), label=labels.get(cid)
+            ),
+            candidate_ids,
+        )
+    )
 
 
 def set_focus_concept(
@@ -983,8 +1165,12 @@ def _lineage_successors(
     current candidate, so the selector can re-approach a missed idea or advance after
     a hit. Empty (degrade to band/sequence) when no such edge exists.
     """
-    if not candidate_ids:
-        return {}
+    return pick(not candidate_ids, lambda: {}, lambda: _lineage_rows(db, from_assertion_id, candidate_ids))
+
+
+def _lineage_rows(
+    db: Session, from_assertion_id: str, candidate_ids: list[str]
+) -> dict[str, str]:
     rows = db.execute(
         text(
             """
@@ -1010,27 +1196,32 @@ def next_assertion_id(
     page_ids: list[str] | None = None,
 ) -> str | None:
     doc = db.get(Document, document_id)
-    if doc is None:
-        return None
-    return select_next_assertion(db, document_id, doc, progress, page_ids=page_ids)
+    return pick(
+        evaluate_presence(doc).action == "missing",
+        lambda: None,
+        lambda: select_next_assertion(db, document_id, doc, progress, page_ids=page_ids),
+    )
 
 
 def selected_page_list(doc: Document) -> list[int]:
     """Ordered study pages — explicit list or contiguous from/to range."""
     selected = (doc.meta or {}).get("selected_range") or {}
     pages = selected.get("pages")
-    if isinstance(pages, list) and pages:
-        return sorted({int(p) for p in pages if int(p) >= 1})
-    lo = int(selected.get("from") or 1)
-    hi = int(selected.get("to") or lo)
-    return list(range(lo, hi + 1))
+
+    def from_list() -> list[int]:
+        return sorted({int(p) for p in filter(lambda p: int(p) >= 1, pages)})
+
+    def from_range() -> list[int]:
+        lo = int(selected.get("from") or 1)
+        hi = int(selected.get("to") or lo)
+        return list(range(lo, hi + 1))
+
+    return pick(isinstance(pages, list) and bool(pages), from_list, from_range)
 
 
 def page_range_bounds(doc: Document) -> tuple[int, int]:
     pages = selected_page_list(doc)
-    if not pages:
-        return 1, 1
-    return pages[0], pages[-1]
+    return pick(not pages, lambda: (1, 1), lambda: (pages[0], pages[-1]))
 
 
 def is_page_complete(
@@ -1044,24 +1235,37 @@ def is_page_complete(
 
     page = int(progress.get("current_page") or 1)
     non_content = is_non_content_page(doc, page)
-    has_next = False
-    all_served = False
-    has_active = False
-    generated = 0
-    budget = 0
-    coverage_done = False
-    if not non_content:
+
+    def content_signals() -> tuple[bool, bool, bool, int, int, bool]:
         has_next = bool(next_assertion_id(db, doc.id, progress, page_ids=page_ids))
-        rows = page_ids if page_ids is not None else page_assertion_ids(db, doc.id, page)
+        rows = pick(
+            page_ids is not None,
+            lambda: page_ids,
+            lambda: page_assertion_ids(db, doc.id, page),
+        )
         answered = {str(x) for x in progress.get("answered_ids") or []}
         all_served = bool(rows) and all(rid in answered for rid in rows)
-        if all_served:
-            from app.services.question_pool_jobs import _has_active_generate_job_for_page
 
-            has_active = bool(_has_active_generate_job_for_page(db, doc.id, page))
+        def active_job() -> bool:
+            from app.services import question_pool_jobs
+
+            return bool(question_pool_jobs._has_active_generate_job_for_page(db, doc.id, page))
+
+        has_active = pick(all_served, active_job, lambda: False)
         budget = get_question_budget(doc, page)
-        generated = len(page_ids) if page_ids is not None else count_assertions_on_page(db, doc.id, page)
+        generated = pick(
+            page_ids is not None,
+            lambda: len(page_ids),
+            lambda: count_assertions_on_page(db, doc.id, page),
+        )
         coverage_done = is_coverage_complete(doc, page)
+        return has_next, all_served, has_active, generated, budget, coverage_done
+
+    has_next, all_served, has_active, generated, budget, coverage_done = pick(
+        not non_content,
+        content_signals,
+        lambda: (False, False, False, 0, 0, False),
+    )
     verdict = evaluate_page_complete(
         non_content=non_content,
         has_next_card=has_next,
@@ -1094,32 +1298,42 @@ def build_learn_queue_state(
         plan_session,
     )
 
-    serve_mode = mode if mode is not None else serve_budget_mode(doc, learner_key=learner_key)
+    serve_mode = pick(
+        mode is not None,
+        lambda: mode,
+        lambda: serve_budget_mode(doc, learner_key=learner_key),
+    )
     newspaper = is_newspaper_document(doc)
     page = int(progress.get("current_page") or 1)
     study_pages = selected_page_list(doc)
     page_from, page_to = page_range_bounds(doc)
     answered_ids = [str(x) for x in progress.get("answered_ids") or []]
     answered_set = set(answered_ids)
-    pool_mode: Mode | None = serve_mode if newspaper else None
+    pool_mode: Mode | None = choose(newspaper, serve_mode, None)
     scope = plan_newspaper_serve_scope(newspaper=newspaper)
-    if scope.stats_from_edition:
-        page_ids = edition_assertion_ids(db, document_id, doc, serve_mode=pool_mode)
-        learn_pool_ids = edition_assertion_ids(db, document_id, doc, serve_mode="learn")
-        test_pool_ids = edition_assertion_ids(db, document_id, doc, serve_mode="test")
-        selection_ids = page_assertion_ids(db, document_id, page, serve_mode=pool_mode)
-    else:
-        page_ids = page_assertion_ids(db, document_id, page)
-        selection_ids = page_ids
-        learn_pool_ids = []
-        test_pool_ids = []
+
+    def edition_ids() -> tuple[list[str], list[str], list[str], list[str]]:
+        return (
+            edition_assertion_ids(db, document_id, doc, serve_mode=pool_mode),
+            edition_assertion_ids(db, document_id, doc, serve_mode="learn"),
+            edition_assertion_ids(db, document_id, doc, serve_mode="test"),
+            page_assertion_ids(db, document_id, page, serve_mode=pool_mode),
+        )
+
+    def page_only() -> tuple[list[str], list[str], list[str], list[str]]:
+        ids = page_assertion_ids(db, document_id, page)
+        return ids, [], [], ids
+
+    page_ids, learn_pool_ids, test_pool_ids, selection_ids = pick(
+        scope.stats_from_edition, edition_ids, page_only
+    )
     questions_generated = len(page_ids)
-    questions_answered = sum(1 for row_id in page_ids if row_id in answered_set)
-    edition_page_question_total: int | None = None
-    edition_page_questions_answered: int | None = None
-    current_page_question_number: int | None = None
+    questions_answered = sum(
+        1 for row_id in filter(lambda rid: rid in answered_set, page_ids)
+    )
     cov = get_page_coverage(doc, page)
-    if scope.edition_budget:
+
+    def edition_budget_path() -> tuple[int, bool, bool]:
         plan_budget = plan_newspaper_display_budget(generated=questions_generated)
         learn_answered_set = set(mode_answered_ids(progress, "learn"))
         learn_complete = evaluate_newspaper_learn_complete(
@@ -1129,11 +1343,13 @@ def build_learn_queue_state(
             ),
             generation_pending=bool(progress.get("generation_pending")),
         )
-        test_pool_ready = len(test_pool_ids) > 0
-    else:
-        learn_complete = False
-        test_pool_ready = False
-        plan_budget = get_question_budget(doc, page, mode=serve_mode)
+        return plan_budget, learn_complete, len(test_pool_ids) > 0
+
+    plan_budget, learn_complete, test_pool_ready = pick(
+        scope.edition_budget,
+        edition_budget_path,
+        lambda: (get_question_budget(doc, page, mode=serve_mode), False, False),
+    )
     # FE compat: generation_cap used to be a generate-ahead pace; now equals plan.
     generation_cap = plan_budget
     doc_plan = plan_document_budget(page_budgets_for_document(doc, mode=serve_mode), mode=serve_mode)
@@ -1148,23 +1364,33 @@ def build_learn_queue_state(
     ).should_break
     # Loop's choosing step (policy-driven; defaults to sequence order).
     next_id = select_next_assertion(db, document_id, doc, progress, page_ids=selection_ids)
-    selection_reason = (
-        selection_reason_for(db, document_id, doc, progress, page_ids=selection_ids)
-        if next_id
-        else None
+    selection_reason = pick(
+        bool(next_id),
+        lambda: selection_reason_for(
+            db, document_id, doc, progress, page_ids=selection_ids
+        ),
+        lambda: None,
     )
-    if scope.stats_from_edition:
-        edition_page_question_total = len(selection_ids)
-        edition_page_questions_answered = sum(
-            1 for row_id in selection_ids if row_id in answered_set
+
+    def edition_stats() -> tuple[int, int, int]:
+        total = len(selection_ids)
+        answered = sum(
+            1 for row_id in filter(lambda rid: rid in answered_set, selection_ids)
         )
-        current_page_question_number = (
-            edition_page_questions_answered + 1
-            if next_id and edition_page_question_total > 0
-            else edition_page_questions_answered
+        number = pick(
+            bool(next_id) and total > 0,
+            lambda: answered + 1,
+            lambda: answered,
         )
+        return total, answered, number
+
+    edition_page_question_total, edition_page_questions_answered, current_page_question_number = pick(
+        scope.stats_from_edition,
+        edition_stats,
+        lambda: (None, None, None),
+    )
     coverage_complete = is_coverage_complete(doc, page)
-    last_study_page = study_pages[-1] if study_pages else page_to
+    last_study_page = pick(bool(study_pages), lambda: study_pages[-1], lambda: page_to)
     page_complete = is_page_complete(db, doc, progress, page_ids=selection_ids)
     document_complete = evaluate_document_complete(
         page_complete=page_complete,
@@ -1188,8 +1414,10 @@ def build_learn_queue_state(
         questions_generated=questions_generated,
         questions_answered=questions_answered,
         generation_pending=bool(progress.get("generation_pending")),
-        range_has_no_questions=(
-            _study_range_has_no_questions(db, document_id, doc) if maybe_empty else False
+        range_has_no_questions=pick(
+            maybe_empty,
+            lambda: _study_range_has_no_questions(db, document_id, doc),
+            lambda: False,
         ),
     )
 
@@ -1201,28 +1429,30 @@ def build_learn_queue_state(
             newspaper=newspaper,
             current_page=page,
             study_pages=study_pages,
-            stored_window=None if newspaper else get_rag_window(doc),
+            stored_window=pick(newspaper, lambda: None, lambda: get_rag_window(doc)),
         )
     )
     rag_ready = is_rag_window_ready(db, document_id, doc)
     non_content = is_non_content_page(doc, page)
-    triage_complete = bool(cov)
-    if newspaper:
+
+    def newspaper_triage() -> bool:
         from app.services.session_design import evaluate_newspaper_triage_complete
 
-        triage_complete = evaluate_newspaper_triage_complete(
+        return evaluate_newspaper_triage_complete(
             has_any_coverage=any(get_page_coverage(doc, p) for p in study_pages),
             questions_generated=questions_generated,
         )
 
-    # Learn lesson: ready lessons surface to the UI; everything else (missing /
-    # generating / failed) collapses to null so the frontend falls straight
-    # through to the MCQs. Loaded once per queue tick — a single indexed row read.
-    page_lesson = None
-    if serve_mode == "learn" and not non_content:
+    triage_complete = pick(newspaper, newspaper_triage, lambda: bool(cov))
+
+    def load_lesson() -> Any:
         from app.services.page_lessons import get_lesson
 
-        page_lesson = get_lesson(db, document_id, page)
+        return get_lesson(db, document_id, page)
+
+    page_lesson = pick(
+        serve_mode == "learn" and not non_content, load_lesson, lambda: None
+    )
 
     return {
         "current_page": page,
@@ -1230,7 +1460,9 @@ def build_learn_queue_state(
         "page_to": page_to,
         "current_assertion_id": next_id,
         "selection_reason": selection_reason,
-        "question_number": questions_answered + 1 if next_id else questions_answered,
+        "question_number": pick(
+            bool(next_id), lambda: questions_answered + 1, lambda: questions_answered
+        ),
         # Page cook / UI Y = plan_budget (N_page). session_soft is serve pacing only.
         "question_budget": plan_budget,
         "plan_budget": plan_budget,
@@ -1256,12 +1488,14 @@ def build_learn_queue_state(
         "non_content": non_content,
         "no_questions_reason": no_questions_reason,
         "document_complete": document_complete,
-        "learn_complete": learn_complete if newspaper else None,
-        "test_pool_ready": test_pool_ready if newspaper else None,
+        "learn_complete": choose(newspaper, learn_complete, None),
+        "test_pool_ready": choose(newspaper, test_pool_ready, None),
         "page_lesson": page_lesson,
         "prompt_reselect_pages": bool(progress.get("prompt_reselect_pages")),
         "prompt_reselect_reason": progress.get("prompt_reselect_reason"),
-        "pool_available": sum(1 for row_id in selection_ids if row_id not in answered_set),
+        "pool_available": sum(
+            1 for row_id in filter(lambda rid: rid not in answered_set, selection_ids)
+        ),
         "generated_on_page": questions_generated,
         "answered_on_page": questions_answered,
         "max_per_page": plan_budget,
@@ -1269,7 +1503,7 @@ def build_learn_queue_state(
         "rag_window_ready": rag_ready,
         "study_mode": get_study_mode(doc, learner_key=learner_key),
         "edition_pool": newspaper,
-        "edition_question_total": questions_generated if newspaper else None,
+        "edition_question_total": choose(newspaper, questions_generated, None),
         "edition_page_question_total": edition_page_question_total,
         "edition_page_questions_answered": edition_page_questions_answered,
         "current_page_question_number": current_page_question_number,
@@ -1281,20 +1515,22 @@ def _study_range_has_no_questions(
 ) -> bool:
     """True when not a single active question exists across the selected pages."""
     pages = selected_page_list(doc)
-    if not pages:
-        return False
-    count = db.execute(
-        text(
-            """
+
+    def count_range() -> bool:
+        count = db.execute(
+            text(
+                """
             SELECT COUNT(*)::int FROM intel.assertion
             WHERE payload->>'artifact_id' = :aid
               AND status = 'active'
               AND (payload->>'page_number')::int = ANY(:pages)
             """
-        ),
-        {"aid": str(document_id), "pages": [int(p) for p in pages]},
-    ).scalar()
-    return int(count or 0) == 0
+            ),
+            {"aid": str(document_id), "pages": [int(p) for p in pages]},
+        ).scalar()
+        return int(count or 0) == 0
+
+    return pick(not pages, lambda: False, count_range)
 
 
 # --- Job orchestration lives in question_pool_jobs (keeps this module focused on

@@ -32,6 +32,8 @@ from typing import Any
 
 from litellm import Router
 
+from app.engine_runtime import choose, pick
+
 logger = logging.getLogger(__name__)
 
 ROUTER_ENABLED = os.getenv("ZIVO_ROUTER_ENABLED", "1") not in {"0", "false", "False"}
@@ -66,38 +68,33 @@ def router_model_list(models: list[Any]) -> list[dict]:
 
 def build_router(models: list[Any]) -> Router:
     """Construct a Router over the given pool with cooldown + retry policy."""
-    model_list = router_model_list(models)
-    if not model_list:
+    def _raise_empty() -> Router:
         raise ValueError("No chat models in pool for router")
-    return Router(
-        model_list=model_list,
-        # Cooldown: after ALLOWED_FAILS failures, skip a model for this long.
-        cooldown_time=COOLDOWN_SECONDS,
-        allowed_fails=ALLOWED_FAILS,
-        # Transient failures retried with backoff before failing over.
-        retry_policy={
-            "RateLimitErrorRetries": RATE_LIMIT_RETRIES,
-            "TimeoutErrorRetries": TIMEOUT_RETRIES,
-            "ServiceUnavailableErrorRetries": 2,
-            "InternalServerErrorRetries": 1,
-        },
-        num_retries=0,  # Router-level retry policy above governs; avoid double-retry.
-        # Fallbacks = remaining models in the list (failover chain). litellm matches
-        # the dict KEY against the requested model group, so it must be the primary
-        # model's name — a literal like "backup" matches nothing and silently
-        # disables Router-level failover.
-        fallbacks=(
-            [{model_list[0]["model_name"]: [m["model_name"] for m in model_list[1:]]}]
-            if len(model_list) > 1
-            else []
-        ),
-        # simple-shuffle is the recommended production default: zero per-request
-        # overhead (usage-based-routing adds Redis latency on every call).
-        routing_strategy="simple-shuffle",
-        # Pre-flight context-window check: skip a deployment whose context is too
-        # small for the message before spending a request on it.
-        enable_pre_call_checks=True,
-    )
+
+    model_list = router_model_list(models)
+
+    def _build() -> Router:
+        return Router(
+            model_list=model_list,
+            cooldown_time=COOLDOWN_SECONDS,
+            allowed_fails=ALLOWED_FAILS,
+            retry_policy={
+                "RateLimitErrorRetries": RATE_LIMIT_RETRIES,
+                "TimeoutErrorRetries": TIMEOUT_RETRIES,
+                "ServiceUnavailableErrorRetries": 2,
+                "InternalServerErrorRetries": 1,
+            },
+            num_retries=0,
+            fallbacks=choose(
+                len(model_list) > 1,
+                [{model_list[0]["model_name"]: [m["model_name"] for m in model_list[1:]]}],
+                [],
+            ),
+            routing_strategy="simple-shuffle",
+            enable_pre_call_checks=True,
+        )
+
+    return pick(not model_list, _raise_empty, _build)
 
 
 def router_enabled() -> bool:

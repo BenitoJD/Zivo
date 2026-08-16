@@ -15,6 +15,7 @@ import pytest
 from sqlalchemy import select
 
 from app.db import SessionLocal
+from app.engine_runtime import pick
 from app.eta.executions import (
     cancel_execution,
     get_execution,
@@ -65,10 +66,12 @@ def db():
             select(EtaExecution.id).where(EtaExecution.name.like("itest-%"))
         ).scalars().all()
     )
-    if test_exec_ids:
+    def _wipe_execs() -> None:
         session.execute(Job.__table__.delete().where(Job.execution_id.in_(test_exec_ids)))
         session.execute(EtaExecution.__table__.delete().where(EtaExecution.id.in_(test_exec_ids)))
         session.commit()
+
+    pick(bool(test_exec_ids), _wipe_execs, lambda: None)
     session.close()
 
 

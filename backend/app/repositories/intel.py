@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from app.engine_runtime import pick
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -17,16 +18,21 @@ _source_id_store: dict[str, uuid.UUID] = {}
 
 def _concept_id(db: Session, uri: str) -> uuid.UUID:
     cached = _concept_id_store.get(uri)
-    if cached is not None:
-        return cached
-    row = db.execute(
-        text("SELECT id FROM intel.concept WHERE uri = :uri"),
-        {"uri": uri},
-    ).first()
-    if not row:
-        raise ValueError(f"Missing concept seed: {uri}")
-    _concept_id_store[uri] = row[0]
-    return row[0]
+
+    def _load() -> uuid.UUID:
+        row = db.execute(
+            text("SELECT id FROM intel.concept WHERE uri = :uri"),
+            {"uri": uri},
+        ).first()
+
+        def _missing() -> None:
+            raise ValueError(f"Missing concept seed: {uri}")
+
+        pick(not row, _missing, lambda: None)
+        _concept_id_store[uri] = row[0]
+        return row[0]
+
+    return pick(cached is not None, lambda: cached, _load)
 
 
 def concept_id(db: Session, uri: str) -> uuid.UUID:
@@ -40,16 +46,21 @@ def concept_id(db: Session, uri: str) -> uuid.UUID:
 
 def _source_id(db: Session, slug: str) -> uuid.UUID:
     cached = _source_id_store.get(slug)
-    if cached is not None:
-        return cached
-    row = db.execute(
-        text("SELECT id FROM intel.source WHERE slug = :slug"),
-        {"slug": slug},
-    ).first()
-    if not row:
-        raise ValueError(f"Missing source seed: {slug}")
-    _source_id_store[slug] = row[0]
-    return row[0]
+
+    def _load() -> uuid.UUID:
+        row = db.execute(
+            text("SELECT id FROM intel.source WHERE slug = :slug"),
+            {"slug": slug},
+        ).first()
+
+        def _missing() -> None:
+            raise ValueError(f"Missing source seed: {slug}")
+
+        pick(not row, _missing, lambda: None)
+        _source_id_store[slug] = row[0]
+        return row[0]
+
+    return pick(cached is not None, lambda: cached, _load)
 
 
 def create_activity(
@@ -61,7 +72,7 @@ def create_activity(
     stats: dict[str, Any] | None = None,
 ) -> uuid.UUID:
     activity_id = uuid.uuid4()
-    source_id = _source_id(db, source_slug) if source_slug else None
+    source_id = pick(bool(source_slug), lambda: _source_id(db, source_slug), lambda: None)
     db.execute(
         text(
             """
@@ -91,23 +102,36 @@ def update_activity(
 ) -> None:
     parts = []
     params: dict[str, Any] = {"id": activity_id}
-    if status:
-        parts.append("status = :status")
-        params["status"] = status
-    if stats is not None:
-        parts.append("stats = stats || CAST(:stats AS jsonb)")
-        params["stats"] = json.dumps(stats)
-    if error_summary is not None:
-        parts.append("error_summary = :error")
-        params["error"] = error_summary
-    if finished:
-        parts.append("finished_at = :finished_at")
-        params["finished_at"] = datetime.now(timezone.utc)
-    if not parts:
-        return
-    db.execute(
-        text(f"UPDATE intel.activity SET {', '.join(parts)} WHERE id = :id"),
-        params,
+    pick(
+        bool(status),
+        lambda: (parts.append("status = :status"), params.__setitem__("status", status)),
+        lambda: None,
+    )
+    pick(
+        stats is not None,
+        lambda: (parts.append("stats = stats || CAST(:stats AS jsonb)"), params.__setitem__("stats", json.dumps(stats))),
+        lambda: None,
+    )
+    pick(
+        error_summary is not None,
+        lambda: (parts.append("error_summary = :error"), params.__setitem__("error", error_summary)),
+        lambda: None,
+    )
+    pick(
+        finished,
+        lambda: (
+            parts.append("finished_at = :finished_at"),
+            params.__setitem__("finished_at", datetime.now(timezone.utc)),
+        ),
+        lambda: None,
+    )
+    pick(
+        not parts,
+        lambda: None,
+        lambda: db.execute(
+            text(f"UPDATE intel.activity SET {', '.join(parts)} WHERE id = :id"),
+            params,
+        ),
     )
 
 
@@ -121,7 +145,7 @@ def get_activity(db: Session, activity_id: uuid.UUID) -> dict[str, Any] | None:
         ),
         {"id": activity_id},
     ).mappings().first()
-    return dict(row) if row else None
+    return pick(bool(row), lambda: dict(row), lambda: None)
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +155,35 @@ def get_activity(db: Session, activity_id: uuid.UUID) -> dict[str, Any] | None:
 _CONCEPT_TYPE_URI = "/vocab/entity/concept"
 _TESTS_ROLE_URI = "/vocab/role/tests"
 _SUBCLASS_OF_URI = "/vocab/relation/subclass_of"
+
+
+def _public_doc_filter(
+    public_only: bool,
+    owner_account_id: uuid.UUID | None,
+    params: dict[str, Any],
+) -> tuple[str, str]:
+    joins = ""
+    where = ""
+
+    def _apply() -> None:
+        nonlocal joins, where
+        owner_sql = pick(bool(owner_account_id), lambda: " OR d.account_id = :owner_id", lambda: "")
+        joins = "LEFT JOIN qb.documents d ON d.id = CAST(a.payload->>'artifact_id' AS uuid)"
+        where = (
+            " AND ("
+            "  d.id IS NULL"
+            "  OR d.account_id IS NULL AND COALESCE(d.meta->>'is_public', d.meta->>'is_demo') IS NOT NULL"
+            + owner_sql
+            + ")"
+        )
+        pick(
+            bool(owner_account_id),
+            lambda: params.__setitem__("owner_id", owner_account_id),
+            lambda: None,
+        )
+
+    pick(public_only, _apply, lambda: None)
+    return joins, where
 
 
 def get_or_create_concept_entity(
@@ -224,71 +277,77 @@ def get_or_create_account_entity(
         text("SELECT entity_id FROM qb.account_entity WHERE account_id = :id"),
         {"id": account_id},
     ).first()
-    if row:
+    def _existing() -> uuid.UUID:
         return row[0]
 
-    canonical_uri = f"qb://account/{account_id}"
-    now = datetime.now(timezone.utc)
-    type_id = _concept_id(db, _PERSON_TYPE_URI)
-    label = (username or str(account_id))[:500]
-    normalized = label.strip().lower()[:500]
+    def _create() -> uuid.UUID:
+        canonical_uri = f"qb://account/{account_id}"
+        now = datetime.now(timezone.utc)
+        type_id = _concept_id(db, _PERSON_TYPE_URI)
+        label = (username or str(account_id))[:500]
+        normalized = label.strip().lower()[:500]
 
-    entity_row = db.execute(
-        text(
-            """
-            INSERT INTO intel.entity (type_concept_id, canonical_uri, status)
-            VALUES (:type_id, :uri, 'active')
-            ON CONFLICT (canonical_uri) DO UPDATE SET canonical_uri = EXCLUDED.canonical_uri
-            RETURNING id
-            """
-        ),
-        {"type_id": type_id, "uri": canonical_uri},
-    ).first()
-    entity_id = entity_row[0]
+        entity_row = db.execute(
+            text(
+                """
+                INSERT INTO intel.entity (type_concept_id, canonical_uri, status)
+                VALUES (:type_id, :uri, 'active')
+                ON CONFLICT (canonical_uri) DO UPDATE SET canonical_uri = EXCLUDED.canonical_uri
+                RETURNING id
+                """
+            ),
+            {"type_id": type_id, "uri": canonical_uri},
+        ).first()
+        entity_id = entity_row[0]
 
-    db.execute(
-        text(
-            """
-            UPDATE intel.entity_label SET valid_to = :now
-            WHERE entity_id = :entity_id AND valid_to IS NULL
-            """
-        ),
-        {"entity_id": entity_id, "now": now},
-    )
-    db.execute(
-        text(
-            """
-            INSERT INTO intel.entity_label
-              (entity_id, label, label_normalized, language, valid_from)
-            VALUES (:entity_id, :label, :normalized, 'en', :now)
-            """
-        ),
-        {
-            "entity_id": entity_id,
-            "label": label,
-            "normalized": normalized,
-            "now": now,
-        },
-    )
+        db.execute(
+            text(
+                """
+                UPDATE intel.entity_label SET valid_to = :now
+                WHERE entity_id = :entity_id AND valid_to IS NULL
+                """
+            ),
+            {"entity_id": entity_id, "now": now},
+        )
+        db.execute(
+            text(
+                """
+                INSERT INTO intel.entity_label
+                  (entity_id, label, label_normalized, language, valid_from)
+                VALUES (:entity_id, :label, :normalized, 'en', :now)
+                """
+            ),
+            {
+                "entity_id": entity_id,
+                "label": label,
+                "normalized": normalized,
+                "now": now,
+            },
+        )
 
-    db.execute(
-        text(
-            """
-            INSERT INTO qb.account_entity (account_id, entity_id)
-            VALUES (:account_id, :entity_id)
-            ON CONFLICT (account_id) DO NOTHING
-            """
-        ),
-        {"account_id": account_id, "entity_id": entity_id},
-    )
+        db.execute(
+            text(
+                """
+                INSERT INTO qb.account_entity (account_id, entity_id)
+                VALUES (:account_id, :entity_id)
+                ON CONFLICT (account_id) DO NOTHING
+                """
+            ),
+            {"account_id": account_id, "entity_id": entity_id},
+        )
 
-    linked = db.execute(
-        text("SELECT entity_id FROM qb.account_entity WHERE account_id = :id"),
-        {"id": account_id},
-    ).first()
-    if not linked:
-        raise RuntimeError(f"account_entity link missing for account {account_id}")
-    return linked[0]
+        linked = db.execute(
+            text("SELECT entity_id FROM qb.account_entity WHERE account_id = :id"),
+            {"id": account_id},
+        ).first()
+
+        def _missing() -> None:
+            raise RuntimeError(f"account_entity link missing for account {account_id}")
+
+        pick(not linked, _missing, lambda: None)
+        return linked[0]
+
+    return pick(bool(row), _existing, _create)
 
 
 def link_assertion_concept(
@@ -367,7 +426,7 @@ def get_concept_entity_by_qid(db: Session, qid: str) -> uuid.UUID | None:
         ),
         {"qid": qid},
     ).first()
-    return row[0] if row else None
+    return pick(bool(row), lambda: row[0], lambda: None)
 
 
 def count_concept_questions(
@@ -391,17 +450,7 @@ def count_concept_questions(
         "entity_id": entity_id,
         "role_id": _concept_id(db, _TESTS_ROLE_URI),
     }
-    if public_only:
-        joins = "LEFT JOIN qb.documents d ON d.id = CAST(a.payload->>'artifact_id' AS uuid)"
-        where = (
-            " AND ("
-            "  d.id IS NULL"  # assertion not tied to a doc (e.g. seed bank)
-            "  OR d.account_id IS NULL AND COALESCE(d.meta->>'is_public', d.meta->>'is_demo') IS NOT NULL"
-            + (" OR d.account_id = :owner_id" if owner_account_id else "")
-            + ")"
-        )
-        if owner_account_id:
-            params["owner_id"] = owner_account_id
+    joins, where = _public_doc_filter(public_only, owner_account_id, params)
     row = db.execute(
         text(
             f"""
@@ -416,7 +465,7 @@ def count_concept_questions(
         ),
         params,
     ).first()
-    return int(row[0]) if row else 0
+    return pick(bool(row), lambda: int(row[0]), lambda: 0)
 
 
 def get_concept_questions(
@@ -440,17 +489,7 @@ def get_concept_questions(
         "limit": limit,
         "offset": offset,
     }
-    if public_only:
-        joins = "LEFT JOIN qb.documents d ON d.id = CAST(a.payload->>'artifact_id' AS uuid)"
-        where = (
-            " AND ("
-            "  d.id IS NULL"
-            "  OR d.account_id IS NULL AND COALESCE(d.meta->>'is_public', d.meta->>'is_demo') IS NOT NULL"
-            + (" OR d.account_id = :owner_id" if owner_account_id else "")
-            + ")"
-        )
-        if owner_account_id:
-            params["owner_id"] = owner_account_id
+    joins, where = _public_doc_filter(public_only, owner_account_id, params)
     rows = db.execute(
         text(
             f"""
@@ -479,8 +518,7 @@ def get_concept_relations(
     """Related concepts. direction='parents' (this subclass_of others) or
     'children' (others subclass_of this)."""
     rel_id = _concept_id(db, relation_uri)
-    if direction == "parents":
-        select_sql = """
+    parents_sql = """
             SELECT e.id, e.canonical_uri, l.label,
                    i.value AS qid
             FROM intel.relation r
@@ -498,8 +536,7 @@ def get_concept_relations(
             WHERE r.from_entity_id = :entity_id AND r.type_concept_id = :rel_id
               AND r.valid_to IS NULL
         """
-    else:
-        select_sql = """
+    children_sql = """
             SELECT e.id, e.canonical_uri, l.label,
                    i.value AS qid
             FROM intel.relation r
@@ -517,6 +554,7 @@ def get_concept_relations(
             WHERE r.to_entity_id = :entity_id AND r.type_concept_id = :rel_id
               AND r.valid_to IS NULL
         """
+    select_sql = pick(direction == "parents", lambda: parents_sql, lambda: children_sql)
     rows = db.execute(
         text(select_sql), {"entity_id": entity_id, "rel_id": rel_id}
     ).mappings().all()
@@ -541,4 +579,4 @@ def get_concept_label(db: Session, entity_id: uuid.UUID) -> str | None:
         ),
         {"entity_id": entity_id},
     ).first()
-    return row[0] if row else None
+    return pick(bool(row), lambda: row[0], lambda: None)

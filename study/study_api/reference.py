@@ -8,10 +8,16 @@ import concurrent.futures
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from app.engine_runtime import pick
 from app.services import reference_lookup
+from app.services.http_outcome import evaluate_http_outcome
 from app.services.rate_limit import rate_limit_dependency
 
 router = APIRouter()
+
+
+def _raise_from(cause: BaseException, wrapped: BaseException) -> None:
+    raise wrapped from cause
 
 
 def _run_async(coro):
@@ -21,10 +27,11 @@ def _run_async(coro):
     except RuntimeError:
         in_loop = False
 
-    if in_loop:
+    def _in_loop():
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(asyncio.run, coro).result()
-    return asyncio.run(coro)
+
+    return pick(in_loop, _in_loop, lambda: asyncio.run(coro))
 
 
 class DictionaryOut(BaseModel):
@@ -48,7 +55,10 @@ def dictionary_lookup(
     try:
         entry = _run_async(reference_lookup.lookup_dictionary(word))
     except reference_lookup.ReferenceLookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        _raise_from(
+            exc,
+            HTTPException(status_code=evaluate_http_outcome("missing").status, detail=str(exc)),
+        )
     return DictionaryOut(
         word=entry.word,
         part_of_speech=entry.part_of_speech,
@@ -65,7 +75,10 @@ def wikipedia_lookup(
     try:
         summary = _run_async(reference_lookup.lookup_wikipedia_summary(query))
     except reference_lookup.ReferenceLookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        _raise_from(
+            exc,
+            HTTPException(status_code=evaluate_http_outcome("missing").status, detail=str(exc)),
+        )
     return WikipediaOut(
         title=summary.title,
         extract=summary.extract,

@@ -2,7 +2,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import re
 import uuid
 from datetime import datetime
 from typing import Any
@@ -15,6 +14,7 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from app.db import SessionLocal, get_db
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 from app.graphs.chat_graph import run_retrieve
 from app.graphs.mcq_graph import grade_mcq_answer
 from app.models import Account, ChatMessage, ChatThread, Document
@@ -28,10 +28,25 @@ from app.services.llm_router import is_failover_eligible, stream_chat_completion
 from app.services.prompts import get_prompt
 from app.services.guest import can_access_document
 from app.services.document_access import require_document
+from app.services.http_outcome import evaluate_http_outcome
+from app.services.presence import evaluate_presence
 from app.services.tutor_retrieval import (
+    CHAT_BUSY_MESSAGE,
+    MCQ_ANSWER_GUARDRAIL,
+    PREFETCHED_REFERENCE_DIRECTIVE,
     compress_chat_history,
     evaluate_chat_cache_eligible,
+    is_prefetched_reference,
+    learn_context_has_active_question,
+    message_has_prefetched_reference,
+    plan_chat_surface,
+    plan_chat_system_prompt_key,
     plan_chat_thread_history,
+    plan_chat_trailers,
+    plan_chat_user_error,
+    plan_retrieval_query,
+    should_pin_learn_queue,
+    user_requests_mcq_answer,
 )
 from app.services.guest_session import guest_session_for_read, optional_guest_session
 from app.services.response_cache import get_cached_response, store_response
@@ -44,15 +59,31 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _LIST_MESSAGES_LIMIT = 100
-_CHAT_BUSY_MESSAGE = "Tutor is busy. Try again."
+_CHAT_BUSY_MESSAGE = CHAT_BUSY_MESSAGE
+_MCQ_ANSWER_GUARDRAIL = MCQ_ANSWER_GUARDRAIL
+_PREFETCHED_REFERENCE_DIRECTIVE = PREFETCHED_REFERENCE_DIRECTIVE
+
+
+def _raise(exc: BaseException) -> None:
+    raise exc
+
+
+def _raise_from(cause: BaseException, wrapped: BaseException) -> None:
+    raise wrapped from cause
+
+
+def _http(action: str, detail: str) -> None:
+    _raise(HTTPException(status_code=evaluate_http_outcome(action).status, detail=detail))
+
+
+def _account_id(user: Account | None):
+    return pick(bool(user), lambda: user.id, lambda: None)
 
 
 def _history_digest(prior: list[dict]) -> str:
     """Fold prior user turns into the semantic-cache scope so follow-ups don't collide."""
     h = hashlib.sha256()
-    for m in prior:
-        if (m.get("role") or "") != "user":
-            continue
+    for m in filter(lambda row: (row.get("role") or "") == "user", prior):
         h.update((m.get("content") or "")[:500].encode("utf-8", "ignore"))
         h.update(b"\x1f")
     return h.hexdigest()[:32]
@@ -64,94 +95,33 @@ def _shrink_prior_messages(prior: list[dict]) -> list[dict]:
 
 
 def _user_facing_chat_error(exc: BaseException) -> str:
-    if is_failover_eligible(exc):
-        message = str(exc).lower()
-        if "rate" in message or "429" in message or "too many requests" in message:
-            return "Too many requests — wait a moment and try again."
-        if "timeout" in message or "timed out" in message:
-            return "That took too long — try a shorter question."
-    return _CHAT_BUSY_MESSAGE
-
-# Matches messages that look like a quiz/test request. Only when this hits do
-# we inject the ~300-token mcq_format prompt — otherwise it's dead weight on
-# every turn and destabilizes the provider prefix cache.
-_QUIZ_RE = re.compile(
-    r"\b(quiz|quizzes|mcq|mcqs|multiple[- ]choice|practice question|test me|"
-    r"give me .* question|exam questions?)\b",
-    re.IGNORECASE,
-)
+    return plan_chat_user_error(exc, failover_eligible=is_failover_eligible(exc))
 
 
 def _looks_like_quiz(message: str) -> bool:
-    return bool(_QUIZ_RE.search(message or ""))
+    from app.services.tutor_retrieval import looks_like_quiz
 
-
-_MCQ_ANSWER_REQUEST_RE = re.compile(
-    r"|".join(
-        [
-            r"\bwhat(?:'s| is) the (?:correct )?answer\b",
-            r"\bwhich (?:option|choice) (?:is )?(?:correct|right)\b",
-            r"\btell me (?:the )?answer\b",
-            r"\bgive me (?:the )?answer\b",
-            r"\bwhat should i (?:pick|choose|select)\b",
-            r"\b(?:is|was) (?:option )?[a-d] (?:correct|right)\b",
-            r"\bthe (?:correct|right) (?:option|choice|letter)\b",
-            r"\breveal the answer\b",
-        ]
-    ),
-    re.IGNORECASE,
-)
-
-_MCQ_ANSWER_GUARDRAIL = (
-    "Tutor guardrail (this turn): The learner has not asked for the quiz answer. "
-    "Explain the topic clearly. Do NOT state which option letter is correct, "
-    'do NOT say "the correct answer is …", and do NOT map your explanation to A/B/C/D.'
-)
+    return looks_like_quiz(message)
 
 
 def _user_requests_mcq_answer(message: str) -> bool:
-    return bool(_MCQ_ANSWER_REQUEST_RE.search(message or ""))
+    return user_requests_mcq_answer(message)
 
 
 def _learn_context_has_active_question(learn_context: str | None) -> bool:
-    return bool(learn_context and "Current question stem:" in learn_context)
-
-
-_HIGHLIGHTED_RE = re.compile(
-    r'I highlighted(?: this while studying)?:\s*\n\n"([^"]{1,240})"',
-    re.IGNORECASE,
-)
+    return learn_context_has_active_question(learn_context)
 
 
 def _retrieval_query(message: str) -> str:
-    """Prefer the quoted highlight over the full turn text for vector search."""
-    m = _HIGHLIGHTED_RE.search(message or "")
-    if m:
-        return m.group(1).strip()
-    text = (message or "").strip()
-    return text[:500] if len(text) > 500 else text
+    return plan_retrieval_query(message)
 
 
 def _is_prefetched_reference(scope: dict | None) -> bool:
-    return (scope or {}).get("reference_source") in ("wikipedia", "dictionary")
-
-
-_WIKIPEDIA_PREFETCH_RE = re.compile(
-    r"Wikipedia summary of\s+\"",
-    re.IGNORECASE,
-)
+    return is_prefetched_reference(scope)
 
 
 def _message_has_prefetched_reference(message: str) -> bool:
-    return bool(_WIKIPEDIA_PREFETCH_RE.search(message or ""))
-
-
-_PREFETCHED_REFERENCE_DIRECTIVE = (
-    "Reference lookup (this turn): The learner highlighted a term from their current "
-    "study question. Use the Wikipedia summary in their message plus the Learn session "
-    "block. Explain the highlighted term in that quiz context only. Do not discuss "
-    "unrelated topics from other newspaper pages or earlier chat turns."
-)
+    return message_has_prefetched_reference(message)
 
 
 def _cache_eligible(
@@ -200,10 +170,7 @@ class ChatScope(BaseModel):
     confirmed_choice_indices: list[int] | None = Field(default=None, max_length=26)
     answer_correct: bool | None = None
     mentions: list[str] = Field(default_factory=list, max_length=20)
-    # Client-side reference lookup already embedded in the message (Wikipedia, etc.).
     reference_source: str | None = Field(default=None, max_length=32)
-    # Which study surface the chat is on. "read" → the buddy is about the document
-    # being read, so Learn-mode page/question context must NOT be injected.
     mode: str | None = Field(default=None, max_length=16)
 
     @field_validator("mentions")
@@ -214,9 +181,11 @@ class ChatScope(BaseModel):
     @field_validator("selected_choice_indices", "confirmed_choice_indices")
     @classmethod
     def cap_choice_indices(cls, value: list[int] | None) -> list[int] | None:
-        if value is None:
-            return None
-        return [int(i) for i in value if 0 <= int(i) <= 25][:26]
+        return pick(
+            value is None,
+            lambda: None,
+            lambda: list(filter(lambda i: 0 <= i <= 25, map(int, value)))[:26],
+        )
 
 
 class ChatRequest(BaseModel):
@@ -244,47 +213,50 @@ def _resolve_document_ids(
     guest_id: str | None,
 ) -> list[uuid.UUID]:
     """Map `@slug` mentions to document ids the caller can access."""
-    if not mentions:
-        return [primary]
-    slugs = []
-    seen = set()
-    for raw in mentions:
-        slug = raw.lstrip("@").strip()
-        if not slug or slug in seen:
-            continue
-        seen.add(slug)
-        slugs.append(slug)
-    if not slugs:
-        return [primary]
-    q = db.query(Document).filter(Document.slug.in_(slugs))
-    q = q.filter(Document.account_id.is_(None)) if not user else q.filter(
-        (Document.account_id == user.id) | (Document.account_id.is_(None))
-    )
-    docs = q.all()
-    ids = [primary]
-    for doc in docs:
-        if doc.id == primary:
-            continue
-        if can_access_document(doc, user, guest_id) and doc.id not in ids:
-            ids.append(doc.id)
-    return ids
+
+    def _from_mentions() -> list[uuid.UUID]:
+        slugs: list[str] = []
+        seen: set[str] = set()
+        for raw in mentions:
+            slug = raw.lstrip("@").strip()
+            pick(
+                not slug or slug in seen,
+                lambda: None,
+                lambda: (seen.add(slug), slugs.append(slug)),
+            )
+
+        def _query() -> list[uuid.UUID]:
+            q = db.query(Document).filter(Document.slug.in_(slugs))
+            q = pick(
+                not user,
+                lambda: q.filter(Document.account_id.is_(None)),
+                lambda: q.filter(
+                    (Document.account_id == user.id) | (Document.account_id.is_(None))
+                ),
+            )
+            docs = q.all()
+            ids = [primary]
+            for doc in docs:
+                pick(
+                    doc.id == primary
+                    or not can_access_document(doc, user, guest_id)
+                    or doc.id in ids,
+                    lambda: None,
+                    lambda: ids.append(doc.id),
+                )
+            return ids
+
+        return pick(not slugs, lambda: [primary], _query)
+
+    return pick(not mentions, lambda: [primary], _from_mentions)
 
 
 def _artifact_ref(doc: Document) -> tuple[uuid.UUID, datetime]:
     return doc.artifact_id or doc.id, doc.artifact_captured_at or doc.created_at
 
 
-_CHAT_SURFACES = {"read", "learn", "test", "brainstorm", "socratic"}
-
-
 def _chat_surface(mode: str | None) -> str:
-    """The conversation surface for a study mode — keeps Read / Learn / Test /
-    Brainstorm chats fully separate; anything else shares a neutral 'general' thread.
-
-    Mirrored by ``chatSurfaceForMode`` in frontend/lib/api/queries.ts — a mode added
-    to one and not the other silently merges into 'general'."""
-    m = (mode or "").strip().lower()
-    return m if m in _CHAT_SURFACES else "general"
+    return plan_chat_surface(mode)
 
 
 def _get_or_create_thread(
@@ -296,12 +268,11 @@ def _get_or_create_thread(
     guest_id: str | None = None,
 ) -> ChatThread:
     artifact_id, captured_at = _artifact_ref(doc)
-    # Guests share account_id=NULL. Without a guest key they would all land on one
-    # thread for public/demo docs. Encode guest id into the surface so each guest
-    # gets an isolated conversation without a schema migration.
-    thread_surface = surface
-    if account_id is None and guest_id:
-        thread_surface = f"g:{guest_id}:{surface}"
+    thread_surface = pick(
+        account_id is None and bool(guest_id),
+        lambda: f"g:{guest_id}:{surface}",
+        lambda: surface,
+    )
     thread = (
         db.query(ChatThread)
         .filter(
@@ -313,36 +284,37 @@ def _get_or_create_thread(
         .order_by(ChatThread.version.desc())
         .first()
     )
-    if thread:
-        return thread
-    thread = ChatThread(
-        account_id=account_id,
-        artifact_id=artifact_id,
-        artifact_captured_at=captured_at,
-        surface=thread_surface,
-        version=1,
-    )
-    try:
-        db.add(thread)
-        db.commit()
-        db.refresh(thread)
-        return thread
-    except IntegrityError:
-        db.rollback()
-        existing = (
-            db.query(ChatThread)
-            .filter(
-                ChatThread.artifact_id == artifact_id,
-                ChatThread.artifact_captured_at == captured_at,
-                ChatThread.account_id == account_id,
-                ChatThread.surface == thread_surface,
-                ChatThread.version == 1,
-            )
-            .first()
+
+    def _create() -> ChatThread:
+        created = ChatThread(
+            account_id=account_id,
+            artifact_id=artifact_id,
+            artifact_captured_at=captured_at,
+            surface=thread_surface,
+            version=1,
         )
-        if existing:
-            return existing
-        raise
+        try:
+            db.add(created)
+            db.commit()
+            db.refresh(created)
+            return created
+        except IntegrityError as err:
+            caught = err
+            db.rollback()
+            existing = (
+                db.query(ChatThread)
+                .filter(
+                    ChatThread.artifact_id == artifact_id,
+                    ChatThread.artifact_captured_at == captured_at,
+                    ChatThread.account_id == account_id,
+                    ChatThread.surface == thread_surface,
+                    ChatThread.version == 1,
+                )
+                .first()
+            )
+            return pick(bool(existing), lambda: existing, lambda: _raise(caught))
+
+    return pick(bool(thread), lambda: thread, _create)
 
 
 @router.get("/threads/{document_id}/messages", response_model=list[MessageOut])
@@ -354,11 +326,14 @@ def list_messages(
     user: Account | None = Depends(get_optional_user),
     guest_id: str | None = Depends(guest_session_for_read),
 ) -> list[ChatMessage]:
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="offset must be >= 0")
+    pick(
+        offset < 0,
+        lambda: _raise(HTTPException(status_code=400, detail="offset must be >= 0")),
+        lambda: None,
+    )
     doc = require_document(db, document_id, user, guest_id)
     thread = _get_or_create_thread(
-        db, user.id if user else None, doc, _chat_surface(surface), guest_id=guest_id
+        db, _account_id(user), doc, _chat_surface(surface), guest_id=guest_id
     )
     return (
         db.query(ChatMessage)
@@ -381,14 +356,13 @@ def clear_thread(
     doc = require_document(db, document_id, user, guest_id)
     resolved_surface = _chat_surface(surface)
     current = _get_or_create_thread(
-        db, user.id if user else None, doc, resolved_surface, guest_id=guest_id
+        db, _account_id(user), doc, resolved_surface, guest_id=guest_id
     )
     new_version = current.version + 1
     artifact_id, captured_at = _artifact_ref(doc)
-    # Keep the same guest-scoped surface key as _get_or_create_thread.
     thread_surface = current.surface
     thread = ChatThread(
-        account_id=user.id if user else None,
+        account_id=_account_id(user),
         artifact_id=artifact_id,
         artifact_captured_at=captured_at,
         surface=thread_surface,
@@ -423,17 +397,32 @@ def persist_chat_mcqs(
     (facet, concepts, birth difficulty) so the questions behave exactly like
     cooked ones — they surface in the Learn queue and feed the engines.
     """
-    require_document(db, document_id, user, guest_id)  # access check + 404
-    questions = [q for q in (body.questions or []) if isinstance(q, dict) and str(q.get("question") or "").strip()]
-    if not questions:
-        raise HTTPException(status_code=422, detail="No valid questions provided")
-    if len(questions) > 10:
-        raise HTTPException(status_code=422, detail="At most 10 questions per request")
+    require_document(db, document_id, user, guest_id)
+    questions = list(
+        filter(
+            lambda q: isinstance(q, dict) and str(q.get("question") or "").strip(),
+            body.questions or [],
+        )
+    )
+    apply(
+        first_match(
+            (
+                Rule(when=(Pred("empty", "truthy"),), action="empty"),
+                Rule(when=(Pred("too_many", "truthy"),), action="too_many"),
+                Rule(when=(), action="ok"),
+            ),
+            {"empty": not questions, "too_many": len(questions) > 10},
+        ).action,
+        {
+            "empty": lambda: _http("invalid", "No valid questions provided"),
+            "too_many": lambda: _http("invalid", "At most 10 questions per request"),
+            "ok": lambda: None,
+        },
+    )
 
     from app.graphs.generation_graph import _persist_assertion
 
     page = max(1, int(body.page_number or 1))
-    # Next 1-based sequence for this page's MCQ facet (mirrors the cook path).
     seq_row = db.execute(
         text(
             """
@@ -447,25 +436,32 @@ def persist_chat_mcqs(
     sequence = int(seq_row or 1)
     persisted = 0
     for q in questions:
-        options = [str(o).strip() for o in (q.get("options") or []) if str(o).strip()]
+        options = list(filter(None, (str(o).strip() for o in (q.get("options") or []))))
         correct = q.get("correct_index")
-        if len(options) < 2 or not isinstance(correct, int) or not (0 <= correct < len(options)):
-            continue
-        _persist_assertion(
-            db,
-            document_id,
-            {
-                "question": str(q["question"]).strip(),
-                "options": options,
-                "correct_index": correct,
-                "explanation": str(q.get("explanation") or "").strip(),
-            },
-            page_number=page,
-            sequence=sequence,
-            serve_mode="learn",
+        valid = (
+            len(options) >= 2
+            and isinstance(correct, int)
+            and 0 <= correct < len(options)
         )
-        sequence += 1
-        persisted += 1
+
+        def _save(item: dict, opts: list[str], idx: int, seq: int) -> None:
+            _persist_assertion(
+                db,
+                document_id,
+                {
+                    "question": str(item["question"]).strip(),
+                    "options": opts,
+                    "correct_index": idx,
+                    "explanation": str(item.get("explanation") or "").strip(),
+                },
+                page_number=page,
+                sequence=seq,
+                serve_mode="learn",
+            )
+
+        pick(valid, lambda: _save(q, options, correct, sequence), lambda: None)
+        sequence += choose(valid, 1, 0)
+        persisted += choose(valid, 1, 0)
     db.commit()
     return {"persisted": persisted}
 
@@ -479,22 +475,43 @@ def _prepare_chat_stream(
     """Sync DB work for chat stream setup — run via asyncio.to_thread."""
     with SessionLocal() as db:
         doc = db.get(Document, body.document_id)
-        if not doc:
-            raise HTTPException(status_code=404, detail="Document not found")
-        if not can_access_document(doc, user, guest_id):
-            raise HTTPException(status_code=404, detail="Document not found")
-        if doc.status != "ready":
-            raise HTTPException(status_code=409, detail="Document not ready")
+        apply(
+            first_match(
+                (
+                    Rule(when=(Pred("missing", "truthy"),), action="missing"),
+                    Rule(when=(Pred("denied", "truthy"),), action="missing"),
+                    Rule(when=(Pred("not_ready", "truthy"),), action="conflict"),
+                    Rule(when=(), action="ok"),
+                ),
+                {
+                    "missing": not doc,
+                    "denied": bool(doc) and not can_access_document(doc, user, guest_id),
+                    "not_ready": bool(doc) and doc.status != "ready",
+                },
+            ).action,
+            {
+                "missing": lambda: _http("missing", "Document not found"),
+                "conflict": lambda: _http("conflict", "Document not ready"),
+                "ok": lambda: None,
+            },
+        )
 
-        scope_preview = body.scope.model_dump() if body.scope else {}
-        if scope_preview.get("current_page") is not None:
+        scope_preview = pick(bool(body.scope), lambda: body.scope.model_dump(), lambda: {})
+
+        def _check_rag() -> None:
             from app.services.rag_window import is_rag_window_ready
 
-            if not is_rag_window_ready(db, doc.id, doc):
-                raise HTTPException(status_code=409, detail="Preparing chat context…")
+            pick(
+                not is_rag_window_ready(db, doc.id, doc),
+                lambda: _http("conflict", "Preparing chat context…"),
+                lambda: None,
+            )
+
+        pick(scope_preview.get("current_page") is not None, _check_rag, lambda: None)
 
         include_image = body.use_vision or is_image_document(doc)
-        if body.model_id is not None:
+
+        def _resolve_model() -> None:
             from app.services.llm_registry import resolve_chat_model
 
             try:
@@ -502,12 +519,17 @@ def _prepare_chat_stream(
             except HTTPException:
                 raise
             except Exception as exc:
-                raise HTTPException(status_code=503, detail="No chat model available") from exc
+                _raise_from(
+                    exc,
+                    HTTPException(status_code=503, detail="No chat model available"),
+                )
+
+        pick(body.model_id is not None, _resolve_model, lambda: None)
 
         reserve_message_slot(db, user=user, request=request, demo_cookie=guest_id)
 
         surface = _chat_surface(scope_preview.get("mode"))
-        thread = _get_or_create_thread(db, user.id if user else None, doc, surface, guest_id=guest_id)
+        thread = _get_or_create_thread(db, _account_id(user), doc, surface, guest_id=guest_id)
         history = (
             db.query(ChatMessage)
             .filter(ChatMessage.thread_id == thread.id)
@@ -516,12 +538,18 @@ def _prepare_chat_stream(
             .all()
         )
         history = list(reversed(history))
-        prior = [
-            {"role": m.role, "content": m.content}
-            for m in history
-            if (m.content or "").strip()
-            and not (m.role == "assistant" and _is_transient_assistant_error(m.content))
-        ]
+        prior = list(
+            map(
+                lambda m: {"role": m.role, "content": m.content},
+                filter(
+                    lambda m: (m.content or "").strip()
+                    and not (
+                        m.role == "assistant" and _is_transient_assistant_error(m.content)
+                    ),
+                    history,
+                ),
+            )
+        )
         prior = _shrink_prior_messages(prior)
 
         db.add(ChatMessage(thread_id=thread.id, role="user", content=body.message))
@@ -533,7 +561,7 @@ def _prepare_chat_stream(
             "prior_messages": prior,
             "request_message": body.message,
             "request_model_id": body.model_id,
-            "request_scope": body.scope.model_dump() if body.scope else {},
+            "request_scope": pick(bool(body.scope), lambda: body.scope.model_dump(), lambda: {}),
             "include_image": include_image,
         }
 
@@ -557,30 +585,35 @@ async def chat_stream(
     include_image = setup["include_image"]
 
     async def event_generator() -> Any:
-        # Request-scoped `db` may close before this generator finishes; use a
-        # dedicated session for all post-stream persistence.
         stream_db = SessionLocal()
         try:
             yield {"event": "status", "data": json.dumps({"phase": "thinking"})}
             try:
                 doc = stream_db.get(Document, document_id)
-                if not doc or not can_access_document(doc, user, guest_id):
-                    yield _stream_error_event("Document not found.")
-                    return
-                scope = dict(request_scope) if request_scope else {}
+                accessible = bool(doc) and can_access_document(doc, user, guest_id)
+                apply(
+                    evaluate_presence(pick(accessible, lambda: doc, lambda: None)).action,
+                    {
+                        "missing": lambda: _raise(
+                            _StreamHalt(_stream_error_event("Document not found."))
+                        ),
+                        "empty": lambda: _raise(
+                            _StreamHalt(_stream_error_event("Document not found."))
+                        ),
+                        "ok": lambda: None,
+                    },
+                )
+                scope = pick(bool(request_scope), lambda: dict(request_scope), lambda: {})
                 mode = str(request_scope.get("mode") or "").lower()
                 read_mode = mode == "read"
                 brainstorm_mode = mode == "brainstorm"
                 socratic_mode = mode == "socratic"
-                scope["mode"] = "read" if read_mode else (request_scope.get("mode") or None)
-                # Read-mode chat is about the document, not the Learn loop — keep its
-                # page/question signal out of the scope entirely. Brainstorm is the
-                # same: it ranges over the whole source, so pinning it to the Learn
-                # queue's current question would collapse it back into tutoring.
-                # Socratic is a dialogue about the same material — no Learn pinning,
-                # so the questions follow the learner's answers, not the queue.
-                if not read_mode and not brainstorm_mode and not socratic_mode:
-                    scope.update(
+                scope["mode"] = pick(
+                    read_mode, lambda: "read", lambda: request_scope.get("mode") or None
+                )
+                pick(
+                    should_pin_learn_queue(scope_mode=mode),
+                    lambda: scope.update(
                         learn_scope_fields(
                             stream_db,
                             doc.id,
@@ -589,7 +622,9 @@ async def chat_stream(
                             user=user,
                             guest_id=guest_id,
                         )
-                    )
+                    ),
+                    lambda: None,
+                )
                 scope = normalize_chat_scope(scope, doc)
                 prefetched_ref = _is_prefetched_reference(scope)
                 doc_ids = _resolve_document_ids(
@@ -599,29 +634,44 @@ async def chat_stream(
                     user,
                     guest_id,
                 )
-                if is_image_document(doc):
-                    retrieved = {
-                        "citations": [],
-                        "messages": prior_messages,
-                        "context_block": "",
-                        "context_note": "",
-                    }
-                    learn_context = build_learn_chat_context(
-                        stream_db,
-                        doc.id,
-                        doc,
-                        scope=scope,
-                        user=user,
-                        guest_id=guest_id,
-                    )
-                else:
-                    yield {"event": "status", "data": json.dumps({"phase": "retrieving"})}
+                image = is_image_document(doc)
+                for ev in pick(
+                    image,
+                    lambda: [],
+                    lambda: [{"event": "status", "data": json.dumps({"phase": "retrieving"})}],
+                ):
+                    yield ev
 
+                async def _from_image() -> tuple[dict, str | None]:
+                    return (
+                        {
+                            "citations": [],
+                            "messages": prior_messages,
+                            "context_block": "",
+                            "context_note": "",
+                        },
+                        build_learn_chat_context(
+                            stream_db,
+                            doc.id,
+                            doc,
+                            scope=scope,
+                            user=user,
+                            guest_id=guest_id,
+                        ),
+                    )
+
+                async def _from_text() -> tuple[dict, str | None]:
                     def _retrieve_for_chat() -> dict:
                         with SessionLocal() as retrieve_db:
                             retrieve_doc = retrieve_db.get(Document, document_id)
-                            if not retrieve_doc:
-                                raise HTTPException(status_code=404, detail="Document not found")
+                            apply(
+                                evaluate_presence(retrieve_doc).action,
+                                {
+                                    "missing": lambda: _http("missing", "Document not found"),
+                                    "empty": lambda: _http("missing", "Document not found"),
+                                    "ok": lambda: None,
+                                },
+                            )
                             return run_retrieve(
                                 retrieve_db,
                                 document_ids=doc_ids,
@@ -632,46 +682,46 @@ async def chat_stream(
                             )
 
                     def _learn_context_for_chat() -> str | None:
-                        if brainstorm_mode or socratic_mode:
-                            return None
-                        with SessionLocal() as learn_db:
-                            learn_doc = learn_db.get(Document, document_id)
-                            if not learn_doc:
-                                return None
-                            return build_learn_chat_context(
-                                learn_db,
-                                learn_doc.id,
-                                learn_doc,
-                                scope=scope,
-                                user=user,
-                                guest_id=guest_id,
-                            )
+                        def _load() -> str | None:
+                            with SessionLocal() as learn_db:
+                                learn_doc = learn_db.get(Document, document_id)
+                                return pick(
+                                    not learn_doc,
+                                    lambda: None,
+                                    lambda: build_learn_chat_context(
+                                        learn_db,
+                                        learn_doc.id,
+                                        learn_doc,
+                                        scope=scope,
+                                        user=user,
+                                        guest_id=guest_id,
+                                    ),
+                                )
 
-                    retrieved, learn_context = await asyncio.gather(
+                        return pick(
+                            brainstorm_mode or socratic_mode,
+                            lambda: None,
+                            _load,
+                        )
+
+                    return await asyncio.gather(
                         asyncio.to_thread(_retrieve_for_chat),
                         asyncio.to_thread(_learn_context_for_chat),
                     )
+
+                retrieved, learn_context = await pick(image, _from_image, _from_text)
                 citations = retrieved.get("citations", [])
-                # Prefix-cache discipline (this is what makes provider prompt caching
-                # hit): the leading [system, ...history] must be byte-stable across
-                # turns. So the system prompt is never mutated per-turn, and the
-                # retrieved context (which changes every turn) rides in the FINAL
-                # user message — not as a mid-list message before the history.
-                # Per-surface system prompt. Still byte-stable *within* a surface, so
-                # prefix caching keeps hitting; brainstorm just gets a different prefix.
                 system = get_prompt(
                     stream_db,
-                    "socratic_system"
-                    if socratic_mode
-                    else ("brainstorm_system" if brainstorm_mode else "tutor_system"),
+                    plan_chat_system_prompt_key(
+                        socratic=socratic_mode, brainstorm=brainstorm_mode
+                    ),
                 )
                 messages = [{"role": "system", "content": system}]
-                # Wikipedia / dictionary lookups carry their own reference text. Prior
-                # chat turns (e.g. another newspaper page) would steer answers wrong.
-                model_history = (
-                    []
-                    if prefetched_ref
-                    else (retrieved.get("messages") or prior_messages)
+                model_history = pick(
+                    prefetched_ref,
+                    lambda: [],
+                    lambda: retrieved.get("messages") or prior_messages,
                 )
                 messages.extend(model_history)
 
@@ -685,41 +735,53 @@ async def chat_stream(
                     page_end=scope.get("page_end"),
                     db=stream_db,
                 )
-                trailer_parts: list[str] = []
-                if prefetched_ref:
-                    trailer_parts.append(_PREFETCHED_REFERENCE_DIRECTIVE)
-                learn_lead = learn_context or ""
-                has_history = bool(prior_messages)
-                guardrail_applies = (
-                    learn_context
-                    and _learn_context_has_active_question(learn_context)
-                    and not _user_requests_mcq_answer(request_message)
-                    and not (has_history and is_conversational_followup(request_message))
+                trailer = plan_chat_trailers(
+                    prefetched_reference=prefetched_ref,
+                    learn_context=learn_context,
+                    message=request_message,
+                    has_history=bool(prior_messages),
                 )
-                if guardrail_applies:
-                    trailer_parts.append(_MCQ_ANSWER_GUARDRAIL)
-                if _looks_like_quiz(request_message):
-                    trailer_parts.append(get_prompt(stream_db, "mcq_format"))
-                if trailer_parts:
-                    user_content = user_content + "\n\n" + "\n\n".join(trailer_parts)
+                trailer_parts: list[str] = []
+                pick(
+                    trailer.prefetched_directive,
+                    lambda: trailer_parts.append(_PREFETCHED_REFERENCE_DIRECTIVE),
+                    lambda: None,
+                )
+                pick(
+                    trailer.mcq_guardrail,
+                    lambda: trailer_parts.append(_MCQ_ANSWER_GUARDRAIL),
+                    lambda: None,
+                )
+                pick(
+                    trailer.quiz_format,
+                    lambda: trailer_parts.append(get_prompt(stream_db, "mcq_format")),
+                    lambda: None,
+                )
+                user_content = pick(
+                    bool(trailer_parts),
+                    lambda: user_content + "\n\n" + "\n\n".join(trailer_parts),
+                    lambda: user_content,
+                )
                 body_parts: list[str] = []
-                if learn_lead:
-                    body_parts.append(learn_lead)
-                if context_block:
-                    body_parts.append(
+                learn_lead = learn_context or ""
+                pick(bool(learn_lead), lambda: body_parts.append(learn_lead), lambda: None)
+                pick(
+                    bool(context_block),
+                    lambda: body_parts.append(
                         "Document excerpts (retrieved for this turn):\n\n" + context_block
-                    )
+                    ),
+                    lambda: None,
+                )
                 body_parts.append(user_content)
-                if len(body_parts) == 1:
-                    final_user_content = body_parts[0]
-                else:
-                    final_user_content = "\n\n---\n\n".join(body_parts)
+                final_user_content = pick(
+                    len(body_parts) == 1,
+                    lambda: body_parts[0],
+                    lambda: "\n\n---\n\n".join(body_parts),
+                )
                 messages.append({"role": "user", "content": final_user_content})
 
-                # Brainstorm never serves the semantic response cache. Two near-identical
-                # prompts returning the identical stored answer is fine for a tutor and
-                # fatal for ideation — the point is that asking again gives you new angles.
-                cache_eligible = not brainstorm_mode and _cache_eligible(
+                has_history = bool(prior_messages)
+                cache_eligible = (not brainstorm_mode) and _cache_eligible(
                     include_image=include_image,
                     selection_text=scope.get("selection_text"),
                     has_citations=bool(citations),
@@ -729,12 +791,16 @@ async def chat_stream(
                     prefetched_reference=prefetched_ref,
                 )
                 artifact_id, artifact_captured_at = _artifact_ref(doc)
-                cached: dict | None = None
-                query_embedding: list[float] | None = None
                 cache_scope = dict(scope)
-                if has_history:
-                    cache_scope["history_digest"] = _history_digest(prior_messages)
-                if cache_eligible:
+                pick(
+                    has_history,
+                    lambda: cache_scope.__setitem__(
+                        "history_digest", _history_digest(prior_messages)
+                    ),
+                    lambda: None,
+                )
+
+                async def _lookup_cache() -> tuple[list[float] | None, dict | None]:
                     query_embedding = await asyncio.to_thread(embed_query, request_message)
                     cached = await asyncio.to_thread(
                         get_cached_response,
@@ -744,17 +810,31 @@ async def chat_stream(
                         scope=cache_scope,
                         query_embedding=query_embedding,
                     )
-                elif has_history and is_conversational_followup(request_message):
-                    logger.debug(
-                        "chat cache skipped: conversational follow-up doc=%s",
-                        document_id,
+                    return query_embedding, cached
+
+                async def _skip_cache() -> tuple[list[float] | None, dict | None]:
+                    pick(
+                        has_history and is_conversational_followup(request_message),
+                        lambda: logger.debug(
+                            "chat cache skipped: conversational follow-up doc=%s",
+                            document_id,
+                        ),
+                        lambda: None,
                     )
+                    return None, None
+
+                query_embedding, cached = await pick(
+                    cache_eligible, _lookup_cache, _skip_cache
+                )
+            except _StreamHalt as halt:
+                yield halt.event
+                return
             except Exception as exc:
                 logger.exception("chat setup failed: %s", exc)
                 yield _stream_error_event(_user_facing_chat_error(exc))
                 return
 
-            if cached:
+            async def _replay_cached():
                 full = cached["response_text"]
                 cache_citations = (cached.get("citations") or {}).get("sources", citations)
                 try:
@@ -774,50 +854,61 @@ async def chat_stream(
                 except Exception as exc:
                     logger.exception("cached chat replay failed: %s", exc)
                     yield _stream_error_event(_CHAT_BUSY_MESSAGE)
-                return
 
-            full = ""
-            try:
-                async for token in stream_chat_completion(
-                    messages,
-                    stream_db,
-                    model_id=request_model_id,
-                    require_vision=include_image,
-                ):
-                    full += token
-                    yield {"event": "token", "data": json.dumps({"text": token})}
-                if not full.strip():
-                    raise RuntimeError("empty model response")
-                stream_db.add(
-                    ChatMessage(
-                        thread_id=thread_id,
-                        role="assistant",
-                        content=full,
-                        citations={"sources": citations},
-                    )
-                )
-                stream_db.commit()
-                if cache_eligible:
-                    await asyncio.to_thread(
-                        store_response,
+            async def _stream_live():
+                full = ""
+                try:
+                    async for token in stream_chat_completion(
+                        messages,
                         stream_db,
-                        document_id=artifact_id,
-                        artifact_captured_at=artifact_captured_at,
-                        scope=cache_scope,
-                        query_embedding=query_embedding,
-                        response_text=full,
-                        citations=citations,
+                        model_id=request_model_id,
+                        require_vision=include_image,
+                    ):
+                        full += token
+                        yield {"event": "token", "data": json.dumps({"text": token})}
+                    pick(
+                        not full.strip(),
+                        lambda: _raise(RuntimeError("empty model response")),
+                        lambda: None,
                     )
-                yield {"event": "sources", "data": json.dumps({"citations": citations})}
-                yield {"event": "done", "data": "{}"}
-            except Exception as exc:
-                logger.exception("chat stream failed: %s", exc)
-                yield _stream_error_event(_user_facing_chat_error(exc))
+                    stream_db.add(
+                        ChatMessage(
+                            thread_id=thread_id,
+                            role="assistant",
+                            content=full,
+                            citations={"sources": citations},
+                        )
+                    )
+                    stream_db.commit()
+
+                    async def _store() -> None:
+                        await asyncio.to_thread(
+                            store_response,
+                            stream_db,
+                            document_id=artifact_id,
+                            artifact_captured_at=artifact_captured_at,
+                            scope=cache_scope,
+                            query_embedding=query_embedding,
+                            response_text=full,
+                            citations=citations,
+                        )
+
+                    async def _noop() -> None:
+                        return None
+
+                    await pick(cache_eligible, _store, _noop)
+                    yield {"event": "sources", "data": json.dumps({"citations": citations})}
+                    yield {"event": "done", "data": "{}"}
+                except Exception as exc:
+                    logger.exception("chat stream failed: %s", exc)
+                    yield _stream_error_event(_user_facing_chat_error(exc))
+
+            agen = pick(bool(cached), _replay_cached, _stream_live)
+            async for ev in agen:
+                yield ev
         finally:
             stream_db.close()
 
-    # Explicit anti-buffering headers so tokens stream through reverse proxies
-    # (nginx/ingress) instead of arriving all at once.
     return EventSourceResponse(
         event_generator(),
         headers={
@@ -825,6 +916,11 @@ async def chat_stream(
             "Cache-Control": "no-cache, no-transform",
         },
     )
+
+
+class _StreamHalt(Exception):
+    def __init__(self, event: dict[str, str]) -> None:
+        self.event = event
 
 
 @router.post(
@@ -845,12 +941,15 @@ async def grade_mcq(
             return require_document(session, body.document_id, user, guest_id)
 
     doc = await asyncio.to_thread(_load_doc)
-    if body.correct_index >= len(body.options) or body.selected_index >= len(body.options):
-        raise HTTPException(status_code=400, detail="Invalid option index")
+    pick(
+        body.correct_index >= len(body.options) or body.selected_index >= len(body.options),
+        lambda: _raise(HTTPException(status_code=400, detail="Invalid option index")),
+        lambda: None,
+    )
 
-    # Stored explanation usually grounds grading; skip retrieval unless missing.
-    context = ""
-    if not (body.explanation or "").strip() and not is_image_document(doc):
+    need_ctx = not (body.explanation or "").strip() and not is_image_document(doc)
+
+    async def _fetch() -> str:
         retrieved = await asyncio.to_thread(
             run_retrieve,
             db,
@@ -864,7 +963,12 @@ async def grade_mcq(
         from app.services.tutor_retrieval import grade_context_top_n
 
         top_n = grade_context_top_n()
-        context = "\n\n".join(c["text"] for c in chunks[:top_n])
+        return "\n\n".join(c["text"] for c in chunks[:top_n])
+
+    async def _empty() -> str:
+        return ""
+
+    context = await pick(need_ctx, _fetch, _empty)
 
     result = await grade_mcq_answer(
         db,

@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 
 from app.db import SessionLocal
+from app.engine_runtime import pick
 from app.eta.scheduler_registry import eta_scheduler
 from app.eta.stale_jobs import reclaim_stale_jobs_sync
 from app.models import JobWorkload
@@ -26,5 +27,8 @@ def run_jobs_reclaim() -> None:
     with SessionLocal() as db:
         reclaimed = reclaim_stale_jobs_sync(db, workloads=_ALL_WORKLOADS)
         db.commit()
-    if reclaimed:
-        logger.info("scheduler reclaimed orphaned job(s)", extra={"count": reclaimed})
+    pick(
+        bool(reclaimed),
+        lambda: logger.info("scheduler reclaimed orphaned job(s)", extra={"count": reclaimed}),
+        lambda: None,
+    )

@@ -16,6 +16,8 @@ from typing import Any, Literal
 
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import Pred, Rule, choose, first_match, pick
+
 SEO_GATE_VERSION = "qb.seo_gate.v1"
 DEFAULT_POLICY = "seo_gate_v1"
 
@@ -91,11 +93,24 @@ class SeoDedupeVerdict:
     policy_version: str = SEO_GATE_VERSION
 
 
+_POLICY_ALIASES = ("default", "seo", "triage")
+_INTERNAL_FILENAME_TOKS = ("password", "secrets", "1on1", "1-1", "standup", "payroll")
+_USEFUL_RULES = (
+    Rule(when=(Pred("too_short", "truthy"),), action="too_short"),
+    Rule(when=(Pred("internal", "truthy"),), action="internal_markers"),
+    Rule(when=(Pred("personal", "truthy"),), action="personal_markers"),
+    Rule(when=(Pred("internal_fn", "truthy"),), action="internal_filename"),
+    Rule(
+        when=(Pred("no_signal", "truthy"), Pred("signal_short", "truthy")),
+        action="no_useful_signal",
+    ),
+    Rule(when=(), action="ok"),
+)
+
+
 def normalize_policy(policy: str | None) -> str:
     p = (policy or DEFAULT_POLICY).strip().lower()
-    if p in ("default", "seo", "triage"):
-        return DEFAULT_POLICY
-    return p or DEFAULT_POLICY
+    return pick(p in _POLICY_ALIASES, lambda: DEFAULT_POLICY, lambda: p or DEFAULT_POLICY)
 
 
 def evaluate_usefulness(
@@ -108,21 +123,19 @@ def evaluate_usefulness(
     pol = normalize_policy(policy)
     body = (text or "").strip()
     name = (filename or "").strip().lower()
-    if len(body) < SEO_USEFUL_MIN_CHARS:
-        return SeoUsefulnessVerdict(False, "too_short", policy=pol)
-    if _INTERNAL_MARKERS.search(body) or _INTERNAL_MARKERS.search(name):
-        return SeoUsefulnessVerdict(False, "internal_markers", policy=pol)
-    if _PERSONAL_MARKERS.search(body):
-        return SeoUsefulnessVerdict(False, "personal_markers", policy=pol)
-    if any(
-        tok in name
-        for tok in ("password", "secrets", "1on1", "1-1", "standup", "payroll")
-    ):
-        return SeoUsefulnessVerdict(False, "internal_filename", policy=pol)
-    if not _USEFUL_SIGNALS.search(body):
-        if len(body) < SEO_USEFUL_SIGNAL_MIN_CHARS:
-            return SeoUsefulnessVerdict(False, "no_useful_signal", policy=pol)
-    return SeoUsefulnessVerdict(True, "ok", policy=pol)
+    hit = first_match(
+        _USEFUL_RULES,
+        {
+            "too_short": len(body) < SEO_USEFUL_MIN_CHARS,
+            "internal": bool(_INTERNAL_MARKERS.search(body) or _INTERNAL_MARKERS.search(name)),
+            "personal": bool(_PERSONAL_MARKERS.search(body)),
+            "internal_fn": any(tok in name for tok in _INTERNAL_FILENAME_TOKS),
+            "no_signal": not _USEFUL_SIGNALS.search(body),
+            "signal_short": len(body) < SEO_USEFUL_SIGNAL_MIN_CHARS,
+        },
+    )
+    reason: UsefulnessReason = hit.action  # type: ignore[assignment]
+    return SeoUsefulnessVerdict(hit.action == "ok", reason, policy=pol)
 
 
 def triage_usefulness(text: str, *, filename: str = "") -> tuple[bool, str]:
@@ -170,26 +183,32 @@ def evaluate_publish_cap(
 ) -> SeoPublishCapVerdict:
     """Daily soft publish ceiling before SEO cook spends LLM."""
     pol = normalize_policy(policy)
-    soft = int(soft_max_per_day) if soft_max_per_day is not None else DEFAULT_SOFT_MAX_PER_DAY
+    soft = pick(
+        soft_max_per_day is not None,
+        lambda: int(soft_max_per_day),
+        lambda: DEFAULT_SOFT_MAX_PER_DAY,
+    )
     soft = max(1, soft)
     published = max(0, int(published_today))
     remaining = max(0, soft - published)
-    if remaining <= 0:
-        return SeoPublishCapVerdict(
+    return pick(
+        remaining <= 0,
+        lambda: SeoPublishCapVerdict(
             allow=False,
             remaining=0,
             soft_max=soft,
             published_today=published,
             reason="soft_max",
             policy=pol,
-        )
-    return SeoPublishCapVerdict(
-        allow=True,
-        remaining=remaining,
-        soft_max=soft,
-        published_today=published,
-        reason="ok",
-        policy=pol,
+        ),
+        lambda: SeoPublishCapVerdict(
+            allow=True,
+            remaining=remaining,
+            soft_max=soft,
+            published_today=published,
+            reason="ok",
+            policy=pol,
+        ),
     )
 
 
@@ -208,25 +227,31 @@ class SeoFormatContract:
     policy_version: str = SEO_GATE_VERSION
 
 
-def plan_article_format_contract(fmt: str) -> SeoFormatContract:
-    """Prompt contract for the chosen article format (word band / item counts)."""
-    kind: Literal["explainer", "faq", "list"]
-    if fmt == "faq":
-        kind = "faq"
-        rule = (
+_FORMAT_CONTRACTS: dict[str, SeoFormatContract] = {
+    "faq": SeoFormatContract(
+        "faq",
+        (
             "Write an FAQ post. body_md with ## questions. "
             "Also fill faq_items as [{question, answer}, ...] (3-6 items)."
-        )
-    elif fmt == "list":
-        kind = "list"
-        rule = "Write a numbered list post (5-9 concrete points). body_md markdown."
-    else:
-        kind = "explainer"
-        rule = (
+        ),
+    ),
+    "list": SeoFormatContract(
+        "list",
+        "Write a numbered list post (5-9 concrete points). body_md markdown.",
+    ),
+    "explainer": SeoFormatContract(
+        "explainer",
+        (
             "Write an explainer (800-1500 words target in body_md). "
             "Markdown with short headings."
-        )
-    return SeoFormatContract(kind, rule)
+        ),
+    ),
+}
+
+
+def plan_article_format_contract(fmt: str) -> SeoFormatContract:
+    """Prompt contract for the chosen article format (word band / item counts)."""
+    return _FORMAT_CONTRACTS.get(fmt, _FORMAT_CONTRACTS["explainer"])
 
 
 def plan_article_presentation(
@@ -240,22 +265,40 @@ def plan_article_presentation(
     import random as _random
 
     pol = normalize_policy(policy)
-    picker = rng if rng is not None else _random
-    if format_override in {"explainer", "faq", "list"}:
-        fmt = format_override  # type: Literal["explainer", "faq", "list"]
-    else:
+    picker = pick(rng is not None, lambda: rng, lambda: _random)
+
+    def rolled() -> Literal["explainer", "faq", "list"]:
         roll = picker.random()
-        if roll < 0.70:
-            fmt = "explainer"
-        elif roll < 0.85:
-            fmt = "faq"
-        else:
-            fmt = "list"
-    kind = "system_design" if stream == "system_design" else picker.choice(["practice", "signup", "system_design"])
+        return pick(
+            roll < 0.70,
+            lambda: "explainer",
+            lambda: pick(roll < 0.85, lambda: "faq", lambda: "list"),
+        )
+
+    fmt: Literal["explainer", "faq", "list"] = pick(
+        format_override in {"explainer", "faq", "list"},
+        lambda: format_override,  # type: ignore[return-value]
+        rolled,
+    )
+    kind = pick(
+        stream == "system_design",
+        lambda: "system_design",
+        lambda: picker.choice(["practice", "signup", "system_design"]),
+    )
     return SeoPresentationPlan(format=fmt, cta_kind=kind, policy=pol)
 
 
 SD_DAILY_MIN = 1
+_SD_DAILY_RULES = (
+    Rule(when=(Pred("cook_enabled", "falsey"),), action="cook_disabled", extras={"cook": False}),
+    Rule(when=(Pred("have_sd", "truthy"),), action="already_have_sd", extras={"cook": False}),
+    Rule(when=(Pred("cap_allow", "falsey"),), action="soft_max", extras={"cook": False}),
+    Rule(
+        when=(),
+        action="need_sd",
+        extras={"cook": True, "source_order": ("problem", "topic")},
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -276,16 +319,18 @@ def plan_sd_daily_cook(
 ) -> SdDailyCookPlan:
     """At least one system-design post per IST day; problem bank before topic queue."""
     pol = normalize_policy(policy)
-    if not cook_enabled:
-        return SdDailyCookPlan(False, "cook_disabled", policy=pol)
-    if int(sd_published_today) >= SD_DAILY_MIN:
-        return SdDailyCookPlan(False, "already_have_sd", policy=pol)
-    if not cap_allow:
-        return SdDailyCookPlan(False, "soft_max", policy=pol)
+    hit = first_match(
+        _SD_DAILY_RULES,
+        {
+            "cook_enabled": cook_enabled,
+            "have_sd": int(sd_published_today) >= SD_DAILY_MIN,
+            "cap_allow": cap_allow,
+        },
+    )
     return SdDailyCookPlan(
-        True,
-        "need_sd",
-        source_order=("problem", "topic"),
+        bool(hit.extras["cook"]),
+        hit.action,
+        source_order=tuple(hit.extras.get("source_order") or ()),
         policy=pol,
     )
 
@@ -359,7 +404,7 @@ def plan_seo_candidate_schedule(
 ) -> SeoCandidateSchedule:
     """Newspaper pages first, then uploads, until batch_size."""
     pol = normalize_policy(policy)
-    n = SEO_CANDIDATE_BATCH_DEFAULT if batch_size is None else int(batch_size)
+    n = pick(batch_size is None, lambda: SEO_CANDIDATE_BATCH_DEFAULT, lambda: int(batch_size))
     cap = max(1, n)
     return SeoCandidateSchedule(
         batch_size=cap,
@@ -375,18 +420,20 @@ def seo_candidate_slots_remaining(*, accepted: int, batch_size: int) -> int:
 
 def seo_candidate_min_chars(source_kind: str) -> int:
     """Pre-filter floor before a newspaper page or upload enters the SEO cook queue."""
-    if (source_kind or "").strip().lower() == "newspaper":
-        return SEO_USEFUL_MIN_CHARS
-    return SEO_UPLOAD_CANDIDATE_MIN_CHARS
+    return choose(
+        (source_kind or "").strip().lower() == "newspaper",
+        SEO_USEFUL_MIN_CHARS,
+        SEO_UPLOAD_CANDIDATE_MIN_CHARS,
+    )
 
 
 def plan_seo_candidate_query_limit(*, source_kind: str, requested: int) -> int:
     """Hard cap on how many candidate rows one SEO query may load."""
     kind = (source_kind or "").strip().lower()
-    cap = (
-        SEO_NEWSPAPER_CANDIDATE_QUERY_MAX
-        if kind == "newspaper"
-        else SEO_UPLOAD_CANDIDATE_QUERY_MAX
+    cap = choose(
+        kind == "newspaper",
+        SEO_NEWSPAPER_CANDIDATE_QUERY_MAX,
+        SEO_UPLOAD_CANDIDATE_QUERY_MAX,
     )
     return max(1, min(int(requested), int(cap)))
 
@@ -416,11 +463,15 @@ def plan_seo_fingerprint(
 ) -> str:
     """Stable fingerprints for bank/topic sources so we do not recook the same item."""
     kind = (source_kind or "").strip().lower()
-    if kind == "sd_bank":
-        return f"sd:{source_key}"
-    if kind == "topic_queue":
-        return f"topic:{source_key}"
-    return default_fingerprint
+    return pick(
+        kind == "sd_bank",
+        lambda: f"sd:{source_key}",
+        lambda: pick(
+            kind == "topic_queue",
+            lambda: f"topic:{source_key}",
+            lambda: default_fingerprint,
+        ),
+    )
 
 
 def evaluate_seo_mcq_attach_ready(
@@ -435,18 +486,24 @@ def evaluate_seo_mcq_attach_ready(
 def evaluate_digest_source_ready(text: str, *, filename: str = "") -> SeoUsefulnessVerdict:
     """Edition digest uses the usefulness gate; syllabus keywords are optional."""
     verdict = evaluate_usefulness(text, filename=filename)
-    if verdict.reason == "no_useful_signal":
-        return SeoUsefulnessVerdict(True, "ok", policy=verdict.policy)
-    return verdict
+    return pick(
+        verdict.reason == "no_useful_signal",
+        lambda: SeoUsefulnessVerdict(True, "ok", policy=verdict.policy),
+        lambda: verdict,
+    )
 
 
 def digest_skip_reason(verdict: SeoUsefulnessVerdict) -> str | None:
     """Map a digest usefulness miss to the cook skip taxonomy."""
-    if verdict.useful:
-        return None
-    if verdict.reason == "too_short":
-        return "insufficient_text"
-    return verdict.reason
+    return pick(
+        verdict.useful,
+        lambda: None,
+        lambda: pick(
+            verdict.reason == "too_short",
+            lambda: "insufficient_text",
+            lambda: verdict.reason,
+        ),
+    )
 
 
 def should_bypass_digest_dedupe(*, force: bool, existing_post_id: Any) -> bool:
@@ -462,9 +519,7 @@ EditionDigestSkipStatus = Literal["failed", "skipped"]
 
 def evaluate_edition_digest_skip_status(reason: str) -> EditionDigestSkipStatus:
     """Transient write failures stay retryable; other skips are terminal."""
-    if str(reason) in RETRYABLE_EDITION_DIGEST_REASONS:
-        return "failed"
-    return "skipped"
+    return choose(str(reason) in RETRYABLE_EDITION_DIGEST_REASONS, "failed", "skipped")
 
 
 def plan_seo_cook_tick(
@@ -486,27 +541,17 @@ def plan_seo_mcq_attach(
 ) -> list[Any]:
     """Prefer distinct concept keys, then backfill to min_count."""
     del policy
-    if not rows:
-        return []
     lo = max(1, int(min_count))
     hi = max(lo, int(max_count))
-    picked: list[Any] = []
     seen: set[str] = set()
+    unique: list[Any] = []
     for aid, ck in rows:
-        if ck in seen:
-            continue
+        unique += choose(ck in seen, [], [aid])
         seen.add(ck)
-        picked.append(aid)
-        if len(picked) >= hi:
-            break
-    if len(picked) < lo:
-        for aid, _ck in rows:
-            if aid in picked:
-                continue
-            picked.append(aid)
-            if len(picked) >= lo:
-                break
-    return picked[:hi]
+    picked = unique[:hi]
+    need = max(0, lo - len(picked))
+    extras = list(filter(lambda aid: aid not in picked, (aid for aid, _ck in rows)))[:need]
+    return (picked + extras)[:hi]
 
 
 @dataclass(frozen=True)
@@ -526,20 +571,22 @@ def plan_newspaper_digest(
     """Rank cooked MCQ pages first, else worthy fallback; cap digest length."""
     del policy
     cap = max(1, int(max_chars))
-    cooked = [p for p in pages if int(p.mcq_count) > 0]
-    if cooked:
-        ranked = sorted(cooked, key=lambda p: (-int(p.mcq_count), int(p.page)))
-    else:
-        ranked = sorted([p for p in pages if p.worthy], key=lambda p: int(p.page))
+    cooked = list(filter(lambda p: int(p.mcq_count) > 0, pages))
+    ranked = pick(
+        bool(cooked),
+        lambda: sorted(cooked, key=lambda p: (-int(p.mcq_count), int(p.page))),
+        lambda: sorted(list(filter(lambda p: p.worthy, pages)), key=lambda p: int(p.page)),
+    )
     parts: list[str] = []
-    total = 0
-    for page in ranked:
-        if total >= cap:
-            break
-        room = cap - total
-        chunk = page.text if len(page.text) <= room else page.text[:room]
+    total = [0]
+
+    def add_page(page: NewspaperDigestPage) -> None:
+        room = cap - total[0]
+        chunk = choose(len(page.text) <= room, page.text, page.text[:room])
         parts.append(chunk)
-        total += len(chunk) + 2
+        total[0] += len(chunk) + 2
+
+    list(map(add_page, filter(lambda _p: total[0] < cap, ranked)))
     return "\n\n".join(parts)
 
 
@@ -550,7 +597,7 @@ def plan_seo_faq_item_cap() -> int:
 
 def plan_seo_related_mcq_query_limit(requested: int | None = None) -> int:
     """Cap on related-assertion lookup when attaching MCQs to an SEO post."""
-    n = SEO_RELATED_MCQ_QUERY_DEFAULT if requested is None else int(requested)
+    n = pick(requested is None, lambda: SEO_RELATED_MCQ_QUERY_DEFAULT, lambda: int(requested))
     return max(1, min(n, SEO_RELATED_MCQ_QUERY_MAX))
 
 
@@ -591,3 +638,89 @@ def plan_seo_mcq_attach_defaults() -> SeoMcqAttachPlan:
 def plan_seo_digest_backfill_batch() -> int:
     """How many unlinked newspaper editions one digest-backfill tick may enqueue."""
     return plan_seo_candidate_schedule().batch_size
+
+
+def evaluate_seo_cook_enabled(settings: dict[str, Any] | None) -> bool:
+    """Master cook switch from qb.seo_settings."""
+    return bool((settings or {}).get("cook_enabled"))
+
+
+_EDITION_DIGEST_PREFLIGHT_RULES = (
+    Rule(when=(Pred("no_ed", "truthy"),), action="edition_not_found"),
+    Rule(when=(Pred("not_ready", "truthy"),), action="edition_not_ready"),
+    Rule(
+        when=(Pred("already", "truthy"), Pred("force", "falsey")),
+        action="already_published",
+    ),
+    Rule(when=(), action="ok"),
+)
+
+
+def evaluate_edition_digest_preflight(
+    ed: dict[str, Any] | None,
+    *,
+    force: bool = False,
+) -> str:
+    """Whether an edition may enter the digest cook, or why to skip."""
+    return first_match(
+        _EDITION_DIGEST_PREFLIGHT_RULES,
+        {
+            "no_ed": not ed,
+            "not_ready": bool(ed) and ed.get("status") != "ready",
+            "already": bool(ed)
+            and ed.get("blog_status") == "published"
+            and bool(ed.get("blog_post_id")),
+            "force": bool(force),
+        },
+    ).action
+
+
+_EDITION_BLOG_LINK_RULES = (
+    Rule(when=(Pred("no_ed", "truthy"),), action="missing"),
+    Rule(
+        when=(Pred("has_post", "truthy"), Pred("post_live", "truthy")),
+        action="already_linked",
+    ),
+    Rule(when=(Pred("fp_live", "truthy"),), action="link_existing"),
+    Rule(when=(), action="continue"),
+)
+
+
+def evaluate_edition_blog_link(
+    *,
+    has_edition: bool,
+    has_post_id: bool,
+    post_published: bool,
+    fingerprint_published: bool,
+) -> str:
+    """Repair vs short-circuit when a digest post is already live."""
+    return first_match(
+        _EDITION_BLOG_LINK_RULES,
+        {
+            "no_ed": not has_edition,
+            "has_post": has_post_id,
+            "post_live": post_published,
+            "fp_live": fingerprint_published,
+        },
+    ).action
+
+
+_SKIP_EDITION_LINK_RULES = (
+    Rule(
+        when=(Pred("has_post", "truthy"), Pred("post_live", "truthy")),
+        action="keep_published",
+    ),
+    Rule(when=(), action="record_skip"),
+)
+
+
+def evaluate_edition_skip_link(
+    *,
+    has_post_id: bool,
+    post_published: bool,
+) -> str:
+    """Keep a live digest link on skip, otherwise record the skip reason."""
+    return first_match(
+        _SKIP_EDITION_LINK_RULES,
+        {"has_post": has_post_id, "post_live": post_published},
+    ).action

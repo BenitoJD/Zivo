@@ -75,7 +75,7 @@ def test_create_edition_imports_reset_via_question_pool_facade() -> None:
     from app.services.question_pool import reset_for_new_page_range
     from app.services import question_pool_jobs
 
-    src = inspect.getsource(newspaper.create_edition_from_pdf)
+    src = inspect.getsource(newspaper._insert_edition_pdf)
     assert "from app.services.question_pool_jobs import" not in src
     assert "from app.services.question_pool import reset_for_new_page_range" in src
   # Import order that used to fail mid-init: jobs must fully export cancel helpers.

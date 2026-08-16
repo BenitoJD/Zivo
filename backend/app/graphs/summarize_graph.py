@@ -7,9 +7,11 @@ import uuid
 
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import apply, pick
 from app.services.chunk_map_cache import map_chunk_cached
 from app.services.chunks import load_document_chunk_texts
 from app.services.llm_router import complete_chat
+from app.services.presence import evaluate_presence
 from app.services.prompts import get_prompt
 from app.services.session_design import (
     plan_auxiliary_generation_strategy,
@@ -25,6 +27,14 @@ from app.services.token_budget import (
 # Per-chunk map step + roll-up over section summaries (cacheable prefix on roll-up).
 _CHUNK_MAP_MAX_TOKENS = SUMMARIZE_CHUNK_INPUT_MAX_TOKENS
 _ROLLUP_INPUT_MAX_TOKENS = SUMMARIZE_ROLLUP_INPUT_MAX_TOKENS
+
+
+def _cache_text(hit: object) -> str:
+    return pick(
+        isinstance(hit, str),
+        lambda: str(hit).strip(),
+        lambda: "",
+    )
 
 
 async def _summarize_chunk(
@@ -47,65 +57,119 @@ async def _summarize_chunk(
 
 async def generate_whole_doc_summary(db: Session, document_id: uuid.UUID) -> str:
     chunk_texts = load_document_chunk_texts(db, document_id)
-    if not chunk_texts:
+
+    async def _empty() -> str:
         return ""
 
-    system = get_prompt(db, "summarize_system")
-    from app.services.llm_registry import default_chat_model_id
+    async def _summarize() -> str:
+        system = get_prompt(db, "summarize_system")
+        from app.services.llm_registry import default_chat_model_id
 
-    model_id = default_chat_model_id(db)
-    body = "\n\n".join(chunk_texts)
-    gen = plan_auxiliary_generation_strategy(count_tokens(body))
+        model_id = default_chat_model_id(db)
+        body = "\n\n".join(chunk_texts)
+        gen = plan_auxiliary_generation_strategy(count_tokens(body))
 
-    if gen.mode == "single_shot":
-        from app.services.chunk_map_cache import content_hash_key
-        from app.services.generation_cache import get as cache_get, put as cache_put
+        async def _single_shot() -> str:
+            from app.services.chunk_map_cache import content_hash_key
+            from app.services.generation_cache import get as cache_get, put as cache_put
 
-        summary_key = content_hash_key(
-            "summarize_doc", system, truncate_to_tokens(body, gen.single_shot_max_tokens), str(model_id)
-        )
-        hit = cache_get(db, kind="summarize_doc", cache_key=summary_key)
-        if isinstance(hit, str) and hit.strip():
-            return hit
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": f"Summarize this document:\n\n{truncate_to_tokens(body, gen.single_shot_max_tokens)}"},
-        ]
-        out = (await complete_chat(messages, db, log_tag="summarize_doc", model_id=model_id)).strip()
-        if out:
-            cache_put(db, kind="summarize_doc", cache_key=summary_key, value=out)
-        return out
+            summary_key = content_hash_key(
+                "summarize_doc",
+                system,
+                truncate_to_tokens(body, gen.single_shot_max_tokens),
+                str(model_id),
+            )
+            hit = cache_get(db, kind="summarize_doc", cache_key=summary_key)
+            cached = _cache_text(hit)
 
-    section_sem = asyncio.Semaphore(plan_auxiliary_map_concurrency("summarize"))
+            async def _hit() -> str:
+                return cached
 
-    async def _summarize_one(text: str) -> str:
-        async with section_sem:
-            return await _summarize_chunk(db, text, system=system, model_id=model_id)
+            async def _miss() -> str:
+                messages = [
+                    {"role": "system", "content": system},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Summarize this document:\n\n"
+                            f"{truncate_to_tokens(body, gen.single_shot_max_tokens)}"
+                        ),
+                    },
+                ]
+                out = (
+                    await complete_chat(messages, db, log_tag="summarize_doc", model_id=model_id)
+                ).strip()
+                pick(bool(out), lambda: cache_put(db, kind="summarize_doc", cache_key=summary_key, value=out), lambda: None)
+                return out
 
-    section_summaries = [
-        s for s in await asyncio.gather(*[_summarize_one(text) for text in chunk_texts]) if s
-    ]
+            return await apply(
+                evaluate_presence(cached).action,
+                {"ok": _hit, "empty": _miss, "missing": _miss},
+            )
 
-    if not section_summaries:
-        return ""
+        async def _map_reduce() -> str:
+            section_sem = asyncio.Semaphore(plan_auxiliary_map_concurrency("summarize"))
 
-    rollup_body = truncate_to_tokens("\n\n".join(section_summaries), _ROLLUP_INPUT_MAX_TOKENS)
-    from app.services.chunk_map_cache import content_hash_key
-    from app.services.generation_cache import get as cache_get, put as cache_put
+            async def _summarize_one(text: str) -> str:
+                async with section_sem:
+                    return await _summarize_chunk(db, text, system=system, model_id=model_id)
 
-    rollup_key = content_hash_key("summarize_rollup", system, rollup_body, str(model_id))
-    hit = cache_get(db, kind="summarize_rollup", cache_key=rollup_key)
-    if isinstance(hit, str) and hit.strip():
-        return hit
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": f"Section summaries:\n\n{rollup_body}"},
-        {
-            "role": "user",
-            "content": "Write one cohesive document summary from these section summaries.",
-        },
-    ]
-    out = (await complete_chat(messages, db, log_tag="summarize_rollup", model_id=model_id)).strip()
-    if out:
-        cache_put(db, kind="summarize_rollup", cache_key=rollup_key, value=out)
-    return out
+            section_summaries = list(
+                filter(None, await asyncio.gather(*[_summarize_one(text) for text in chunk_texts]))
+            )
+
+            async def _rollup() -> str:
+                rollup_body = truncate_to_tokens(
+                    "\n\n".join(section_summaries), _ROLLUP_INPUT_MAX_TOKENS
+                )
+                from app.services.chunk_map_cache import content_hash_key
+                from app.services.generation_cache import get as cache_get, put as cache_put
+
+                rollup_key = content_hash_key(
+                    "summarize_rollup", system, rollup_body, str(model_id)
+                )
+                hit = cache_get(db, kind="summarize_rollup", cache_key=rollup_key)
+                cached = _cache_text(hit)
+
+                async def _hit() -> str:
+                    return cached
+
+                async def _miss() -> str:
+                    messages = [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": f"Section summaries:\n\n{rollup_body}"},
+                        {
+                            "role": "user",
+                            "content": "Write one cohesive document summary from these section summaries.",
+                        },
+                    ]
+                    out = (
+                        await complete_chat(
+                            messages, db, log_tag="summarize_rollup", model_id=model_id
+                        )
+                    ).strip()
+                    pick(
+                        bool(out),
+                        lambda: cache_put(
+                            db, kind="summarize_rollup", cache_key=rollup_key, value=out
+                        ),
+                        lambda: None,
+                    )
+                    return out
+
+                return await apply(
+                    evaluate_presence(cached).action,
+                    {"ok": _hit, "empty": _miss, "missing": _miss},
+                )
+
+            return await apply(
+                evaluate_presence(section_summaries).action,
+                {"ok": _rollup, "empty": _empty, "missing": _empty},
+            )
+
+        return await apply(gen.mode, {"single_shot": _single_shot, "map_reduce": _map_reduce})
+
+    return await apply(
+        evaluate_presence(chunk_texts).action,
+        {"missing": _empty, "empty": _empty, "ok": _summarize},
+    )

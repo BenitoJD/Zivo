@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from app.engine_runtime import choose
 from app.services.seo_cook import _edition_fingerprint, _edition_source_key
 from app.services.seo_voice import humanize_voice, strip_em_dashes
 from app.services import seo_writer
@@ -108,7 +109,7 @@ def test_aggregate_worthy_newspaper_text_prefers_cooked_pages(monkeypatch) -> No
     )
     monkeypatch.setattr(
         "app.services.question_pool.count_assertions_on_page",
-        lambda db, doc, page, serve_mode="learn": 3 if page == 5 else 0,
+        lambda db, doc, page, serve_mode="learn": choose(page == 5, 3, 0),
     )
     monkeypatch.setattr(
         "app.services.content_worthiness.evaluate_worthiness",

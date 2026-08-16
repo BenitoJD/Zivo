@@ -10,10 +10,19 @@ import httpx
 from fastapi import HTTPException
 
 from app.config import get_settings
+from app.engine_runtime import Pred, Rule, apply, first_match, pick
 
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=300.0, pool=5.0)
+
+_CLIENT_ERROR = {400, 401, 403, 404, 410, 413, 415}
+
+_STATUS_RULES = (
+    Rule(when=(Pred("ok", "truthy"),), action="ok"),
+    Rule(when=(Pred("client", "truthy"),), action="client"),
+    Rule(when=(), action="unavailable"),
+)
 
 
 def _client() -> httpx.Client:
@@ -25,21 +34,35 @@ def _client() -> httpx.Client:
     )
 
 
-def _raise_for_status(response: httpx.Response) -> None:
-    if response.status_code < 400:
-        return
-    detail = "Storage unavailable"
+def _detail_from_response(response: httpx.Response) -> str:
     try:
         body = response.json()
-        if isinstance(body, dict) and body.get("detail"):
-            detail = str(body["detail"])
+        return pick(
+            isinstance(body, dict) and bool(body.get("detail")),
+            lambda: str(body["detail"]),
+            lambda: pick(bool(response.text), lambda: response.text[:200], lambda: "Storage unavailable"),
+        )
     except Exception:
-        if response.text:
-            detail = response.text[:200]
-    if response.status_code in {400, 401, 403, 404, 410, 413, 415}:
-        raise HTTPException(status_code=response.status_code, detail=detail)
-    logger.warning("storage service error status=%s detail=%s", response.status_code, detail)
-    raise HTTPException(status_code=503, detail="Storage unavailable")
+        return pick(bool(response.text), lambda: response.text[:200], lambda: "Storage unavailable")
+
+
+def _raise_for_status(response: httpx.Response) -> None:
+    hit = first_match(
+        _STATUS_RULES,
+        {
+            "ok": response.status_code < 400,
+            "client": response.status_code in _CLIENT_ERROR,
+        },
+    )
+
+    def _client_err() -> None:
+        raise HTTPException(status_code=response.status_code, detail=_detail_from_response(response))
+
+    def _unavailable() -> None:
+        logger.warning("storage service error status=%s detail=%s", response.status_code, _detail_from_response(response))
+        raise HTTPException(status_code=503, detail="Storage unavailable")
+
+    apply(hit.action, {"ok": lambda: None, "client": _client_err, "unavailable": _unavailable})
 
 
 def _request(method: str, path: str, **kwargs) -> httpx.Response:
@@ -79,8 +102,7 @@ def save_upload(account_id: uuid.UUID | None, filename: str, data: bytes, conten
         "filename": filename,
         "content_type": content_type,
     }
-    if account_id is not None:
-        params["account_id"] = str(account_id)
+    pick(account_id is not None, lambda: params.__setitem__("account_id", str(account_id)), lambda: None)
     response = _request("PUT", "/api/storage/internal/objects", params=params, content=data)
     body = response.json()
     return str(body["storage_key"])
@@ -166,9 +188,7 @@ def presigned_get_url(storage_key: str, expires: int = 3600) -> str:
 
 def get_object_meta(*, object_id: uuid.UUID | None = None, storage_key: str | None = None) -> dict:
     params: dict[str, str] = {}
-    if object_id is not None:
-        params["object_id"] = str(object_id)
-    if storage_key:
-        params["key"] = storage_key
+    pick(object_id is not None, lambda: params.__setitem__("object_id", str(object_id)), lambda: None)
+    pick(bool(storage_key), lambda: params.__setitem__("key", storage_key), lambda: None)
     response = _request("GET", "/api/storage/internal/objects/meta", params=params)
     return response.json()

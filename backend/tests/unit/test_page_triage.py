@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from unittest.mock import MagicMock, patch
 
+from app.engine_runtime import pick
 from app.graphs import page_triage_graph as ptg
 from app.graphs.page_triage_graph import (
     _fallback_triage,
@@ -205,10 +206,7 @@ def test_finalize_triage_shrinks_budget_after_dedup() -> None:
     def fake_embed(texts: list[str]) -> list[list[float]]:
         out: list[list[float]] = []
         for t in texts:
-            if "calvin" in t.lower():
-                out.append([0.0, 1.0])
-            else:
-                out.append([1.0, 0.0])
+            out.append(pick("calvin" in t.lower(), lambda: [0.0, 1.0], lambda: [1.0, 0.0]))
         return out
 
     with patch("app.services.mcq_dedup.embed_texts", side_effect=fake_embed):

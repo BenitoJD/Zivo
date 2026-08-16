@@ -16,6 +16,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 from app.services.artifact_store import ArtifactStore, coerce_jsonb, run_artifact_generation
 from app.services.source_fingerprint import is_artifact_stale, mark_artifact_fresh
 
@@ -33,39 +34,51 @@ _FLASHCARDS_STORE = ArtifactStore(
     payload_col="cards",
 )
 
+_ENSURE_RULES = (
+    Rule(when=(Pred("ready_fresh", "truthy"),), action="keep"),
+    Rule(when=(Pred("generating", "truthy"),), action="keep"),
+    Rule(when=(), action="enqueue"),
+)
 
-# --------------------------------------------------------------------------- notes
+
 def load_notes(db: Session, document_id: uuid.UUID, kind: str) -> dict[str, Any]:
     """Return {status, content, error}. status: missing|generating|ready|failed."""
     row = _NOTES_STORE.load_row(db, document_id, kind=kind)
-    if not row:
-        return {"status": "missing", "content": "", "error": None}
-    return {"status": row["status"], "content": row["content"] or "", "error": row["error"]}
+    return pick(
+        not row,
+        lambda: {"status": "missing", "content": "", "error": None},
+        lambda: {"status": row["status"], "content": row["content"] or "", "error": row["error"]},
+    )
 
 
 def ensure_notes(db: Session, document_id: uuid.UUID, kind: str) -> dict[str, Any]:
-    if kind not in NOTE_KINDS:
-        kind = "notes"
+    kind = choose(kind in NOTE_KINDS, kind, "notes")
     state = load_notes(db, document_id, kind)
     fp_key = f"notes:{kind}"
-    if state["status"] == "ready" and not is_artifact_stale(db, document_id, fp_key):
-        return state
-    if state["status"] == "generating":
-        return state
-    from app.services.jobs import enqueue_notes
+    hit = first_match(
+        _ENSURE_RULES,
+        {
+            "ready_fresh": state["status"] == "ready" and not is_artifact_stale(db, document_id, fp_key),
+            "generating": state["status"] == "generating",
+        },
+    )
 
-    _NOTES_STORE.set_status(db, document_id, "generating", kind=kind)
-    db.commit()
-    enqueue_notes(db, document_id, kind)
-    return {"status": "generating", "content": "", "error": None}
+    def _enqueue() -> dict[str, Any]:
+        from app.services.jobs import enqueue_notes
+
+        _NOTES_STORE.set_status(db, document_id, "generating", kind=kind)
+        db.commit()
+        enqueue_notes(db, document_id, kind)
+        return {"status": "generating", "content": "", "error": None}
+
+    return apply(hit.action, {"keep": lambda: state, "enqueue": _enqueue})
 
 
 def run_notes_generation(db: Session, document_id: uuid.UUID, kind: str) -> str:
     """Worker entry: build and persist study notes (or a cheat sheet) for a document."""
     from app.graphs.notes_graph import generate_notes
 
-    if kind not in NOTE_KINDS:
-        kind = "notes"
+    kind = choose(kind in NOTE_KINDS, kind, "notes")
     result = run_artifact_generation(
         db,
         document_id,
@@ -75,33 +88,43 @@ def run_notes_generation(db: Session, document_id: uuid.UUID, kind: str) -> str:
         empty_error="no_notes_generated",
         key_and_extra={"kind": kind},
     )
-    if isinstance(result, str) and result.strip():
-        mark_artifact_fresh(db, document_id, f"notes:{kind}")
-        db.commit()
+    pick(
+        isinstance(result, str) and bool(result.strip()),
+        lambda: (mark_artifact_fresh(db, document_id, f"notes:{kind}"), db.commit()),
+        lambda: None,
+    )
     return result
 
 
-# ----------------------------------------------------------------------- flashcards
 def load_flashcards(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
     """Return {status, cards, error}. status: missing|generating|ready|failed."""
     row = _FLASHCARDS_STORE.load_row(db, document_id)
-    if not row:
-        return {"status": "missing", "cards": [], "error": None}
-    return {"status": row["status"], "cards": coerce_jsonb(row["cards"]) or [], "error": row["error"]}
+    return pick(
+        not row,
+        lambda: {"status": "missing", "cards": [], "error": None},
+        lambda: {"status": row["status"], "cards": coerce_jsonb(row["cards"]) or [], "error": row["error"]},
+    )
 
 
 def ensure_flashcards(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
     state = load_flashcards(db, document_id)
-    if state["status"] == "ready" and not is_artifact_stale(db, document_id, "flashcards"):
-        return state
-    if state["status"] == "generating":
-        return state
-    from app.services.jobs import enqueue_flashcards
+    hit = first_match(
+        _ENSURE_RULES,
+        {
+            "ready_fresh": state["status"] == "ready" and not is_artifact_stale(db, document_id, "flashcards"),
+            "generating": state["status"] == "generating",
+        },
+    )
 
-    _FLASHCARDS_STORE.set_status(db, document_id, "generating")
-    db.commit()
-    enqueue_flashcards(db, document_id)
-    return {"status": "generating", "cards": [], "error": None}
+    def _enqueue() -> dict[str, Any]:
+        from app.services.jobs import enqueue_flashcards
+
+        _FLASHCARDS_STORE.set_status(db, document_id, "generating")
+        db.commit()
+        enqueue_flashcards(db, document_id)
+        return {"status": "generating", "cards": [], "error": None}
+
+    return apply(hit.action, {"keep": lambda: state, "enqueue": _enqueue})
 
 
 def run_flashcards_generation(db: Session, document_id: uuid.UUID) -> list[dict[str, str]]:
@@ -116,7 +139,9 @@ def run_flashcards_generation(db: Session, document_id: uuid.UUID) -> list[dict[
         is_complete=bool,
         empty_error="no_cards_generated",
     )
-    if result:
-        mark_artifact_fresh(db, document_id, "flashcards")
-        db.commit()
+    pick(
+        bool(result),
+        lambda: (mark_artifact_fresh(db, document_id, "flashcards"), db.commit()),
+        lambda: None,
+    )
     return result

@@ -8,6 +8,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import choose, pick
+
 
 def upsert_facet(
     db: Session,
@@ -58,43 +60,44 @@ def upsert_facets(
     Each row: {assertion_id, artifact_id, page_number, sequence, payload}.
     Empty list is a no-op so callers can pass through unconditionally.
     """
-    if not rows:
-        return
-    bound: list[dict[str, Any]] = []
-    for r in rows:
-        payload = r.get("payload") or {}
-        question = str(payload.get("question") or payload.get("stem") or "")[:2000]
-        try:
-            ci = int(payload.get("correct_index", 0))
-        except (TypeError, ValueError):
-            ci = 0
-        bound.append(
-            {
-                "aid": r["assertion_id"],
-                "artifact_id": r["artifact_id"],
-                "page": r["page_number"],
-                "seq": r["sequence"],
-                "question": question,
-                "ci": ci,
-            }
-        )
-    db.execute(
-        text(
-            """
-            INSERT INTO qb.mcq_assertion_facets (
-              assertion_id, artifact_id, page_number, sequence, question, correct_index
+    def _upsert() -> None:
+        bound: list[dict[str, Any]] = []
+        for r in rows:
+            payload = r.get("payload") or {}
+            question = str(payload.get("question") or payload.get("stem") or "")[:2000]
+            try:
+                ci = int(payload.get("correct_index", 0))
+            except (TypeError, ValueError):
+                ci = 0
+            bound.append(
+                {
+                    "aid": r["assertion_id"],
+                    "artifact_id": r["artifact_id"],
+                    "page": r["page_number"],
+                    "seq": r["sequence"],
+                    "question": question,
+                    "ci": ci,
+                }
             )
-            VALUES (:aid, :artifact_id, :page, :seq, :question, :ci)
-            ON CONFLICT (assertion_id) DO UPDATE SET
-              artifact_id = EXCLUDED.artifact_id,
-              page_number = EXCLUDED.page_number,
-              sequence = EXCLUDED.sequence,
-              question = EXCLUDED.question,
-              correct_index = EXCLUDED.correct_index
-            """
-        ),
-        bound,
-    )
+        db.execute(
+            text(
+                """
+                INSERT INTO qb.mcq_assertion_facets (
+                  assertion_id, artifact_id, page_number, sequence, question, correct_index
+                )
+                VALUES (:aid, :artifact_id, :page, :seq, :question, :ci)
+                ON CONFLICT (assertion_id) DO UPDATE SET
+                  artifact_id = EXCLUDED.artifact_id,
+                  page_number = EXCLUDED.page_number,
+                  sequence = EXCLUDED.sequence,
+                  question = EXCLUDED.question,
+                  correct_index = EXCLUDED.correct_index
+                """
+            ),
+            bound,
+        )
+
+    pick(not rows, lambda: None, _upsert)
 
 
 def page_assertion_ids_from_facets(
@@ -104,15 +107,17 @@ def page_assertion_ids_from_facets(
     *,
     serve_mode: str | None = None,
 ) -> list[str] | None:
-    mode_filter = ""
     params: dict[str, Any] = {"artifact_id": artifact_id, "page": page}
-    if serve_mode is not None:
-        mode_filter = (
+
+    def _with_mode() -> str:
+        params["serve_mode"] = serve_mode
+        return (
             " AND EXISTS (SELECT 1 FROM intel.assertion a "
             "WHERE a.id = f.assertion_id "
             "AND COALESCE(a.payload->>'serve_mode', 'learn') = :serve_mode)"
         )
-        params["serve_mode"] = serve_mode
+
+    mode_filter = pick(serve_mode is not None, _with_mode, lambda: "")
     rows = db.execute(
         text(
             f"""
@@ -125,6 +130,8 @@ def page_assertion_ids_from_facets(
         ),
         params,
     ).scalars().all()
-    if not rows:
-        return None if serve_mode is None else []
-    return list(rows)
+    return pick(
+        not rows,
+        lambda: choose(serve_mode is None, None, []),
+        lambda: list(rows),
+    )

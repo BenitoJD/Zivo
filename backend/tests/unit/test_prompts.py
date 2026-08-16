@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import re
 
+from app.engine_runtime import pick
+
 
 class _StubQuery:
     def filter(self, *a, **k):  # noqa: D401
@@ -30,7 +32,7 @@ class _StubDB:
 
 def _example_block(text: str) -> str | None:
     m = re.search(r"```zv-mcq\s*(\{.*?\})\s*```", text, re.DOTALL)
-    return m.group(1) if m else None
+    return pick(bool(m), lambda: m.group(1), lambda: None)
 
 
 def test_generate_prompt_example_is_valid_single_brace_json() -> None:

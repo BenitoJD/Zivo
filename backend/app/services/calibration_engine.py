@@ -20,6 +20,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import Pred, Rule, apply, first_match
 from app.repositories.intel import concept_id
 
 CALIBRATION_VERSION = "qb.calibration.v1"
@@ -50,6 +51,67 @@ _EASY_VERBS = re.compile(
     r"\b(define|identif(?:y|ies)|name|list|recall|state|label|who|when|where|"
     r"what\s+is|which\s+of)\b",
     re.IGNORECASE,
+)
+
+_SPREAD_RULES = (
+    Rule(when=(Pred("mean_ok", "truthy"),), action="spread"),
+    Rule(when=(), action="zero"),
+)
+_HARD_VERB_RULES = (
+    Rule(when=(Pred("hit", "truthy"),), action="add", extras={"delta": 0.6}),
+    Rule(when=(), action="none", extras={"delta": 0.0}),
+)
+_EASY_VERB_RULES = (
+    Rule(when=(Pred("hit", "truthy"),), action="add", extras={"delta": -0.6}),
+    Rule(when=(), action="none", extras={"delta": 0.0}),
+)
+_OPTION_COUNT_RULES = (
+    Rule(when=(Pred("has_options", "truthy"),), action="guess_rate"),
+    Rule(when=(), action="none"),
+)
+_OPTION_SPREAD_RULES = (
+    Rule(when=(Pred("enough", "truthy"),), action="spread"),
+    Rule(when=(), action="none"),
+)
+_POLICY_RULES = (
+    Rule(when=(Pred("known", "truthy"),), action="keep"),
+    Rule(when=(), action="default"),
+)
+_K_RULES = (
+    Rule(when=(Pred("dynamic", "truthy"),), action="dynamic"),
+    Rule(when=(), action="base"),
+)
+_SUBJECT_RULES = (
+    Rule(when=(Pred("has_entity", "truthy"),), action="entity"),
+    Rule(when=(), action="assertion"),
+)
+_JSON_LOAD_RULES = (
+    Rule(when=(Pred("is_str", "truthy"),), action="parse"),
+    Rule(when=(), action="keep"),
+)
+_DICT_RULES = (
+    Rule(when=(Pred("is_dict", "truthy"),), action="ok"),
+    Rule(when=(), action="empty"),
+)
+_RATING_RULES = (
+    Rule(when=(Pred("has_rating", "truthy"),), action="blob"),
+    Rule(when=(), action="default"),
+)
+_INFO_PROXY_RULES = (
+    Rule(when=(Pred("need_proxy", "truthy"),), action="proxy"),
+    Rule(when=(), action="keep"),
+)
+_INFO_APPEND_RULES = (
+    Rule(when=(Pred("has_info", "truthy"),), action="include"),
+    Rule(when=(), action="omit"),
+)
+_SEED_RULES = (
+    Rule(when=(Pred("exists", "truthy"),), action="skip"),
+    Rule(when=(), action="seed"),
+)
+_OUTCOME_RULES = (
+    Rule(when=(Pred("correct", "truthy"),), action="hit"),
+    Rule(when=(), action="miss"),
 )
 
 
@@ -94,6 +156,20 @@ def estimate_birth_difficulty(
     return birth_difficulty_prior(mcq, policy=policy).difficulty
 
 
+def _option_spread_score(options: list[str]) -> float:
+    lengths = [len(o) for o in options]
+    mean = sum(lengths) / len(lengths)
+    return apply(
+        first_match(_SPREAD_RULES, {"mean_ok": mean > 0}).action,
+        {
+            "spread": lambda: max(
+                -0.5, min(0.5, 0.6 - (max(lengths) - min(lengths)) / mean)
+            ),
+            "zero": lambda: 0.0,
+        },
+    )
+
+
 def birth_difficulty_prior(
     mcq: dict,
     *,
@@ -112,23 +188,33 @@ def birth_difficulty_prior(
     """
     pol = (policy or BIRTH_PRIOR_POLICY).strip().lower() or BIRTH_PRIOR_POLICY
     question = str(mcq.get("question") or mcq.get("stem") or "")
-    options = [str(o) for o in (mcq.get("options") or mcq.get("choices") or []) if str(o).strip()]
+    options = [
+        str(o)
+        for o in filter(
+            lambda o: str(o).strip(),
+            mcq.get("options") or mcq.get("choices") or [],
+        )
+    ]
     angle = str(mcq.get("cognitive_angle") or "")
     haystack = f"{angle}\n{question}"
 
     score = 0.0
-    if _HARD_VERBS.search(haystack):
-        score += 0.6
-    if _EASY_VERBS.search(haystack):
-        score -= 0.6
-    if options:
-        score += (len(options) - 4) * 0.25
-    if len(options) >= 3:
-        lengths = [len(o) for o in options]
-        mean = sum(lengths) / len(lengths)
-        if mean > 0:
-            spread = (max(lengths) - min(lengths)) / mean
-            score += max(-0.5, min(0.5, 0.6 - spread))
+    score += float(first_match(_HARD_VERB_RULES, {"hit": bool(_HARD_VERBS.search(haystack))}).extras["delta"])
+    score += float(first_match(_EASY_VERB_RULES, {"hit": bool(_EASY_VERBS.search(haystack))}).extras["delta"])
+    score += apply(
+        first_match(_OPTION_COUNT_RULES, {"has_options": bool(options)}).action,
+        {
+            "guess_rate": lambda: (len(options) - 4) * 0.25,
+            "none": lambda: 0.0,
+        },
+    )
+    score += apply(
+        first_match(_OPTION_SPREAD_RULES, {"enough": len(options) >= 3}).action,
+        {
+            "spread": lambda: _option_spread_score(options),
+            "none": lambda: 0.0,
+        },
+    )
     words = len(question.split())
     score += max(-0.3, min(0.5, (words - 18) / 40.0))
     difficulty = max(-PRIOR_CLAMP, min(PRIOR_CLAMP, score))
@@ -166,7 +252,10 @@ def elo_update(
     scale: float = ELO_SCALE,
 ) -> EloUpdate:
     p = expected_correct(ability, difficulty, scale=scale)
-    outcome = 1.0 if correct else 0.0
+    outcome = apply(
+        first_match(_OUTCOME_RULES, {"correct": correct}).action,
+        {"hit": lambda: 1.0, "miss": lambda: 0.0},
+    )
     return EloUpdate(
         ability=ability + k_learner * (outcome - p),
         difficulty=difficulty + k_item * (p - outcome),
@@ -187,11 +276,24 @@ def update_from_outcome(
 ) -> CalibrationVerdict:
     """Pure calibration step. No I/O."""
     pol = (policy or DEFAULT_CALIBRATION_POLICY).strip().lower()
-    if pol not in ("elo_online_v1", "elo"):
-        # Unknown → still Elo (safe default).
-        pol = DEFAULT_CALIBRATION_POLICY
-    k_l = dynamic_k(ability_n, K_LEARNER) if use_dynamic_k else K_LEARNER
-    k_i = dynamic_k(difficulty_n, K_ITEM) if use_dynamic_k else K_ITEM
+    pol = apply(
+        first_match(_POLICY_RULES, {"known": pol in ("elo_online_v1", "elo")}).action,
+        {"keep": lambda: pol, "default": lambda: DEFAULT_CALIBRATION_POLICY},
+    )
+    k_l = apply(
+        first_match(_K_RULES, {"dynamic": use_dynamic_k}).action,
+        {
+            "dynamic": lambda: dynamic_k(ability_n, K_LEARNER),
+            "base": lambda: K_LEARNER,
+        },
+    )
+    k_i = apply(
+        first_match(_K_RULES, {"dynamic": use_dynamic_k}).action,
+        {
+            "dynamic": lambda: dynamic_k(difficulty_n, K_ITEM),
+            "base": lambda: K_ITEM,
+        },
+    )
     upd = elo_update(ability, difficulty, correct, k_learner=k_l, k_item=k_i)
     info = float(running_info) + fisher_info_1pl(ability, difficulty)
     return CalibrationVerdict(
@@ -215,8 +317,14 @@ def _latest_rating_blob(
     entity_id: uuid.UUID | None = None,
     assertion_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
-    column = "subject_entity_id" if entity_id is not None else "subject_assertion_id"
-    subject = entity_id if entity_id is not None else assertion_id
+    subject = apply(
+        first_match(_SUBJECT_RULES, {"has_entity": entity_id is not None}).action,
+        {
+            "entity": lambda: ("subject_entity_id", entity_id),
+            "assertion": lambda: ("subject_assertion_id", assertion_id),
+        },
+    )
+    column, subject_id = subject
     value = db.execute(
         text(
             f"""
@@ -226,13 +334,16 @@ def _latest_rating_blob(
             LIMIT 1
             """
         ),
-        {"t": concept_id(db, type_uri), "s": subject},
+        {"t": concept_id(db, type_uri), "s": subject_id},
     ).scalar()
-    if isinstance(value, str):
-        value = json.loads(value)
-    if isinstance(value, dict):
-        return value
-    return {}
+    loaded = apply(
+        first_match(_JSON_LOAD_RULES, {"is_str": isinstance(value, str)}).action,
+        {"parse": lambda: json.loads(value), "keep": lambda: value},
+    )
+    return apply(
+        first_match(_DICT_RULES, {"is_dict": isinstance(loaded, dict)}).action,
+        {"ok": lambda: loaded, "empty": lambda: {}},
+    )
 
 
 def _latest_rating(
@@ -245,21 +356,38 @@ def _latest_rating(
     blob = _latest_rating_blob(
         db, type_uri, entity_id=entity_id, assertion_id=assertion_id
     )
-    if blob.get("rating") is not None:
-        return float(blob["rating"]), int(blob.get("n") or 0)
-    return DEFAULT_RATING, 0
+    return apply(
+        first_match(_RATING_RULES, {"has_rating": blob.get("rating") is not None}).action,
+        {
+            "blob": lambda: (float(blob["rating"]), int(blob.get("n") or 0)),
+            "default": lambda: (DEFAULT_RATING, 0),
+        },
+    )
 
 
 def get_ability(db: Session, entity_id: uuid.UUID) -> tuple[float, int, float]:
     """Return (rating, n, se) for Selection / Mastery."""
     blob = _latest_rating_blob(db, ABILITY_PROJECTION_URI, entity_id=entity_id)
-    if blob.get("rating") is None:
-        return DEFAULT_RATING, 0, se_from_info(0.0)
-    info = float(blob.get("info") or 0.0)
-    if info <= 0 and int(blob.get("n") or 0) > 0:
-        # Legacy rows without info: approximate from n * 0.2
-        info = 0.2 * int(blob["n"])
-    return float(blob["rating"]), int(blob.get("n") or 0), se_from_info(info)
+
+    def _from_blob() -> tuple[float, int, float]:
+        info = float(blob.get("info") or 0.0)
+        n = int(blob.get("n") or 0)
+        info = apply(
+            first_match(
+                _INFO_PROXY_RULES,
+                {"need_proxy": info <= 0 and n > 0},
+            ).action,
+            {"proxy": lambda: 0.2 * n, "keep": lambda: info},
+        )
+        return float(blob["rating"]), n, se_from_info(info)
+
+    return apply(
+        first_match(_RATING_RULES, {"has_rating": blob.get("rating") is not None}).action,
+        {
+            "default": lambda: (DEFAULT_RATING, 0, se_from_info(0.0)),
+            "blob": _from_blob,
+        },
+    )
 
 
 def get_difficulty(db: Session, assertion_id: uuid.UUID) -> tuple[float, int]:
@@ -285,8 +413,15 @@ def _append_rating(
         "policy": DEFAULT_CALIBRATION_POLICY,
         "version": CALIBRATION_VERSION,
     }
-    if info is not None:
-        payload["info"] = round(float(info), 6)
+    payload.update(
+        apply(
+            first_match(_INFO_APPEND_RULES, {"has_info": info is not None}).action,
+            {
+                "include": lambda: {"info": round(float(info), 6)},
+                "omit": lambda: {},
+            },
+        )
+    )
     db.execute(
         text(
             """
@@ -317,17 +452,22 @@ def seed_item_difficulty(db: Session, assertion_id: uuid.UUID, difficulty: float
         ),
         {"t": concept_id(db, DIFFICULTY_PROJECTION_URI), "a": assertion_id},
     ).first()
-    if existing is not None:
-        return False
-    _append_rating(
-        db,
-        DIFFICULTY_PROJECTION_URI,
-        now=datetime.now(timezone.utc),
-        rating=difficulty,
-        n=0,
-        assertion_id=assertion_id,
+
+    def _seed() -> bool:
+        _append_rating(
+            db,
+            DIFFICULTY_PROJECTION_URI,
+            now=datetime.now(timezone.utc),
+            rating=difficulty,
+            n=0,
+            assertion_id=assertion_id,
+        )
+        return True
+
+    return apply(
+        first_match(_SEED_RULES, {"exists": existing is not None}).action,
+        {"skip": lambda: False, "seed": _seed},
     )
-    return True
 
 
 def record_outcome(
@@ -344,7 +484,13 @@ def record_outcome(
     ability_blob = _latest_rating_blob(
         db, ABILITY_PROJECTION_URI, entity_id=subject_entity_id
     )
-    ability = float(ability_blob["rating"]) if ability_blob.get("rating") is not None else DEFAULT_RATING
+    ability = apply(
+        first_match(_RATING_RULES, {"has_rating": ability_blob.get("rating") is not None}).action,
+        {
+            "blob": lambda: float(ability_blob["rating"]),
+            "default": lambda: DEFAULT_RATING,
+        },
+    )
     ability_n = int(ability_blob.get("n") or 0)
     running_info = float(ability_blob.get("info") or 0.0)
     difficulty, difficulty_n = _latest_rating(

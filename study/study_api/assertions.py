@@ -10,56 +10,82 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.engine_runtime import apply, pick
 from app.models import Account, User
 from app.repositories.intel import create_activity
 from app.services.auth import get_current_user, get_optional_user, require_csrf, require_csrf_or_guest
 from app.services.document_access import require_document
 from app.services.guest_session import guest_session_for_read
+from app.services.http_outcome import evaluate_http_outcome
 from app.services.jobs import enqueue_generate
 from app.services.mcq_dedup import (
     coerce_mcq_options,
     sanitize_mcq_stem,
 )
+from app.services.presence import evaluate_presence
 from app.services.rate_limit import rate_limit_dependency
 
 router = APIRouter()
 
 
+def _raise(exc: BaseException) -> None:
+    raise exc
+
+
+def _http(action: str, detail: str) -> None:
+    _raise(HTTPException(status_code=evaluate_http_outcome(action).status, detail=detail))
+
+
 def _sanitize_assertion_payload(payload: dict | None) -> dict:
-    if not isinstance(payload, dict):
-        return {}
-    out = dict(payload)
-    question = sanitize_mcq_stem(str(out.get("question") or out.get("stem") or ""))
-    if question:
-        out["question"] = question
-        out.pop("stem", None)
-    raw_options = out.get("options") or out.get("choices")
-    options = coerce_mcq_options(raw_options)
-    if options:
-        out["options"] = options
-        out.pop("choices", None)
-    # Answer key must not leak to learners before they grade. The grade
-    # endpoint (/api/mcq/grade) is the only place that returns the verdict,
-    # correct index/indices, explanation, and per-option feedback. Here we
-    # keep only a boolean is_multi so the UI can render select-all mode
-    # without revealing how many answers are correct or which they are.
-    multi_list = out.get("correct_indices")
-    if not isinstance(multi_list, list):
-        multi_list = out["correct_index"] if isinstance(out.get("correct_index"), list) else None
-    out["is_multi"] = bool(multi_list) and len(multi_list) >= 2
-    for leaked in (
-        "correct_index", "correct_indices", "explanation", "option_feedback",
-        "answer", "answers", "quality",  # internal QA/generation metadata
-    ):
-        out.pop(leaked, None)
-    return out
+    def _clean() -> dict:
+        out = dict(payload)
+        question = sanitize_mcq_stem(str(out.get("question") or out.get("stem") or ""))
+        pick(
+            bool(question),
+            lambda: (out.__setitem__("question", question), out.pop("stem", None)),
+            lambda: None,
+        )
+        raw_options = out.get("options") or out.get("choices")
+        options = coerce_mcq_options(raw_options)
+        pick(
+            bool(options),
+            lambda: (out.__setitem__("options", options), out.pop("choices", None)),
+            lambda: None,
+        )
+        # Answer key must not leak to learners before they grade. The grade
+        # endpoint (/api/mcq/grade) is the only place that returns the verdict,
+        # correct index/indices, explanation, and per-option feedback. Here we
+        # keep only a boolean is_multi so the UI can render select-all mode
+        # without revealing how many answers are correct or which they are.
+        multi_list = out.get("correct_indices")
+        multi_list = pick(
+            isinstance(multi_list, list),
+            lambda: multi_list,
+            lambda: pick(
+                isinstance(out.get("correct_index"), list),
+                lambda: out["correct_index"],
+                lambda: None,
+            ),
+        )
+        out["is_multi"] = bool(multi_list) and len(multi_list) >= 2
+        for leaked in (
+            "correct_index", "correct_indices", "explanation", "option_feedback",
+            "answer", "answers", "quality",
+        ):
+            out.pop(leaked, None)
+        return out
+
+    return pick(isinstance(payload, dict), _clean, lambda: {})
 
 
 def _sanitize_assertion_row(row: dict) -> dict:
     out = dict(row)
     payload = out.get("payload")
-    if isinstance(payload, dict):
-        out["payload"] = _sanitize_assertion_payload(payload)
+    pick(
+        isinstance(payload, dict),
+        lambda: out.__setitem__("payload", _sanitize_assertion_payload(payload)),
+        lambda: None,
+    )
     return out
 
 
@@ -79,13 +105,23 @@ def _assertion_access(
         ),
         {"id": assertion_id},
     ).mappings().first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Not found")
+    apply(
+        evaluate_presence(row).action,
+        {
+            "missing": lambda: _http("missing", "Not found"),
+            "empty": lambda: _http("missing", "Not found"),
+            "ok": lambda: None,
+        },
+    )
     artifact_raw = (row.get("payload") or {}).get("artifact_id")
-    # Assertions without a document link are not publicly readable — skipping
-    # require_document here used to leak orphan / mis-keyed assertion content.
-    if not artifact_raw:
-        raise HTTPException(status_code=404, detail="Not found")
+    apply(
+        evaluate_presence(artifact_raw).action,
+        {
+            "missing": lambda: _http("missing", "Not found"),
+            "empty": lambda: _http("missing", "Not found"),
+            "ok": lambda: None,
+        },
+    )
     require_document(db, uuid.UUID(str(artifact_raw)), user, guest_id)
     return _sanitize_assertion_row(dict(row))
 
@@ -179,7 +215,11 @@ def flag_assertion(
             VALUES (:aid, :uid, :reason)
             """
         ),
-        {"aid": assertion_id, "uid": user.id if user else None, "reason": body.reason},
+        {
+            "aid": assertion_id,
+            "uid": pick(bool(user), lambda: user.id, lambda: None),
+            "reason": body.reason,
+        },
     )
     db.commit()
     return {"ok": True}
@@ -195,8 +235,14 @@ def remediate(
 ) -> dict:
     row = _assertion_access(db, assertion_id, user, guest_id)
     artifact_raw = (row.get("payload") or {}).get("artifact_id")
-    if not artifact_raw:
-        raise HTTPException(status_code=404, detail="Not found")
+    apply(
+        evaluate_presence(artifact_raw).action,
+        {
+            "missing": lambda: _http("missing", "Not found"),
+            "empty": lambda: _http("missing", "Not found"),
+            "ok": lambda: None,
+        },
+    )
     artifact_id = uuid.UUID(str(artifact_raw))
     job = enqueue_generate(
         db,

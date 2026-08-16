@@ -23,6 +23,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import apply, pick
 from app.models import Document, DocumentChunk
 from app.services.document_learner_state import learner_key_for_user
 from app.services.llm_json import extract_json_obj
@@ -34,8 +35,10 @@ from app.services.open_response import (
     degraded_interview_scores,
     empty_interview_scores,
     evaluate_interview_coding_turn,
+    evaluate_interview_turn_kind,
     plan_resume_chunk_limit,
     plan_resume_input_tokens,
+    resolve_coding_language_id,
     shape_interview_scores,
 )
 from app.services.session_design import plan_interview_rounds
@@ -52,8 +55,6 @@ CATEGORY_META: dict[str, dict[str, str]] = {
     "startup": {"label": "Startup", "blurb": "Early-stage, fast-paced, generalist"},
     "other": {"label": "Other", "blurb": "A balanced general interview"},
 }
-
-# RUBRIC_DIMENSIONS from Open Response Measurement Engine.
 
 # Built-in, self-contained stdin→stdout problems used when the LLM can't produce a gradable
 # coding question — so the DSA round is always a real coding round, never a silent downgrade.
@@ -108,6 +109,10 @@ _EVAL_SYSTEM = (
 )
 
 
+def _raise_value(msg: str) -> None:
+    raise ValueError(msg)
+
+
 # ---------------------------------------------------------------- persistence
 def resolve_interview_learner_key(
     user_id: uuid.UUID | None, guest_id: str | None
@@ -126,9 +131,14 @@ def load_interview(
         ),
         {"id": document_id, "key": learner_key},
     ).mappings().first()
-    if not row:
-        return {"status": "missing", "categories": CATEGORY_META, **_empty()}
+    return pick(
+        not row,
+        lambda: {"status": "missing", "categories": CATEGORY_META, **_empty()},
+        lambda: _load_interview_row(row),
+    )
 
+
+def _load_interview_row(row: Any) -> dict[str, Any]:
     config = _as_json(row["config"], [])
     state = _as_json(row["state"], {})
     transcript = _as_json(row["transcript"], [])
@@ -140,12 +150,19 @@ def load_interview(
         "rounds": [{"name": r["name"], "kind": r["kind"], "questions": r["questions"]} for r in config],
         "round_index": (state or {}).get("round_index", 0),
         "total_rounds": len(config),
-        "current_question": _public_question(current) if current else None,
+        "current_question": pick(
+            bool(current),
+            lambda: _public_question(current),
+            lambda: None,
+        ),
         "transcript": [_public_turn(t) for t in transcript],
         "error": row["error"],
     }
-    if row["status"] == "complete":
-        out["report"] = build_report(config, transcript)
+    pick(
+        row["status"] == "complete",
+        lambda: out.__setitem__("report", build_report(config, transcript)),
+        lambda: None,
+    )
     return out
 
 
@@ -215,11 +232,17 @@ async def start_interview(
     """Begin (or resume) an interview for the chosen company category."""
     planned = plan_interview_rounds(category)
     category = planned.category
-
     existing = load_interview(db, document_id, learner_key=learner_key)
-    if existing["status"] == "in_progress" and existing["category"] == category:
-        return existing  # idempotent — don't nuke progress on a repeat start
+    return pick(
+        existing["status"] == "in_progress" and existing["category"] == category,
+        lambda: existing,
+        lambda: None,
+    ) or await _start_fresh(db, document_id, category, learner_key, planned)
 
+
+async def _start_fresh(
+    db: Session, document_id: uuid.UUID, category: str, learner_key: str, planned: Any
+) -> dict[str, Any]:
     config = [dict(r) for r in planned.rounds]
     resume = _resume_text(db, document_id)
     first = await _generate_question(db, category, config[0], resume, asked=[])
@@ -248,15 +271,17 @@ async def submit_answer(
         ),
         {"id": document_id, "key": learner_key},
     ).mappings().first()
-    if not row or row["status"] != "in_progress":
-        raise ValueError("no interview in progress")
+    pick(
+        not row or row["status"] != "in_progress",
+        lambda: _raise_value("no interview in progress"),
+        lambda: None,
+    )
     category = row["category"]
     config = _as_json(row["config"], [])
     state = _as_json(row["state"], {})
     transcript = _as_json(row["transcript"], [])
     current = state.get("current")
-    if not current:
-        raise ValueError("no pending question")
+    pick(not current, lambda: _raise_value("no pending question"), lambda: None)
 
     turn = await _evaluate(db, current, answer)
     transcript.append(turn)
@@ -269,25 +294,53 @@ async def submit_answer(
         round_question_count=int(config[int(state["round_index"])]["questions"]),
         round_count=len(config),
     )
-    if advance.complete:
-        _save(
-            db,
-            document_id,
-            learner_key=learner_key,
-            category=category,
-            config=config,
-            state={
-                "round_index": advance.round_index,
-                "q_in_round": advance.q_in_round,
-                "current": None,
-            },
-            transcript=transcript,
-            status="complete",
-        )
-        return load_interview(db, document_id, learner_key=learner_key)
+    return pick(
+        advance.complete,
+        lambda: _finish_interview(
+            db, document_id, learner_key, category, config, advance, transcript
+        ),
+        lambda: None,
+    ) or await _continue_interview(
+        db, document_id, learner_key, category, config, advance, transcript
+    )
 
+
+def _finish_interview(
+    db: Session,
+    document_id: uuid.UUID,
+    learner_key: str,
+    category: str,
+    config: list,
+    advance: Any,
+    transcript: list,
+) -> dict[str, Any]:
+    _save(
+        db,
+        document_id,
+        learner_key=learner_key,
+        category=category,
+        config=config,
+        state={
+            "round_index": advance.round_index,
+            "q_in_round": advance.q_in_round,
+            "current": None,
+        },
+        transcript=transcript,
+        status="complete",
+    )
+    return load_interview(db, document_id, learner_key=learner_key)
+
+
+async def _continue_interview(
+    db: Session,
+    document_id: uuid.UUID,
+    learner_key: str,
+    category: str,
+    config: list,
+    advance: Any,
+    transcript: list,
+) -> dict[str, Any]:
     ri, qi = advance.round_index, advance.q_in_round
-
     resume = _resume_text(db, document_id)
     asked = [t["question"] for t in transcript]
     nxt = await _generate_question(db, category, config[ri], resume, asked=asked)
@@ -319,8 +372,6 @@ async def _generate_question(
     contract = plan_interview_gen_contract(str(rnd.get("kind") or ""))
     schema = contract.schema
     rules = contract.rules
-    # Prefix-cache discipline: the resume is byte-stable across every call of an
-    # interview, so it leads; the asked-list changes each question and rides last.
     user = (
         f"CANDIDATE RESUME:\n{truncate_to_tokens(resume, plan_resume_input_tokens()) or '(resume unavailable)'}\n\n"
         f"Company type: {label}\n"
@@ -337,59 +388,128 @@ async def _generate_question(
         "interview_gen", category, rnd["name"], rnd["kind"], rnd["focus"], resume_digest, asked_digest
     )
     hit = cache_get(db, kind="interview_gen", cache_key=gen_key)
-    if isinstance(hit, dict) and hit.get("question"):
-        return hit
+    return pick(
+        isinstance(hit, dict) and bool(hit.get("question")),
+        lambda: hit,
+        lambda: None,
+    ) or await _generate_question_fresh(db, rnd, user, asked, contract, gen_key, cache_put)
 
+
+async def _generate_question_fresh(
+    db: Session,
+    rnd: Round,
+    user: str,
+    asked: list[str],
+    contract: Any,
+    gen_key: str,
+    cache_put: Any,
+) -> dict[str, Any]:
     raw = await complete_chat(
         [{"role": "system", "content": _GEN_SYSTEM}, {"role": "user", "content": user}],
         db, log_tag="interview_gen",
     )
     data = _parse_json_obj(raw)
-
     q = (data.get("question") or "").strip()
-    out: dict[str, Any] = {"kind": rnd["kind"], "round_name": rnd["name"], "focus": rnd["focus"],
-                           "question": q or _fallback_question(rnd)}
-    from app.services.session_design import plan_interview_question_shape, pick_interview_coding_fallback
-
-    if rnd["kind"] == "mcq":
-        opts = [str(o).strip() for o in (data.get("options") or []) if str(o).strip()]
-        ci = int(data.get("correct_index", 0)) if str(data.get("correct_index", "")).strip() != "" else 0
-        mcq_valid = len(opts) >= 2 and 0 <= ci < len(opts)
-        shape = plan_interview_question_shape(
-            planned_kind="mcq", mcq_valid=mcq_valid, coding_has_tests=True
-        )
-        if shape == "typed":
-            out["kind"] = "typed"
-        else:
-            out["options"] = opts[: contract.max_options]
-            out["correct_index"] = min(ci, len(out["options"]) - 1)
-            out["explanation"] = (data.get("explanation") or "").strip()
-    elif rnd["kind"] == "coding":
-        from app.services.code_execution import DEFAULT_LANGUAGE_ID, LANGUAGES
-
-        tests = [
-            {"stdin": str(t.get("stdin", "")), "expected_output": str(t.get("expected_output", ""))}
-            for t in (data.get("tests") or [])
-            if isinstance(t, dict) and str(t.get("expected_output", "")).strip() != ""
-        ]
-        shape = plan_interview_question_shape(
-            planned_kind="coding", mcq_valid=True, coding_has_tests=bool(tests)
-        )
-        if shape == "coding_fallback":
-            fb = pick_interview_coding_fallback(len(asked), _FALLBACK_CODING)
-            out.update({
-                "kind": "coding", "question": fb["question"], "starter_code": fb["starter_code"],
-                "language_id": DEFAULT_LANGUAGE_ID, "tests": fb["tests"], "explanation": fb["explanation"],
-            })
-        else:
-            lid = data.get("language_id", DEFAULT_LANGUAGE_ID)
-            out["language_id"] = lid if lid in LANGUAGES else DEFAULT_LANGUAGE_ID
-            out["starter_code"] = (data.get("starter_code") or "").rstrip()
-            out["tests"] = tests[: contract.max_tests]
-            out["explanation"] = (data.get("explanation") or "").strip()
-    if out.get("question"):
-        cache_put(db, kind="interview_gen", cache_key=gen_key, value=out)
+    out: dict[str, Any] = {
+        "kind": rnd["kind"],
+        "round_name": rnd["name"],
+        "focus": rnd["focus"],
+        "question": q or _fallback_question(rnd),
+    }
+    apply(
+        evaluate_interview_turn_kind(str(rnd["kind"])),
+        {
+            "mcq": lambda: _fill_generated_mcq(out, data, contract),
+            "coding": lambda: _fill_generated_coding(out, data, contract, asked),
+            "typed": lambda: None,
+        },
+    )
+    pick(
+        bool(out.get("question")),
+        lambda: cache_put(db, kind="interview_gen", cache_key=gen_key, value=out),
+        lambda: None,
+    )
     return out
+
+
+def _fill_generated_mcq(out: dict[str, Any], data: dict[str, Any], contract: Any) -> None:
+    from app.services.session_design import plan_interview_question_shape
+
+    opts = list(filter(None, (str(o).strip() for o in (data.get("options") or []))))
+    raw_ci = str(data.get("correct_index", "")).strip()
+    ci = pick(raw_ci != "", lambda: int(data.get("correct_index", 0)), lambda: 0)
+    mcq_valid = len(opts) >= 2 and 0 <= ci < len(opts)
+    shape = plan_interview_question_shape(
+        planned_kind="mcq", mcq_valid=mcq_valid, coding_has_tests=True
+    )
+    apply(
+        shape,
+        {
+            "typed": lambda: out.__setitem__("kind", "typed"),
+            "mcq": lambda: _set_mcq_fields(out, opts, ci, data, contract),
+        },
+    )
+
+
+def _set_mcq_fields(
+    out: dict[str, Any], opts: list[str], ci: int, data: dict[str, Any], contract: Any
+) -> None:
+    out["options"] = opts[: contract.max_options]
+    out["correct_index"] = min(ci, len(out["options"]) - 1)
+    out["explanation"] = (data.get("explanation") or "").strip()
+
+
+def _fill_generated_coding(
+    out: dict[str, Any], data: dict[str, Any], contract: Any, asked: list[str]
+) -> None:
+    from app.services.code_execution import DEFAULT_LANGUAGE_ID, LANGUAGES
+    from app.services.session_design import (
+        pick_interview_coding_fallback,
+        plan_interview_question_shape,
+    )
+
+    tests = [
+        {"stdin": str(t.get("stdin", "")), "expected_output": str(t.get("expected_output", ""))}
+        for t in filter(
+            lambda t: isinstance(t, dict) and str(t.get("expected_output", "")).strip() != "",
+            data.get("tests") or [],
+        )
+    ]
+    shape = plan_interview_question_shape(
+        planned_kind="coding", mcq_valid=True, coding_has_tests=bool(tests)
+    )
+    apply(
+        shape,
+        {
+            "coding_fallback": lambda: out.update(
+                {
+                    **pick_interview_coding_fallback(len(asked), _FALLBACK_CODING),
+                    "kind": "coding",
+                    "language_id": DEFAULT_LANGUAGE_ID,
+                }
+            ),
+            "coding": lambda: _set_coding_fields(
+                out, data, tests, contract, LANGUAGES, DEFAULT_LANGUAGE_ID
+            ),
+        },
+    )
+
+
+def _set_coding_fields(
+    out: dict[str, Any],
+    data: dict[str, Any],
+    tests: list[dict[str, str]],
+    contract: Any,
+    languages: Any,
+    default_language_id: int,
+) -> None:
+    lid = data.get("language_id", default_language_id)
+    out["language_id"] = resolve_coding_language_id(
+        lid, languages, default=default_language_id
+    )
+    out["starter_code"] = (data.get("starter_code") or "").rstrip()
+    out["tests"] = tests[: contract.max_tests]
+    out["explanation"] = (data.get("explanation") or "").strip()
 
 
 def _fallback_question(rnd: Round) -> str:
@@ -403,59 +523,101 @@ async def _evaluate(db: Session, current: dict, answer: Any) -> dict[str, Any]:
         "kind": current["kind"],
         "question": current.get("question", ""),
     }
-    if current["kind"] == "coding":
-        from app.services.code_execution import LANGUAGES, run_tests
+    return await apply(
+        evaluate_interview_turn_kind(str(current["kind"])),
+        {
+            "coding": lambda: _evaluate_coding(db, current, answer, turn),
+            "mcq": lambda: _evaluate_mcq(db, current, answer, turn),
+            "typed": lambda: _evaluate_typed(db, current, answer, turn),
+        },
+    )
 
-        src = str((answer or {}).get("source", "")) if isinstance(answer, dict) else str(answer or "")
-        lang = (answer or {}).get("language_id") if isinstance(answer, dict) else None
-        language_id = lang if lang in LANGUAGES else current.get("language_id", 71)
-        tests = current.get("tests") or []
-        res = await run_tests(src, language_id, tests)
-        failed = next((c for c in (res.get("cases") or []) if not c["ok"]), None)
-        measured = evaluate_interview_coding_turn(
-            source=src,
-            language_id=language_id,
-            passed=res["passed"],
-            total=res["total"],
-            error=res.get("error"),
-            first_fail=failed,
-        )
-        turn.update(measured.result)
-        return turn
 
-    if current["kind"] == "mcq":
-        from app.graphs.mcq_graph import grade_mcq_answer
+async def _evaluate_coding(
+    db: Session, current: dict, answer: Any, turn: dict[str, Any]
+) -> dict[str, Any]:
+    from app.services.code_execution import LANGUAGES, run_tests
 
-        options = current.get("options") or []
-        correct_index = int(current.get("correct_index", 0))
-        try:
-            selected = int(answer)
-        except (TypeError, ValueError):
-            selected = -1
-        result = await grade_mcq_answer(
-            db,
-            question=current.get("question", ""),
-            options=options,
-            correct_index=correct_index,
-            selected_index=selected,
-            explanation=current.get("explanation", ""),
-        )
-        turn.update({
-            "options": options,
-            "selected_index": selected,
-            "correct_index": correct_index,
-            "correct": bool(result["is_correct"]),
-            "feedback": result["feedback"],
-        })
-        return turn
+    src = pick(
+        isinstance(answer, dict),
+        lambda: str((answer or {}).get("source", "")),
+        lambda: str(answer or ""),
+    )
+    lang = pick(
+        isinstance(answer, dict),
+        lambda: (answer or {}).get("language_id"),
+        lambda: None,
+    )
+    language_id = pick(
+        lang in LANGUAGES,
+        lambda: lang,
+        lambda: current.get("language_id", 71),
+    )
+    tests = current.get("tests") or []
+    res = await run_tests(src, language_id, tests)
+    failed = next(filter(lambda c: not c["ok"], res.get("cases") or []), None)
+    measured = evaluate_interview_coding_turn(
+        source=src,
+        language_id=language_id,
+        passed=res["passed"],
+        total=res["total"],
+        error=res.get("error"),
+        first_fail=failed,
+    )
+    turn.update(measured.result)
+    return turn
 
-    # typed answer -> rubric scoring (Open Response Measurement Engine)
+
+async def _evaluate_mcq(
+    db: Session, current: dict, answer: Any, turn: dict[str, Any]
+) -> dict[str, Any]:
+    from app.graphs.mcq_graph import grade_mcq_answer
+
+    options = current.get("options") or []
+    correct_index = int(current.get("correct_index", 0))
+    try:
+        selected = int(answer)
+    except (TypeError, ValueError):
+        selected = -1
+    result = await grade_mcq_answer(
+        db,
+        question=current.get("question", ""),
+        options=options,
+        correct_index=correct_index,
+        selected_index=selected,
+        explanation=current.get("explanation", ""),
+    )
+    turn.update({
+        "options": options,
+        "selected_index": selected,
+        "correct_index": correct_index,
+        "correct": bool(result["is_correct"]),
+        "feedback": result["feedback"],
+    })
+    return turn
+
+
+async def _evaluate_typed(
+    db: Session, current: dict, answer: Any, turn: dict[str, Any]
+) -> dict[str, Any]:
     answer_text = str(answer or "").strip()
     turn["answer"] = answer_text
-    if not answer_text:
-        empty = empty_interview_scores()
-        turn.update(empty.result)
-        return turn
+    return pick(
+        not answer_text,
+        lambda: _empty_typed_turn(turn),
+        lambda: None,
+    ) or await _score_typed(db, current, answer_text, turn)
+
+
+def _empty_typed_turn(turn: dict[str, Any]) -> dict[str, Any]:
+    empty = empty_interview_scores()
+    turn.update(empty.result)
+    return turn
+
+
+async def _score_typed(
+    db: Session, current: dict, answer_text: str, turn: dict[str, Any]
+) -> dict[str, Any]:
     user = (
         f"Round: {current.get('round_name','')} - focus: {current.get('focus','')}\n"
         f"Question: {current.get('question','')}\n\n"
@@ -472,9 +634,21 @@ async def _evaluate(db: Session, current: dict, answer: Any) -> dict[str, Any]:
         current.get("focus", ""),
     )
     hit = cache_get(db, kind="interview_eval", cache_key=eval_key)
-    if isinstance(hit, dict) and hit.get("scores"):
-        turn.update({"scores": hit["scores"], "feedback": hit.get("feedback") or "Answer recorded."})
-        return turn
+    return pick(
+        isinstance(hit, dict) and bool(hit.get("scores")),
+        lambda: _typed_from_cache(turn, hit),
+        lambda: None,
+    ) or await _score_typed_llm(db, user, eval_key, cache_put, turn)
+
+
+def _typed_from_cache(turn: dict[str, Any], hit: dict[str, Any]) -> dict[str, Any]:
+    turn.update({"scores": hit["scores"], "feedback": hit.get("feedback") or "Answer recorded."})
+    return turn
+
+
+async def _score_typed_llm(
+    db: Session, user: str, eval_key: str, cache_put: Any, turn: dict[str, Any]
+) -> dict[str, Any]:
     try:
         raw = await complete_chat(
             [{"role": "system", "content": _EVAL_SYSTEM}, {"role": "user", "content": user}],
@@ -482,7 +656,11 @@ async def _evaluate(db: Session, current: dict, answer: Any) -> dict[str, Any]:
         )
         data = _parse_json_obj(raw)
         scores = shape_interview_scores(
-            data.get("scores") if isinstance(data.get("scores"), dict) else {}
+            pick(
+                isinstance(data.get("scores"), dict),
+                lambda: data.get("scores"),
+                lambda: {},
+            )
         ).result["scores"]
         feedback = (data.get("feedback") or "").strip() or "Answer recorded."
         cache_put(db, kind="interview_eval", cache_key=eval_key, value={"scores": scores, "feedback": feedback})
@@ -499,12 +677,13 @@ def build_report(config: list, transcript: list) -> dict[str, Any]:
     return build_interview_report(config, transcript).result
 
 
-
 # ---------------------------------------------------------------- helpers
 def _resume_text(db: Session, document_id: uuid.UUID) -> str:
     doc = db.get(Document, document_id)
-    if not doc:
-        return ""
+    return pick(not doc, lambda: "", lambda: _resume_chunks(db, document_id))
+
+
+def _resume_chunks(db: Session, document_id: uuid.UUID) -> str:
     rows = (
         db.query(DocumentChunk)
         .filter(DocumentChunk.document_id == document_id)
@@ -512,19 +691,27 @@ def _resume_text(db: Session, document_id: uuid.UUID) -> str:
         .limit(plan_resume_chunk_limit())
         .all()
     )
-    return "\n\n".join(r.text for r in rows if r.text)
+    return "\n\n".join(filter(None, (r.text for r in rows)))
 
 
 def _public_question(q: dict) -> dict[str, Any]:
     """Strip the answer key (correct_index / hidden tests / explanation) before sending
     a pending question to the client."""
     out = {"kind": q["kind"], "round_name": q.get("round_name", ""), "question": q.get("question", "")}
-    if q["kind"] == "mcq":
-        out["options"] = q.get("options", [])
-    elif q["kind"] == "coding":
-        out["starter_code"] = q.get("starter_code", "")
-        out["language_id"] = q.get("language_id", 71)
-        out["test_count"] = len(q.get("tests") or [])
+    apply(
+        evaluate_interview_turn_kind(str(q["kind"])),
+        {
+            "mcq": lambda: out.__setitem__("options", q.get("options", [])),
+            "coding": lambda: out.update(
+                {
+                    "starter_code": q.get("starter_code", ""),
+                    "language_id": q.get("language_id", 71),
+                    "test_count": len(q.get("tests") or []),
+                }
+            ),
+            "typed": lambda: None,
+        },
+    )
     return out
 
 
@@ -534,17 +721,27 @@ def _public_turn(t: dict) -> dict[str, Any]:
 
 
 def _as_json(v: Any, default: Any) -> Any:
-    if v is None:
-        return default
-    return json.loads(v) if isinstance(v, str) else v
+    return pick(
+        v is None,
+        lambda: default,
+        lambda: pick(isinstance(v, str), lambda: json.loads(v), lambda: v),
+    )
 
 
 # Tolerant LLM-JSON extraction lives in app.services.llm_json (shared with resume.py).
 _parse_json_obj = extract_json_obj
 
 
-# ---------------------------------------------------------------- self-check
-if __name__ == "__main__":  # pragma: no cover
+def _advance_cursor(ri: int, qi: int, cfg: list[dict[str, Any]]) -> tuple[int, int]:
+    qi += 1
+    return pick(
+        qi >= cfg[ri]["questions"],
+        lambda: (ri + 1, 0),
+        lambda: (ri, qi),
+    )
+
+
+def _self_check() -> None:
     # ponytail: one runnable check — no DB/LLM. Exercises the pure logic: cursor
     # advance through a plan, report math, and tolerant JSON parsing.
     cfg = [dict(r) for r in plan_interview_rounds("product").rounds]
@@ -552,29 +749,24 @@ if __name__ == "__main__":  # pragma: no cover
     assert total_q == 7, total_q  # DSA round is now 1 coding question (was 3 MCQ)
     assert cfg[0]["kind"] == "coding", cfg[0]
 
-    # simulate advancing the cursor to completion
     ri, qi, seen = 0, 0, 0
     while ri < len(cfg):
         seen += 1
-        qi += 1
-        if qi >= cfg[ri]["questions"]:
-            ri, qi = ri + 1, 0
+        ri, qi = _advance_cursor(ri, qi, cfg)
     assert seen == total_q, (seen, total_q)
 
-    # report: a coding round (3/4 tests) + a perfect typed round
     transcript = [
         {"round_name": "DSA / Coding", "kind": "coding", "passed": 3, "total": 4},
         {"round_name": "Behavioural", "kind": "typed",
          "scores": {d: 4 for d in RUBRIC_DIMENSIONS}},
     ]
     rep = build_report(cfg, transcript)
-    dsa = next(r for r in rep["rounds"] if r["name"] == "DSA / Coding")
-    beh = next(r for r in rep["rounds"] if r["name"] == "Behavioural")
+    dsa = next(filter(lambda r: r["name"] == "DSA / Coding", rep["rounds"]))
+    beh = next(filter(lambda r: r["name"] == "Behavioural", rep["rounds"]))
     assert dsa["score"] == 75, dsa
     assert beh["score"] == 100, beh
     assert _clamp_score(9) == 4 and _clamp_score(0) == 1 and _clamp_score("x") == 2
 
-    # every built-in coding fallback is gradable (has a question + non-empty tests)
     for fb in _FALLBACK_CODING:
         assert fb["question"] and fb["starter_code"] and fb["tests"], fb
         assert all(t["expected_output"] for t in fb["tests"]), fb
@@ -583,3 +775,6 @@ if __name__ == "__main__":  # pragma: no cover
     assert _parse_json_obj("noise {\"a\":1} tail")["a"] == 1
     assert _parse_json_obj("not json") == {}
     print("interview self-check OK")
+
+
+pick(__name__ == "__main__", _self_check, lambda: None)

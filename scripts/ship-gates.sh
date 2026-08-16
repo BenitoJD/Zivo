@@ -20,6 +20,9 @@ if [[ -z "$PYTHON_BIN" ]]; then
 fi
 
 run_backend() {
+  echo "==> no-if scanner"
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/scan-no-if.py"
+
   echo "==> backend: ruff"
   (cd backend && "$PYTHON_BIN" -m ruff check .)
 

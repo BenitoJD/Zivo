@@ -21,6 +21,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import choose, pick
 from app.models import Document
 from app.services.artifact_store import coerce_jsonb
 from app.services.chunks import load_document_chunk_texts
@@ -93,17 +94,19 @@ def _load_row(db: Session, document_id: uuid.UUID) -> dict[str, Any] | None:
         ),
         {"id": document_id},
     ).mappings().first()
-    if not row:
-        return None
-    return {
-        "question": row["question"] or "",
-        "scheme": coerce_jsonb(row["scheme"]) or {},
-        "answer": row["answer"] or "",
-        "result": coerce_jsonb(row["result"]) or {},
-        "config": coerce_jsonb(row["config"]) or {},
-        "status": row["status"],
-        "error": row["error"],
-    }
+    return pick(
+        not row,
+        lambda: None,
+        lambda: {
+            "question": row["question"] or "",
+            "scheme": coerce_jsonb(row["scheme"]) or {},
+            "answer": row["answer"] or "",
+            "result": coerce_jsonb(row["result"]) or {},
+            "config": coerce_jsonb(row["config"]) or {},
+            "status": row["status"],
+            "error": row["error"],
+        },
+    )
 
 
 def _save(
@@ -148,7 +151,7 @@ def _save(
 def public_state(row: dict[str, Any] | None) -> dict[str, Any]:
     """Client-facing state. Never exposes the raw marking scheme — the reveal is
     `result.scheme_hits`, only present once status == 'ready'."""
-    if not row:
+    def _missing() -> dict[str, Any]:
         return {
             "status": "missing",
             "question": "",
@@ -160,20 +163,24 @@ def public_state(row: dict[str, Any] | None) -> dict[str, Any]:
             "result": None,
             "error": None,
         }
-    scheme = row["scheme"] or {}
-    config = row["config"] or {}
-    ready = row["status"] == "ready"
-    return {
-        "status": row["status"],
-        "question": row["question"],
-        "directive": scheme.get("directive", ""),
-        "marks_max": int(scheme.get("marks_max") or config.get("marks_max") or 10),
-        "strictness": config.get("strictness", DEFAULT_STRICTNESS),
-        "input_kind": config.get("input_kind"),
-        "answer": row["answer"] if ready else "",
-        "result": (row["result"] or None) if ready else None,
-        "error": row["error"],
-    }
+
+    def _present() -> dict[str, Any]:
+        scheme = row["scheme"] or {}
+        config = row["config"] or {}
+        ready = row["status"] == "ready"
+        return {
+            "status": row["status"],
+            "question": row["question"],
+            "directive": scheme.get("directive", ""),
+            "marks_max": int(scheme.get("marks_max") or config.get("marks_max") or 10),
+            "strictness": config.get("strictness", DEFAULT_STRICTNESS),
+            "input_kind": config.get("input_kind"),
+            "answer": pick(ready, lambda: row["answer"], lambda: ""),
+            "result": pick(ready, lambda: row["result"] or None, lambda: None),
+            "error": row["error"],
+        }
+
+    return pick(not row, _missing, _present)
 
 
 # ---------------------------------------------------------------------------
@@ -215,14 +222,23 @@ def submit_mains_answer(
 ) -> dict[str, Any]:
     """Store the answer (typed text and/or an uploaded photo doc) and enqueue grading."""
     row = _load_row(db, document_id)
-    if not row or row["status"] not in ("awaiting_answer", "ready", "grading"):
+    def _not_ready() -> None:
         raise ValueError("No question is ready to answer yet.")
+
+    pick(not row or row["status"] not in ("awaiting_answer", "ready", "grading"), _not_ready, lambda: None)
     answer = (text_answer or "").strip()
-    if not answer and image_document_id is None:
+
+    def _no_answer() -> None:
         raise ValueError("Write an answer or upload a photo first.")
+
+    pick(not answer and image_document_id is None, _no_answer, lambda: None)
     config = dict(row["config"] or {})
-    config["input_kind"] = "handwritten" if image_document_id is not None else "typed"
-    config["answer_image_id"] = str(image_document_id) if image_document_id is not None else None
+    config["input_kind"] = choose(image_document_id is not None, "handwritten", "typed")
+    config["answer_image_id"] = pick(
+        image_document_id is not None,
+        lambda: str(image_document_id),
+        lambda: None,
+    )
     _save(
         db,
         document_id,
@@ -246,93 +262,98 @@ def submit_mains_answer(
 
 def run_mains_generation(db: Session, document_id: uuid.UUID) -> None:
     row = _load_row(db, document_id)
-    if not row:
-        return
-    marks_max = int((row["config"] or {}).get("marks_max") or 10)
-    try:
-        gen = asyncio.run(_generate(db, document_id, marks_max=marks_max))
-        scheme = {
-            "directive": gen["directive"],
-            "marks_max": gen["marks_max"],
-            "model_points": gen["model_points"],
-        }
-        _save(
-            db,
-            document_id,
-            question=gen["question"],
-            scheme=scheme,
-            answer="",
-            result={},
-            config=row["config"],
-            status="awaiting_answer",
-            error=None,
-        )
-    except Exception:
-        logger.exception("mains generation failed for %s", document_id)
-        _save(
-            db,
-            document_id,
-            question="",
-            scheme=row["scheme"],
-            answer="",
-            result={},
-            config=row["config"],
-            status="failed",
-            error="generation_failed",
-        )
+
+    def _run() -> None:
+        marks_max = int((row["config"] or {}).get("marks_max") or 10)
+        try:
+            gen = asyncio.run(_generate(db, document_id, marks_max=marks_max))
+            scheme = {
+                "directive": gen["directive"],
+                "marks_max": gen["marks_max"],
+                "model_points": gen["model_points"],
+            }
+            _save(
+                db,
+                document_id,
+                question=gen["question"],
+                scheme=scheme,
+                answer="",
+                result={},
+                config=row["config"],
+                status="awaiting_answer",
+                error=None,
+            )
+        except Exception:
+            logger.exception("mains generation failed for %s", document_id)
+            _save(
+                db,
+                document_id,
+                question="",
+                scheme=row["scheme"],
+                answer="",
+                result={},
+                config=row["config"],
+                status="failed",
+                error="generation_failed",
+            )
+
+    pick(not row, lambda: None, _run)
 
 
 def run_mains_grading(db: Session, document_id: uuid.UUID) -> None:
     row = _load_row(db, document_id)
-    if not row:
-        return
-    config = row["config"] or {}
-    scheme = row["scheme"] or {}
-    try:
-        answer = row["answer"] or ""
-        image_id = config.get("answer_image_id")
-        if image_id and not answer.strip():
-            answer = asyncio.run(_ocr_image(db, uuid.UUID(str(image_id))))
-        if not answer.strip():
-            result = _unreadable_result(scheme)
-        else:
-            result = asyncio.run(
-                _grade(
-                    db,
-                    document_id,
-                    question=row["question"],
-                    scheme=scheme,
-                    answer=answer,
-                    strictness=config.get("strictness", DEFAULT_STRICTNESS),
-                )
+
+    def _run() -> None:
+        config = row["config"] or {}
+        scheme = row["scheme"] or {}
+        try:
+            answer = row["answer"] or ""
+            image_id = config.get("answer_image_id")
+            answer = pick(
+                bool(image_id) and not answer.strip(),
+                lambda: asyncio.run(_ocr_image(db, uuid.UUID(str(image_id)))),
+                lambda: answer,
             )
-        _save(
-            db,
-            document_id,
-            question=row["question"],
-            scheme=scheme,
-            answer=answer,
-            result=result,
-            config=config,
-            status="ready",
-            error=None,
-        )
-    except Exception:
-        logger.exception("mains grading failed for %s", document_id)
-        # The question + scheme are still valid — revert to awaiting_answer (not the
-        # terminal "failed", which routes the UI to the regenerate-only setup screen) so
-        # the user can just resubmit. "failed" is reserved for generation failure.
-        _save(
-            db,
-            document_id,
-            question=row["question"],
-            scheme=scheme,
-            answer=row["answer"] or "",
-            result={},
-            config=config,
-            status="awaiting_answer",
-            error="grading_failed",
-        )
+            result = pick(
+                not answer.strip(),
+                lambda: _unreadable_result(scheme),
+                lambda: asyncio.run(
+                    _grade(
+                        db,
+                        document_id,
+                        question=row["question"],
+                        scheme=scheme,
+                        answer=answer,
+                        strictness=config.get("strictness", DEFAULT_STRICTNESS),
+                    )
+                ),
+            )
+            _save(
+                db,
+                document_id,
+                question=row["question"],
+                scheme=scheme,
+                answer=answer,
+                result=result,
+                config=config,
+                status="ready",
+                error=None,
+            )
+        except Exception:
+            logger.exception("mains grading failed for %s", document_id)
+            _save(
+                db,
+                document_id,
+                question=row["question"],
+                scheme=scheme,
+                answer=row["answer"] or "",
+                result={},
+                config=config,
+                status="awaiting_answer",
+                error="grading_failed",
+            )
+
+    pick(not row, lambda: None, _run)
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +363,11 @@ def run_mains_grading(db: Session, document_id: uuid.UUID) -> None:
 async def _generate(db: Session, document_id: uuid.UUID, *, marks_max: int) -> dict[str, Any]:
     chunks = load_document_chunk_texts(db, document_id)
     body = "\n\n".join(chunks).strip()
-    source = truncate_to_tokens(body, SUMMARIZE_SINGLE_SHOT_MAX_TOKENS) if body else ""
+    source = pick(
+        bool(body),
+        lambda: truncate_to_tokens(body, SUMMARIZE_SINGLE_SHOT_MAX_TOKENS),
+        lambda: "",
+    )
     words = str(plan_mains_attempt(strictness=DEFAULT_STRICTNESS, marks_max=marks_max).word_target)
     user = (
         f"SOURCE MATERIAL:\n{source or '(no extracted text — infer a sensible topic from the document)'}\n\n"
@@ -362,54 +387,72 @@ async def _generate(db: Session, document_id: uuid.UUID, *, marks_max: int) -> d
     )
     data = extract_json_obj(raw)
     question = (data.get("question") or "").strip()
-    if not question:
+    def _no_question() -> None:
         raise ValueError("no question generated")
+
+    pick(not question, _no_question, lambda: None)
     mm = int(data.get("marks_max") or marks_max) or marks_max
     directive = (data.get("directive") or "Discuss").strip()
     points: list[dict[str, Any]] = []
     for p in data.get("model_points") or []:
-        if isinstance(p, dict) and (p.get("point") or "").strip():
-            points.append({"point": str(p["point"]).strip(), "marks": _clamp_int(p.get("marks"), 0, mm)})
+        pick(
+            isinstance(p, dict) and bool((p.get("point") or "").strip()),
+            lambda: points.append({"point": str(p["point"]).strip(), "marks": _clamp_int(p.get("marks"), 0, mm)}),
+            lambda: None,
+        )
     return {"question": question, "directive": directive, "marks_max": mm, "model_points": points}
 
 
 async def _ocr_image(db: Session, image_document_id: uuid.UUID) -> str:
     doc = db.get(Document, image_document_id)
-    if not doc or not is_image_document(doc):
+    async def _empty() -> str:
         return ""
-    from app.services.chunk_map_cache import content_hash_key
-    from app.services.generation_cache import get as cache_get, put as cache_put
 
-    ocr_key = content_hash_key("mains_ocr", doc.storage_key or str(doc.id))
-    hit = cache_get(db, kind="mains_ocr", cache_key=ocr_key)
-    if isinstance(hit, str) and hit.strip():
-        return hit
-    content = build_user_message(
-        "Transcribe this exam answer sheet to plain text, verbatim. Preserve paragraph and line "
-        "breaks. Do NOT correct spelling/grammar, summarise, or add anything — output only the "
-        "transcription of what is written.",
-        doc,
-        include_image=True,
-        db=db,
-    )
-    if isinstance(content, str):  # not actually an image doc → nothing to read
-        return ""
-    raw = await complete_chat(
-        [
-            {"role": "system", "content": "You are a precise OCR engine for handwritten and typed exam answers."},
-            {"role": "user", "content": content},
-        ],
-        db,
-        model_id=vision_chat_model_id(db),
-        require_vision=True,
-        log_tag="mains_ocr",
-        document_id=doc.id,
-        strip_output=False,  # transcription must be verbatim (keep the user's own dashes)
-    )
-    out = (raw or "").strip()
-    if out:
-        cache_put(db, kind="mains_ocr", cache_key=ocr_key, value=out)
-    return out
+    async def _ocr() -> str:
+        from app.services.chunk_map_cache import content_hash_key
+        from app.services.generation_cache import get as cache_get, put as cache_put
+
+        ocr_key = content_hash_key("mains_ocr", doc.storage_key or str(doc.id))
+        hit = cache_get(db, kind="mains_ocr", cache_key=ocr_key)
+
+        async def _cached() -> str:
+            return hit
+
+        async def _call() -> str:
+            content = build_user_message(
+                "Transcribe this exam answer sheet to plain text, verbatim. Preserve paragraph and line "
+                "breaks. Do NOT correct spelling/grammar, summarise, or add anything — output only the "
+                "transcription of what is written.",
+                doc,
+                include_image=True,
+                db=db,
+            )
+
+            async def _not_image() -> str:
+                return ""
+
+            async def _complete() -> str:
+                raw = await complete_chat(
+                    [
+                        {"role": "system", "content": "You are a precise OCR engine for handwritten and typed exam answers."},
+                        {"role": "user", "content": content},
+                    ],
+                    db,
+                    model_id=vision_chat_model_id(db),
+                    require_vision=True,
+                    log_tag="mains_ocr",
+                    document_id=doc.id,
+                    strip_output=False,
+                )
+                out = (raw or "").strip()
+                pick(bool(out), lambda: cache_put(db, kind="mains_ocr", cache_key=ocr_key, value=out), lambda: None)
+                return out
+
+            return await pick(isinstance(content, str), _not_image, _complete)
+
+        return await pick(isinstance(hit, str) and bool(hit.strip()), _cached, _call)
+
+    return await pick(not doc or not is_image_document(doc), _empty, _ocr)
 
 
 async def _grade(
@@ -423,7 +466,9 @@ async def _grade(
 ) -> dict[str, Any]:
     marks_max = int(scheme.get("marks_max") or 10)
     directive = scheme.get("directive", "")
-    points = [p for p in (scheme.get("model_points") or []) if str(p.get("point", "")).strip()]
+    points = list(
+        filter(lambda p: str(p.get("point", "")).strip(), scheme.get("model_points") or [])
+    )
     pts_txt = (
         "\n".join(f"{i + 1}. ({int(p.get('marks') or 0)}m) {p.get('point', '')}" for i, p in enumerate(points))
         or "(use your judgement)"
@@ -442,64 +487,74 @@ async def _grade(
         json.dumps(points, sort_keys=True, default=str),
     )
     hit = cache_get(db, kind="mains_grade", cache_key=grade_key)
-    if isinstance(hit, dict) and hit:
+
+    async def _cached() -> dict[str, Any]:
         return hit
-    user = (
-        f"GRADING SEVERITY: {guide}\n\n"
-        f"QUESTION (directive '{directive}', out of {marks_max} marks):\n{question}\n\n"
-        f"HIDDEN MARKING SCHEME — award each point's marks ONLY if the answer genuinely USES it in an "
-        f"argument (not just names it):\n{pts_txt}\n\n"
-        f"AXES — score each 0..{AXIS_MAX} against its anchor:\n{anchors_txt}\n\n"
-        f"CANDIDATE'S ANSWER:\n{truncate_to_tokens(answer, SUMMARIZE_SINGLE_SHOT_MAX_TOKENS)}\n\n"
-        f"Grade it. First decide, per NUMBERED scheme point, whether it is genuinely covered (be ready "
-        f"to quote the phrase) — report each by its number in scheme_hits. Then award an integer mark "
-        f"out of {marks_max} that reflects the covered scheme "
-        "points plus answer quality — do NOT invent a number unmoored from the scheme, never reward "
-        "length or repetition, and let wrong/fabricated content lower it. Score each axis against its "
-        "anchor (directive axis <= 1 if the directive is ignored). Give at most 3 'keep doing' and 3 "
-        "'improve' bullets (specific and actionable), one terse examiner one-liner, and up to 4 "
-        "highlights each quoting a SHORT phrase from the answer with a kind (strong/weak/error) and a "
-        "brief note.\n"
-        'Return JSON: {"marks":n,'
-        '"axes":{"directive":n,"structure":n,"coverage":n,"substantiation":n,"presentation":n},'
-        '"axis_notes":{"directive":"...","structure":"...","coverage":"...","substantiation":"...","presentation":"..."},'
-        '"scheme_hits":[{"index":1,"hit":true}],"keep_doing":["..."],"improve":["..."],'
-        '"examiner_note":"...","highlights":[{"quote":"...","kind":"strong","comment":"..."}]}'
-    )
-    raw = await complete_chat(
-        [{"role": "system", "content": _GRADE_SYSTEM}, {"role": "user", "content": user}],
-        db,
-        log_tag="mains_grade",
-        document_id=document_id,
-    )
-    parsed = extract_json_obj(raw)
-    # extract_json_obj returns {} on ANY parse failure — don't shape that into a
-    # confident-looking 0/10. A real grade always carries "marks". One repair
-    # round: models occasionally wrap or truncate the JSON, so ask it to return
-    # ONLY the corrected object before giving up (the caller then reverts to
-    # awaiting_answer so the user can resubmit).
-    if "marks" not in parsed:
-        repair = await complete_chat(
-            [
-                {"role": "system", "content": _GRADE_SYSTEM},
-                {
-                    "role": "user",
-                    "content": (
-                        "Your previous response was not valid JSON. Return ONLY a valid JSON object "
-                        f"matching the requested shape for this grading task.\n\nMalformed response:\n{raw}"
-                    ),
-                },
-            ],
+
+    async def _compute() -> dict[str, Any]:
+        user = (
+            f"GRADING SEVERITY: {guide}\n\n"
+            f"QUESTION (directive '{directive}', out of {marks_max} marks):\n{question}\n\n"
+            f"HIDDEN MARKING SCHEME — award each point's marks ONLY if the answer genuinely USES it in an "
+            f"argument (not just names it):\n{pts_txt}\n\n"
+            f"AXES — score each 0..{AXIS_MAX} against its anchor:\n{anchors_txt}\n\n"
+            f"CANDIDATE'S ANSWER:\n{truncate_to_tokens(answer, SUMMARIZE_SINGLE_SHOT_MAX_TOKENS)}\n\n"
+            f"Grade it. First decide, per NUMBERED scheme point, whether it is genuinely covered (be ready "
+            f"to quote the phrase) — report each by its number in scheme_hits. Then award an integer mark "
+            f"out of {marks_max} that reflects the covered scheme "
+            "points plus answer quality — do NOT invent a number unmoored from the scheme, never reward "
+            "length or repetition, and let wrong/fabricated content lower it. Score each axis against its "
+            "anchor (directive axis <= 1 if the directive is ignored). Give at most 3 'keep doing' and 3 "
+            "'improve' bullets (specific and actionable), one terse examiner one-liner, and up to 4 "
+            "highlights each quoting a SHORT phrase from the answer with a kind (strong/weak/error) and a "
+            "brief note.\n"
+            'Return JSON: {"marks":n,'
+            '"axes":{"directive":n,"structure":n,"coverage":n,"substantiation":n,"presentation":n},'
+            '"axis_notes":{"directive":"...","structure":"...","coverage":"...","substantiation":"...","presentation":"..."},'
+            '"scheme_hits":[{"index":1,"hit":true}],"keep_doing":["..."],"improve":["..."],'
+            '"examiner_note":"...","highlights":[{"quote":"...","kind":"strong","comment":"..."}]}'
+        )
+        raw = await complete_chat(
+            [{"role": "system", "content": _GRADE_SYSTEM}, {"role": "user", "content": user}],
             db,
-            log_tag="mains_grade_repair",
+            log_tag="mains_grade",
             document_id=document_id,
         )
-        parsed = extract_json_obj(repair)
-    if "marks" not in parsed:
-        raise ValueError("unparseable grade output")
-    shaped = shape_mains_result(parsed, scheme, strictness).result
-    cache_put(db, kind="mains_grade", cache_key=grade_key, value=shaped)
-    return shaped
+        parsed = extract_json_obj(raw)
+
+        async def _noop() -> None:
+            return None
+
+        async def _repair() -> None:
+            nonlocal parsed
+            repair = await complete_chat(
+                [
+                    {"role": "system", "content": _GRADE_SYSTEM},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Your previous response was not valid JSON. Return ONLY a valid JSON object "
+                            f"matching the requested shape for this grading task.\n\nMalformed response:\n{raw}"
+                        ),
+                    },
+                ],
+                db,
+                log_tag="mains_grade_repair",
+                document_id=document_id,
+            )
+            parsed = extract_json_obj(repair)
+
+        await pick("marks" not in parsed, _repair, _noop)
+
+        def _unparseable() -> None:
+            raise ValueError("unparseable grade output")
+
+        pick("marks" not in parsed, _unparseable, lambda: None)
+        shaped = shape_mains_result(parsed, scheme, strictness).result
+        cache_put(db, kind="mains_grade", cache_key=grade_key, value=shaped)
+        return shaped
+
+    return await pick(isinstance(hit, dict) and bool(hit), _cached, _compute)
 
 
 # ---------------------------------------------------------------------------

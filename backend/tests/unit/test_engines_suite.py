@@ -178,7 +178,7 @@ def test_worthiness_junk_and_newspaper_seam() -> None:
     skip = plan_newspaper_batch_gate(
         page_text="Advertisement: buy now limited period offer call toll free flat for sale"
     )
-    assert skip.skip is True and skip.mark_complete is True
+    assert skip.action == "skip" and skip.skip is True and skip.mark_complete is True
 
 
 def test_practice_selection_overlap() -> None:

@@ -27,6 +27,7 @@ import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
+from app.engine_runtime import pick
 from app.services.calibration import (
     DEFAULT_RATING,
     ELO_SCALE,
@@ -148,13 +149,14 @@ def _average_ranks(xs: Sequence[float]) -> list[float]:
 
 def _pearson(a: Sequence[float], b: Sequence[float]) -> float:
     n = len(a)
-    if n == 0:
-        return 0.0
-    ma, mb = sum(a) / n, sum(b) / n
-    num = sum((a[i] - ma) * (b[i] - mb) for i in range(n))
-    da = math.sqrt(sum((x - ma) ** 2 for x in a))
-    db = math.sqrt(sum((x - mb) ** 2 for x in b))
-    return num / (da * db) if da > 0 and db > 0 else 0.0
+    def _corr() -> float:
+        ma, mb = sum(a) / n, sum(b) / n
+        num = sum((a[i] - ma) * (b[i] - mb) for i in range(n))
+        da = math.sqrt(sum((x - ma) ** 2 for x in a))
+        db = math.sqrt(sum((x - mb) ** 2 for x in b))
+        return pick(da > 0 and db > 0, lambda: num / (da * db), lambda: 0.0)
+
+    return pick(n == 0, lambda: 0.0, _corr)
 
 
 def spearman(a: Sequence[float], b: Sequence[float]) -> float:
@@ -232,30 +234,43 @@ def simulate_learner(
     rng = random.Random(seed)
     theta_true = 0.0
     theta_est = DEFAULT_RATING
-    remaining = list(item_difficulties.keys())  # insertion order == sequence order
+    remaining = list(item_difficulties.keys())
     served_success: list[float] = []
-    for _ in range(min(n_questions, len(remaining))):
-        if policy == "difficulty_edge":
-            diff_map = {i: item_difficulties[i] for i in remaining}
-            item = choose_next_assertion(
-                "difficulty_edge", remaining, {}, LearnerState(ability=theta_est), diff_map
-            )
-        else:
-            item = remaining[0]
-        if item is None:  # real guard, not `assert` (which -O strips)
-            break
-        remaining.remove(item)
+    n_left = min(n_questions, len(remaining))
+    i = 0
+    while i < n_left and remaining:
+        item = pick(
+            policy == "difficulty_edge",
+            lambda: choose_next_assertion(
+                "difficulty_edge",
+                remaining,
+                {},
+                LearnerState(ability=theta_est),
+                {k: item_difficulties[k] for k in remaining},
+            ),
+            lambda: remaining[0],
+        )
 
-        difficulty = item_difficulties[item]
-        p = expected_correct(theta_true, difficulty)
-        correct = rng.random() < p
-        served_success.append(p)
-        theta_true += learning_rate * learning_gain(p)
-        theta_est = elo_update(theta_est, difficulty, correct, k_learner=k_learner).ability
+        def _step() -> None:
+            nonlocal i, theta_true, theta_est
+            remaining.remove(item)
+            difficulty = item_difficulties[item]
+            p = expected_correct(theta_true, difficulty)
+            correct = rng.random() < p
+            served_success.append(p)
+            theta_true += learning_rate * learning_gain(p)
+            theta_est = elo_update(theta_est, difficulty, correct, k_learner=k_learner).ability
+            i += 1
+
+        pick(item is None, remaining.clear, _step)
 
     return {
         "mastery_gain": theta_true,
-        "mean_success": sum(served_success) / len(served_success) if served_success else 0.0,
+        "mean_success": pick(
+            bool(served_success),
+            lambda: sum(served_success) / len(served_success),
+            lambda: 0.0,
+        ),
     }
 
 
@@ -298,7 +313,7 @@ def adaptation_efficacy(
     return {
         "edge_mastery_per_q": edge_mean / n_questions,
         "sequence_mastery_per_q": seq_mean / n_questions,
-        "mastery_ratio": edge_mean / seq_mean if seq_mean > 0 else float("inf"),
+        "mastery_ratio": pick(seq_mean > 0, lambda: edge_mean / seq_mean, lambda: float("inf")),
         "edge_mean_success": sum(edge_success) / n,
         "n_learners": n,
     }
@@ -311,24 +326,31 @@ def adaptation_efficacy(
 
 def percentile(values: Sequence[float], q: float) -> float:
     """Linear-interpolated percentile (q in [0, 1]); used for p95 latency."""
-    if not values:
-        return 0.0
-    ordered = sorted(values)
-    if len(ordered) == 1:
-        return ordered[0]
-    k = (len(ordered) - 1) * q
-    lo = math.floor(k)
-    hi = math.ceil(k)
-    if lo == hi:
-        return ordered[int(k)]
-    return ordered[lo] * (hi - k) + ordered[hi] * (k - lo)
+    def _interp() -> float:
+        ordered = sorted(values)
+
+        def _many() -> float:
+            k = (len(ordered) - 1) * q
+            lo = math.floor(k)
+            hi = math.ceil(k)
+            return pick(
+                lo == hi,
+                lambda: ordered[int(k)],
+                lambda: ordered[lo] * (hi - k) + ordered[hi] * (k - lo),
+            )
+
+        return pick(len(ordered) == 1, lambda: ordered[0], _many)
+
+    return pick(not values, lambda: 0.0, _interp)
 
 
 def _warm_pool(pool_size: int) -> dict[str, float]:
     """A realistic warm pool of calibrated items spanning roughly [-2, 2] logits."""
-    if pool_size == 1:
-        return {"I0": 0.0}
-    return {f"I{i}": (i / (pool_size - 1)) * 4.0 - 2.0 for i in range(pool_size)}
+    return pick(
+        pool_size == 1,
+        lambda: {"I0": 0.0},
+        lambda: {f"I{i}": (i / (pool_size - 1)) * 4.0 - 2.0 for i in range(pool_size)},
+    )
 
 
 def selection_latencies(

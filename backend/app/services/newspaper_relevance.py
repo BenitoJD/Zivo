@@ -19,6 +19,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
 from app.services.content_worthiness import (
     evaluate_newspaper_relevance_outcome,
     plan_newspaper_relevance_input,
@@ -55,11 +56,7 @@ def _parse_relevance(raw: str) -> dict[str, Any] | None:
     from app.services.llm_json import extract_json_obj
 
     parsed = extract_json_obj(raw or "")
-    if not parsed:
-        return None
-    if "relevant" not in parsed:
-        return None
-    return parsed
+    return pick(not parsed or "relevant" not in parsed, lambda: None, lambda: parsed)
 
 
 def _relevance_payload(
@@ -97,39 +94,47 @@ def judge_newspaper_relevance(db: Session, page_text: str) -> dict[str, Any]:
 
     cache_key = content_hash_key(_CACHE_KIND, page_text or "")
     hit = cache_get(db, kind=_CACHE_KIND, cache_key=cache_key)
-    if isinstance(hit, dict) and "relevant" in hit:
+
+    def _cached() -> dict[str, Any]:
         return {
             "relevant": bool(hit.get("relevant")),
             "theme": str(hit.get("theme") or ""),
             "rationale": str(hit.get("rationale") or ""),
         }
 
-    text = plan_newspaper_relevance_input(page_text)
-    if not text:
-        verdict = _relevance_payload("")
-        cache_put(db, kind=_CACHE_KIND, cache_key=cache_key, value=verdict)
-        return verdict
+    def _judge() -> dict[str, Any]:
+        text = plan_newspaper_relevance_input(page_text)
 
-    try:
-        raw = run_coro_in_worker(
-            acomplete_chat(
-                [
-                    {"role": "system", "content": _NEWS_RELEVANCE_SYSTEM},
-                    {"role": "user", "content": text},
-                    {"role": "user", "content": _NEWS_RELEVANCE_FORMAT},
-                ],
-                db,
-                model_id=default_chat_model_id(db),
-                log_tag="newspaper_relevance",
-            )
-        )
-    except Exception:
-        logger.warning("newspaper relevance judge failed", exc_info=True)
-        verdict = _relevance_payload(text, judge_error=True)
-        cache_put(db, kind=_CACHE_KIND, cache_key=cache_key, value=verdict)
-        return verdict
+        def _empty() -> dict[str, Any]:
+            verdict = _relevance_payload("")
+            cache_put(db, kind=_CACHE_KIND, cache_key=cache_key, value=verdict)
+            return verdict
 
-    parsed = _parse_relevance(raw or "")
-    verdict = _relevance_payload(text, parsed=parsed)
-    cache_put(db, kind=_CACHE_KIND, cache_key=cache_key, value=verdict)
-    return verdict
+        def _call() -> dict[str, Any]:
+            try:
+                raw = run_coro_in_worker(
+                    acomplete_chat(
+                        [
+                            {"role": "system", "content": _NEWS_RELEVANCE_SYSTEM},
+                            {"role": "user", "content": text},
+                            {"role": "user", "content": _NEWS_RELEVANCE_FORMAT},
+                        ],
+                        db,
+                        model_id=default_chat_model_id(db),
+                        log_tag="newspaper_relevance",
+                    )
+                )
+            except Exception:
+                logger.warning("newspaper relevance judge failed", exc_info=True)
+                verdict = _relevance_payload(text, judge_error=True)
+                cache_put(db, kind=_CACHE_KIND, cache_key=cache_key, value=verdict)
+                return verdict
+
+            parsed = _parse_relevance(raw or "")
+            verdict = _relevance_payload(text, parsed=parsed)
+            cache_put(db, kind=_CACHE_KIND, cache_key=cache_key, value=verdict)
+            return verdict
+
+        return pick(not text, _empty, _call)
+
+    return pick(isinstance(hit, dict) and "relevant" in hit, _cached, _judge)

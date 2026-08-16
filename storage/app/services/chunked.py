@@ -14,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 from app.services.guest import Principal
 from app.services.minio import (
     abort_multipart_upload,
@@ -29,6 +30,10 @@ SESSION_TTL_HOURS = 24
 logger = logging.getLogger(__name__)
 
 
+def _raise(exc: BaseException) -> None:
+    raise exc
+
+
 def _session_row(db: Session, session_id: uuid.UUID) -> dict[str, Any] | None:
     row = db.execute(
         text(
@@ -41,23 +46,65 @@ def _session_row(db: Session, session_id: uuid.UUID) -> dict[str, Any] | None:
         ),
         {"id": session_id},
     ).mappings().first()
-    return dict(row) if row else None
+    return pick(row is None, lambda: None, lambda: dict(row))
 
 
 def _assert_session_access(row: dict[str, Any] | None, principal: Principal) -> dict[str, Any]:
-    if not row:
-        raise HTTPException(status_code=404, detail="Upload session not found")
-    if row["expires_at"] < datetime.now(timezone.utc):
-        raise HTTPException(status_code=410, detail="Upload session expired")
-    if principal.account_id:
-        if row["account_id"] != principal.account_id:
-            raise HTTPException(status_code=404, detail="Upload session not found")
-    elif principal.guest_id:
-        if row["guest_id"] != principal.guest_id:
-            raise HTTPException(status_code=404, detail="Upload session not found")
-    else:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    return row
+    def _missing() -> dict[str, Any]:
+        _raise(HTTPException(status_code=404, detail="Upload session not found"))
+        return {}
+
+    def _after_row() -> dict[str, Any]:
+        pick(
+            row["expires_at"] < datetime.now(timezone.utc),
+            lambda: _raise(HTTPException(status_code=410, detail="Upload session expired")),
+            lambda: None,
+        )
+
+        def _account() -> dict[str, Any]:
+            pick(
+                row["account_id"] != principal.account_id,
+                lambda: _raise(HTTPException(status_code=404, detail="Upload session not found")),
+                lambda: None,
+            )
+            return row
+
+        def _guest() -> dict[str, Any]:
+            pick(
+                row["guest_id"] != principal.guest_id,
+                lambda: _raise(HTTPException(status_code=404, detail="Upload session not found")),
+                lambda: None,
+            )
+            return row
+
+        def _unauth() -> dict[str, Any]:
+            _raise(HTTPException(status_code=401, detail="Not authenticated"))
+            return {}
+
+        return apply(
+            first_match(
+                (
+                    Rule(when=(Pred("has_account", "truthy"),), action="account"),
+                    Rule(when=(Pred("has_guest", "truthy"),), action="guest"),
+                    Rule(when=(), action="unauth"),
+                ),
+                {
+                    "has_account": bool(principal.account_id),
+                    "has_guest": bool(principal.guest_id),
+                },
+            ).action,
+            {"account": _account, "guest": _guest, "unauth": _unauth},
+        )
+
+    return pick(not row, _missing, _after_row)
+
+
+def _parts_map(row: dict[str, Any]) -> dict:
+    return pick(
+        isinstance(row["parts"], dict),
+        lambda: row["parts"],
+        lambda: json.loads(row["parts"] or "{}"),
+    )
 
 
 def init_upload_session(
@@ -71,9 +118,16 @@ def init_upload_session(
 ) -> dict[str, Any]:
     principal.require_identity()
     settings = get_settings()
-    if total_size < 1 or total_size > settings.max_upload_bytes:
-        limit_gb = settings.max_upload_bytes // (1024 * 1024 * 1024)
-        raise HTTPException(status_code=413, detail=f"File too large (max {limit_gb}GB)")
+    pick(
+        total_size < 1 or total_size > settings.max_upload_bytes,
+        lambda: _raise(
+            HTTPException(
+                status_code=413,
+                detail=f"File too large (max {settings.max_upload_bytes // (1024 * 1024 * 1024)}GB)",
+            )
+        ),
+        lambda: None,
+    )
 
     size = chunk_size or DEFAULT_CHUNK_SIZE
     size = max(256 * 1024, min(size, 32 * 1024 * 1024))
@@ -99,7 +153,7 @@ def init_upload_session(
         {
             "id": session_id,
             "account_id": principal.account_id,
-            "guest_id": principal.guest_id if principal.account_id is None else None,
+            "guest_id": pick(principal.account_id is None, lambda: principal.guest_id, lambda: None),
             "filename": filename[:512],
             "content_type": content_type,
             "total_size": total_size,
@@ -126,7 +180,7 @@ def upload_session_status(
     principal: Principal,
 ) -> dict[str, Any]:
     row = _assert_session_access(_session_row(db, session_id), principal)
-    parts = row["parts"] if isinstance(row["parts"], dict) else json.loads(row["parts"] or "{}")
+    parts = _parts_map(row)
     received = sorted(int(k) for k in parts.keys())
     expected = math.ceil(int(row["total_size"]) / int(row["chunk_size"]))
     return {
@@ -148,17 +202,30 @@ def upload_part(
     *,
     principal: Principal,
 ) -> dict[str, Any]:
-    if part_number < 1:
-        raise HTTPException(status_code=400, detail="Invalid part number")
+    pick(
+        part_number < 1,
+        lambda: _raise(HTTPException(status_code=400, detail="Invalid part number")),
+        lambda: None,
+    )
     row = _assert_session_access(_session_row(db, session_id), principal)
     chunk_size = int(row["chunk_size"])
     total_size = int(row["total_size"])
     expected_parts = math.ceil(total_size / chunk_size)
-    if part_number > expected_parts:
-        raise HTTPException(status_code=400, detail="Part number out of range")
-    max_part = chunk_size if part_number < expected_parts else total_size - chunk_size * (expected_parts - 1)
-    if len(data) > max_part or (part_number < expected_parts and len(data) != chunk_size):
-        raise HTTPException(status_code=400, detail="Invalid part size")
+    pick(
+        part_number > expected_parts,
+        lambda: _raise(HTTPException(status_code=400, detail="Part number out of range")),
+        lambda: None,
+    )
+    max_part = choose(
+        part_number < expected_parts,
+        chunk_size,
+        total_size - chunk_size * (expected_parts - 1),
+    )
+    pick(
+        len(data) > max_part or (part_number < expected_parts and len(data) != chunk_size),
+        lambda: _raise(HTTPException(status_code=400, detail="Invalid part size")),
+        lambda: None,
+    )
 
     etag = upload_multipart_part(
         row["storage_key"],
@@ -166,7 +233,7 @@ def upload_part(
         part_number,
         data,
     )
-    parts = row["parts"] if isinstance(row["parts"], dict) else json.loads(row["parts"] or "{}")
+    parts = _parts_map(row)
     parts[str(part_number)] = etag
     db.execute(
         text(
@@ -200,11 +267,14 @@ def complete_upload_session(
         ),
         {"id": session_id},
     ).mappings().first()
-    row = _assert_session_access(dict(locked) if locked else None, principal)
-    parts = row["parts"] if isinstance(row["parts"], dict) else json.loads(row["parts"] or "{}")
+    row = _assert_session_access(pick(locked is None, lambda: None, lambda: dict(locked)), principal)
+    parts = _parts_map(row)
     expected = math.ceil(int(row["total_size"]) / int(row["chunk_size"]))
-    if len(parts) != expected:
-        raise HTTPException(status_code=400, detail="Missing upload parts")
+    pick(
+        len(parts) != expected,
+        lambda: _raise(HTTPException(status_code=400, detail="Missing upload parts")),
+        lambda: None,
+    )
 
     part_list = [
         {"PartNumber": int(num), "ETag": etag}
@@ -242,7 +312,7 @@ def complete_upload_session(
         "filename": row["filename"],
         "content_type": row["content_type"],
         "size_bytes": int(row["total_size"]),
-        "account_id": str(row["account_id"]) if row["account_id"] else None,
+        "account_id": pick(row["account_id"] is not None, lambda: str(row["account_id"]), lambda: None),
         "guest_id": row["guest_id"],
     }
 

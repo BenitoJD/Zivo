@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from app.engine_runtime import apply, choose, pick
 from app.models import Document, Job, JobPriority, JobWorkload
 from app.repositories import workspace as workspace_repo
 from app.services.question_pool import (
@@ -26,25 +27,31 @@ from app.services.rag_window import (
     sync_rag_window,
 )
 from app.services.session_design import (
+    PREP_MODE_BACKGROUND,
+    PREP_MODE_NOW,  # noqa: F401  (re-export for callers)
+    PREP_PHASE_COOKING,
+    PREP_PHASE_INDEXING,
     evaluate_background_cook_tick,
+    evaluate_background_prep_active,
+    evaluate_capped_prep_promote,
     evaluate_page_prep_ready,
     evaluate_prep_progress,
+    evaluate_prep_short_circuit,
     plan_refill_batch,
 )
 
-PREP_MODE_NOW = "now"
-PREP_MODE_BACKGROUND = "background"
-
-_PREP_PHASE_INDEXING = "indexing"
-_PREP_PHASE_COOKING = "cooking"
+_PREP_PHASE_INDEXING = PREP_PHASE_INDEXING
+_PREP_PHASE_COOKING = PREP_PHASE_COOKING
 _PREP_PHASE_COMPLETE = "complete"
 
 
 def is_background_prep(doc: Document | None) -> bool:
-    if not doc:
-        return False
-    meta = doc.meta or {}
-    return meta.get("prep_mode") == PREP_MODE_BACKGROUND and not meta.get("prep_complete")
+    meta = pick(bool(doc), lambda: (doc.meta or {}), lambda: {})
+    return evaluate_background_prep_active(
+        has_doc=bool(doc),
+        prep_mode=meta.get("prep_mode"),
+        prep_complete=bool(meta.get("prep_complete")),
+    )
 
 
 def count_assertions_for_document(db: Session, document_id: uuid.UUID) -> int:
@@ -77,30 +84,35 @@ def study_pages_for_doc(doc: Document) -> list[int]:
 
 def page_learn_prep_ready(db: Session, doc: Document, page: int) -> bool:
     coverage = get_page_coverage(doc, page)
-    budget = get_question_budget(doc, page) if coverage else 0
-    generated = count_assertions_on_page(db, doc.id, page) if coverage else 0
+    budget = choose(bool(coverage), get_question_budget(doc, page), 0)
+    generated = choose(bool(coverage), count_assertions_on_page(db, doc.id, page), 0)
     return evaluate_page_prep_ready(
         has_coverage=bool(coverage),
         non_content=bool((coverage or {}).get("non_content")),
         budget=budget,
         generated=generated,
-        coverage_complete=is_coverage_complete(doc, page) if coverage else False,
+        coverage_complete=choose(bool(coverage), is_coverage_complete(doc, page), False),
     )
 
 
 def all_study_pages_indexed(db: Session, doc: Document) -> bool:
     study = study_pages_for_doc(doc)
-    if not study:
-        return False
-    ready = pages_ready_for_document(db, doc.id, doc)
-    return all(page in ready for page in study)
+    return pick(
+        not study,
+        lambda: False,
+        lambda: all(page in pages_ready_for_document(db, doc.id, doc) for page in study),
+    )
 
 
 def compute_prep_progress(db: Session, doc: Document) -> dict[str, Any]:
     study = study_pages_for_doc(doc)
-    index_pct = rag_window_index_progress(db, doc.id, study) if study else 0
-    cook_done = sum(1 for page in study if page_learn_prep_ready(db, doc, page)) if study else 0
-    cook_pct = int(100 * cook_done / len(study)) if study else 0
+    index_pct = choose(bool(study), rag_window_index_progress(db, doc.id, study), 0)
+    cook_done = choose(
+        bool(study),
+        sum(map(lambda page: int(page_learn_prep_ready(db, doc, page)), study)),
+        0,
+    )
+    cook_pct = choose(bool(study), int(100 * cook_done / len(study)), 0)
     verdict = evaluate_prep_progress(
         index_pct=index_pct,
         cook_pct=cook_pct,
@@ -117,16 +129,21 @@ def compute_prep_progress(db: Session, doc: Document) -> dict[str, Any]:
 
 def is_prep_complete(db: Session, doc: Document) -> bool:
     meta = doc.meta or {}
-    if meta.get("prep_complete"):
-        return True
-    if meta.get("prep_mode") != PREP_MODE_BACKGROUND:
-        return True
+    return pick(
+        evaluate_prep_short_circuit(
+            prep_complete=bool(meta.get("prep_complete")),
+            prep_mode=meta.get("prep_mode"),
+        ),
+        lambda: True,
+        lambda: _prep_pages_complete(db, doc),
+    )
+
+
+def _prep_pages_complete(db: Session, doc: Document) -> bool:
     study = study_pages_for_doc(doc)
-    if not study:
-        return False
-    if not all_study_pages_indexed(db, doc):
-        return False
-    return all(page_learn_prep_ready(db, doc, page) for page in study)
+    return bool(study) and all_study_pages_indexed(db, doc) and all(
+        page_learn_prep_ready(db, doc, page) for page in study
+    )
 
 
 def apply_prep_meta(
@@ -138,10 +155,11 @@ def apply_prep_meta(
     meta = dict(doc.meta or {})
     meta["prep_mode"] = prep_mode
     meta.pop("prep_complete", None)
-    if prep_mode == PREP_MODE_BACKGROUND:
-        meta["prep_phase"] = _PREP_PHASE_INDEXING
-    else:
-        meta.pop("prep_phase", None)
+    pick(
+        prep_mode == PREP_MODE_BACKGROUND,
+        lambda: meta.__setitem__("prep_phase", _PREP_PHASE_INDEXING),
+        lambda: meta.pop("prep_phase", None),
+    )
     doc.meta = meta
     flag_modified(doc, "meta")
     db.add(doc)
@@ -162,12 +180,22 @@ def _update_workspace(
     status: str,
     pool_available_count: int | None = None,
 ) -> None:
-    if not doc.account_id:
-        return
+    pick(not doc.account_id, lambda: None, lambda: _upsert_workspace(db, doc, status, pool_available_count))
+
+
+def _upsert_workspace(
+    db: Session,
+    doc: Document,
+    status: str,
+    pool_available_count: int | None,
+) -> None:
     captured = doc.artifact_captured_at or doc.created_at
     fields: dict[str, Any] = {"status": status}
-    if pool_available_count is not None:
-        fields["pool_available_count"] = pool_available_count
+    pick(
+        pool_available_count is not None,
+        lambda: fields.__setitem__("pool_available_count", pool_available_count),
+        lambda: None,
+    )
     workspace_repo.upsert_workspace(
         db,
         account_id=doc.account_id,
@@ -180,8 +208,10 @@ def _update_workspace(
 def _enqueue_missing_ingest_pages(
     db: Session, document_id: uuid.UUID, pages: list[int]
 ) -> None:
-    if not pages:
-        return
+    pick(not pages, lambda: None, lambda: _enqueue_ingest_batch(db, document_id, pages))
+
+
+def _enqueue_ingest_batch(db: Session, document_id: uuid.UUID, pages: list[int]) -> None:
     from app.services.jobs import batch_enqueue_jobs
     from app.services.session_design import plan_newspaper_ingest_batch
 
@@ -210,8 +240,12 @@ def start_full_range_ingest(
     current_page: int | None = None,
 ) -> list[int]:
     study = study_pages_for_doc(doc)
-    if not study:
-        return []
+    return pick(not study, lambda: [], lambda: _start_ingest(db, doc, study, current_page))
+
+
+def _start_ingest(
+    db: Session, doc: Document, study: list[int], current_page: int | None
+) -> list[int]:
     page_from = current_page or int(study[0])
     progress = get_progress(doc)
     progress["current_page"] = page_from
@@ -223,21 +257,25 @@ def start_full_range_ingest(
     db.add(doc)
     db.commit()
     missing = sync_rag_window(db, doc.id, study)
-    if missing:
-        _enqueue_missing_ingest_pages(db, doc.id, missing)
+    pick(bool(missing), lambda: _enqueue_missing_ingest_pages(db, doc.id, missing), lambda: None)
     return missing
 
 
 def on_page_ingested_for_prep(db: Session, document_id: uuid.UUID) -> None:
     doc = db.get(Document, document_id)
-    if not doc or not is_background_prep(doc):
-        return
+    pick(
+        not doc or not is_background_prep(doc),
+        lambda: None,
+        lambda: _after_page_ingest(db, document_id, doc),
+    )
+
+
+def _after_page_ingest(db: Session, document_id: uuid.UUID, doc: Document) -> None:
     study = study_pages_for_doc(doc)
     doc.index_progress = rag_window_index_progress(db, document_id, study)
     db.add(doc)
     db.commit()
-    if all_study_pages_indexed(db, doc):
-        _transition_to_cooking(db, doc)
+    pick(all_study_pages_indexed(db, doc), lambda: _transition_to_cooking(db, doc), lambda: None)
 
 
 def _transition_to_cooking(db: Session, doc: Document) -> None:
@@ -257,79 +295,121 @@ def _transition_to_cooking(db: Session, doc: Document) -> None:
     _update_workspace(db, doc, status="prepping")
 
 
-def _next_page_needing_triage(db: Session, document_id: uuid.UUID, doc: Document) -> int | None:
-    ready = pages_ready_for_document(db, document_id, doc)
+def _needs_triage(db: Session, document_id: uuid.UUID, doc: Document, page: int, ready: set[int]) -> bool:
     from app.services.question_pool_jobs import _has_active_triage_job_for_page
 
-    for page in study_pages_for_doc(doc):
-        if page not in ready:
-            continue
-        if get_page_coverage(doc, page):
-            continue
-        if _has_active_triage_job_for_page(db, document_id, page):
-            continue
-        return page
-    return None
+    return (
+        page in ready
+        and not get_page_coverage(doc, page)
+        and not _has_active_triage_job_for_page(db, document_id, page)
+    )
+
+
+def _next_page_needing_triage(db: Session, document_id: uuid.UUID, doc: Document) -> int | None:
+    ready = pages_ready_for_document(db, document_id, doc)
+    return next(
+        filter(lambda page: _needs_triage(db, document_id, doc, page, ready), study_pages_for_doc(doc)),
+        None,
+    )
+
+
+def _needs_cook(db: Session, document_id: uuid.UUID, doc: Document, page: int) -> bool:
+    from app.services.question_pool_jobs import _has_active_generate_job_for_page
+
+    return (
+        bool(get_page_coverage(doc, page))
+        and not page_learn_prep_ready(db, doc, page)
+        and not _has_active_generate_job_for_page(db, document_id, page)
+    )
 
 
 def _next_page_needing_cook(db: Session, document_id: uuid.UUID, doc: Document) -> int | None:
-    from app.services.question_pool_jobs import _has_active_generate_job_for_page
-
-    for page in study_pages_for_doc(doc):
-        if not get_page_coverage(doc, page):
-            continue
-        if page_learn_prep_ready(db, doc, page):
-            continue
-        if _has_active_generate_job_for_page(db, document_id, page):
-            continue
-        return page
-    return None
+    return next(
+        filter(lambda page: _needs_cook(db, document_id, doc, page), study_pages_for_doc(doc)),
+        None,
+    )
 
 
 def tick_background_cook(db: Session, document_id: uuid.UUID) -> Job | None:
     doc = db.get(Document, document_id)
-    if not doc or not is_background_prep(doc):
-        return None
-
-    from app.services.question_pool_jobs import (
-        BACKGROUND_PREP_MAX_QUESTIONS,
-        enqueue_page_batch,
-        enqueue_page_triage,
+    return pick(
+        not doc or not is_background_prep(doc),
+        lambda: None,
+        lambda: _tick_prep(db, document_id, doc),
     )
+
+
+def _tick_prep(db: Session, document_id: uuid.UUID, doc: Document) -> Job | None:
+    from app.services.question_pool_jobs import BACKGROUND_PREP_MAX_QUESTIONS
 
     phase = prep_phase(doc)
     indexed = all_study_pages_indexed(db, doc)
-    if phase == _PREP_PHASE_INDEXING and not indexed:
-        missing = sync_rag_window(db, document_id, study_pages_for_doc(doc))
-        verdict = evaluate_background_cook_tick(
-            phase=phase,
-            all_indexed=False,
-            has_ingest_missing=bool(missing),
-            triage_page=None,
-            cook_page=None,
-            total_generated=0,
-            max_questions=BACKGROUND_PREP_MAX_QUESTIONS,
-            remaining_on_page=None,
-        )
-        if verdict.action == "ingest":
-            _enqueue_missing_ingest_pages(db, document_id, missing)
-        return None
+    return pick(
+        phase == _PREP_PHASE_INDEXING and not indexed,
+        lambda: _tick_indexing(db, document_id, doc, BACKGROUND_PREP_MAX_QUESTIONS),
+        lambda: pick(
+            phase == _PREP_PHASE_INDEXING,
+            lambda: _tick_after_index_transition(db, document_id),
+            lambda: _tick_cooking(db, document_id, doc, BACKGROUND_PREP_MAX_QUESTIONS),
+        ),
+    )
 
-    if phase == _PREP_PHASE_INDEXING:
-        _transition_to_cooking(db, doc)
-        doc = db.get(Document, document_id)
-        if not doc:
-            return None
+
+def _tick_indexing(
+    db: Session, document_id: uuid.UUID, doc: Document, max_questions: int
+) -> None:
+    missing = sync_rag_window(db, document_id, study_pages_for_doc(doc))
+    verdict = evaluate_background_cook_tick(
+        phase=_PREP_PHASE_INDEXING,
+        all_indexed=False,
+        has_ingest_missing=bool(missing),
+        triage_page=None,
+        cook_page=None,
+        total_generated=0,
+        max_questions=max_questions,
+        remaining_on_page=None,
+    )
+    pick(verdict.action == "ingest", lambda: _enqueue_missing_ingest_pages(db, document_id, missing), lambda: None)
+    return None
+
+
+def _tick_after_index_transition(db: Session, document_id: uuid.UUID) -> Job | None:
+    doc = db.get(Document, document_id)
+    pick(bool(doc), lambda: _transition_to_cooking(db, doc), lambda: None)
+    doc = db.get(Document, document_id)
+    return pick(not doc, lambda: None, lambda: _tick_cooking_after_transition(db, document_id, doc))
+
+
+def _tick_cooking_after_transition(db: Session, document_id: uuid.UUID, doc: Document) -> Job | None:
+    from app.services.question_pool_jobs import BACKGROUND_PREP_MAX_QUESTIONS
+
+    return _tick_cooking(db, document_id, doc, BACKGROUND_PREP_MAX_QUESTIONS)
+
+
+def _tick_cooking(
+    db: Session, document_id: uuid.UUID, doc: Document, max_questions: int
+) -> Job | None:
+    from app.services.question_pool_jobs import enqueue_page_triage
 
     ingest_missing = sync_rag_window(db, document_id, study_pages_for_doc(doc))
-    triage_page = None if ingest_missing else _next_page_needing_triage(db, document_id, doc)
-    cook_page = None if ingest_missing or triage_page is not None else _next_page_needing_cook(db, document_id, doc)
-    remaining = None
-    total_generated = 0
-    if cook_page is not None:
-        total_generated = count_assertions_for_document(db, document_id)
-        generated = count_assertions_on_page(db, document_id, cook_page)
-        remaining = get_question_budget(doc, cook_page) - generated
+    triage_page = pick(
+        bool(ingest_missing),
+        lambda: None,
+        lambda: _next_page_needing_triage(db, document_id, doc),
+    )
+    cook_page = pick(
+        bool(ingest_missing) or triage_page is not None,
+        lambda: None,
+        lambda: _next_page_needing_cook(db, document_id, doc),
+    )
+    remaining, total_generated = pick(
+        cook_page is not None,
+        lambda: (
+            get_question_budget(doc, cook_page) - count_assertions_on_page(db, document_id, cook_page),
+            count_assertions_for_document(db, document_id),
+        ),
+        lambda: (None, 0),
+    )
 
     verdict = evaluate_background_cook_tick(
         phase=_PREP_PHASE_COOKING,
@@ -338,48 +418,82 @@ def tick_background_cook(db: Session, document_id: uuid.UUID) -> Job | None:
         triage_page=triage_page,
         cook_page=cook_page,
         total_generated=total_generated,
-        max_questions=BACKGROUND_PREP_MAX_QUESTIONS,
+        max_questions=max_questions,
         remaining_on_page=remaining,
     )
-    if verdict.action == "ingest":
-        _enqueue_missing_ingest_pages(db, document_id, ingest_missing)
-        return None
-    if verdict.action == "triage":
-        return enqueue_page_triage(db, doc, page=verdict.page, precompute=True)
-    if verdict.action == "complete":
-        maybe_complete_prep(db, doc)
-        return None
-    if verdict.action == "complete_cap":
-        meta = dict(doc.meta or {})
-        meta["prep_complete"] = True
-        doc.meta = meta
-        flag_modified(doc, "meta")
-        ensure_capped_prep_ready(db, doc)
-        return None
-    if verdict.action == "cook" and verdict.page is not None:
-        generated = count_assertions_on_page(db, document_id, verdict.page)
-        budget = get_question_budget(doc, verdict.page)
-        capped = min(max(0, remaining or 0), budget)
-        batch = plan_refill_batch(remaining=capped)
-        job = enqueue_page_batch(
-            db,
-            doc,
-            page=verdict.page,
-            batch_size=batch,
-            start_sequence=generated,
-        )
-        maybe_complete_prep(db, doc)
-        return job
+    return apply(
+        verdict.action,
+        {
+            "ingest": lambda: (_enqueue_missing_ingest_pages(db, document_id, ingest_missing), None)[1],
+            "triage": lambda: enqueue_page_triage(db, doc, page=verdict.page, precompute=True),
+            "complete": lambda: (maybe_complete_prep(db, doc), None)[1],
+            "complete_cap": lambda: _complete_cap(db, doc),
+            "cook": lambda: _cook_page(db, document_id, doc, verdict.page, remaining),
+            "idle": lambda: None,
+            "transition_cook": lambda: None,
+        },
+    )
+
+
+def _complete_cap(db: Session, doc: Document) -> None:
+    meta = dict(doc.meta or {})
+    meta["prep_complete"] = True
+    doc.meta = meta
+    flag_modified(doc, "meta")
+    ensure_capped_prep_ready(db, doc)
     return None
+
+
+def _cook_page(
+    db: Session,
+    document_id: uuid.UUID,
+    doc: Document,
+    page: int | None,
+    remaining: int | None,
+) -> Job | None:
+    return pick(
+        page is None,
+        lambda: None,
+        lambda: _enqueue_cook(db, document_id, doc, page, remaining),
+    )
+
+
+def _enqueue_cook(
+    db: Session,
+    document_id: uuid.UUID,
+    doc: Document,
+    page: int,
+    remaining: int | None,
+) -> Job:
+    from app.services.question_pool_jobs import enqueue_page_batch
+
+    generated = count_assertions_on_page(db, document_id, page)
+    budget = get_question_budget(doc, page)
+    capped = min(max(0, remaining or 0), budget)
+    batch = plan_refill_batch(remaining=capped)
+    job = enqueue_page_batch(
+        db,
+        doc,
+        page=page,
+        batch_size=batch,
+        start_sequence=generated,
+    )
+    maybe_complete_prep(db, doc)
+    return job
 
 
 def on_background_triage_completed(
     db: Session, document_id: uuid.UUID, *, page: int
 ) -> Job | None:
     doc = db.get(Document, document_id)
-    if not doc or not is_background_prep(doc):
-        return None
-    from app.services.question_pool_jobs import enqueue_page_batch
+    return pick(
+        not doc or not is_background_prep(doc),
+        lambda: None,
+        lambda: _after_triage(db, document_id, doc, page),
+    )
+
+
+def _after_triage(db: Session, document_id: uuid.UUID, doc: Document, page: int) -> Job | None:
     from app.services.session_design import evaluate_background_first_batch
 
     budget = get_question_budget(doc, page)
@@ -389,29 +503,50 @@ def on_background_triage_completed(
         generated=generated,
         first_batch=FIRST_QUESTION_BATCH_SIZE,
     )
-    if batch > 0:
-        job = enqueue_page_batch(
-            db,
-            doc,
-            page=page,
-            batch_size=batch,
-            start_sequence=0,
-        )
-        tick_background_cook(db, document_id)
-        return job
-    return tick_background_cook(db, document_id)
+    return pick(
+        batch > 0,
+        lambda: _enqueue_first_then_tick(db, document_id, doc, page, batch),
+        lambda: tick_background_cook(db, document_id),
+    )
+
+
+def _enqueue_first_then_tick(
+    db: Session, document_id: uuid.UUID, doc: Document, page: int, batch: int
+) -> Job:
+    from app.services.question_pool_jobs import enqueue_page_batch
+
+    job = enqueue_page_batch(
+        db,
+        doc,
+        page=page,
+        batch_size=batch,
+        start_sequence=0,
+    )
+    tick_background_cook(db, document_id)
+    return job
 
 
 def maybe_complete_prep(db: Session, doc: Document) -> bool:
-    if not is_background_prep(doc):
-        return False
-    if not is_prep_complete(db, doc):
-        progress = compute_prep_progress(db, doc)
-        doc.index_progress = int(progress["overall_pct"])
-        db.add(doc)
-        db.commit()
-        return False
+    return pick(
+        not is_background_prep(doc),
+        lambda: False,
+        lambda: pick(
+            not is_prep_complete(db, doc),
+            lambda: _mark_incomplete_progress(db, doc),
+            lambda: _mark_prep_ready(db, doc),
+        ),
+    )
 
+
+def _mark_incomplete_progress(db: Session, doc: Document) -> bool:
+    progress = compute_prep_progress(db, doc)
+    doc.index_progress = int(progress["overall_pct"])
+    db.add(doc)
+    db.commit()
+    return False
+
+
+def _mark_prep_ready(db: Session, doc: Document) -> bool:
     meta = dict(doc.meta or {})
     meta["prep_complete"] = True
     meta["prep_phase"] = _PREP_PHASE_COMPLETE
@@ -440,8 +575,16 @@ def ensure_capped_prep_ready(db: Session, doc: Document) -> bool:
     to ready (partial pool) so the learner can actually open it.
     """
     meta = doc.meta or {}
-    if not meta.get("prep_complete") or doc.status == "ready":
-        return False
+    return pick(
+        not evaluate_capped_prep_promote(
+            prep_complete=bool(meta.get("prep_complete")), status=doc.status
+        ),
+        lambda: False,
+        lambda: _promote_capped(db, doc, meta),
+    )
+
+
+def _promote_capped(db: Session, doc: Document, meta: dict[str, Any]) -> bool:
     meta = dict(meta)
     meta["prep_phase"] = _PREP_PHASE_COMPLETE
     doc.meta = meta
@@ -460,10 +603,14 @@ def ensure_capped_prep_ready(db: Session, doc: Document) -> bool:
 
 
 def maybe_recover_stuck_background_prep(db: Session, doc: Document) -> None:
-    if not is_background_prep(doc):
-        return
+    pick(
+        not is_background_prep(doc),
+        lambda: None,
+        lambda: _recover_prep(db, doc),
+    )
+
+
+def _recover_prep(db: Session, doc: Document) -> None:
     from app.services.rag_window import has_active_ingest_jobs
 
-    if has_active_ingest_jobs(db, doc.id):
-        return
-    tick_background_cook(db, doc.id)
+    pick(has_active_ingest_jobs(db, doc.id), lambda: None, lambda: tick_background_cook(db, doc.id))

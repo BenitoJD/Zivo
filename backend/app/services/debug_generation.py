@@ -15,6 +15,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import choose, pick
 from app.repositories.intel import _concept_id, _source_id
 from app.services.code_execution import DEFAULT_LANGUAGE_ID, run_tests
 from app.services.debug_cook import get_cook_job, set_cook_job_status
@@ -69,31 +70,41 @@ _GEN_RULES = (
 
 def _parse_json(raw: str) -> dict[str, Any] | None:
     text_clean = (raw or "").strip()
-    if text_clean.startswith("```"):
-        lines = text_clean.split("\n")
-        lines = [ln for ln in lines if not ln.strip().startswith("```")]
-        text_clean = "\n".join(lines).strip()
+
+    def _strip_fence() -> str:
+        lines = list(filter(lambda ln: not ln.strip().startswith("```"), text_clean.split("\n")))
+        return "\n".join(lines).strip()
+
+    text_clean = pick(text_clean.startswith("```"), _strip_fence, lambda: text_clean)
     try:
         data = json.loads(text_clean)
-        return data if isinstance(data, dict) else None
+        return pick(isinstance(data, dict), lambda: data, lambda: None)
     except json.JSONDecodeError:
         return None
 
 
 def _internal_qa_passes(draft: dict[str, Any]) -> bool:
     qa = draft.get("cook_qa") or {}
-    buggy = str(qa.get("buggy_code") or "").strip() if isinstance(qa, dict) else ""
-    fixed = str(qa.get("reference_fix_code") or "").strip() if isinstance(qa, dict) else ""
-    tests = (qa.get("tests") or []) if isinstance(qa, dict) else []
+    buggy = pick(
+        isinstance(qa, dict),
+        lambda: str(qa.get("buggy_code") or "").strip(),
+        lambda: "",
+    )
+    fixed = pick(
+        isinstance(qa, dict),
+        lambda: str(qa.get("reference_fix_code") or "").strip(),
+        lambda: "",
+    )
+    tests = pick(isinstance(qa, dict), lambda: qa.get("tests") or [], lambda: [])
     clean_tests = [
         {
             "stdin": str(t.get("stdin", "")),
             "expected_output": str(t.get("expected_output", "")),
         }
-        for t in tests
-        if isinstance(t, dict)
+        for t in filter(lambda t: isinstance(t, dict), tests)
     ]
-    if not buggy or not fixed or not clean_tests:
+
+    def _skip_run() -> bool:
         return evaluate_debug_scenario_qa(
             has_buggy=bool(buggy),
             has_fixed=bool(fixed),
@@ -101,17 +112,21 @@ def _internal_qa_passes(draft: dict[str, Any]) -> bool:
             buggy_fails=False,
             fixed_passes=False,
         ).persist
-    buggy_result = run_tests(buggy, clean_tests, language_id=DEFAULT_LANGUAGE_ID)
-    fixed_result = run_tests(fixed, clean_tests, language_id=DEFAULT_LANGUAGE_ID)
-    buggy_fails = any(not r.get("passed") for r in buggy_result.get("results") or [])
-    fixed_passes = all(r.get("passed") for r in fixed_result.get("results") or [])
-    return evaluate_debug_scenario_qa(
-        has_buggy=True,
-        has_fixed=True,
-        has_tests=True,
-        buggy_fails=buggy_fails,
-        fixed_passes=fixed_passes,
-    ).persist
+
+    def _run() -> bool:
+        buggy_result = run_tests(buggy, clean_tests, language_id=DEFAULT_LANGUAGE_ID)
+        fixed_result = run_tests(fixed, clean_tests, language_id=DEFAULT_LANGUAGE_ID)
+        buggy_fails = any(not r.get("passed") for r in buggy_result.get("results") or [])
+        fixed_passes = all(r.get("passed") for r in fixed_result.get("results") or [])
+        return evaluate_debug_scenario_qa(
+            has_buggy=True,
+            has_fixed=True,
+            has_tests=True,
+            buggy_fails=buggy_fails,
+            fixed_passes=fixed_passes,
+        ).persist
+
+    return pick(not buggy or not fixed or not clean_tests, _skip_run, _run)
 
 
 def _draft_scenario(db: Session, material: str, brief: str, index: int) -> dict[str, Any] | None:
@@ -122,24 +137,35 @@ def _draft_scenario(db: Session, material: str, brief: str, index: int) -> dict[
         f"Scenario index: {index + 1}\n\n"
         f"Output schema:\n{_GEN_SCHEMA}\n\n{_GEN_RULES}"
     )
+    found: dict[str, Any] | None = None
     for attempt in range(_MAX_VERIFY_ATTEMPTS):
-        raw = run_coro_in_worker(
-            acomplete_chat(
-                [
-                    {"role": "system", "content": _GEN_SYSTEM},
-                    {"role": "user", "content": user_msg},
-                ],
-                db,
-                log_tag="debug_cook",
+        def _try() -> None:
+            nonlocal found
+            raw = run_coro_in_worker(
+                acomplete_chat(
+                    [
+                        {"role": "system", "content": _GEN_SYSTEM},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    db,
+                    log_tag="debug_cook",
+                )
             )
-        )
-        draft = _parse_json(str(raw or ""))
-        if not draft:
-            continue
-        if _internal_qa_passes(draft):
-            return draft
-        logger.info("debug cook QA failed attempt %d", attempt + 1)
-    return None
+            draft = _parse_json(str(raw or ""))
+
+            def _accept() -> None:
+                nonlocal found
+                found = draft
+
+            pick(bool(draft) and _internal_qa_passes(draft), _accept, lambda: None)
+            pick(
+                bool(draft) and found is None,
+                lambda: logger.info("debug cook QA failed attempt %d", attempt + 1),
+                lambda: None,
+            )
+
+        pick(found is None, _try, lambda: None)
+    return found
 
 
 def _persist_scenario(
@@ -158,102 +184,113 @@ def _persist_scenario(
     steps = draft.get("steps") or []
     shape = evaluate_debug_scenario_shape(
         title=title,
-        step_count=len(steps) if isinstance(steps, list) else 0,
+        step_count=pick(isinstance(steps, list), lambda: len(steps), lambda: 0),
     )
-    if not shape.ok:
-        return None
-    case = draft.get("case") or {}
-    try:
-        full_payload = build_full_payload(
-            title=title,
-            scenario_type=str(draft.get("scenario_type") or "code_reading"),
-            case=case if isinstance(case, dict) else {},
-            steps=steps if isinstance(steps, list) else [],
-            difficulty=str(draft.get("difficulty") or "medium"),
-            tags=draft.get("tags") if isinstance(draft.get("tags"), list) else [],
-            origin=origin,
-            cook_job_id=str(cook_job_id),
-            artifact_id=str(artifact_id) if artifact_id else None,
-            page_number=page_number,
-            sequence=sequence,
-            cook_qa=draft.get("cook_qa") if isinstance(draft.get("cook_qa"), dict) else {},
-        )
-    except ValueError:
+
+    def _none() -> None:
         return None
 
-    full_payload["cook_provenance"] = {
-        "source_hash": source_hash,
-        "cook_job_id": str(cook_job_id),
-    }
+    def _persist() -> dict[str, Any] | None:
+        case = draft.get("case") or {}
+        try:
+            full_payload = build_full_payload(
+                title=title,
+                scenario_type=str(draft.get("scenario_type") or "code_reading"),
+                case=choose(isinstance(case, dict), case, {}),
+                steps=choose(isinstance(steps, list), steps, []),
+                difficulty=str(draft.get("difficulty") or "medium"),
+                tags=choose(isinstance(draft.get("tags"), list), draft.get("tags"), []),
+                origin=origin,
+                cook_job_id=str(cook_job_id),
+                artifact_id=pick(bool(artifact_id), lambda: str(artifact_id), lambda: None),
+                page_number=page_number,
+                sequence=sequence,
+                cook_qa=choose(
+                    isinstance(draft.get("cook_qa"), dict),
+                    draft.get("cook_qa"),
+                    {},
+                ),
+            )
+        except ValueError:
+            return None
 
-    assertion_id = uuid.uuid4()
-    source_slug = "user-upload" if artifact_id else "debug-bank"
-    fp = f"debug:{cook_job_id}:{sequence}"
-    if artifact_id:
-        fp = f"debug:{artifact_id}:{page_number}:{sequence}"
+        full_payload["cook_provenance"] = {
+            "source_hash": source_hash,
+            "cook_job_id": str(cook_job_id),
+        }
 
-    try:
-        db.execute(
-            text(
-                """
-                INSERT INTO intel.assertion (
-                  id, type_concept_id, source_id, canonical_uri, fingerprint,
-                  title, summary, payload, status
-                )
-                VALUES (
-                  :id, :type_id, :source_id, :uri, :fp,
-                  :title, :summary, CAST(:payload AS jsonb), 'active'
-                )
-                """
-            ),
-            {
-                "id": assertion_id,
-                "type_id": _concept_id(db, _DEBUG_TYPE_URI),
-                "source_id": _source_id(db, source_slug),
-                "uri": f"qb://assertion/{assertion_id}",
-                "fp": fp,
-                "title": title,
-                "summary": str(case.get("summary") or title)[:500],
-                "payload": json.dumps(full_payload),
-            },
+        assertion_id = uuid.uuid4()
+        source_slug = choose(bool(artifact_id), "user-upload", "debug-bank")
+        fp = pick(
+            bool(artifact_id),
+            lambda: f"debug:{artifact_id}:{page_number}:{sequence}",
+            lambda: f"debug:{cook_job_id}:{sequence}",
         )
-        db.execute(
-            text(
-                """
-                INSERT INTO qb.debug_assertion_facets (
-                  assertion_id, cook_job_id, artifact_id, page_number, sequence,
-                  title, scenario_type, difficulty, step_count,
-                  published, origin, review_status, owner_user_id, tags
-                )
-                VALUES (
-                  :aid, :cook_job_id, :artifact_id, :page, :seq,
-                  :title, :scenario_type, :difficulty, :step_count,
-                  false, :origin, 'draft', :owner_user_id, :tags
-                )
-                """
-            ),
-            {
-                "aid": assertion_id,
-                "cook_job_id": cook_job_id,
-                "artifact_id": artifact_id,
-                "page": page_number,
-                "seq": sequence,
-                "title": title,
-                "scenario_type": full_payload["scenario_type"],
-                "difficulty": full_payload["difficulty"],
-                "step_count": len(full_payload["steps"]),
-                "origin": origin,
-                "owner_user_id": owner_user_id,
-                "tags": full_payload["tags"],
-            },
-        )
-    except Exception:
-        logger.warning("debug persist failed job=%s seq=%d", cook_job_id, sequence, exc_info=True)
-        return None
 
-    pub = public_payload(full_payload)
-    pub["id"] = str(assertion_id)
-    return pub
+        try:
+            db.execute(
+                text(
+                    """
+                    INSERT INTO intel.assertion (
+                      id, type_concept_id, source_id, canonical_uri, fingerprint,
+                      title, summary, payload, status
+                    )
+                    VALUES (
+                      :id, :type_id, :source_id, :uri, :fp,
+                      :title, :summary, CAST(:payload AS jsonb), 'active'
+                    )
+                    """
+                ),
+                {
+                    "id": assertion_id,
+                    "type_id": _concept_id(db, _DEBUG_TYPE_URI),
+                    "source_id": _source_id(db, source_slug),
+                    "uri": f"qb://assertion/{assertion_id}",
+                    "fp": fp,
+                    "title": title,
+                    "summary": str(case.get("summary") or title)[:500],
+                    "payload": json.dumps(full_payload),
+                },
+            )
+            db.execute(
+                text(
+                    """
+                    INSERT INTO qb.debug_assertion_facets (
+                      assertion_id, cook_job_id, artifact_id, page_number, sequence,
+                      title, scenario_type, difficulty, step_count,
+                      published, origin, review_status, owner_user_id, tags
+                    )
+                    VALUES (
+                      :aid, :cook_job_id, :artifact_id, :page, :seq,
+                      :title, :scenario_type, :difficulty, :step_count,
+                      false, :origin, 'draft', :owner_user_id, :tags
+                    )
+                    """
+                ),
+                {
+                    "aid": assertion_id,
+                    "cook_job_id": cook_job_id,
+                    "artifact_id": artifact_id,
+                    "page": page_number,
+                    "seq": sequence,
+                    "title": title,
+                    "scenario_type": full_payload["scenario_type"],
+                    "difficulty": full_payload["difficulty"],
+                    "step_count": len(full_payload["steps"]),
+                    "origin": origin,
+                    "owner_user_id": owner_user_id,
+                    "tags": full_payload["tags"],
+                },
+            )
+        except Exception:
+            logger.warning("debug persist failed job=%s seq=%d", cook_job_id, sequence, exc_info=True)
+            return None
+
+        pub = public_payload(full_payload)
+        pub["id"] = str(assertion_id)
+        return pub
+
+    return pick(not shape.ok, _none, _persist)
 
 
 def run_cook_job(db: Session, cook_job_id: uuid.UUID) -> dict[str, Any]:
@@ -270,41 +307,48 @@ def run_cook_job(db: Session, cook_job_id: uuid.UUID) -> dict[str, Any]:
         text("SELECT material, brief, scenario_count, origin, owner_user_id FROM qb.debug_cook_job WHERE id = :id"),
         {"id": cook_job_id},
     ).first()
-    if not row:
+    def _missing() -> dict[str, Any]:
         set_cook_job_status(db, cook_job_id, "failed", error="job_not_found")
         db.commit()
         return {"saved": 0}
-    m = row._mapping
-    material_full = str(m["material"] or "")
-    brief = str(m["brief"] or "")
-    count = plan_debug_cook_yield(m["scenario_count"])
-    origin = str(m["origin"] or "generated")
-    owner = m["owner_user_id"]
-    source_hash = hashlib.sha256(material_full.encode()).hexdigest()[:16]
 
-    saved = 0
-    for i in range(count):
-        draft = _draft_scenario(db, material_full, brief, i)
-        if not draft:
-            continue
-        result = _persist_scenario(
-            db,
-            draft=draft,
-            cook_job_id=cook_job_id,
-            owner_user_id=owner,
-            origin=origin,
-            sequence=i + 1,
-            source_hash=source_hash,
+    def _cook() -> dict[str, Any]:
+        m = row._mapping
+        material_full = str(m["material"] or "")
+        brief = str(m["brief"] or "")
+        count = plan_debug_cook_yield(m["scenario_count"])
+        origin = str(m["origin"] or "generated")
+        owner = m["owner_user_id"]
+        source_hash = hashlib.sha256(material_full.encode()).hexdigest()[:16]
+
+        saved = 0
+        for i in range(count):
+            draft = _draft_scenario(db, material_full, brief, i)
+
+            def _persist() -> None:
+                nonlocal saved
+                result = _persist_scenario(
+                    db,
+                    draft=draft,
+                    cook_job_id=cook_job_id,
+                    owner_user_id=owner,
+                    origin=origin,
+                    sequence=i + 1,
+                    source_hash=source_hash,
+                )
+                saved += int(bool(result))
+
+            pick(not draft, lambda: None, _persist)
+
+        pick(
+            saved > 0,
+            lambda: set_cook_job_status(db, cook_job_id, "done"),
+            lambda: set_cook_job_status(db, cook_job_id, "failed", error="no_scenarios_generated"),
         )
-        if result:
-            saved += 1
+        db.commit()
+        return {"saved": saved, "cook_job_id": str(cook_job_id)}
 
-    if saved > 0:
-        set_cook_job_status(db, cook_job_id, "done")
-    else:
-        set_cook_job_status(db, cook_job_id, "failed", error="no_scenarios_generated")
-    db.commit()
-    return {"saved": saved, "cook_job_id": str(cook_job_id)}
+    return pick(not row, _missing, _cook)
 
 
 def generate_debug_for_page(
@@ -333,16 +377,21 @@ def generate_debug_for_page(
     job_id = uuid.UUID(job["id"])
     db.commit()
     result = run_cook_job(db, job_id)
-    if result.get("saved", 0) > 0:
-        db.execute(
-            text(
-                """
-                UPDATE qb.debug_assertion_facets
-                SET artifact_id = :aid, page_number = :page
-                WHERE cook_job_id = :jid
-                """
+    pick(
+        result.get("saved", 0) > 0,
+        lambda: (
+            db.execute(
+                text(
+                    """
+                    UPDATE qb.debug_assertion_facets
+                    SET artifact_id = :aid, page_number = :page
+                    WHERE cook_job_id = :jid
+                    """
+                ),
+                {"aid": document_id, "page": page_number, "jid": job_id},
             ),
-            {"aid": document_id, "page": page_number, "jid": job_id},
-        )
-        db.commit()
+            db.commit(),
+        ),
+        lambda: None,
+    )
     return int(result.get("saved") or 0)

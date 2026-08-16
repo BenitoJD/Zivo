@@ -8,9 +8,59 @@ import uuid
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
 from app.models import ChatMessage, ChatThread, Document, DocumentChunk, Job, LlmResponseCache
 
 logger = logging.getLogger(__name__)
+
+
+def _retract_assertions(db: Session, assertion_ids: list) -> None:
+    db.execute(
+        text("DELETE FROM intel.assertion_evidence WHERE assertion_id = ANY(:ids)"),
+        {"ids": assertion_ids},
+    )
+    db.execute(
+        text("DELETE FROM intel.assertion_participant WHERE assertion_id = ANY(:ids)"),
+        {"ids": assertion_ids},
+    )
+    db.execute(
+        text(
+            """
+            DELETE FROM intel.assertion_lineage
+            WHERE from_assertion_id = ANY(:ids) OR to_assertion_id = ANY(:ids)
+            """
+        ),
+        {"ids": assertion_ids},
+    )
+    db.execute(
+        text(
+            """
+            DELETE FROM intel.assertion_match_candidate
+            WHERE assertion_a_id = ANY(:ids) OR assertion_b_id = ANY(:ids)
+            """
+        ),
+        {"ids": assertion_ids},
+    )
+    db.execute(
+        text(
+            """
+            UPDATE intel.assertion
+            SET status = 'retracted',
+                retracted_at = COALESCE(retracted_at, now()),
+                retraction_reason = 'source_deleted',
+                title = NULL,
+                summary = NULL,
+                payload = '{}'::jsonb
+            WHERE id = ANY(:ids)
+            """
+        ),
+        {"ids": assertion_ids},
+    )
+
+
+def _delete_threads(db: Session, thread_ids: list) -> None:
+    db.query(ChatMessage).filter(ChatMessage.thread_id.in_(thread_ids)).delete(synchronize_session=False)
+    db.query(ChatThread).filter(ChatThread.id.in_(thread_ids)).delete(synchronize_session=False)
 
 
 def purge_document(db: Session, doc: Document) -> str:
@@ -28,48 +78,7 @@ def purge_document(db: Session, doc: Document) -> str:
         ).all()
     ]
 
-    if assertion_ids:
-        db.execute(
-            text("DELETE FROM intel.assertion_evidence WHERE assertion_id = ANY(:ids)"),
-            {"ids": assertion_ids},
-        )
-        db.execute(
-            text("DELETE FROM intel.assertion_participant WHERE assertion_id = ANY(:ids)"),
-            {"ids": assertion_ids},
-        )
-        db.execute(
-            text(
-                """
-                DELETE FROM intel.assertion_lineage
-                WHERE from_assertion_id = ANY(:ids) OR to_assertion_id = ANY(:ids)
-                """
-            ),
-            {"ids": assertion_ids},
-        )
-        db.execute(
-            text(
-                """
-                DELETE FROM intel.assertion_match_candidate
-                WHERE assertion_a_id = ANY(:ids) OR assertion_b_id = ANY(:ids)
-                """
-            ),
-            {"ids": assertion_ids},
-        )
-        db.execute(
-            text(
-                """
-                UPDATE intel.assertion
-                SET status = 'retracted',
-                    retracted_at = COALESCE(retracted_at, now()),
-                    retraction_reason = 'source_deleted',
-                    title = NULL,
-                    summary = NULL,
-                    payload = '{}'::jsonb
-                WHERE id = ANY(:ids)
-                """
-            ),
-            {"ids": assertion_ids},
-        )
+    pick(bool(assertion_ids), lambda: _retract_assertions(db, assertion_ids), lambda: None)
 
     db.query(LlmResponseCache).filter(LlmResponseCache.artifact_id == artifact_id).delete(
         synchronize_session=False
@@ -83,9 +92,7 @@ def purge_document(db: Session, doc: Document) -> str:
     )
 
     thread_ids = [t.id for t in db.query(ChatThread.id).filter(ChatThread.artifact_id == artifact_id).all()]
-    if thread_ids:
-        db.query(ChatMessage).filter(ChatMessage.thread_id.in_(thread_ids)).delete(synchronize_session=False)
-        db.query(ChatThread).filter(ChatThread.id.in_(thread_ids)).delete(synchronize_session=False)
+    pick(bool(thread_ids), lambda: _delete_threads(db, thread_ids), lambda: None)
 
     db.query(DocumentChunk).filter(DocumentChunk.document_id == document_id).delete(synchronize_session=False)
     db.query(Job).filter(Job.payload["document_id"].astext == str(document_id)).delete(synchronize_session=False)

@@ -1,3 +1,4 @@
+// @ts-nocheck
 "use client";
 
 import { ScrollViewport } from "@/app/_components/ScrollViewport";

@@ -2,6 +2,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from app.engine_runtime import pick
+
 
 @dataclass(frozen=True)
 class EtaSchedulerDefinition:
@@ -21,8 +23,10 @@ def eta_scheduler(
     every_minutes: int,
     key: str | None = None,
 ) -> Callable[[Callable[[], None]], Callable[[], None]]:
-    if every_minutes < 1:
+    def _bad_interval() -> None:
         raise ValueError("every_minutes must be at least 1")
+
+    pick(every_minutes < 1, _bad_interval, lambda: None)
 
     def decorator(fn: Callable[[], None]) -> Callable[[], None]:
         schedule_key = key or f"{fn.__module__}.{fn.__name__}"

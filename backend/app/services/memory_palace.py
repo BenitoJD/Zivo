@@ -17,6 +17,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import Pred, Rule, apply, first_match, pick
 from app.services.artifact_store import ArtifactStore, coerce_jsonb, run_artifact_generation
 from app.services.source_fingerprint import is_artifact_stale, mark_artifact_fresh
 
@@ -29,18 +30,26 @@ _PALACE_STORE = ArtifactStore(
     extra_cols={"setting": "setting"},
 )
 
+_ENSURE_RULES = (
+    Rule(when=(Pred("ready_match", "truthy"),), action="keep"),
+    Rule(when=(Pred("generating_match", "truthy"),), action="keep"),
+    Rule(when=(), action="kick"),
+)
+
 
 def load_palace(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
     """Return {status, setting, palace, error}. status: missing|generating|ready|failed."""
     row = _PALACE_STORE.load_row(db, document_id)
-    if not row:
-        return {"status": "missing", "setting": "", "palace": None, "error": None}
-    return {
-        "status": row["status"],
-        "setting": row["setting"] or "",
-        "palace": coerce_jsonb(row["palace"]) or None,
-        "error": row["error"],
-    }
+    return pick(
+        not row,
+        lambda: {"status": "missing", "setting": "", "palace": None, "error": None},
+        lambda: {
+            "status": row["status"],
+            "setting": row["setting"] or "",
+            "palace": coerce_jsonb(row["palace"]) or None,
+            "error": row["error"],
+        },
+    )
 
 
 def ensure_palace(
@@ -53,24 +62,28 @@ def ensure_palace(
     """
     state = load_palace(db, document_id)
     requested = (setting or "").strip()
+    stored = (state["setting"] or "").strip().lower()
     fp_key = f"palace:{(requested or state.get('setting') or '').strip().lower()}"
-
-    if requested:
-        if (
-            state["status"] == "ready"
-            and (state["setting"] or "").strip().lower() == requested.lower()
-            and not is_artifact_stale(db, document_id, fp_key)
-        ):
-            return state
-        if state["status"] == "generating" and (state["setting"] or "").strip().lower() == requested.lower():
-            return state
-        return _kick(db, document_id, requested)
-
-    if state["status"] == "ready" and not is_artifact_stale(db, document_id, fp_key):
-        return state
-    if state["status"] == "generating":
-        return state
-    return _kick(db, document_id, "")
+    same = stored == requested.lower()
+    hit = first_match(
+        _ENSURE_RULES,
+        {
+            "ready_match": (
+                state["status"] == "ready"
+                and pick(bool(requested), lambda: same, lambda: True)
+                and not is_artifact_stale(db, document_id, fp_key)
+            ),
+            "generating_match": state["status"] == "generating"
+            and pick(bool(requested), lambda: same, lambda: True),
+        },
+    )
+    return apply(
+        hit.action,
+        {
+            "keep": lambda: state,
+            "kick": lambda: _kick(db, document_id, requested),
+        },
+    )
 
 
 def _kick(db: Session, document_id: uuid.UUID, setting: str) -> dict[str, Any]:
@@ -95,7 +108,9 @@ def run_palace_generation(db: Session, document_id: uuid.UUID, setting: str = ""
         empty_error="no_palace_generated",
         key_and_extra={"setting": setting},
     )
-    if result and result.get("stations"):
-        mark_artifact_fresh(db, document_id, f"palace:{(setting or '').strip().lower()}")
-        db.commit()
+    pick(
+        bool(result and result.get("stations")),
+        lambda: (mark_artifact_fresh(db, document_id, f"palace:{(setting or '').strip().lower()}"), db.commit()),
+        lambda: None,
+    )
     return result

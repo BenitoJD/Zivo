@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from unittest.mock import MagicMock, patch
 
+from app.engine_runtime import pick
 from app.services.request_ip import client_ip
 from app.services.usage import _ip_hash
 
@@ -16,10 +17,17 @@ def _mock_request(
     trusted_proxy_ips: str = "",
 ) -> MagicMock:
     headers: dict[str, str] = {}
-    if xff is not None:
-        headers["x-forwarded-for"] = xff
+    pick(
+        xff is not None,
+        lambda: headers.__setitem__("x-forwarded-for", xff),
+        lambda: None,
+    )
     request = MagicMock()
-    request.client = MagicMock(host=client_host) if client_host else None
+    request.client = pick(
+        bool(client_host),
+        lambda: MagicMock(host=client_host),
+        lambda: None,
+    )
     request.headers.get = lambda name, default="": headers.get(name.lower(), default)
     return request
 

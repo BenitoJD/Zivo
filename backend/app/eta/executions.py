@@ -4,6 +4,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
 from app.eta.execution_state import update_execution_state_sync
 from app.eta.spec import EtaDagNode, EtaDagSpec
 from app.eta.submit import build_job, eta_session
@@ -23,61 +24,66 @@ class EtaDagValidationError(ValueError):
     pass
 
 
-def _validate_dag(spec: EtaDagSpec) -> None:
-    if not spec.name.strip():
-        raise EtaDagValidationError("Execution name is required")
+def _reject(cond: bool, message: str) -> None:
+    def _raise() -> None:
+        raise EtaDagValidationError(message)
 
-    if not spec.nodes:
-        raise EtaDagValidationError("At least one node is required")
+    pick(cond, _raise, lambda: None)
+
+
+def _validate_dag(spec: EtaDagSpec) -> None:
+    _reject(not spec.name.strip(), "Execution name is required")
+    _reject(not spec.nodes, "At least one node is required")
 
     keys = [node.key.strip() for node in spec.nodes]
-    if any(not key for key in keys):
-        raise EtaDagValidationError("Node keys must be non-empty")
-
-    if len(set(keys)) != len(keys):
-        raise EtaDagValidationError("Node keys must be unique")
+    _reject(any(not key for key in keys), "Node keys must be non-empty")
+    _reject(len(set(keys)) != len(keys), "Node keys must be unique")
 
     node_key_set = set(keys)
     indegree: dict[str, int] = {key: 0 for key in node_key_set}
     adjacency: dict[str, list[str]] = {key: [] for key in node_key_set}
 
-    for edge in spec.edges:
-        if edge.source not in node_key_set:
-            raise EtaDagValidationError(f"Edge source not found: {edge.source}")
-        if edge.target not in node_key_set:
-            raise EtaDagValidationError(f"Edge target not found: {edge.target}")
-        if edge.source == edge.target:
-            raise EtaDagValidationError(f"Self dependency is not allowed: {edge.source}")
-
+    def _check_edge(edge) -> None:
+        _reject(edge.source not in node_key_set, f"Edge source not found: {edge.source}")
+        _reject(edge.target not in node_key_set, f"Edge target not found: {edge.target}")
+        _reject(edge.source == edge.target, f"Self dependency is not allowed: {edge.source}")
         adjacency[edge.source].append(edge.target)
         indegree[edge.target] += 1
 
-    queue = deque([k for k, degree in indegree.items() if degree == 0])
+    for edge in spec.edges:
+        _check_edge(edge)
+
+    queue = deque(
+        map(
+            lambda item: item[0],
+            filter(lambda item: item[1] == 0, indegree.items()),
+        )
+    )
     visited = 0
     while queue:
         node = queue.popleft()
         visited += 1
-        for child in adjacency[node]:
-            indegree[child] -= 1
-            if indegree[child] == 0:
-                queue.append(child)
 
-    if visited != len(node_key_set):
-        raise EtaDagValidationError("Cycle detected in DAG")
+        def _dec(child: str) -> None:
+            indegree[child] -= 1
+            pick(indegree[child] == 0, lambda: queue.append(child), lambda: None)
+
+        for child in adjacency[node]:
+            _dec(child)
+
+    _reject(visited != len(node_key_set), "Cycle detected in DAG")
 
 
 def _merge_parent_job_ids(payload: Any, parent_job_ids: Sequence[str]) -> dict[str, Any]:
-    if not isinstance(payload, dict):
-        raise EtaDagValidationError("Node payload must normalize to a JSON object")
-
+    _reject(not isinstance(payload, dict), "Node payload must normalize to a JSON object")
     merged = dict(payload)
     existing = merged.get("parent_job_ids") or []
-    if existing and not isinstance(existing, list):
-        raise EtaDagValidationError("Node payload field 'parent_job_ids' must be a list")
-
+    _reject(
+        bool(existing) and not isinstance(existing, list),
+        "Node payload field 'parent_job_ids' must be a list",
+    )
     combined = sorted({str(job_id) for job_id in [*existing, *parent_job_ids]})
-    if combined:
-        merged["parent_job_ids"] = combined
+    pick(bool(combined), lambda: merged.__setitem__("parent_job_ids", combined), lambda: None)
     return merged
 
 
@@ -150,13 +156,18 @@ def submit_dag(
             )
             parent_ids_by_job_id[target_job.id].append(str(source_job.id))
 
-        if dependencies:
-            active_db.add_all(dependencies)
+        pick(bool(dependencies), lambda: active_db.add_all(dependencies), lambda: None)
+
+        def _attach_parents(job: Job) -> None:
+            parent_ids = parent_ids_by_job_id.get(job.id, [])
+            pick(
+                bool(parent_ids),
+                lambda: setattr(job, "payload", _merge_parent_job_ids(job.payload, parent_ids)),
+                lambda: None,
+            )
 
         for job in jobs_by_key.values():
-            parent_ids = parent_ids_by_job_id.get(job.id, [])
-            if parent_ids:
-                job.payload = _merge_parent_job_ids(job.payload, parent_ids)
+            _attach_parents(job)
 
         execution.total_jobs = len(spec.nodes)
         execution.queued_jobs = len(spec.nodes)
@@ -191,10 +202,7 @@ def submit_group(
         )
         for idx, item in enumerate(items)
     ]
-
-    if not nodes:
-        raise EtaDagValidationError("Group submission requires at least one item")
-
+    _reject(not nodes, "Group submission requires at least one item")
     spec = EtaDagSpec(
         name=name,
         nodes=nodes,
@@ -204,77 +212,79 @@ def submit_group(
     return submit_dag(db, spec=spec, account_id=account_id, mode=EtaExecutionMode.group)
 
 
+def _scoped_query(query, account_id: Any, column):
+    return pick(
+        account_id is not None,
+        lambda: query.filter(column == account_id),
+        lambda: query,
+    )
+
+
 def get_execution(
     db: Session, execution_id: object, account_id: Any = None
 ) -> EtaExecution | None:
     query = db.query(EtaExecution).filter(EtaExecution.id == execution_id)
-    if account_id is not None:
-        query = query.filter(EtaExecution.account_id == account_id)
-    return query.first()
+    return _scoped_query(query, account_id, EtaExecution.account_id).first()
 
 
 def list_execution_jobs(db: Session, execution_id: object, account_id: Any = None) -> list[Job]:
     query = db.query(Job).filter(Job.execution_id == execution_id).order_by(Job.created_at.asc())
-    if account_id is not None:
-        query = query.filter(Job.account_id == account_id)
-    return query.all()
+    return _scoped_query(query, account_id, Job.account_id).all()
 
 
 def cancel_execution(
     db: Session, execution_id: object, account_id: Any = None
 ) -> EtaExecution | None:
     execution = get_execution(db, execution_id, account_id=account_id)
-    if not execution:
-        return None
 
-    # Cancel queued and in-flight jobs. Workers only finish a job while it is
-    # still ``running`` (see _mark_succeeded / _mark_failed), so this sticks.
-    db.query(Job).filter(
-        Job.execution_id == execution.id,
-        Job.status.in_([JobStatus.queued, JobStatus.running]),
-    ).update(
-        {
-            Job.status: JobStatus.cancelled,
-            Job.error: "Execution cancelled",
-            Job.locked_by: None,
-            Job.locked_at: None,
-        },
-        synchronize_session=False,
-    )
+    def _cancel(active: EtaExecution) -> EtaExecution:
+        db.query(Job).filter(
+            Job.execution_id == active.id,
+            Job.status.in_([JobStatus.queued, JobStatus.running]),
+        ).update(
+            {
+                Job.status: JobStatus.cancelled,
+                Job.error: "Execution cancelled",
+                Job.locked_by: None,
+                Job.locked_at: None,
+            },
+            synchronize_session=False,
+        )
+        update_execution_state_sync(db, active.id)
+        db.commit()
+        db.refresh(active)
+        return active
 
-    update_execution_state_sync(db, execution.id)
-    db.commit()
-    db.refresh(execution)
-    return execution
+    return pick(execution is None, lambda: None, lambda: _cancel(execution))
 
 
 def retry_failed_jobs(
     db: Session, execution_id: object, account_id: Any = None
 ) -> tuple[EtaExecution, int] | None:
     execution = get_execution(db, execution_id, account_id=account_id)
-    if not execution:
-        return None
 
-    updated = (
-        db.query(Job)
-        .filter(
-            Job.execution_id == execution.id,
-            Job.status == JobStatus.failed,
+    def _retry(active: EtaExecution) -> tuple[EtaExecution, int]:
+        updated = (
+            db.query(Job)
+            .filter(
+                Job.execution_id == active.id,
+                Job.status == JobStatus.failed,
+            )
+            .update(
+                {
+                    Job.status: JobStatus.queued,
+                    Job.error: None,
+                    Job.run_after: None,
+                    Job.locked_at: None,
+                    Job.locked_by: None,
+                    Job.attempts: 0,
+                },
+                synchronize_session=False,
+            )
         )
-        .update(
-            {
-                Job.status: JobStatus.queued,
-                Job.error: None,
-                Job.run_after: None,
-                Job.locked_at: None,
-                Job.locked_by: None,
-                Job.attempts: 0,
-            },
-            synchronize_session=False,
-        )
-    )
+        update_execution_state_sync(db, active.id)
+        db.commit()
+        db.refresh(active)
+        return active, updated
 
-    update_execution_state_sync(db, execution.id)
-    db.commit()
-    db.refresh(execution)
-    return execution, updated
+    return pick(execution is None, lambda: None, lambda: _retry(execution))

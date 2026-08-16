@@ -6,10 +6,14 @@ from sqlalchemy import engine_from_config, pool
 from app.config import get_settings
 from app.db import Base
 from app import models  # noqa: F401
+from app.engine_runtime import pick
 
 config = context.config
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+pick(
+    config.config_file_name is not None,
+    lambda: fileConfig(config.config_file_name),
+    lambda: None,
+)
 
 target_metadata = Base.metadata
 settings = get_settings()
@@ -29,10 +33,8 @@ _RAW_SQL_OBJECTS = {
 
 
 def _include_object(object, name, type_, reflected, compare_to):
-    raw = _RAW_SQL_OBJECTS.get(type_)
-    if raw and name in raw:
-        return False
-    return True
+    raw = _RAW_SQL_OBJECTS.get(type_) or ()
+    return name not in raw
 
 
 def run_migrations_offline() -> None:
@@ -63,7 +65,4 @@ def run_migrations_online() -> None:
             context.run_migrations()
 
 
-if context.is_offline_mode():
-    run_migrations_offline()
-else:
-    run_migrations_online()
+pick(context.is_offline_mode(), run_migrations_offline, run_migrations_online)()

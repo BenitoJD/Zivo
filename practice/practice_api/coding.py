@@ -25,6 +25,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.services.document_access import require_document
 from app.db import get_db
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 from app.models import Account
 from app.services.answer_signal import resolve_subject_entity
 from app.services.auth import get_optional_user, require_admin, require_csrf, require_csrf_or_guest
@@ -45,9 +46,18 @@ from app.services.coding_curation import (
 from app.services.coding_generation import public_payload, record_coding_submit
 from app.services.coding_teach_gap import teach_after_submit
 from app.services.guest_session import guest_session_for_read, optional_guest_session
+from app.services.presence import evaluate_presence
 from app.services.rate_limit import rate_limit_dependency
 
 router = APIRouter()
+
+
+def _raise_http(status: int, detail: str) -> None:
+    raise HTTPException(status_code=status, detail=detail)
+
+
+def _account_id(user: Account | None):
+    return pick(user is not None, lambda: user.id, lambda: None)
 
 
 # ---------------------------------------------------------------- languages (declared before /{assertion_id} so the static path wins)
@@ -125,8 +135,10 @@ def _load_coding_assertion(
     pass ``include_retracted=True`` so a curator can open, edit, or republish a
     soft-deleted (status='retracted') problem instead of hitting a 404.
     """
-    status_clause = (
-        "a.status IN ('active', 'retracted')" if include_retracted else "a.status = 'active'"
+    status_clause = choose(
+        include_retracted,
+        "a.status IN ('active', 'retracted')",
+        "a.status = 'active'",
     )
     row = db.execute(
         text(
@@ -139,13 +151,25 @@ def _load_coding_assertion(
         ),
         {"id": assertion_id},
     ).first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Not found")
+    apply(
+        evaluate_presence(row).action,
+        {
+            "missing": lambda: _raise_http(404, "Not found"),
+            "empty": lambda: _raise_http(404, "Not found"),
+            "ok": lambda: None,
+        },
+    )
     payload = row._mapping["payload"]
-    if not isinstance(payload, dict):
-        payload = json.loads(payload) if payload else {}
-    if payload.get("format") != "qb.coding.v1":
-        raise HTTPException(status_code=404, detail="Not a coding problem")
+    payload = pick(
+        isinstance(payload, dict),
+        lambda: payload,
+        lambda: pick(bool(payload), lambda: json.loads(payload), lambda: {}),
+    )
+    pick(
+        payload.get("format") == "qb.coding.v1",
+        lambda: None,
+        lambda: _raise_http(404, "Not a coding problem"),
+    )
     return {
         "id": row._mapping["id"],
         "payload": payload,
@@ -170,9 +194,9 @@ def _require_solvable_problem(
         ),
         {"aid": assertion_id},
     ).first()
-    if facet is not None and not bool(facet._mapping["published"]):
-        if not user or not user.is_admin:
-            raise HTTPException(status_code=404, detail="Not found")
+    unpublished = facet is not None and not bool(facet._mapping["published"])
+    blocked = unpublished and (user is None or not user.is_admin)
+    pick(blocked, lambda: _raise_http(404, "Not found"), lambda: None)
     return problem
 
 
@@ -185,31 +209,32 @@ def _validate_language_id(language_id: int) -> int:
 
 def _status_for(db: Session, assertion_id: uuid.UUID, subject_entity_id: uuid.UUID | None) -> str:
     """Per-learner status: 'solved' | 'new'."""
-    if subject_entity_id is None:
-        return "new"
-    row = db.execute(
-        text(
-            """
-            SELECT 1
-            FROM intel.measurement
-            WHERE subject_entity_id = :entity
-              AND source_assertion_id = :aid
-              AND metric_concept_id = (
-                SELECT id FROM intel.concept WHERE uri = '/vocab/metric/coding.passed'
-              )
-            LIMIT 1
-            """
-        ),
-        {"entity": subject_entity_id, "aid": assertion_id},
-    ).scalar()
-    return "solved" if row else "new"
+
+    def _lookup() -> str:
+        row = db.execute(
+            text(
+                """
+                SELECT 1
+                FROM intel.measurement
+                WHERE subject_entity_id = :entity
+                  AND source_assertion_id = :aid
+                  AND metric_concept_id = (
+                    SELECT id FROM intel.concept WHERE uri = '/vocab/metric/coding.passed'
+                  )
+                LIMIT 1
+                """
+            ),
+            {"entity": subject_entity_id, "aid": assertion_id},
+        ).scalar()
+        return choose(bool(row), "solved", "new")
+
+    return pick(subject_entity_id is None, lambda: "new", _lookup)
 
 
 def _facet_item(row, *, status: str | None = None, include_unpublished: bool = False) -> dict:
     m = row._mapping
     tags = m.get("tags") or []
-    if not isinstance(tags, list):
-        tags = list(tags) if tags else []
+    tags = pick(isinstance(tags, list), lambda: tags, lambda: list(tags or []))
     item = {
         "id": str(m["id"]),
         "title": m["title"] or "Untitled",
@@ -221,12 +246,17 @@ def _facet_item(row, *, status: str | None = None, include_unpublished: bool = F
         "origin": m.get("origin") or "generated",
         "concept": m.get("concept") or "",
     }
-    if "page_number" in m and m["page_number"] is not None:
-        item["page_number"] = int(m["page_number"] or 0)
-    if status is not None:
-        item["status"] = status
-    if include_unpublished and "published" in m:
-        item["published"] = bool(m["published"])
+    pick(
+        "page_number" in m and m["page_number"] is not None,
+        lambda: item.update({"page_number": int(m["page_number"] or 0)}),
+        lambda: None,
+    )
+    pick(status is not None, lambda: item.update({"status": status}), lambda: None)
+    pick(
+        include_unpublished and "published" in m,
+        lambda: item.update({"published": bool(m["published"])}),
+        lambda: None,
+    )
     return item
 
 
@@ -243,10 +273,13 @@ def admin_list_problems(
     """All coding problems including drafts (admin)."""
     clauses: list[str] = []
     params: dict = {"limit": limit, "offset": offset}
-    if published is not None:
+
+    def _filter_published() -> None:
         clauses.append("f.published = :published")
         params["published"] = published
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    pick(published is not None, _filter_published, lambda: None)
+    where = pick(bool(clauses), lambda: f"WHERE {' AND '.join(clauses)}", lambda: "")
     rows = db.execute(
         text(
             f"""
@@ -287,11 +320,14 @@ def admin_seed_bank(db: Session = Depends(get_db)) -> dict:
 def admin_create_problem(body: CurateProblemIn, db: Session = Depends(get_db)) -> dict:
     """Create a curated coding problem (human-authored)."""
     title = body.title.strip()
-    if body.published and len(title) < 2:
-        raise HTTPException(
-            status_code=400,
-            detail="Published problems need a title of at least 2 characters",
-        )
+    pick(
+        body.published and len(title) < 2,
+        lambda: _raise_http(
+            400,
+            "Published problems need a title of at least 2 characters",
+        ),
+        lambda: None,
+    )
     try:
         pub = upsert_curated_problem(
             db,
@@ -330,11 +366,14 @@ def admin_get_problem(assertion_id: uuid.UUID, db: Session = Depends(get_db)) ->
         ),
         {"aid": assertion_id},
     ).first()
-    if facet:
+
+    def _merge_facet() -> None:
         pub["published"] = bool(facet._mapping["published"])
         pub["origin"] = facet._mapping["origin"] or pub.get("origin")
         tags = facet._mapping["tags"] or []
-        pub["tags"] = list(tags) if not isinstance(tags, list) else tags
+        pub["tags"] = pick(isinstance(tags, list), lambda: tags, lambda: list(tags))
+
+    pick(bool(facet), _merge_facet, lambda: None)
     return pub
 
 
@@ -348,7 +387,6 @@ def admin_patch_problem(
     problem = _load_coding_assertion(db, assertion_id, include_retracted=True)
     payload = problem["payload"]
 
-    # Publish toggle alone — works for generated + curated.
     only_publish = (
         body.published is not None
         and body.title is None
@@ -361,14 +399,20 @@ def admin_patch_problem(
         and body.tags is None
         and body.editor_solution is None
     )
-    if only_publish:
-        if body.published:
+
+    def _publish_only() -> dict:
+        def _check_title() -> None:
             title = str(payload.get("title") or problem.get("title") or "").strip()
-            if len(title) < 2:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Published problems need a title of at least 2 characters",
-                )
+            pick(
+                len(title) < 2,
+                lambda: _raise_http(
+                    400,
+                    "Published problems need a title of at least 2 characters",
+                ),
+                lambda: None,
+            )
+
+        pick(body.published, _check_title, lambda: None)
         try:
             set_published(db, assertion_id, bool(body.published))
             db.commit()
@@ -379,52 +423,100 @@ def admin_patch_problem(
         out["published"] = bool(body.published)
         return out
 
-    # Full rewrite path — merge with existing payload.
-    existing_tests = list(payload.get("sample_tests") or []) + list(payload.get("hidden_tests") or [])
-    tests = [t.model_dump() for t in body.tests] if body.tests is not None else existing_tests
-    next_title = (
-        body.title if body.title is not None else str(payload.get("title") or problem["title"] or "")
-    ).strip()
-    next_published = bool(body.published) if body.published is not None else True
-    if next_published and len(next_title) < 2:
-        raise HTTPException(
-            status_code=400,
-            detail="Published problems need a title of at least 2 characters",
+    def _full_rewrite() -> dict:
+        existing_tests = list(payload.get("sample_tests") or []) + list(
+            payload.get("hidden_tests") or []
         )
-    try:
-        pub = upsert_curated_problem(
-            db,
-            assertion_id=assertion_id,
-            title=next_title,
-            statement=body.statement if body.statement is not None else str(payload.get("statement") or ""),
-            starter_code=body.starter_code if body.starter_code is not None else str(payload.get("starter_code") or ""),
-            tests=tests,
-            difficulty=body.difficulty if body.difficulty is not None else str(payload.get("difficulty") or "medium"),
-            language_id=body.language_id if body.language_id is not None else int(payload.get("language_id") or 71),
-            concept=body.concept if body.concept is not None else str(payload.get("concept") or ""),
-            tags=body.tags if body.tags is not None else list(payload.get("tags") or []),
-            editor_solution=(
-                body.editor_solution
-                if body.editor_solution is not None
-                else str(payload.get("editor_solution") or "")
+        tests = pick(
+            body.tests is not None,
+            lambda: [t.model_dump() for t in body.tests],
+            lambda: existing_tests,
+        )
+        next_title = pick(
+            body.title is not None,
+            lambda: body.title,
+            lambda: str(payload.get("title") or problem["title"] or ""),
+        ).strip()
+        next_published = pick(
+            body.published is not None,
+            lambda: bool(body.published),
+            lambda: True,
+        )
+        pick(
+            next_published and len(next_title) < 2,
+            lambda: _raise_http(
+                400,
+                "Published problems need a title of at least 2 characters",
             ),
-            published=next_published,
-            slug=None,
+            lambda: None,
         )
-        # Preserve published flag from facet if not in body.
-        if body.published is None:
-            facet_pub = db.execute(
-                text("SELECT published FROM qb.coding_assertion_facets WHERE assertion_id = :aid"),
-                {"aid": assertion_id},
-            ).scalar()
-            if facet_pub is not None:
-                set_published(db, assertion_id, bool(facet_pub))
-                pub["published"] = bool(facet_pub)
-        db.commit()
-    except ValueError as exc:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return pub
+        try:
+            pub = upsert_curated_problem(
+                db,
+                assertion_id=assertion_id,
+                title=next_title,
+                statement=pick(
+                    body.statement is not None,
+                    lambda: body.statement,
+                    lambda: str(payload.get("statement") or ""),
+                ),
+                starter_code=pick(
+                    body.starter_code is not None,
+                    lambda: body.starter_code,
+                    lambda: str(payload.get("starter_code") or ""),
+                ),
+                tests=tests,
+                difficulty=pick(
+                    body.difficulty is not None,
+                    lambda: body.difficulty,
+                    lambda: str(payload.get("difficulty") or "medium"),
+                ),
+                language_id=pick(
+                    body.language_id is not None,
+                    lambda: body.language_id,
+                    lambda: int(payload.get("language_id") or 71),
+                ),
+                concept=pick(
+                    body.concept is not None,
+                    lambda: body.concept,
+                    lambda: str(payload.get("concept") or ""),
+                ),
+                tags=pick(
+                    body.tags is not None,
+                    lambda: body.tags,
+                    lambda: list(payload.get("tags") or []),
+                ),
+                editor_solution=pick(
+                    body.editor_solution is not None,
+                    lambda: body.editor_solution,
+                    lambda: str(payload.get("editor_solution") or ""),
+                ),
+                published=next_published,
+                slug=None,
+            )
+
+            def _preserve() -> None:
+                facet_pub = db.execute(
+                    text(
+                        "SELECT published FROM qb.coding_assertion_facets WHERE assertion_id = :aid"
+                    ),
+                    {"aid": assertion_id},
+                ).scalar()
+
+                def _keep() -> None:
+                    set_published(db, assertion_id, bool(facet_pub))
+                    pub["published"] = bool(facet_pub)
+
+                pick(facet_pub is not None, _keep, lambda: None)
+
+            pick(body.published is None, _preserve, lambda: None)
+            db.commit()
+        except ValueError as exc:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return pub
+
+    return pick(only_publish, _publish_only, _full_rewrite)
 
 
 @router.delete("/admin/{assertion_id}", dependencies=[Depends(require_admin), Depends(require_csrf)])
@@ -493,15 +585,22 @@ def list_public_problems(
         "COALESCE(f.published, true) = true",
         "a.status = 'active'",
     ]
-    if difficulty:
+
+    def _add_difficulty() -> None:
         clauses.append("f.difficulty = :difficulty")
         params["difficulty"] = difficulty
-    if tag:
+
+    def _add_tag() -> None:
         clauses.append(":tag = ANY(f.tags)")
         params["tag"] = tag.strip().lower()
-    if origin:
+
+    def _add_origin() -> None:
         clauses.append("f.origin = :origin")
         params["origin"] = origin
+
+    pick(bool(difficulty), _add_difficulty, lambda: None)
+    pick(bool(tag), _add_tag, lambda: None)
+    pick(bool(origin), _add_origin, lambda: None)
 
     where = " AND ".join(clauses)
     rows = db.execute(
@@ -526,11 +625,9 @@ def list_public_problems(
     items = []
     for r in rows:
         st = _status_for(db, uuid.UUID(str(r._mapping["id"])), subject_entity_id)
-        if status and st != status:
-            continue
-        items.append(_facet_item(r, status=st))
+        skip = bool(status) and st != status
+        pick(skip, lambda: None, lambda r=r, st=st: items.append(_facet_item(r, status=st)))
 
-    # Distinct tags for filter chips (published only).
     tag_rows = db.execute(
         text(
             """
@@ -543,7 +640,7 @@ def list_public_problems(
             """
         )
     ).all()
-    all_tags = [str(r[0]) for r in tag_rows if r[0]]
+    all_tags = list(map(str, filter(None, (r[0] for r in tag_rows))))
 
     return {"items": items, "count": len(items), "tags": all_tags}
 
@@ -557,7 +654,6 @@ def get_problem(
 ) -> dict:
     """One problem's public view: statement + sample tests + starter code only."""
     problem = _load_coding_assertion(db, assertion_id)
-    # Unpublished problems are admin-only on the public get.
     facet = db.execute(
         text(
             """
@@ -566,18 +662,21 @@ def get_problem(
         ),
         {"aid": assertion_id},
     ).first()
-    if facet is not None and not bool(facet._mapping["published"]):
-        if not user or not user.is_admin:
-            raise HTTPException(status_code=404, detail="Not found")
+    unpublished = facet is not None and not bool(facet._mapping["published"])
+    blocked = unpublished and (user is None or not user.is_admin)
+    pick(blocked, lambda: _raise_http(404, "Not found"), lambda: None)
 
     artifact_id_str = problem["artifact_id"]
-    if user and artifact_id_str:
+
+    def _touch_access() -> None:
         try:
             require_document(db, uuid.UUID(str(artifact_id_str)), user, guest_id)
         except HTTPException:
             pass
         except (ValueError, TypeError):
             pass
+
+    pick(bool(user) and bool(artifact_id_str), _touch_access, lambda: None)
 
     pub = public_payload(problem["payload"])
     pub["id"] = str(assertion_id)
@@ -626,7 +725,7 @@ def assist_messages(
     problem = _require_solvable_problem(db, assertion_id, user)
     msgs = list_assist_messages(
         db,
-        account_id=user.id if user else None,
+        account_id=_account_id(user),
         assertion_id=assertion_id,
         recorded_at=problem["recorded_at"],
         guest_id=guest_id,
@@ -656,7 +755,7 @@ def assist_clear(
     problem = _require_solvable_problem(db, assertion_id, user)
     version = clear_assist_thread(
         db,
-        account_id=user.id if user else None,
+        account_id=_account_id(user),
         assertion_id=assertion_id,
         recorded_at=problem["recorded_at"],
         guest_id=guest_id,
@@ -677,11 +776,9 @@ async def assist_stream(
     guest_id: str | None = Depends(optional_guest_session),
 ) -> EventSourceResponse:
     problem = _require_solvable_problem(db, assertion_id, user)
-    if body.language_id is not None:
-        _validate_language_id(body.language_id)
+    pick(body.language_id is not None, lambda: _validate_language_id(body.language_id), lambda: None)
     pub = public_payload(problem["payload"])
     recorded_at = problem["recorded_at"]
-    # Close request-scoped session before the long-lived SSE generator runs.
     db.close()
     setup = await asyncio.to_thread(
         prepare_assist_stream,
@@ -718,8 +815,14 @@ async def submit_problem(
     problem = _load_coding_assertion(db, assertion_id)
     payload = problem["payload"]
     hidden_tests = payload.get("hidden_tests") or []
-    if not hidden_tests:
-        raise HTTPException(status_code=409, detail="Problem has no hidden tests")
+    apply(
+        evaluate_presence(hidden_tests).action,
+        {
+            "missing": lambda: _raise_http(409, "Problem has no hidden tests"),
+            "empty": lambda: _raise_http(409, "Problem has no hidden tests"),
+            "ok": lambda: None,
+        },
+    )
 
     language_id = _validate_language_id(body.language_id)
     try:
@@ -730,15 +833,13 @@ async def submit_problem(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     subject_entity_id = resolve_subject_entity(db, user, guest_id)
-    status = (
-        _status_for(db, assertion_id, subject_entity_id)
-        if subject_entity_id
-        else "new"
+    status = pick(
+        subject_entity_id is not None,
+        lambda: _status_for(db, assertion_id, subject_entity_id),
+        lambda: "new",
     )
 
-    # Sandbox unreachable / timed out — do not record a fail or invent a teach-gap
-    # lesson that blames the learner's code.
-    if verdict.get("error"):
+    def _error_result() -> dict:
         return {
             "passed": 0,
             "total": int(verdict.get("total") or len(hidden_tests)),
@@ -753,66 +854,92 @@ async def submit_problem(
             "reference_solution": None,
         }
 
-    passed = int(verdict.get("passed") or 0)
-    total = int(verdict.get("total") or len(hidden_tests))
-    all_passed = passed == total and total > 0
+    async def _success() -> dict:
+        passed = int(verdict.get("passed") or 0)
+        total = int(verdict.get("total") or len(hidden_tests))
+        all_passed = passed == total and total > 0
 
-    if subject_entity_id is not None:
-        record_coding_submit(
+        def _record() -> str:
+            record_coding_submit(
+                db,
+                assertion_id=assertion_id,
+                passed=all_passed,
+                passed_count=passed,
+                total_count=total,
+                language_id=language_id,
+                subject_entity_id=subject_entity_id,
+            )
+            db.commit()
+            return _status_for(db, assertion_id, subject_entity_id)
+
+        next_status = pick(
+            subject_entity_id is not None,
+            _record,
+            lambda: pick(all_passed, lambda: "solved", lambda: status),
+        )
+
+        cases_out: list[dict] = []
+        shown = [False]
+
+        def _handle(case: dict) -> None:
+            def _reveal() -> None:
+                cases_out.append(
+                    {
+                        "ok": False,
+                        "stdin": case.get("stdin", ""),
+                        "expected": case.get("expected", ""),
+                        "stdout": case.get("stdout", ""),
+                        "stderr": case.get("stderr", ""),
+                    }
+                )
+                shown[0] = True
+
+            apply(
+                first_match(
+                    (
+                        Rule(when=(Pred("ok", "truthy"),), action="pass"),
+                        Rule(when=(Pred("shown", "falsey"),), action="reveal"),
+                        Rule(when=(), action="hide"),
+                    ),
+                    {"ok": bool(case.get("ok")), "shown": shown[0]},
+                ).action,
+                {
+                    "pass": lambda: cases_out.append({"ok": True}),
+                    "reveal": _reveal,
+                    "hide": lambda: cases_out.append({"ok": False}),
+                },
+            )
+
+        for c in verdict.get("cases") or []:
+            _handle(c)
+
+        teach = await teach_after_submit(
             db,
             assertion_id=assertion_id,
-            passed=all_passed,
-            passed_count=passed,
-            total_count=total,
-            language_id=language_id,
+            payload=payload,
+            source=body.source,
+            all_passed=all_passed,
+            passed=passed,
+            total=total,
+            cases=cases_out,
             subject_entity_id=subject_entity_id,
         )
-        db.commit()
-        status = _status_for(db, assertion_id, subject_entity_id)
-    elif all_passed:
-        status = "solved"
 
-    cases_out: list[dict] = []
-    first_fail_shown = False
-    for c in verdict.get("cases") or []:
-        if c.get("ok"):
-            cases_out.append({"ok": True})
-        elif not first_fail_shown:
-            cases_out.append(
-                {
-                    "ok": False,
-                    "stdin": c.get("stdin", ""),
-                    "expected": c.get("expected", ""),
-                    "stdout": c.get("stdout", ""),
-                    "stderr": c.get("stderr", ""),
-                }
-            )
-            first_fail_shown = True
-        else:
-            cases_out.append({"ok": False})
+        return {
+            "passed": passed,
+            "total": total,
+            "all_passed": all_passed,
+            "cases": cases_out,
+            "error": None,
+            "status": next_status,
+            "mentor_summary": teach["mentor_summary"],
+            "weak_concepts": teach["weak_concepts"],
+            "lesson": teach["lesson"],
+            "recommended_next_id": teach["recommended_next_id"],
+            "reference_solution": teach.get("reference_solution"),
+        }
 
-    teach = await teach_after_submit(
-        db,
-        assertion_id=assertion_id,
-        payload=payload,
-        source=body.source,
-        all_passed=all_passed,
-        passed=passed,
-        total=total,
-        cases=cases_out,
-        subject_entity_id=subject_entity_id,
-    )
+    async def _error_async() -> dict:
+        return _error_result()
 
-    return {
-        "passed": passed,
-        "total": total,
-        "all_passed": all_passed,
-        "cases": cases_out,
-        "error": None,
-        "status": status,
-        "mentor_summary": teach["mentor_summary"],
-        "weak_concepts": teach["weak_concepts"],
-        "lesson": teach["lesson"],
-        "recommended_next_id": teach["recommended_next_id"],
-        "reference_solution": teach.get("reference_solution"),
-    }
+    return await pick(bool(verdict.get("error")), _error_async, _success)

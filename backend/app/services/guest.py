@@ -10,6 +10,7 @@ from fastapi import Response
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.engine_runtime import pick
 from app.models import Account, ChatThread, Document
 from app.services.usage import DEMO_COOKIE, ensure_demo_cookie
 
@@ -37,6 +38,7 @@ _LEARNER_BOOL_KEYS = (
     "learn_complete",
     "mastery_stop",
 )
+_KNOWN_KEYS = set(_LEARNER_LIST_KEYS) | set(_LEARNER_MAX_KEYS) | set(_LEARNER_BOOL_KEYS)
 
 
 def ensure_guest_id(response: Response | None, cookie_id: str | None) -> str:
@@ -49,33 +51,33 @@ def guest_id_from_cookie(cookie_id: str | None) -> str | None:
 
 def claim_guest_documents(db: Session, account_id: uuid.UUID, guest_id: str | None) -> list[uuid.UUID]:
     """Attach anonymous uploads to the account that just signed in."""
-    if not guest_id:
-        return []
 
-    docs = (
-        db.query(Document)
-        .filter(Document.account_id.is_(None))
-        .filter(Document.meta["guest_id"].astext == guest_id)
-        .all()
-    )
-    if not docs:
-        return []
+    def _claim() -> list[uuid.UUID]:
+        docs = (
+            db.query(Document)
+            .filter(Document.account_id.is_(None))
+            .filter(Document.meta["guest_id"].astext == guest_id)
+            .all()
+        )
 
-    claimed: list[uuid.UUID] = []
-    for doc in docs:
-        doc.account_id = account_id
-        meta = dict(doc.meta or {})
-        meta.pop("guest_id", None)
-        doc.meta = meta
-        claimed.append(doc.id)
+        def _apply() -> list[uuid.UUID]:
+            claimed: list[uuid.UUID] = []
+            for doc in docs:
+                doc.account_id = account_id
+                meta = dict(doc.meta or {})
+                meta.pop("guest_id", None)
+                doc.meta = meta
+                claimed.append(doc.id)
+                db.query(ChatThread).filter(
+                    ChatThread.artifact_id == (doc.artifact_id or doc.id),
+                    ChatThread.account_id.is_(None),
+                ).update({ChatThread.account_id: account_id}, synchronize_session=False)
+            db.commit()
+            return claimed
 
-        db.query(ChatThread).filter(
-            ChatThread.artifact_id == (doc.artifact_id or doc.id),
-            ChatThread.account_id.is_(None),
-        ).update({ChatThread.account_id: account_id}, synchronize_session=False)
+        return pick(not docs, lambda: [], _apply)
 
-    db.commit()
-    return claimed
+    return pick(not guest_id, lambda: [], _claim)
 
 
 def _merge_learner_progress_rows(
@@ -87,7 +89,7 @@ def _merge_learner_progress_rows(
         guest_items = [str(x) for x in (guest_progress.get(key) or [])]
         user_items = [str(x) for x in (merged.get(key) or [])]
         seen = set(user_items)
-        merged[key] = user_items + [item for item in guest_items if item not in seen]
+        merged[key] = user_items + list(filter(lambda item: item not in seen, guest_items))
     for key in _LEARNER_MAX_KEYS:
         merged[key] = max(
             int(guest_progress.get(key) or 0),
@@ -96,11 +98,21 @@ def _merge_learner_progress_rows(
     for key in _LEARNER_BOOL_KEYS:
         merged[key] = bool(guest_progress.get(key)) or bool(merged.get(key))
     for key, value in guest_progress.items():
-        if key in _LEARNER_LIST_KEYS or key in _LEARNER_MAX_KEYS or key in _LEARNER_BOOL_KEYS:
-            continue
-        if key not in merged or merged[key] in (None, "", [], {}):
-            merged[key] = value
+        pick(
+            key in _KNOWN_KEYS,
+            lambda: None,
+            lambda: pick(
+                key not in merged or merged[key] in (None, "", [], {}),
+                lambda: merged.__setitem__(key, value),
+                lambda: None,
+            ),
+        )
     return merged
+
+
+def _coerce_progress(raw: Any) -> dict[str, Any]:
+    loaded = pick(isinstance(raw, str), lambda: json.loads(raw), lambda: raw)
+    return pick(isinstance(loaded, dict), lambda: loaded, lambda: {})
 
 
 def _claim_guest_learner_state(
@@ -116,70 +128,61 @@ def _claim_guest_learner_state(
         ),
         {"guest_key": guest_key},
     ).mappings().all()
-    if not guest_rows:
-        return 0
 
-    merged_count = 0
-    for row in guest_rows:
-        document_id = row["document_id"]
-        guest_progress = row["progress"]
-        if isinstance(guest_progress, str):
-            guest_progress = json.loads(guest_progress)
-        if not isinstance(guest_progress, dict):
-            guest_progress = {}
-
-        user_row = db.execute(
-            text(
-                """
-                SELECT progress FROM qb.document_learner_state
-                WHERE document_id = :doc AND learner_key = :user_key
-                """
-            ),
-            {"doc": document_id, "user_key": user_key},
-        ).scalar()
-
-        if user_row is None:
-            db.execute(
+    def _merge_all() -> int:
+        merged_count = 0
+        for row in guest_rows:
+            document_id = row["document_id"]
+            guest_progress = _coerce_progress(row["progress"])
+            user_row = db.execute(
                 text(
                     """
-                    UPDATE qb.document_learner_state
-                    SET learner_key = :user_key, updated_at = now()
-                    WHERE document_id = :doc AND learner_key = :guest_key
+                    SELECT progress FROM qb.document_learner_state
+                    WHERE document_id = :doc AND learner_key = :user_key
                     """
                 ),
-                {"doc": document_id, "guest_key": guest_key, "user_key": user_key},
-            )
+                {"doc": document_id, "user_key": user_key},
+            ).scalar()
+
+            def _rename() -> None:
+                db.execute(
+                    text(
+                        """
+                        UPDATE qb.document_learner_state
+                        SET learner_key = :user_key, updated_at = now()
+                        WHERE document_id = :doc AND learner_key = :guest_key
+                        """
+                    ),
+                    {"doc": document_id, "guest_key": guest_key, "user_key": user_key},
+                )
+
+            def _combine() -> None:
+                merged = _merge_learner_progress_rows(guest_progress, _coerce_progress(user_row))
+                db.execute(
+                    text(
+                        """
+                        UPDATE qb.document_learner_state
+                        SET progress = CAST(:progress AS jsonb), updated_at = now()
+                        WHERE document_id = :doc AND learner_key = :user_key
+                        """
+                    ),
+                    {"doc": document_id, "user_key": user_key, "progress": json.dumps(merged)},
+                )
+                db.execute(
+                    text(
+                        """
+                        DELETE FROM qb.document_learner_state
+                        WHERE document_id = :doc AND learner_key = :guest_key
+                        """
+                    ),
+                    {"doc": document_id, "guest_key": guest_key},
+                )
+
+            pick(user_row is None, _rename, _combine)
             merged_count += 1
-            continue
+        return merged_count
 
-        user_progress = user_row
-        if isinstance(user_progress, str):
-            user_progress = json.loads(user_progress)
-        if not isinstance(user_progress, dict):
-            user_progress = {}
-
-        merged = _merge_learner_progress_rows(guest_progress, user_progress)
-        db.execute(
-            text(
-                """
-                UPDATE qb.document_learner_state
-                SET progress = CAST(:progress AS jsonb), updated_at = now()
-                WHERE document_id = :doc AND learner_key = :user_key
-                """
-            ),
-            {"doc": document_id, "user_key": user_key, "progress": json.dumps(merged)},
-        )
-        db.execute(
-            text(
-                """
-                DELETE FROM qb.document_learner_state
-                WHERE document_id = :doc AND learner_key = :guest_key
-                """
-            ),
-            {"doc": document_id, "guest_key": guest_key},
-        )
-        merged_count += 1
-    return merged_count
+    return pick(not guest_rows, lambda: 0, _merge_all)
 
 
 def _claim_guest_measurements(
@@ -188,22 +191,7 @@ def _claim_guest_measurements(
     guest_entity_id: uuid.UUID,
     account_entity_id: uuid.UUID,
 ) -> int:
-    """Re-attribute a guest's answer measurements to their new account entity.
-
-    ``intel.measurement`` is INSERT-only — a ``BEFORE UPDATE OR DELETE`` trigger
-    (``intel.reject_update_delete``) enforces immutability, so the previous
-    UPDATE-then-DELETE approach raised ``intel.measurement is immutable (INSERT
-    only)`` and surfaced as a 503 "Database unavailable" on signup for any guest
-    who had practiced first.
-
-    Instead we copy the guest's rows onto the account entity via ``INSERT ...
-    SELECT``, deduping against rows the account already has via the partial
-    unique index ``measurement_answer_idempotent`` (the same index
-    ``answer_signal`` relies on for idempotent answer writes). The original
-    guest rows are immutable evidence and stay put; the now-unused guest entity
-    is harmless. The returned count is the number of rows newly attributed to
-    the account.
-    """
+    """Re-attribute a guest's answer measurements to their new account entity."""
     inserted = db.execute(
         text(
             """
@@ -302,7 +290,8 @@ def claim_guest_progress(
     guest_id: str | None,
 ) -> dict[str, int]:
     """Merge anonymous practice progress into the account that just signed in."""
-    if not guest_id:
+
+    def _empty() -> dict[str, int]:
         return {
             "learner_state_rows": 0,
             "measurements_moved": 0,
@@ -311,48 +300,55 @@ def claim_guest_progress(
             "interviews_claimed": 0,
         }
 
-    from app.repositories.intel import get_or_create_account_entity, get_or_create_concept_entity
+    def _claim() -> dict[str, int]:
+        from app.repositories.intel import get_or_create_account_entity, get_or_create_concept_entity
 
-    guest_key = f"guest:{guest_id}"
-    user_key = f"user:{account_id}"
+        guest_key = f"guest:{guest_id}"
+        user_key = f"user:{account_id}"
+        learner_state_rows = _claim_guest_learner_state(db, guest_key=guest_key, user_key=user_key)
+        guest_entity_id = get_or_create_concept_entity(
+            db, f"guest:{guest_id}", f"Guest {guest_id[:8]}"
+        )
+        account_entity_id = get_or_create_account_entity(db, account_id, username)
+        measurements_moved = _claim_guest_measurements(
+            db,
+            guest_entity_id=guest_entity_id,
+            account_entity_id=account_entity_id,
+        )
+        sd_sessions_moved = _claim_guest_sd_sessions(db, account_id=account_id, guest_id=guest_id)
+        notes_claimed = _claim_guest_notes(db, guest_id=guest_id, account_id=account_id)
+        interviews_claimed = _claim_guest_interviews(db, guest_key=guest_key, user_key=user_key)
+        db.commit()
+        return {
+            "learner_state_rows": learner_state_rows,
+            "measurements_moved": measurements_moved,
+            "sd_sessions_moved": sd_sessions_moved,
+            "notes_claimed": notes_claimed,
+            "interviews_claimed": interviews_claimed,
+        }
 
-    learner_state_rows = _claim_guest_learner_state(db, guest_key=guest_key, user_key=user_key)
-
-    guest_entity_id = get_or_create_concept_entity(
-        db, f"guest:{guest_id}", f"Guest {guest_id[:8]}"
-    )
-    account_entity_id = get_or_create_account_entity(db, account_id, username)
-    measurements_moved = _claim_guest_measurements(
-        db,
-        guest_entity_id=guest_entity_id,
-        account_entity_id=account_entity_id,
-    )
-    sd_sessions_moved = _claim_guest_sd_sessions(db, account_id=account_id, guest_id=guest_id)
-    notes_claimed = _claim_guest_notes(db, guest_id=guest_id, account_id=account_id)
-    interviews_claimed = _claim_guest_interviews(db, guest_key=guest_key, user_key=user_key)
-
-    db.commit()
-    return {
-        "learner_state_rows": learner_state_rows,
-        "measurements_moved": measurements_moved,
-        "sd_sessions_moved": sd_sessions_moved,
-        "notes_claimed": notes_claimed,
-        "interviews_claimed": interviews_claimed,
-    }
+    return pick(not guest_id, _empty, _claim)
 
 
 def document_owned_by_guest(doc: Document, guest_id: str | None) -> bool:
-    if doc.account_id is not None:
-        return False
-    if doc.meta and (doc.meta.get("is_demo") or doc.meta.get("is_public")):
-        return False
-    return bool(guest_id) and doc.meta.get("guest_id") == guest_id
+    return pick(
+        doc.account_id is not None,
+        lambda: False,
+        lambda: pick(
+            bool(doc.meta and (doc.meta.get("is_demo") or doc.meta.get("is_public"))),
+            lambda: False,
+            lambda: bool(guest_id) and doc.meta.get("guest_id") == guest_id,
+        ),
+    )
 
 
 def can_access_document(doc: Document, user: Account | None, guest_id: str | None) -> bool:
-    if doc.account_id is not None:
-        return user is not None and doc.account_id == user.id
-    if doc.meta and (doc.meta.get("is_demo") or doc.meta.get("is_public")):
-        # Platform-owned documents: open to everyone.
-        return True
-    return document_owned_by_guest(doc, guest_id)
+    return pick(
+        doc.account_id is not None,
+        lambda: user is not None and doc.account_id == user.id,
+        lambda: pick(
+            bool(doc.meta and (doc.meta.get("is_demo") or doc.meta.get("is_public"))),
+            lambda: True,
+            lambda: document_owned_by_guest(doc, guest_id),
+        ),
+    )

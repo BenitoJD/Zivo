@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 from app.models import Account
 
 settings = get_settings()
@@ -20,23 +21,40 @@ settings = get_settings()
 USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{2,31}$")
 
 
+def _raise(exc: BaseException) -> None:
+    raise exc
+
+
+def _raise_from(cause: BaseException, wrapped: BaseException) -> None:
+    raise wrapped from cause
+
+
 def validate_username(username: str) -> None:
-    if not USERNAME_RE.match(username):
-        raise HTTPException(status_code=400, detail="Invalid username format")
+    pick(
+        not USERNAME_RE.match(username),
+        lambda: _raise(HTTPException(status_code=400, detail="Invalid username format")),
+        lambda: None,
+    )
 
 
 def validate_password(password: str) -> None:
-    if len(password) < 8:
-        raise HTTPException(status_code=400, detail="Password too short")
-    if not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
-        raise HTTPException(status_code=400, detail="Password must include a letter and a number")
+    pick(
+        len(password) < 8,
+        lambda: _raise(HTTPException(status_code=400, detail="Password too short")),
+        lambda: None,
+    )
+    pick(
+        not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password),
+        lambda: _raise(
+            HTTPException(status_code=400, detail="Password must include a letter and a number")
+        ),
+        lambda: None,
+    )
 
 
 def _password_bytes(password: str) -> bytes:
     raw = password.encode("utf-8")
-    if len(raw) > 72:
-        return hashlib.sha256(raw).digest()
-    return raw
+    return pick(len(raw) > 72, lambda: hashlib.sha256(raw).digest(), lambda: raw)
 
 
 def hash_password(password: str) -> str:
@@ -56,7 +74,7 @@ def create_session_token(
     *,
     remember: bool = False,
 ) -> tuple[str, str]:
-    days = settings.session_remember_days if remember else settings.session_days
+    days = choose(remember, settings.session_remember_days, settings.session_days)
     exp = datetime.now(timezone.utc) + timedelta(days=days)
     csrf = secrets.token_urlsafe(32)
     payload = {"sub": str(account_id), "exp": exp, "csrf": csrf, "sv": int(session_version)}
@@ -82,11 +100,9 @@ def cookie_set_kwargs(*, max_age: int | None = None) -> dict:
         "samesite": "lax",
         "path": "/",
     }
-    if max_age is not None:
-        kwargs["max_age"] = max_age
+    pick(max_age is not None, lambda: kwargs.__setitem__("max_age", max_age), lambda: None)
     domain = settings.resolved_cookie_domain
-    if domain:
-        kwargs["domain"] = domain
+    pick(bool(domain), lambda: kwargs.__setitem__("domain", domain), lambda: None)
     return kwargs
 
 
@@ -98,7 +114,7 @@ def cookie_delete_kwargs() -> dict:
 
 
 def set_session_cookie(response: Response, token: str, remember: bool) -> None:
-    max_age = (settings.session_remember_days if remember else settings.session_days) * 86400
+    max_age = choose(remember, settings.session_remember_days, settings.session_days) * 86400
     response.set_cookie(key="zivo_session", value=token, **cookie_set_kwargs(max_age=max_age))
 
 
@@ -110,19 +126,28 @@ def get_current_user(
     db: Session = Depends(get_db),
     zivo_session: str | None = Cookie(default=None),
 ) -> Account:
-    if not zivo_session:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    pick(
+        not zivo_session,
+        lambda: _raise(HTTPException(status_code=401, detail="Not authenticated")),
+        lambda: None,
+    )
     try:
         payload = jwt.decode(zivo_session, settings.secret_key, algorithms=["HS256"])
         account_id = uuid.UUID(payload["sub"])
     except (JWTError, ValueError) as exc:
-        raise HTTPException(status_code=401, detail="Invalid session") from exc
+        _raise_from(exc, HTTPException(status_code=401, detail="Invalid session"))
 
     user = db.get(Account, account_id)
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    if not _session_version_matches(user, payload):
-        raise HTTPException(status_code=401, detail="Session revoked")
+    pick(
+        not user,
+        lambda: _raise(HTTPException(status_code=401, detail="User not found")),
+        lambda: None,
+    )
+    pick(
+        not _session_version_matches(user, payload),
+        lambda: _raise(HTTPException(status_code=401, detail="Session revoked")),
+        lambda: None,
+    )
     return user
 
 
@@ -130,29 +155,33 @@ def get_optional_user(
     db: Session = Depends(get_db),
     zivo_session: str | None = Cookie(default=None),
 ) -> Account | None:
-    if not zivo_session:
-        return None
-    try:
-        payload = jwt.decode(zivo_session, settings.secret_key, algorithms=["HS256"])
-        account_id = uuid.UUID(payload["sub"])
-    except (JWTError, ValueError):
-        return None
-    user = db.get(Account, account_id)
-    if not user:
-        return None
-    if not _session_version_matches(user, payload):
-        return None
-    return user
+    def _decode() -> Account | None:
+        try:
+            payload = jwt.decode(zivo_session, settings.secret_key, algorithms=["HS256"])
+            account_id = uuid.UUID(payload["sub"])
+        except (JWTError, ValueError):
+            return None
+        user = db.get(Account, account_id)
+        return pick(
+            not user or not _session_version_matches(user, payload),
+            lambda: None,
+            lambda: user,
+        )
+
+    return pick(not zivo_session, lambda: None, _decode)
 
 
 def csrf_from_session_token(zivo_session: str) -> str:
     try:
         payload = jwt.decode(zivo_session, settings.secret_key, algorithms=["HS256"])
     except JWTError as exc:
-        raise HTTPException(status_code=401, detail="Invalid session") from exc
+        _raise_from(exc, HTTPException(status_code=401, detail="Invalid session"))
     csrf = payload.get("csrf")
-    if not isinstance(csrf, str) or not csrf:
-        raise HTTPException(status_code=401, detail="Invalid session")
+    pick(
+        not isinstance(csrf, str) or not csrf,
+        lambda: _raise(HTTPException(status_code=401, detail="Invalid session")),
+        lambda: None,
+    )
     return csrf
 
 
@@ -160,23 +189,44 @@ def require_csrf(
     x_csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
     zivo_session: str | None = Cookie(default=None),
 ) -> None:
-    if settings.csrf_disabled:
-        return
-    if not zivo_session or not x_csrf_token:
-        raise HTTPException(status_code=403, detail="CSRF token required")
-    try:
-        payload = jwt.decode(zivo_session, settings.secret_key, algorithms=["HS256"])
-        if payload.get("csrf") != x_csrf_token:
-            raise HTTPException(status_code=403, detail="CSRF mismatch")
-    except JWTError as exc:
-        raise HTTPException(status_code=403, detail="Invalid CSRF") from exc
+    def _check() -> None:
+        apply(
+            first_match(
+                (
+                    Rule(when=(Pred("session", "falsey"),), action="required"),
+                    Rule(when=(Pred("header", "falsey"),), action="required"),
+                    Rule(when=(), action="compare"),
+                ),
+                {"session": zivo_session, "header": x_csrf_token},
+            ).action,
+            {
+                "required": lambda: _raise(
+                    HTTPException(status_code=403, detail="CSRF token required")
+                ),
+                "compare": lambda: None,
+            },
+        )
+        try:
+            payload = jwt.decode(zivo_session, settings.secret_key, algorithms=["HS256"])
+            pick(
+                payload.get("csrf") != x_csrf_token,
+                lambda: _raise(HTTPException(status_code=403, detail="CSRF mismatch")),
+                lambda: None,
+            )
+        except JWTError as exc:
+            _raise_from(exc, HTTPException(status_code=403, detail="Invalid CSRF"))
+
+    pick(settings.csrf_disabled, lambda: None, _check)
 
 
 def authenticate_user(db: Session, username: str, password: str) -> Account | None:
     user = db.query(Account).filter(Account.username == username).first()
-    if not user or not user.password_hash:
+
+    def _dummy() -> Account | None:
         bcrypt.checkpw(b"timing-oracle-guard", _DUMMY_HASH.encode("utf-8"))
         return None
-    if not verify_password(password, user.password_hash):
-        return None
-    return user
+
+    def _verify() -> Account | None:
+        return pick(not verify_password(password, user.password_hash), lambda: None, lambda: user)
+
+    return pick(not user or not user.password_hash, _dummy, _verify)

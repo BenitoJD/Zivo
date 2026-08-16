@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 
 from app.db import SessionLocal
+from app.engine_runtime import apply, pick
 from app.eta.scheduler_registry import eta_scheduler
 from app.eta.stale_jobs import (
     ACTIVE_JOB_LIVENESS_SQL,
@@ -26,17 +27,12 @@ from app.services.session_design import (
 
 logger = logging.getLogger(__name__)
 
-# How long a READY document's edition may stay indexing before we conclude the
-# cook job died / exhausted retries and re-enqueue it. Generous so we don't race
-# a legitimately slow first MCQ cook on a large edition. Timeouts live in
-# Session Design.
-
 
 def _recover_stuck_editions() -> int:
     """Re-enqueue rag_window for editions that got stuck in indexing/pending.
 
     An edition can get stuck when its ingest.rag_window job is lost (never
-    enqueued, cancelled, or cleaned up before completion).  This recovery
+    enqueued, cancelled, or cleaned up before completion). This recovery
     finds editions whose document still exists but has no active ingest
     pipeline and re-schedules the rag_window job.
     """
@@ -69,28 +65,28 @@ def _recover_stuck_editions() -> int:
             },
         ).mappings().all()
 
-        for row in stuck:
+        def _one(row) -> int:
             try:
                 from app.models import Document
                 from app.services.rag_window import maybe_recover_stuck_indexing
 
                 doc = db.get(Document, row["document_id"])
-                if doc:
-                    maybe_recover_stuck_indexing(db, doc)
-                else:
-                    enqueue_rag_window(
-                        db, row["document_id"], current_page=1
-                    )
-                recovered += 1
+                pick(
+                    doc is not None,
+                    lambda: maybe_recover_stuck_indexing(db, doc),
+                    lambda: enqueue_rag_window(db, row["document_id"], current_page=1),
+                )
                 logger.info(
                     "newspaper recovery enqueued rag_window for %s %s",
                     row["paper_slug"],
                     row["edition_date"],
                 )
+                return 1
             except Exception:
-                logger.exception(
-                    "newspaper recovery failed for edition %s", row["id"]
-                )
+                logger.exception("newspaper recovery failed for edition %s", row["id"])
+                return 0
+
+        recovered = sum(map(_one, stuck))
     return recovered
 
 
@@ -98,20 +94,23 @@ def _recover_stuck_editions() -> int:
 def run_newspaper_recover() -> None:
     n = _recover_stuck_editions()
     n += _recover_editions_doc_ready_uncooked()
-    if n:
-        logger.info("newspaper recovery re-enqueued %s stuck editions", n)
+    pick(
+        bool(n),
+        lambda: logger.info("newspaper recovery re-enqueued %s stuck editions", n),
+        lambda: None,
+    )
 
 
 def _recover_editions_doc_ready_uncooked() -> int:
     """Re-enqueue the MCQ cook for editions whose document is READY but whose
-    catalog status is still indexing/pending — the "document ready, edition
+    catalog status is still indexing/pending: the "document ready, edition
     stuck" orphan state.
 
     Newspapers decouple the two statuses by design (rag_window.py: the document
     flips to ``ready`` once RAG indexing finishes, but the edition stays
     ``indexing`` until the first MCQ lands via ``newspaper_learn_ready``). If
     the ``generate.questions`` cook died, exhausted retries (``max_attempts``),
-    or was cancelled — and there is no scheduler that enqueues the cook — the
+    or was cancelled, and there is no scheduler that enqueues the cook, the
     edition is stranded forever, which the catalog renders as "Preparing".
 
     This catches that exact state: a ready document with an indexing edition and
@@ -152,48 +151,49 @@ def _recover_editions_doc_ready_uncooked() -> int:
             },
         ).mappings().all()
 
-        for row in stuck:
+        def _one(row) -> int:
             try:
                 from app.services.question_pool import page_range_bounds
                 from app.services.question_pool_jobs import _enqueue_first_question_batch
 
                 doc = db.get(Document, row["document_id"])
-                if doc is None:
-                    continue
-                page_from, _ = page_range_bounds(doc)
-                job = _enqueue_first_question_batch(db, doc, page=page_from)
-                followup = plan_newspaper_uncooked_followup(
-                    cook_enqueued=job is not None
-                )
-                if followup == "wait":
-                    db.commit()
-                    recovered += 1
-                    logger.info(
-                        "newspaper recovery re-enqueued MCQ cook for %s %s (doc ready, edition stuck)",
-                        row["paper_slug"],
-                        row["edition_date"],
-                    )
-                else:
-                    # Nothing to cook on page 1 (worthiness engine marked it
-                    # non_content / budget 0). The readiness hook would normally
-                    # promote such an edition to 'ready', but that hook only fires
-                    # from on_triage_completed / on_batch_completed — if neither
-                    # ran (triage died too), the edition stays stuck. Promote it
-                    # here so the catalog stops showing "Preparing" forever.
-                    from app.services.newspaper import maybe_mark_newspaper_edition_ready
 
-                    maybe_mark_newspaper_edition_ready(db, doc)
-                    db.commit()
-                    recovered += 1
-                    logger.info(
-                        "newspaper recovery promoted %s %s to ready (no cookable MCQs on page 1)",
-                        row["paper_slug"],
-                        row["edition_date"],
-                    )
+                def _heal() -> int:
+                    page_from, _ = page_range_bounds(doc)
+                    job = _enqueue_first_question_batch(db, doc, page=page_from)
+                    followup = plan_newspaper_uncooked_followup(cook_enqueued=job is not None)
+
+                    def _wait() -> int:
+                        db.commit()
+                        logger.info(
+                            "newspaper recovery re-enqueued MCQ cook for %s %s (doc ready, edition stuck)",
+                            row["paper_slug"],
+                            row["edition_date"],
+                        )
+                        return 1
+
+                    def _promote() -> int:
+                        from app.services.newspaper import maybe_mark_newspaper_edition_ready
+
+                        maybe_mark_newspaper_edition_ready(db, doc)
+                        db.commit()
+                        logger.info(
+                            "newspaper recovery promoted %s %s to ready (no cookable MCQs on page 1)",
+                            row["paper_slug"],
+                            row["edition_date"],
+                        )
+                        return 1
+
+                    return apply(followup, {"wait": _wait, "promote_ready": _promote})
+
+                return pick(doc is None, lambda: 0, _heal)
             except Exception:
                 logger.exception(
                     "newspaper doc-ready recovery failed for edition %s", row["id"]
                 )
+                return 0
+
+        recovered = sum(map(_one, stuck))
     return recovered
 
 
@@ -201,8 +201,11 @@ def _recover_editions_doc_ready_uncooked() -> int:
 def run_newspaper_purge() -> None:
     with SessionLocal() as db:
         n = purge_expired_editions(db)
-        if n:
-            logger.info("newspaper purge removed %s expired editions", n)
+        pick(
+            bool(n),
+            lambda: logger.info("newspaper purge removed %s expired editions", n),
+            lambda: None,
+        )
 
 
 def _backfill_edition_digests() -> int:
@@ -210,47 +213,54 @@ def _backfill_edition_digests() -> int:
     from app.repositories import seo as seo_repo
     from app.services.seo_gate import plan_seo_digest_backfill_batch
 
-    n = 0
     with SessionLocal() as db:
         settings = seo_repo.get_settings(db)
-        if not settings.get("cook_enabled"):
+
+        def _skip() -> int:
             return 0
 
-        rows = db.execute(
-            text(
-                """
-                SELECT e.id, e.paper_slug, e.edition_date
-                FROM qb.newspaper_edition e
-                WHERE e.status = 'ready'
-                  AND e.blog_post_id IS NULL
-                  AND e.blog_status IN ('none', 'skipped', 'failed')
-                ORDER BY e.edition_date DESC
-                LIMIT :lim
-                """
-            ),
-            {"lim": plan_seo_digest_backfill_batch()},
-        ).mappings().all()
+        def _enqueue_rows() -> int:
+            rows = db.execute(
+                text(
+                    """
+                    SELECT e.id, e.paper_slug, e.edition_date
+                    FROM qb.newspaper_edition e
+                    WHERE e.status = 'ready'
+                      AND e.blog_post_id IS NULL
+                      AND e.blog_status IN ('none', 'skipped', 'failed')
+                    ORDER BY e.edition_date DESC
+                    LIMIT :lim
+                    """
+                ),
+                {"lim": plan_seo_digest_backfill_batch()},
+            ).mappings().all()
 
-        for row in rows:
-            source_key = f"{row['paper_slug']}:{row['edition_date'].isoformat()}"
-            if not seo_repo.edition_digest_may_enqueue(
-                db, "newspaper_edition", source_key
-            ):
-                continue
-            from app.repositories import newspaper as newspaper_repo
+            def _maybe(row) -> int:
+                source_key = f"{row['paper_slug']}:{row['edition_date'].isoformat()}"
 
-            newspaper_repo.reset_edition_blog_for_retry(db, row["id"])
-            enqueue_job(
-                db,
-                name="seo.cook_edition_digest",
-                workload=JobWorkload.io,
-                payload={"edition_id": str(row["id"])},
-            )
-            n += 1
+                def _enqueue() -> int:
+                    from app.repositories import newspaper as newspaper_repo
 
-        if n:
-            db.commit()
-    return n
+                    newspaper_repo.reset_edition_blog_for_retry(db, row["id"])
+                    enqueue_job(
+                        db,
+                        name="seo.cook_edition_digest",
+                        workload=JobWorkload.io,
+                        payload={"edition_id": str(row["id"])},
+                    )
+                    return 1
+
+                return pick(
+                    seo_repo.edition_digest_may_enqueue(db, "newspaper_edition", source_key),
+                    _enqueue,
+                    lambda: 0,
+                )
+
+            n = sum(map(_maybe, rows))
+            pick(bool(n), db.commit, lambda: None)
+            return n
+
+        return pick(not settings.get("cook_enabled"), _skip, _enqueue_rows)
 
 
 @eta_scheduler(every_minutes=60, key="newspaper.backfill_edition_blogs")
@@ -260,8 +270,14 @@ def run_newspaper_backfill_blogs() -> None:
     repaired = 0
     with SessionLocal() as db:
         repaired = newspaper_repo.repair_edition_blog_links(db)
-    if repaired:
-        logger.info("newspaper repaired %s edition blog links", repaired)
+    pick(
+        bool(repaired),
+        lambda: logger.info("newspaper repaired %s edition blog links", repaired),
+        lambda: None,
+    )
     n = _backfill_edition_digests()
-    if n:
-        logger.info("newspaper backfill enqueued %s edition digests", n)
+    pick(
+        bool(n),
+        lambda: logger.info("newspaper backfill enqueued %s edition digests", n),
+        lambda: None,
+    )

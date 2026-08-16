@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.engine_runtime import pick
 from app.services import objects as object_service
 from app.services.minio import (
     abort_multipart_upload,
@@ -19,6 +20,11 @@ from app.services.minio import (
     upload_multipart_part,
 )
 from app.services.session import require_internal_key
+
+
+def _raise(exc: BaseException) -> None:
+    raise exc
+
 
 router = APIRouter(
     prefix="/storage/internal",
@@ -49,8 +55,7 @@ async def internal_put_object(
     storage_key: str | None = Query(default=None, max_length=1024),
 ) -> dict:
     data = await request.body()
-    if not data:
-        raise HTTPException(status_code=400, detail="Empty body")
+    pick(not data, lambda: _raise(HTTPException(status_code=400, detail="Empty body")), lambda: None)
     return object_service.put_bytes(
         db,
         data=data,
@@ -133,8 +138,7 @@ async def internal_multipart_part(
     part_number: int = Query(ge=1),
 ) -> dict[str, str]:
     data = await request.body()
-    if not data:
-        raise HTTPException(status_code=400, detail="Empty part body")
+    pick(not data, lambda: _raise(HTTPException(status_code=400, detail="Empty part body")), lambda: None)
     etag = upload_multipart_part(key, upload_id, part_number, data)
     return {"etag": etag}
 

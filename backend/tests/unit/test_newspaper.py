@@ -9,6 +9,7 @@ deterministic parts and the db=None permissive contract.
 import re
 from datetime import datetime, timezone
 
+from app.engine_runtime import choose, pick
 from app.services.newspaper_ad_filter import (
     classify_page_text,
     is_editorial,
@@ -194,9 +195,7 @@ def test_poisoned_bs_alias_ignored_and_deleted(monkeypatch) -> None:
 
     def resolve(db, raw):
         key = re.sub(r"[^a-z0-9]+", "", (raw or "").lower())
-        if key == "bs":
-            return ("the-hindu", "The Hindu")
-        return None
+        return pick(key == "bs", lambda: ("the-hindu", "The Hindu"), lambda: None)
 
     monkeypatch.setattr(
         "app.services.newspaper_naming.newspaper_repo.resolve_alias",
@@ -297,9 +296,7 @@ def test_glued_city_pdf_hits_brand_alias(monkeypatch) -> None:
     """thdelhi24072026 must resolve via learned 'th' alias — no LLM."""
 
     def resolve(db, raw):
-        if _norm_key(raw) == "th":
-            return ("the-hindu", "The Hindu")
-        return None
+        return pick(_norm_key(raw) == "th", lambda: ("the-hindu", "The Hindu"), lambda: None)
 
     monkeypatch.setattr(
         "app.services.newspaper_naming.newspaper_repo.resolve_alias",
@@ -433,11 +430,11 @@ def test_newspaper_learn_queue_serves_current_page_first() -> None:
     db = MagicMock()
 
     def _page_assertion_ids(_db, _doc_id, pg: int, serve_mode=None) -> list[str]:
-        if pg == 1:
-            return page1_ids
-        if pg == 2:
-            return page2_ids
-        return []
+        return pick(
+            pg == 1,
+            lambda: page1_ids,
+            lambda: pick(pg == 2, lambda: page2_ids, lambda: []),
+        )
 
     with (
         patch("app.services.newspaper.is_newspaper_document", return_value=True),
@@ -576,7 +573,7 @@ def test_create_edition_uses_page_ingest_not_rag_window() -> None:
 
     from app.services import newspaper
 
-    src = inspect.getsource(newspaper.create_edition_from_pdf)
+    src = inspect.getsource(newspaper._insert_edition_pdf)
     assert "ingest.page" in src
     assert "enqueue_rag_window" not in src
     assert "enqueue_ingest" not in src
@@ -625,11 +622,11 @@ def test_maybe_refill_newspaper_cooks_next_page_after_page_one() -> None:
         patch("app.services.question_pool_jobs.is_coverage_complete", side_effect=lambda _doc, page: page == 1),
         patch(
             "app.services.question_pool_jobs.count_assertions_on_page",
-            side_effect=lambda _db, _doc_id, page, **kwargs: 5 if page == 1 else 0,
+            side_effect=lambda _db, _doc_id, page, **kwargs: choose(page == 1, 5, 0),
         ),
         patch(
             "app.services.question_pool_jobs.get_question_budget",
-            side_effect=lambda _doc, page, *args, **kwargs: 5 if page == 1 else 8,
+            side_effect=lambda _doc, page, *args, **kwargs: choose(page == 1, 5, 8),
         ),
         patch("app.services.question_pool_jobs.enqueue_page_batch") as enqueue,
     ):
@@ -720,11 +717,11 @@ def test_newspaper_learn_complete_enables_test_queue() -> None:
     db = MagicMock()
 
     def _edition_ids(_db, _doc_id, _doc, *, serve_mode=None):
-        if serve_mode == "learn":
-            return ["q1", "q2"]
-        if serve_mode == "test":
-            return ["t1", "t2", "t3"]
-        return []
+        return pick(
+            serve_mode == "learn",
+            lambda: ["q1", "q2"],
+            lambda: pick(serve_mode == "test", lambda: ["t1", "t2", "t3"], lambda: []),
+        )
 
     with (
         patch("app.services.newspaper.is_newspaper_document", return_value=True),

@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 
 from app.config import get_settings
+from app.engine_runtime import Pred, Rule, apply, first_match, pick
 
 # Curated top-10 from Judge0 CE active catalogue (classic CE ids that typical
 # self-hosted boxes still ship). Do not silently remap unknown ids — callers
@@ -39,9 +40,11 @@ DEFAULT_LANGUAGE_ID = 71
 def ensure_language(language_id: int) -> int:
     """Return language_id if allowlisted; raise ValueError otherwise."""
     lid = int(language_id)
-    if lid not in LANGUAGES:
+
+    def _bad() -> int:
         raise ValueError(f"Unsupported language_id: {lid}")
-    return lid
+
+    return pick(lid not in LANGUAGES, _bad, lambda: lid)
 
 # Judge0 status ids: 1 = In Queue, 2 = Processing, 3 = Accepted; >3 are errors
 # (Wrong Answer only applies when we submit expected_output, which we don't — we compare
@@ -68,8 +71,11 @@ def _normalize(result: dict[str, Any]) -> dict[str, Any]:
     status = (result.get("status") or {})
     status_id = status.get("id")
     description = status.get("description") or "Unknown"
-    if status_id == _ACCEPTED or str(description).strip().lower() == "accepted":
-        description = "Ran"
+    description = pick(
+        status_id == _ACCEPTED or str(description).strip().lower() == "accepted",
+        lambda: "Ran",
+        lambda: description,
+    )
     return {
         "status_id": status_id,
         "status": description,
@@ -113,22 +119,44 @@ async def run_code(
             )
             resp.raise_for_status()
             token = resp.json().get("token")
-            if not token:
+
+            def _no_token() -> None:
                 raise RuntimeError("code sandbox returned no token")
-            # Poll the privileged workers for the result.
+
+            pick(not token, _no_token, lambda: None)
             deadline = asyncio.get_event_loop().time() + _POLL_MAX
-            while True:
+            done: list[dict[str, Any]] = []
+            while not done:
                 r = await client.get(
                     f"{base}/submissions/{token}",
                     params={"base64_encoded": "false"},
                 )
                 r.raise_for_status()
                 result = r.json()
-                if (result.get("status") or {}).get("id", 0) > _PROCESSING:
-                    return _normalize(result)
-                if asyncio.get_event_loop().time() > deadline:
+                finished = (result.get("status") or {}).get("id", 0) > _PROCESSING
+                timed_out = asyncio.get_event_loop().time() > deadline
+                hit = first_match(
+                    (
+                        Rule(when=(Pred("finished", "truthy"),), action="done"),
+                        Rule(when=(Pred("timed_out", "truthy"),), action="timeout"),
+                        Rule(when=(), action="wait"),
+                    ),
+                    {"finished": finished, "timed_out": timed_out},
+                )
+
+                def _timeout() -> None:
                     raise RuntimeError("code sandbox timed out")
-                await asyncio.sleep(_POLL_INTERVAL)
+
+                apply(
+                    hit.action,
+                    {
+                        "done": lambda: done.append(_normalize(result)),
+                        "timeout": _timeout,
+                        "wait": lambda: None,
+                    },
+                )
+                await pick(not done, lambda: asyncio.sleep(_POLL_INTERVAL), lambda: asyncio.sleep(0))
+            return done[0]
     except (httpx.HTTPError, ValueError) as exc:
         raise RuntimeError(f"code sandbox unavailable: {exc}") from exc
 
@@ -149,8 +177,14 @@ async def run_tests(
     Cases run concurrently (each is an independent sandbox submission). If the sandbox is
     unreachable the whole batch fails closed with an error field.
     """
-    if not tests:
+
+    async def _empty() -> dict[str, Any]:
         return {"passed": 0, "total": 0, "cases": [], "error": None}
+
+    return await pick(not tests, _empty, lambda: _run_tests_body(source, language_id, tests))
+
+
+async def _run_tests_body(source: str, language_id: int, tests: list[dict[str, str]]) -> dict[str, Any]:
     try:
         results = await asyncio.gather(
             *(run_code(source, language_id, t.get("stdin", "")) for t in tests)
@@ -163,8 +197,7 @@ async def run_tests(
     for t, r in zip(tests, results):
         expected = t.get("expected_output", "")
         ok = r["status_id"] == _ACCEPTED and _matches(r["stdout"], expected)
-        if ok:
-            passed += 1
+        passed += int(ok)
         cases.append({
             "ok": ok,
             "stdin": t.get("stdin", ""),
@@ -176,16 +209,17 @@ async def run_tests(
     return {"passed": passed, "total": len(tests), "cases": cases, "error": None}
 
 
-if __name__ == "__main__":  # pragma: no cover
-    # ponytail: pure self-check — normalization + trim-compare, no live sandbox.
+def _self_check() -> None:
     n = _normalize({
         "status": {"id": 3, "description": "Accepted"},
         "stdout": "42\n", "stderr": None, "time": "0.01",
     })
     assert n["status_id"] == 3 and n["stdout"] == "42" and n["stderr"] == "", n
-
     assert _matches("5\n", "5")
-    assert _matches("a \nb\n\n", "a\nb")  # trailing ws + blank lines ignored
+    assert _matches("a \nb\n\n", "a\nb")
     assert not _matches("5", "6")
     assert DEFAULT_LANGUAGE_ID in LANGUAGES
     print("code_execution self-check OK")
+
+
+pick(__name__ == "__main__", _self_check, lambda: None)

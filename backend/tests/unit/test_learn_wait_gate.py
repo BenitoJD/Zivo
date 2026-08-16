@@ -7,15 +7,16 @@ a JS test runner.
 from __future__ import annotations
 
 
+from app.engine_runtime import pick
+
+
 def learn_has_unanswered_ready(
     *,
     pool_available: int = 0,
     questions_generated: int = 0,
     questions_answered: int = 0,
 ) -> bool:
-    if pool_available > 0:
-        return True
-    return questions_generated > questions_answered
+    return pick(pool_available > 0, lambda: True, lambda: questions_generated > questions_answered)
 
 
 def test_unanswered_ready_when_pool_available() -> None:
