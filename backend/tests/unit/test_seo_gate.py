@@ -83,3 +83,33 @@ def test_publish_cap() -> None:
     assert blocked.allow is False and blocked.reason == "soft_max"
     ok = evaluate_publish_cap(published_today=3, soft_max_per_day=20)
     assert ok.allow is True and ok.remaining == 17
+
+
+class _FixedRng:
+    def __init__(self, roll: float, choice: str) -> None:
+        self._roll = roll
+        self._choice = choice
+
+    def random(self) -> float:
+        return self._roll
+
+    def choice(self, seq: list[str]) -> str:
+        return self._choice
+
+
+def test_plan_article_presentation_mix() -> None:
+    from app.services.seo_gate import plan_article_presentation
+
+    explainer = plan_article_presentation("general", rng=_FixedRng(0.10, "practice"))
+    assert explainer.format == "explainer"
+    assert explainer.cta_kind == "practice"
+    faq = plan_article_presentation("general", rng=_FixedRng(0.80, "signup"))
+    assert faq.format == "faq"
+    listing = plan_article_presentation("general", rng=_FixedRng(0.90, "signup"))
+    assert listing.format == "list"
+    sd = plan_article_presentation("system_design", rng=_FixedRng(0.10, "practice"))
+    assert sd.cta_kind == "system_design"
+    forced = plan_article_presentation(
+        "general", format_override="faq", rng=_FixedRng(0.10, "practice")
+    )
+    assert forced.format == "faq"

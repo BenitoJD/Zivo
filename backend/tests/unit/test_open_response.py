@@ -94,3 +94,41 @@ def test_heuristic_coding_teach_gap_pass_still_teaches() -> None:
     )
     assert v.result["lesson"]["title"]
     assert v.result["weak_concepts"]
+
+
+def test_interview_coding_turn_pass_and_fail() -> None:
+    from app.services.open_response import evaluate_interview_coding_turn
+
+    passed = evaluate_interview_coding_turn(
+        source="print(1)",
+        language_id=71,
+        passed=3,
+        total=3,
+    )
+    assert passed.kind == "interview_coding"
+    assert passed.result["correct"] is True
+    failed = evaluate_interview_coding_turn(
+        source="print(1)",
+        language_id=71,
+        passed=1,
+        total=3,
+        first_fail={"stderr": "", "stdout": "1", "expected": "2"},
+    )
+    assert failed.result["correct"] is False
+    assert "1/3" in failed.result["feedback"]
+    broken = evaluate_interview_coding_turn(
+        source="",
+        language_id=71,
+        passed=0,
+        total=0,
+        error="timeout",
+    )
+    assert "timeout" in broken.result["feedback"]
+
+
+def test_degraded_interview_scores_are_mid_scale() -> None:
+    from app.services.open_response import INTERVIEW_DIMENSIONS, degraded_interview_scores
+
+    v = degraded_interview_scores()
+    assert v.kind == "interview_typed"
+    assert v.result["scores"] == {d: 2 for d in INTERVIEW_DIMENSIONS}

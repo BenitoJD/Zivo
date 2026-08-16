@@ -184,7 +184,7 @@ export function CodeEditor({
   );
 
   const runSubmit = (
-    <Group gap="xs" wrap="nowrap">
+    <Group gap="xs" wrap="wrap">
       <Button
         size="xs"
         variant="light"

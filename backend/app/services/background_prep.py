@@ -26,6 +26,7 @@ from app.services.rag_window import (
     save_rag_window,
     sync_rag_window,
 )
+from app.services.session_design import evaluate_background_cook_tick, evaluate_prep_progress
 
 PREP_MODE_NOW = "now"
 PREP_MODE_BACKGROUND = "background"
@@ -95,29 +96,20 @@ def all_study_pages_indexed(db: Session, doc: Document) -> bool:
 
 def compute_prep_progress(db: Session, doc: Document) -> dict[str, Any]:
     study = study_pages_for_doc(doc)
-    if not study:
-        return {
-            "phase": _PREP_PHASE_INDEXING,
-            "index_pct": 0,
-            "cook_pct": 0,
-            "overall_pct": 0,
-        }
-
-    index_pct = rag_window_index_progress(db, doc.id, study)
-    cook_done = sum(1 for page in study if page_learn_prep_ready(db, doc, page))
-    cook_pct = int(100 * cook_done / len(study))
-    phase = prep_phase(doc)
-    if phase == _PREP_PHASE_INDEXING and index_pct >= 100:
-        phase = _PREP_PHASE_COOKING
-    if phase == _PREP_PHASE_INDEXING:
-        overall_pct = index_pct
-    else:
-        overall_pct = int(index_pct * 0.35 + cook_pct * 0.65)
+    index_pct = rag_window_index_progress(db, doc.id, study) if study else 0
+    cook_done = sum(1 for page in study if page_learn_prep_ready(db, doc, page)) if study else 0
+    cook_pct = int(100 * cook_done / len(study)) if study else 0
+    verdict = evaluate_prep_progress(
+        index_pct=index_pct,
+        cook_pct=cook_pct,
+        phase=prep_phase(doc),
+        has_study_pages=bool(study),
+    )
     return {
-        "phase": phase,
-        "index_pct": index_pct,
-        "cook_pct": cook_pct,
-        "overall_pct": min(100, overall_pct),
+        "phase": verdict.phase,
+        "index_pct": verdict.index_pct,
+        "cook_pct": verdict.cook_pct,
+        "overall_pct": verdict.overall_pct,
     }
 
 
@@ -295,68 +287,86 @@ def tick_background_cook(db: Session, document_id: uuid.UUID) -> Job | None:
     doc = db.get(Document, document_id)
     if not doc or not is_background_prep(doc):
         return None
-    if prep_phase(doc) == _PREP_PHASE_INDEXING:
-        if not all_study_pages_indexed(db, doc):
-            missing = sync_rag_window(db, document_id, study_pages_for_doc(doc))
-            if missing:
-                _enqueue_missing_ingest_pages(db, document_id, missing)
-            return None
+
+    from app.services.question_pool_jobs import (
+        BACKGROUND_PREP_MAX_QUESTIONS,
+        enqueue_page_batch,
+        enqueue_page_triage,
+    )
+
+    phase = prep_phase(doc)
+    indexed = all_study_pages_indexed(db, doc)
+    if phase == _PREP_PHASE_INDEXING and not indexed:
+        missing = sync_rag_window(db, document_id, study_pages_for_doc(doc))
+        verdict = evaluate_background_cook_tick(
+            phase=phase,
+            all_indexed=False,
+            has_ingest_missing=bool(missing),
+            triage_page=None,
+            cook_page=None,
+            total_generated=0,
+            max_questions=BACKGROUND_PREP_MAX_QUESTIONS,
+            remaining_on_page=None,
+        )
+        if verdict.action == "ingest":
+            _enqueue_missing_ingest_pages(db, document_id, missing)
+        return None
+
+    if phase == _PREP_PHASE_INDEXING:
         _transition_to_cooking(db, doc)
         doc = db.get(Document, document_id)
         if not doc:
             return None
 
     ingest_missing = sync_rag_window(db, document_id, study_pages_for_doc(doc))
-    if ingest_missing:
+    triage_page = None if ingest_missing else _next_page_needing_triage(db, document_id, doc)
+    cook_page = None if ingest_missing or triage_page is not None else _next_page_needing_cook(db, document_id, doc)
+    remaining = None
+    total_generated = 0
+    if cook_page is not None:
+        total_generated = count_assertions_for_document(db, document_id)
+        generated = count_assertions_on_page(db, document_id, cook_page)
+        remaining = get_question_budget(doc, cook_page) - generated
+
+    verdict = evaluate_background_cook_tick(
+        phase=_PREP_PHASE_COOKING,
+        all_indexed=True,
+        has_ingest_missing=bool(ingest_missing),
+        triage_page=triage_page,
+        cook_page=cook_page,
+        total_generated=total_generated,
+        max_questions=BACKGROUND_PREP_MAX_QUESTIONS,
+        remaining_on_page=remaining,
+    )
+    if verdict.action == "ingest":
         _enqueue_missing_ingest_pages(db, document_id, ingest_missing)
         return None
-
-    from app.services.question_pool_jobs import enqueue_page_batch, enqueue_page_triage
-
-    triage_page = _next_page_needing_triage(db, document_id, doc)
-    if triage_page is not None:
-        return enqueue_page_triage(db, doc, page=triage_page, precompute=True)
-
-    cook_page = _next_page_needing_cook(db, document_id, doc)
-    if cook_page is None:
+    if verdict.action == "triage":
+        return enqueue_page_triage(db, doc, page=verdict.page, precompute=True)
+    if verdict.action == "complete":
         maybe_complete_prep(db, doc)
         return None
-
-    # Background-prep cap: a very large document (e.g. a 496-page PDF) would
-    # otherwise chain one cook batch per page forever, flooding the ETA queue
-    # and starving every other document's jobs (newspaper editions sat in
-    # "Preparing" behind ~300 queued generate.questions from one upload). Once
-    # the document's total cooked questions reach the cap, stop and mark the
-    # prep complete — the learner still gets a fully studyable partial pool.
-    from app.services.question_pool_jobs import BACKGROUND_PREP_MAX_QUESTIONS
-
-    total_generated = count_assertions_for_document(db, document_id)
-    if total_generated >= BACKGROUND_PREP_MAX_QUESTIONS:
-        # Cap reached: mark prep complete (partial pool is studyable) and
-        # promote the doc to ready so the UI stops showing the indexing modal.
+    if verdict.action == "complete_cap":
         meta = dict(doc.meta or {})
         meta["prep_complete"] = True
         doc.meta = meta
         flag_modified(doc, "meta")
         ensure_capped_prep_ready(db, doc)
         return None
-
-    generated = count_assertions_on_page(db, document_id, cook_page)
-    budget = get_question_budget(doc, cook_page)
-    remaining = budget - generated
-    if remaining <= 0:
+    if verdict.action == "cook" and verdict.page is not None:
+        generated = count_assertions_on_page(db, document_id, verdict.page)
+        budget = get_question_budget(doc, verdict.page)
+        batch = min(REFILL_BATCH_SIZE, max(0, remaining or 0), budget)
+        job = enqueue_page_batch(
+            db,
+            doc,
+            page=verdict.page,
+            batch_size=batch,
+            start_sequence=generated,
+        )
         maybe_complete_prep(db, doc)
-        return None
-    batch = min(REFILL_BATCH_SIZE, remaining, budget)
-    job = enqueue_page_batch(
-        db,
-        doc,
-        page=cook_page,
-        batch_size=batch,
-        start_sequence=generated,
-    )
-    maybe_complete_prep(db, doc)
-    return job
+        return job
+    return None
 
 
 def on_background_triage_completed(

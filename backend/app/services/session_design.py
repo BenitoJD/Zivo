@@ -7,7 +7,7 @@ Version: qb.session.v1
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from app.services.question_budget import SESSION_SOFT
 
@@ -234,6 +234,42 @@ class InterviewRoundsPlan:
     policy_version: str = SESSION_VERSION
 
 
+# Prep progress blend (indexing vs cooking) — owned here, not in orchestration.
+PREP_INDEX_WEIGHT = 0.35
+PREP_COOK_WEIGHT = 0.65
+PREP_PHASE_INDEXING = "indexing"
+PREP_PHASE_COOKING = "cooking"
+
+CookAction = Literal[
+    "idle",
+    "ingest",
+    "transition_cook",
+    "triage",
+    "cook",
+    "complete",
+    "complete_cap",
+]
+
+
+@dataclass(frozen=True)
+class PrepProgressVerdict:
+    phase: str
+    index_pct: int
+    cook_pct: int
+    overall_pct: int
+    policy_version: str = SESSION_VERSION
+
+
+@dataclass(frozen=True)
+class CookScheduleVerdict:
+    action: CookAction
+    page: int | None = None
+    cook_mode: str | None = None
+    also_ingest: bool = False
+    reason: str = ""
+    policy_version: str = SESSION_VERSION
+
+
 def plan_session(
     remaining_doc_items: int,
     *,
@@ -292,3 +328,100 @@ def plan_interview_rounds(category: str | None) -> InterviewRoundsPlan:
         cat = "other"
     rounds = tuple(dict(r) for r in INTERVIEW_ROUND_PLANS[cat])
     return InterviewRoundsPlan(category=cat, rounds=rounds)
+
+
+def evaluate_prep_progress(
+    *,
+    index_pct: int,
+    cook_pct: int,
+    phase: str,
+    has_study_pages: bool,
+) -> PrepProgressVerdict:
+    """Index/cook blend for the background-prep modal. Orchestration loads percents."""
+    if not has_study_pages:
+        return PrepProgressVerdict(
+            phase=PREP_PHASE_INDEXING,
+            index_pct=0,
+            cook_pct=0,
+            overall_pct=0,
+        )
+    idx = max(0, min(100, int(index_pct)))
+    cook = max(0, min(100, int(cook_pct)))
+    resolved = phase or PREP_PHASE_INDEXING
+    if resolved == PREP_PHASE_INDEXING and idx >= 100:
+        resolved = PREP_PHASE_COOKING
+    if resolved == PREP_PHASE_INDEXING:
+        overall = idx
+    else:
+        overall = int(idx * PREP_INDEX_WEIGHT + cook * PREP_COOK_WEIGHT)
+    return PrepProgressVerdict(
+        phase=resolved,
+        index_pct=idx,
+        cook_pct=cook,
+        overall_pct=min(100, overall),
+    )
+
+
+def evaluate_background_cook_tick(
+    *,
+    phase: str,
+    all_indexed: bool,
+    has_ingest_missing: bool,
+    triage_page: int | None,
+    cook_page: int | None,
+    total_generated: int,
+    max_questions: int,
+    remaining_on_page: int | None,
+) -> CookScheduleVerdict:
+    """Next background-prep cook step. DB lookups stay in orchestration."""
+    if phase == PREP_PHASE_INDEXING and not all_indexed:
+        if has_ingest_missing:
+            return CookScheduleVerdict(action="ingest", reason="index_missing")
+        return CookScheduleVerdict(action="idle", reason="wait_index")
+    if phase == PREP_PHASE_INDEXING and all_indexed:
+        return CookScheduleVerdict(action="transition_cook", reason="index_done")
+    if has_ingest_missing:
+        return CookScheduleVerdict(action="ingest", reason="window_missing")
+    if triage_page is not None:
+        return CookScheduleVerdict(action="triage", page=triage_page, reason="needs_triage")
+    if cook_page is None:
+        return CookScheduleVerdict(action="complete", reason="no_cook_page")
+    if int(total_generated) >= max(0, int(max_questions)):
+        return CookScheduleVerdict(action="complete_cap", page=cook_page, reason="cap_reached")
+    remaining = 0 if remaining_on_page is None else int(remaining_on_page)
+    if remaining <= 0:
+        return CookScheduleVerdict(action="complete", page=cook_page, reason="page_budget_met")
+    return CookScheduleVerdict(action="cook", page=cook_page, reason="cook_page")
+
+
+def evaluate_newspaper_edition_tick(
+    *,
+    has_ingest_missing: bool,
+    cook_page: int | None,
+    cook_mode: str | None,
+    remaining: int,
+    triage_page: int | None,
+) -> CookScheduleVerdict:
+    """Full-edition newspaper cook priority: ingest in parallel, cook before triage."""
+    if cook_page is None:
+        if triage_page is not None:
+            return CookScheduleVerdict(
+                action="triage",
+                page=triage_page,
+                also_ingest=has_ingest_missing,
+                reason="edition_triage",
+            )
+        if has_ingest_missing:
+            return CookScheduleVerdict(action="ingest", also_ingest=True, reason="edition_ingest")
+        return CookScheduleVerdict(action="idle", reason="edition_idle")
+    if int(remaining) <= 0:
+        if has_ingest_missing:
+            return CookScheduleVerdict(action="ingest", also_ingest=True, reason="edition_budget_met")
+        return CookScheduleVerdict(action="idle", page=cook_page, cook_mode=cook_mode, reason="edition_budget_met")
+    return CookScheduleVerdict(
+        action="cook",
+        page=cook_page,
+        cook_mode=cook_mode,
+        also_ingest=has_ingest_missing,
+        reason="edition_cook",
+    )

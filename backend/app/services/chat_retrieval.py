@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import uuid
 
 from sqlalchemy.orm import Session
@@ -14,20 +13,18 @@ from app.services.tutor_retrieval import (
     DEFAULT_FETCH_LIMIT,
     DEFAULT_TOP_N,
     decide_page_pin,
+    extract_query_page_range,
     finish_ranked_chunks,
-)
-
-_PAGE_REF_RE = re.compile(
-    r"\b(?:on|at)\s+page\s+(\d+)(?:\s*[-–]\s*(\d+))?\b"
-    r"|\bpages?\s+(\d+)\s*(?:to|through|and)\s*(\d+)\b"
-    r"|\bpage\s+(\d+)\s*[-–]\s*(\d+)\b"
-    r"|\bpage\s+(\d+)\b",
-    re.IGNORECASE,
+    plan_chunk_retrieval,
 )
 
 # Over-fetch then rank down via Tutor Retrieval Engine.
 _FETCH_LIMIT = DEFAULT_FETCH_LIMIT
 _TOP_N = DEFAULT_TOP_N
+
+
+def _extract_page_range(query: str) -> tuple[int | None, int | None]:
+    return extract_query_page_range(query)
 
 
 def _chat_rerank_enabled() -> bool:
@@ -45,21 +42,6 @@ def _finish_chunks(query: str, chunks: list[dict], *, top_n: int = _TOP_N) -> li
     return list(verdict.chunks)
 
 
-def _extract_page_range(query: str) -> tuple[int | None, int | None]:
-    text = (query or "").strip()
-    if not text:
-        return None, None
-    match = _PAGE_REF_RE.search(text)
-    if not match:
-        return None, None
-    groups = [g for g in match.groups() if g is not None]
-    start = int(groups[0])
-    end = int(groups[1]) if len(groups) > 1 and groups[1] else start
-    if start <= 0 or end <= 0:
-        return None, None
-    return min(start, end), max(start, end)
-
-
 def retrieve_document_chunks(
     db: Session,
     *,
@@ -69,92 +51,48 @@ def retrieve_document_chunks(
 ) -> list[dict]:
     scope = scope or {}
     pin = decide_page_pin(scope)
+    plan = plan_chunk_retrieval(pin, scope, query)
 
-    # Learn mode: normalize_chat_scope widens page_start/page_end to the RAG window
-    # (up to 6 pages). Tutor Retrieval pin prefers the active page first; only fall
-    # back to the window when that page has no chunks.
-    if pin.pin_current_first and pin.page is not None:
-        page = pin.page
+    if plan.strategy == "pin_page":
         primary_chunks = fetch_chunks_for_page_range(
             db,
             document_ids=document_ids,
-            page_start=page,
-            page_end=page,
+            page_start=plan.page_start,
+            page_end=plan.page_end,
         )
         if primary_chunks:
             return _finish_chunks(query, primary_chunks)
-
-    # Only engine-validated page — never re-read raw scope after decide_page_pin rejects.
-    current_page = pin.page
-
-    query_start, query_end = _extract_page_range(query)
-    scope_start = scope.get("page_start")
-    scope_end = scope.get("page_end")
-    has_scope = scope_start is not None
-    has_query_ref = query_start is not None
-
-    page_start = query_start if has_query_ref else (int(scope_start) if has_scope else None)
-    page_end = query_end if has_query_ref else (int(scope_end) if has_scope else None)
-    if current_page is not None and page_start is None:
-        page_start = int(current_page)
-        page_end = page_start
-    if page_start is not None and page_end is None:
-        page_end = page_start
-
-    pinned_single_page = (
-        page_start is not None
-        and page_end is not None
-        and page_start == page_end
-        and (has_scope or current_page is not None or has_query_ref)
-    )
+        plan = plan_chunk_retrieval(pin, scope, query, pin_missed=True)
 
     page_chunks: list[dict] = []
-    if page_start is not None:
+    if plan.page_start is not None:
         page_chunks = fetch_chunks_for_page_range(
             db,
             document_ids=document_ids,
-            page_start=page_start,
-            page_end=page_end or page_start,
+            page_start=plan.page_start,
+            page_end=plan.page_end or plan.page_start,
+        )
+        plan = plan_chunk_retrieval(
+            pin,
+            scope,
+            query,
+            pin_missed=True,
+            page_chunk_count=len(page_chunks),
+            page_chunks_fetched=True,
         )
 
-    if pinned_single_page and page_chunks:
+    if plan.strategy == "page_range":
         return _finish_chunks(query, page_chunks)
-
-    if has_query_ref and page_chunks and page_start == page_end:
-        return _finish_chunks(query, page_chunks)
-
-    if has_query_ref and page_chunks:
-        embedding = embed_query(query)
-        vector_chunks = search_chunks(
-            db,
-            document_ids=document_ids,
-            query_embedding=embedding,
-            limit=_FETCH_LIMIT,
-            page_start=page_start,
-            page_end=page_end,
-        )
-        merged = merge_chunks(page_chunks, vector_chunks)
-        return _finish_chunks(query, merged)
-
-    if has_query_ref and not page_chunks:
-        embedding = embed_query(query)
-        chunks = search_chunks(
-            db,
-            document_ids=document_ids,
-            query_embedding=embedding,
-            limit=_FETCH_LIMIT,
-            page_start=page_start,
-            page_end=page_end,
-        )
-        return _finish_chunks(query, chunks)
 
     embedding = embed_query(query)
-    chunks = search_chunks(
+    vector_chunks = search_chunks(
         db,
         document_ids=document_ids,
         query_embedding=embedding,
         limit=_FETCH_LIMIT,
-        page_start=page_start,
-        page_end=page_end,
+        page_start=plan.page_start,
+        page_end=plan.page_end,
     )
-    return _finish_chunks(query, chunks)
+    if plan.strategy == "page_plus_vector":
+        return _finish_chunks(query, merge_chunks(page_chunks, vector_chunks))
+    return _finish_chunks(query, vector_chunks)

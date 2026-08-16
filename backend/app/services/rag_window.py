@@ -18,7 +18,7 @@ from app.eta.stale_jobs import (
 )
 from app.services.chunks import indexed_pages_for_document
 from app.services.question_pool import get_progress, selected_page_list
-from app.services.tutor_retrieval import MAX_RAG_PAGES, plan_rag_window
+from app.services.tutor_retrieval import MAX_RAG_PAGES, evaluate_rag_window_ready, plan_rag_window
 
 _INGESTED_PAGES_KEY = "ingested_pages"
 
@@ -224,24 +224,16 @@ def is_rag_window_ready(db: Session, document_id: uuid.UUID, doc: Document | Non
     if not doc:
         return False
     meta = doc.meta or {}
-    target = get_rag_window(doc)
-    # The saved window is only rewritten when an ingest actually runs, so the learner
-    # can walk past it (current page 10, window still [4..9]). Judging readiness
-    # against that stale target - or against the sticky `rag_window_ready` flag it
-    # was saved with - deadlocks the learn loop: page triage defers because the
-    # current page has no chunks, while this reports "ready" so ensure_question_pool
-    # never enqueues the ingest that would create them, and generation_pending stays
-    # true forever (the UI sits at "Planning the quiz"). When the current page has
-    # escaped the saved window, re-derive the window the learner needs NOW.
     current = int((get_progress(doc) or {}).get("current_page") or 0)
-    if current > 0 and current not in set(target):
-        target = chat_rag_window(current, selected_page_list(doc))
-    elif meta.get("rag_window_ready"):
-        return True
-    if not target:
-        return True
-    ready = pages_ready_for_document(db, document_id, doc)
-    return all(p in ready for p in target)
+    verdict = evaluate_rag_window_ready(
+        has_doc=True,
+        current_page=current,
+        saved_window=get_rag_window(doc),
+        flag_ready=bool(meta.get("rag_window_ready")),
+        study_pages=selected_page_list(doc),
+        ready_pages=pages_ready_for_document(db, document_id, doc),
+    )
+    return verdict.ready
 
 
 def maybe_recover_stuck_indexing(db: Session, doc: Document) -> None:

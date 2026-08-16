@@ -108,3 +108,48 @@ def test_decide_page_pin_rejects_invalid_page() -> None:
 
     assert decide_page_pin({"current_page": 0}).pin_current_first is False
     assert decide_page_pin({"current_page": "nope"}).page is None
+
+
+def test_evaluate_rag_window_ready_replans_stale_window() -> None:
+    from app.services.tutor_retrieval import evaluate_rag_window_ready
+
+    stale = evaluate_rag_window_ready(
+        has_doc=True,
+        current_page=10,
+        saved_window=[4, 5, 6, 7, 8, 9],
+        flag_ready=True,
+        study_pages=list(range(2, 35)),
+        ready_pages=set(range(2, 10)),
+    )
+    assert stale.ready is False
+    assert stale.reason == "stale_window"
+    assert 10 in stale.target_pages
+
+    inside = evaluate_rag_window_ready(
+        has_doc=True,
+        current_page=8,
+        saved_window=[4, 5, 6, 7, 8, 9],
+        flag_ready=True,
+        study_pages=list(range(2, 35)),
+        ready_pages=set(),
+    )
+    assert inside.ready is True
+    assert inside.reason == "flag_ready"
+
+
+def test_plan_chunk_retrieval_pin_then_vector() -> None:
+    from app.services.tutor_retrieval import PagePinVerdict, plan_chunk_retrieval
+
+    pin = PagePinVerdict(pin_current_first=True, page=5)
+    first = plan_chunk_retrieval(pin, {"current_page": 5, "page_start": 1, "page_end": 6}, "what is ATP?")
+    assert first.strategy == "pin_page"
+    assert first.page_start == 5
+    miss = plan_chunk_retrieval(
+        pin,
+        {"current_page": 5, "page_start": 1, "page_end": 6},
+        "what is ATP?",
+        pin_missed=True,
+        page_chunks_fetched=True,
+        page_chunk_count=0,
+    )
+    assert miss.strategy == "vector_only"

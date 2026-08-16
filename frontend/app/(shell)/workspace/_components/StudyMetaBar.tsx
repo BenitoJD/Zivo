@@ -527,16 +527,16 @@ export function StudyMetaBar({
   const barPx = inline ? 0 : { base: "sm", sm: "md", lg: "lg" } as const;
   return (
     <Box w="100%" px={barPx} py={8} style={barChrome}>
-      <Group justify="space-between" wrap="nowrap" align="center" w="100%" gap="md">
-        <Group gap="md" wrap="nowrap" style={{ minWidth: 0, flexShrink: 1 }}>
+      <Group justify="space-between" wrap="wrap" align="center" w="100%" gap="sm">
+        <Group gap="md" wrap="wrap" style={{ minWidth: 0, flexShrink: 1 }}>
           {backControl}
           {modeBadge}
           {lessonControl}
         </Group>
-        <Group gap="md" wrap="nowrap" justify="center" style={{ minWidth: 0, flexShrink: 0 }}>
+        <Group gap="md" wrap="wrap" justify="center" style={{ minWidth: 0, flex: "1 1 160px" }}>
           {progress}
         </Group>
-        <Group gap="xs" wrap="nowrap" style={{ minWidth: 0, flexShrink: 0 }}>
+        <Group gap="xs" wrap="wrap" style={{ minWidth: 0, flexShrink: 1 }}>
           {studyModeControl}
           {alignControl}
         </Group>

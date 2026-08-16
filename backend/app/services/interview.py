@@ -31,7 +31,9 @@ from app.services.open_response import (
     INTERVIEW_DIMENSIONS as RUBRIC_DIMENSIONS,
     build_interview_report,
     clamp_interview_score as _clamp_score,
+    degraded_interview_scores,
     empty_interview_scores,
+    evaluate_interview_coding_turn,
     shape_interview_scores,
 )
 from app.services.session_design import plan_interview_rounds
@@ -407,26 +409,16 @@ async def _evaluate(db: Session, current: dict, answer: Any) -> dict[str, Any]:
         language_id = lang if lang in LANGUAGES else current.get("language_id", 71)
         tests = current.get("tests") or []
         res = await run_tests(src, language_id, tests)
-        passed, total = res["passed"], res["total"]
-        if res.get("error"):
-            fb = f"Couldn't run your code: {res['error']}"
-        elif total and passed == total:
-            fb = f"All {total} tests passed — clean solution."
-        else:
-            failed = next((c for c in res["cases"] if not c["ok"]), None)
-            hint = ""
-            if failed:
-                detail = failed["stderr"] or f"got {failed['stdout']!r}, expected {failed['expected']!r}"
-                hint = f" First failing case: {detail}"
-            fb = f"{passed}/{total} tests passed.{hint}"
-        turn.update({
-            "answer": src,
-            "language_id": language_id,
-            "passed": passed,
-            "total": total,
-            "correct": bool(total) and passed == total,
-            "feedback": fb,
-        })
+        failed = next((c for c in (res.get("cases") or []) if not c["ok"]), None)
+        measured = evaluate_interview_coding_turn(
+            source=src,
+            language_id=language_id,
+            passed=res["passed"],
+            total=res["total"],
+            error=res.get("error"),
+            first_fail=failed,
+        )
+        turn.update(measured.result)
         return turn
 
     if current["kind"] == "mcq":
@@ -493,8 +485,9 @@ async def _evaluate(db: Session, current: dict, answer: Any) -> dict[str, Any]:
         feedback = (data.get("feedback") or "").strip() or "Answer recorded."
         cache_put(db, kind="interview_eval", cache_key=eval_key, value={"scores": scores, "feedback": feedback})
     except Exception:
-        scores = {d: 2 for d in RUBRIC_DIMENSIONS}
-        feedback = "Answer recorded (automatic scoring was unavailable for this one)."
+        degraded = degraded_interview_scores()
+        scores = degraded.result["scores"]
+        feedback = degraded.result["feedback"]
     turn.update({"scores": scores, "feedback": feedback})
     return turn
 

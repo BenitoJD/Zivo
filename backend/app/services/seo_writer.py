@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import random
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -11,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.services.llm_json import extract_json_obj
 from app.services.llm_router import acomplete_chat
 from app.services.llm_sync import run_coro_in_worker
+from app.services.seo_gate import plan_article_presentation
 from app.services.seo_voice import humanize_fields
 
 logger = logging.getLogger(__name__)
@@ -21,22 +21,6 @@ Never mention sources, newspapers, uploads, PDFs, or "as an AI".
 Never use em-dashes. Never use words like delve, landscape, robust, leverage, tapestry.
 No hype. Teach something useful.
 Return ONLY JSON."""
-
-
-def _pick_format() -> str:
-    # ~70% explainer, ~30% faq/list
-    roll = random.random()
-    if roll < 0.70:
-        return "explainer"
-    if roll < 0.85:
-        return "faq"
-    return "list"
-
-
-def _cta_for_stream(stream: str) -> str:
-    if stream == "system_design":
-        return "system_design"
-    return random.choice(["practice", "signup", "system_design"])
 
 
 def _complete(db: Session, messages: list[dict]) -> str:
@@ -55,9 +39,10 @@ def write_article(
     format_override: str | None = None,
 ) -> dict[str, Any] | None:
     """Rewrite scrubbed source into public article fields."""
-    fmt = format_override or _pick_format()
     stream = stream if stream in {"general", "system_design"} else "general"
-    cta_kind = _cta_for_stream(stream)
+    presentation = plan_article_presentation(stream, format_override=format_override)
+    fmt = presentation.format
+    cta_kind = presentation.cta_kind
 
     format_rules = {
         "explainer": "Write an explainer (800-1500 words target in body_md). Markdown with short headings.",

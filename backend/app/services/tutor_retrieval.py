@@ -58,6 +58,14 @@ _NO_RETRIEVE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_PAGE_REF_RE = re.compile(
+    r"\b(?:on|at)\s+page\s+(\d+)(?:\s*[-–]\s*(\d+))?\b"
+    r"|\bpages?\s+(\d+)\s*(?:to|through|and)\s*(\d+)\b"
+    r"|\bpage\s+(\d+)\s*[-–]\s*(\d+)\b"
+    r"|\bpage\s+(\d+)\b",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class RetrievalGateVerdict:
@@ -353,5 +361,159 @@ def finish_ranked_chunks(
         chunks=tuple(ranked),
         top_n=top_n,
         used_rerank=True,
+        policy=pol,
+    )
+
+
+RagReadyReason = Literal["missing_doc", "stale_window", "flag_ready", "empty", "all_indexed", "partial"]
+ChunkStrategy = Literal["pin_page", "page_range", "page_plus_vector", "vector_only"]
+
+
+@dataclass(frozen=True)
+class RagWindowReadyVerdict:
+    ready: bool
+    target_pages: tuple[int, ...]
+    reason: RagReadyReason
+    policy: str = DEFAULT_POLICY
+    policy_version: str = TUTOR_RETRIEVAL_VERSION
+
+
+@dataclass(frozen=True)
+class ChunkRetrievalPlan:
+    strategy: ChunkStrategy
+    page_start: int | None
+    page_end: int | None
+    policy: str = DEFAULT_POLICY
+    policy_version: str = TUTOR_RETRIEVAL_VERSION
+
+
+def extract_query_page_range(query: str) -> tuple[int | None, int | None]:
+    """Parse a learner page reference out of a chat query."""
+    text = (query or "").strip()
+    if not text:
+        return None, None
+    match = _PAGE_REF_RE.search(text)
+    if not match:
+        return None, None
+    groups = [g for g in match.groups() if g is not None]
+    start = int(groups[0])
+    end = int(groups[1]) if len(groups) > 1 and groups[1] else start
+    if start <= 0 or end <= 0:
+        return None, None
+    return min(start, end), max(start, end)
+
+
+def evaluate_rag_window_ready(
+    *,
+    has_doc: bool,
+    current_page: int,
+    saved_window: Sequence[int],
+    flag_ready: bool,
+    study_pages: Sequence[int],
+    ready_pages: set[int],
+    policy: str | None = None,
+) -> RagWindowReadyVerdict:
+    """Whether the learner's current RAG window is indexed enough to proceed.
+
+    When the current page has walked past the persisted window, re-plan instead
+    of trusting the sticky ready flag (that deadlock sat at Planning the quiz).
+    """
+    pol = normalize_policy(policy)
+    if not has_doc:
+        return RagWindowReadyVerdict(False, (), "missing_doc", policy=pol)
+    target = tuple(int(p) for p in saved_window)
+    current = int(current_page or 0)
+    if current > 0 and current not in set(target):
+        planned = plan_rag_window(current, list(study_pages), policy=pol)
+        target = planned.pages
+        reason: RagReadyReason = "stale_window"
+    elif flag_ready:
+        return RagWindowReadyVerdict(True, target, "flag_ready", policy=pol)
+    else:
+        reason = "empty" if not target else "partial"
+    if not target:
+        return RagWindowReadyVerdict(True, (), "empty", policy=pol)
+    ready = all(p in ready_pages for p in target)
+    if ready:
+        reason = "all_indexed"
+    return RagWindowReadyVerdict(ready, target, reason, policy=pol)
+
+
+def plan_chunk_retrieval(
+    pin: PagePinVerdict,
+    scope: dict | None,
+    query: str,
+    *,
+    pin_missed: bool = False,
+    page_chunk_count: int = 0,
+    page_chunks_fetched: bool = False,
+    policy: str | None = None,
+) -> ChunkRetrievalPlan:
+    """How to fetch tutor chunks. Orchestration runs embed/search/merge."""
+    pol = normalize_policy(policy)
+    scope = scope or {}
+    if pin.pin_current_first and pin.page is not None and not pin_missed:
+        return ChunkRetrievalPlan(
+            strategy="pin_page",
+            page_start=pin.page,
+            page_end=pin.page,
+            policy=pol,
+        )
+
+    query_start, query_end = extract_query_page_range(query)
+    scope_start = scope.get("page_start")
+    scope_end = scope.get("page_end")
+    has_scope = scope_start is not None
+    has_query_ref = query_start is not None
+    current_page = pin.page
+
+    page_start = query_start if has_query_ref else (int(scope_start) if has_scope else None)
+    page_end = query_end if has_query_ref else (int(scope_end) if has_scope else None)
+    if current_page is not None and page_start is None:
+        page_start = int(current_page)
+        page_end = page_start
+    if page_start is not None and page_end is None:
+        page_end = page_start
+
+    pinned_single_page = (
+        page_start is not None
+        and page_end is not None
+        and page_start == page_end
+        and (has_scope or current_page is not None or has_query_ref)
+    )
+
+    if not page_chunks_fetched and page_start is not None:
+        return ChunkRetrievalPlan(
+            strategy="page_range",
+            page_start=page_start,
+            page_end=page_end,
+            policy=pol,
+        )
+
+    if pinned_single_page and page_chunk_count:
+        return ChunkRetrievalPlan(
+            strategy="page_range",
+            page_start=page_start,
+            page_end=page_end,
+            policy=pol,
+        )
+    if has_query_ref and page_chunk_count and page_start == page_end:
+        return ChunkRetrievalPlan(
+            strategy="page_range",
+            page_start=page_start,
+            page_end=page_end,
+            policy=pol,
+        )
+    if has_query_ref and page_chunk_count:
+        return ChunkRetrievalPlan(
+            strategy="page_plus_vector",
+            page_start=page_start,
+            page_end=page_end,
+            policy=pol,
+        )
+    return ChunkRetrievalPlan(
+        strategy="vector_only",
+        page_start=page_start,
+        page_end=page_end,
         policy=pol,
     )

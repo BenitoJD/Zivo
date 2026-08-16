@@ -89,17 +89,20 @@ export default function CodingSolvePage({ params }: { params: Promise<{ id: stri
         px="sm"
         py={6}
         justify="space-between"
-        style={{ borderBottom: "1px solid var(--mantine-color-default-border)", flexShrink: 0 }}
+        wrap="nowrap"
+        gap="sm"
+        style={{ borderBottom: "1px solid var(--mantine-color-default-border)", flexShrink: 0, minWidth: 0 }}
       >
         <Button
           variant="subtle"
           size="xs"
           leftSection={<IconArrowLeft size={14} />}
           onClick={() => router.push("/practice/coding")}
+          style={{ flexShrink: 0 }}
         >
           All problems
         </Button>
-        <Text fz="xs" c="dimmed" lineClamp={1}>
+        <Text fz="xs" c="dimmed" lineClamp={1} style={{ minWidth: 0 }}>
           {problem.title}
         </Text>
       </Group>

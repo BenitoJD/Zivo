@@ -48,7 +48,7 @@ export function Footer() {
             </Text>
           </Stack>
 
-          <Group gap={52} wrap="wrap" align="flex-start">
+          <Group gap="xl" wrap="wrap" align="flex-start">
             {COLUMNS.map((col) => (
               <Stack key={col.heading} gap={10}>
                 <Text size="xs" fw={700} tt="uppercase" lts={1.5} c="gray.5">

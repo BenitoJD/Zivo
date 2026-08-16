@@ -101,7 +101,7 @@ function ScoreTab({ artifactId, compact }: { artifactId: string; compact?: boole
           sections={[{ value: score, color: scoreColor(score) }]}
           label={<Text ta="center" ff="var(--font-serif)" fz={compact ? 26 : 34} fw={600}>{score}</Text>}
         />
-        <Box style={{ flex: 1, minWidth: 200 }}>
+        <Box style={{ flex: 1, minWidth: 0 }}>
           <Text ff="var(--font-serif)" fz="lg" fw={500}>ATS readiness</Text>
           <Text c="dimmed" fz="sm">Format checks {a.det_score ?? 0}/100 · Content {a.content_score ?? 0}/100</Text>
           <Button mt="sm" size="xs" variant="light" color="gray" radius="xl"
@@ -129,13 +129,13 @@ function ScoreTab({ artifactId, compact }: { artifactId: string; compact?: boole
       {(a.strengths?.length || a.improvements?.length) ? (
         <Group align="flex-start" gap="xl" wrap="wrap">
           {a.strengths?.length ? (
-            <Box style={{ flex: 1, minWidth: 220 }}>
+            <Box style={{ flex: 1, minWidth: 0 }}>
               <Text fz="xs" fw={700} tt="uppercase" c="sage.7" mb={6}>Strengths</Text>
               {a.strengths.map((s, i) => <Text key={i} fz="sm">• {s}</Text>)}
             </Box>
           ) : null}
           {a.improvements?.length ? (
-            <Box style={{ flex: 1, minWidth: 220 }}>
+            <Box style={{ flex: 1, minWidth: 0 }}>
               <Text fz="xs" fw={700} tt="uppercase" c="terracotta.7" mb={6}>Fix next</Text>
               {a.improvements.map((s, i) => <Text key={i} fz="sm">• {s}</Text>)}
             </Box>

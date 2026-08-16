@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from sqlalchemy.orm import Session
 
@@ -183,3 +183,37 @@ def evaluate_publish_cap(
         reason="ok",
         policy=pol,
     )
+
+
+@dataclass(frozen=True)
+class SeoPresentationPlan:
+    format: Literal["explainer", "faq", "list"]
+    cta_kind: str
+    policy: str = DEFAULT_POLICY
+    policy_version: str = SEO_GATE_VERSION
+
+
+def plan_article_presentation(
+    stream: str,
+    *,
+    format_override: str | None = None,
+    rng: Any | None = None,
+    policy: str | None = None,
+) -> SeoPresentationPlan:
+    """Editorial mix (~70% explainer, 15% faq, 15% list) and CTA kind."""
+    import random as _random
+
+    pol = normalize_policy(policy)
+    picker = rng if rng is not None else _random
+    if format_override in {"explainer", "faq", "list"}:
+        fmt = format_override  # type: Literal["explainer", "faq", "list"]
+    else:
+        roll = picker.random()
+        if roll < 0.70:
+            fmt = "explainer"
+        elif roll < 0.85:
+            fmt = "faq"
+        else:
+            fmt = "list"
+    kind = "system_design" if stream == "system_design" else picker.choice(["practice", "signup", "system_design"])
+    return SeoPresentationPlan(format=fmt, cta_kind=kind, policy=pol)

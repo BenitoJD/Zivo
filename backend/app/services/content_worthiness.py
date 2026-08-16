@@ -51,6 +51,29 @@ _POLICY_ALIASES = {
     "default": "worth_v1",
 }
 
+_NEWSPAPER_AD_MARKERS = re.compile(
+    r"\b("
+    r"advertisement|classifieds?|matrimonial|tenders?|"
+    r"subscribe\s+now|scan\s+qr|whatsapp\s+us|"
+    r"limited\s+period\s+offer|buy\s+now|call\s+toll\s*free|"
+    r"horoscope|crossword|sudoku|weather\s+report|"
+    r"flat\s+for\s+sale|sq\.?\s*ft|emi\s+starts|walk[- ]in\s+interview|"
+    r"job\s+vacanc(?:y|ies)|situations?\s+vacant|"
+    r"showtimes?|box\s+office|now\s+showing|"
+    r"lottery|jackpot|astrology|"
+    r"buy\s+call|sell\s+call|target\s+price|"
+    r"prime\s+time|tv\s+guide|channel\s+listing"
+    r")\b",
+    re.I,
+)
+
+_NEWSPAPER_MASTHEAD_MARKERS = re.compile(
+    r"\b(volume\s+\d+|regd\.?\s*no\.?|postal\s+regn|rni\s+no)\b",
+    re.I,
+)
+
+NewspaperStructureLabel = Literal["editorial", "ad", "masthead", "low_signal"]
+
 
 @dataclass(frozen=True)
 class WorthinessVerdict:
@@ -59,6 +82,34 @@ class WorthinessVerdict:
     policy: str = DEFAULT_WORTH_POLICY
     policy_version: str = WORTH_VERSION
     details: str = ""
+
+
+@dataclass(frozen=True)
+class NewspaperStructureVerdict:
+    label: NewspaperStructureLabel
+    rationale: str
+    policy: str = DEFAULT_WORTH_POLICY
+    policy_version: str = WORTH_VERSION
+
+
+def evaluate_newspaper_structure(page_text: str, *, policy: str | None = None) -> NewspaperStructureVerdict:
+    """Deterministic ad / masthead / low-signal gate before LLM relevance."""
+    pol = normalize_policy(policy)
+    text = (page_text or "").strip()
+    if len(text) < 120:
+        return NewspaperStructureVerdict("low_signal", "Too little extractable text for study.", policy=pol)
+    ad_hits = len(_NEWSPAPER_AD_MARKERS.findall(text))
+    if ad_hits >= 2 or (ad_hits >= 1 and len(text) < 800):
+        return NewspaperStructureVerdict("ad", f"Ad/classified markers ({ad_hits}).", policy=pol)
+    if _NEWSPAPER_MASTHEAD_MARKERS.search(text) and len(text) < 600:
+        return NewspaperStructureVerdict("masthead", "Looks like masthead / registration boilerplate.", policy=pol)
+    phones = len(re.findall(r"\b\d{5,}[-/\s]?\d{4,}\b", text))
+    if phones >= 4 and len(text) < 1500:
+        return NewspaperStructureVerdict("ad", "Many phone/price-like tokens; treat as ad page.", policy=pol)
+    prop = len(re.findall(r"\b(?:₹|rs\.?)\s*\d", text, re.I))
+    if prop >= 6 and len(text) < 2000:
+        return NewspaperStructureVerdict("ad", "Dense price tokens; treat as classified/ad page.", policy=pol)
+    return NewspaperStructureVerdict("editorial", "Usable editorial signal.", policy=pol)
 
 
 def normalize_policy(policy: str | None) -> str:

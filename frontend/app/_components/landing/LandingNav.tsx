@@ -230,7 +230,7 @@ export function LandingNav() {
         opened={drawerOpen}
         onClose={closeDrawer}
         position="right"
-        size="md"
+        size="xs"
         padding="xl"
         title={
           <Group gap={10}>

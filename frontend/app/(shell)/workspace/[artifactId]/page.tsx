@@ -1398,7 +1398,7 @@ export default function WorkspaceArtifactPage({
   if (invalidArtifactId) {
     return (
       <Center mih="50vh">
-        <Stack gap="sm" w={280}>
+        <Stack gap="sm" w="100%" maw={280}>
           <Skeleton height={24} radius="md" />
           <Skeleton height={120} radius="md" />
         </Stack>
@@ -1427,8 +1427,8 @@ export default function WorkspaceArtifactPage({
 
   if (!artifact || !pages) {
     return (
-      <Center mih="50vh">
-        <Stack gap="sm" w={320}>
+      <Center mih="50vh" px="sm">
+        <Stack gap="sm" w="100%" maw={320}>
           <Skeleton height={28} width="60%" radius="md" />
           <Skeleton height={200} radius="md" />
           <Skeleton height={16} width="40%" radius="md" />
@@ -1441,7 +1441,7 @@ export default function WorkspaceArtifactPage({
     if (isNewspaper) {
       return (
         <Center mih="50vh">
-          <Stack gap="sm" w={320}>
+          <Stack gap="sm" w="100%" maw={320}>
             <Skeleton height={28} width="60%" radius="md" />
             <Skeleton height={200} radius="md" />
           </Stack>

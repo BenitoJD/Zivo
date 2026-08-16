@@ -112,7 +112,7 @@ export function Hero() {
                 href="/workspace"
                 rightSection={<IconArrowRight size={18} stroke={2} />}
                 className="hero-cta-primary"
-                w={{ base: "100%", xs: "auto" }}
+                w={{ base: "100%", md: "auto" }}
               >
                 Start studying - it&apos;s free
               </Button>
@@ -122,7 +122,7 @@ export function Hero() {
                 component={Link}
                 href="/signup"
                 className="hero-cta-secondary"
-                w={{ base: "100%", xs: "auto" }}
+                w={{ base: "100%", md: "auto" }}
               >
                 Create an account
               </Button>

@@ -17,11 +17,11 @@ Index of durable policy engines (ADR 0004 seams). Budget plans N; Quality decide
 | 9 | Content Worthiness Gate | [CONTENT_WORTHINESS_ENGINE.md](CONTENT_WORTHINESS_ENGINE.md) | `content_worthiness.py` | empty PDF + newspaper + junk skip (sole facade) | yes | DONE |
 | 10 | Grounding / Answerability | [GROUNDING_ANSWERABILITY_ENGINE.md](GROUNDING_ANSWERABILITY_ENGINE.md) | `grounding_answerability.py` | all quality cook paths | yes | DONE |
 | 11 | Spaced Revisit | [SPACED_REVISIT_ENGINE.md](SPACED_REVISIT_ENGINE.md) | `spaced_revisit.py` | grade → ease/reps + due map → Selection prefer | yes | DONE |
-| 12 | Session Design | [SESSION_DESIGN_ENGINE.md](SESSION_DESIGN_ENGINE.md) | `session_design.py` | learn-queue `session_break` | yes | DONE |
+| 12 | Session Design | [SESSION_DESIGN_ENGINE.md](SESSION_DESIGN_ENGINE.md) | `session_design.py` | learn-queue `session_break` + background/newspaper cook | yes | DONE |
 | 13 | Item Health / Bank Hygiene | [ITEM_HEALTH_ENGINE.md](ITEM_HEALTH_ENGINE.md) | `item_health.py` | retirement ETA (flag + retire) | yes | DONE |
 | 14 | Practice Selection | (sibling of Adaptive Selection) | `practice_selection.py` | coding + system-design next (attempt bias on all next-pick paths) | yes | DONE |
 | 15 | Tutor Retrieval | (this index) | `tutor_retrieval.py` | chat gate + RAG window + chunk rank | yes | DONE |
-| 16 | SEO Gate | (this index) | `seo_gate.py` | seo cook usefulness + dedupe (`NEAR_DUPE_COSINE`) | yes | DONE |
+| 16 | SEO Gate | (this index) | `seo_gate.py` | seo cook usefulness + dedupe + presentation mix | yes | DONE |
 | 17 | Open Response Measurement | (this index) | `open_response.py` | mains + interview + coding teach + SD heuristic + coding bank gate | yes | DONE |
 | 18 | Aspect Discovery | (this index) | `aspect_discovery.py` | triage pick + speculative + next-unasked | yes | DONE |
 | 19 | Learn Lesson | (this index) | `page_lessons.py` | page cook (before MCQ loop) → learn-queue `page_lesson` | yes | DONE |
@@ -53,6 +53,8 @@ Speculative pre-triage `N_page` lives in **Question Budget** (`speculative_page_
 | RAG window size / look-ahead | Tutor Retrieval | `tutor_retrieval.plan_rag_window` |
 | Cross-encoder rank vs truncate | Tutor Retrieval | `tutor_retrieval.finish_ranked_chunks` (calls `rerank` plumbing) |
 | Learn pin `current_page` before RAG window | Tutor Retrieval | `tutor_retrieval.decide_page_pin` |
+| RAG window readiness (stale window vs sticky flag) | Tutor Retrieval | `tutor_retrieval.evaluate_rag_window_ready` |
+| Tutor chunk fetch strategy | Tutor Retrieval | `tutor_retrieval.plan_chunk_retrieval` |
 | Semantic chat-cache reuse threshold | Tutor Retrieval | `tutor_retrieval.decide_cache_reuse` |
 | Grade-tutor chunk top_n | Tutor Retrieval | `tutor_retrieval.grade_context_top_n` |
 | Brainstorm skips vector RAG | Tutor Retrieval | `tutor_retrieval.decide_retrieval` (`reason=brainstorm`) |
@@ -66,18 +68,24 @@ Speculative pre-triage `N_page` lives in **Question Budget** (`speculative_page_
 | Critic sample-rate default | Quality Evaluation | `quality_evaluation.DEFAULT_CRITIC_SAMPLE_RATE` |
 | Vision empty-page glance → skip reason | Content Worthiness | `content_worthiness.evaluate_vision_glance` (vision LLM stays plumbing) |
 | Empty-page reselect streak | Content Worthiness | `content_worthiness.plan_empty_page_reselect` |
+| Newspaper page structure (ad / masthead / low_signal) | Content Worthiness | `content_worthiness.evaluate_newspaper_structure` |
 | Newspaper naming confidence | Content Worthiness | `newspaper_naming.evaluate_naming_confidence` |
 | Practice attempt bias (+unattempted / −done) | Practice Selection | `practice_selection.score_candidate` / `pick_next(attempted_ids=…)` |
 | Coding heuristic teach-gap lesson | Open Response | `open_response.heuristic_coding_teach_gap` |
 | System-design heuristic grade | Open Response | `open_response.heuristic_system_design_grade` |
 | Coding bank structural persist gate | Open Response | `open_response.evaluate_coding_bank_item` |
+| Interview coding pass/fail + degraded scores | Open Response | `open_response.evaluate_interview_coding_turn` / `degraded_interview_scores` |
 | Cross-doc MCQ reuse scope (`off`/`demo`/`all`) | Question Graph | `question_graph.plan_mcq_reuse` |
 | Focus / mastery diversify / spaced prefer | Adaptive Selection | `adaptive_selection.narrow_serve_pool` (via `select_next`) |
 | Cook grounding fatality (page words + min score) | Grounding / Answerability | `grounding_answerability.evaluate_grounding_for_cook` |
 | SEO near-dupe cosine | SEO Gate | `seo_gate.NEAR_DUPE_COSINE` (`seo_dedupe` plumbing) |
 | SEO daily soft publish cap | SEO Gate | `seo_gate.evaluate_publish_cap` |
+| SEO article format mix + CTA | SEO Gate | `seo_gate.plan_article_presentation` |
 | Pool refill / transition / periodic cadence | Session Design | `session_design.evaluate_serve_schedule` |
 | Interview round plans by category | Session Design | `session_design.plan_interview_rounds` |
+| Background-prep index/cook progress blend | Session Design | `session_design.evaluate_prep_progress` |
+| Background-prep cook tick | Session Design | `session_design.evaluate_background_cook_tick` |
+| Newspaper edition cook vs triage | Session Design | `session_design.evaluate_newspaper_edition_tick` |
 | Speculative pre-triage `N_page` | Question Budget | `question_budget.speculative_page_budget` |
 | Practice-hub path mastery bands | Mastery / Evidence-Stop | `mastery_evidence.label_path_mastery` |
 

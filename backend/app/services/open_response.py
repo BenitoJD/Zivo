@@ -64,7 +64,14 @@ INTERVIEW_SCORE_MAX = 4
 class OpenResponseVerdict:
     """Typed measurement result with policy provenance."""
 
-    kind: Literal["mains", "interview_typed", "interview_report", "coding_teach", "system_design"]
+    kind: Literal[
+        "mains",
+        "interview_typed",
+        "interview_report",
+        "interview_coding",
+        "coding_teach",
+        "system_design",
+    ]
     result: dict[str, Any]
     policy: str = DEFAULT_POLICY
     policy_version: str = OPEN_RESPONSE_VERSION
@@ -240,6 +247,60 @@ def empty_interview_scores(*, policy: str | None = None) -> OpenResponseVerdict:
                 "No answer was given, so there's nothing to evaluate. "
                 "Try to at least outline your approach next time."
             ),
+        },
+        policy=pol,
+    )
+
+
+def degraded_interview_scores(*, policy: str | None = None) -> OpenResponseVerdict:
+    """Mid-scale scores when the interview eval LLM is unavailable."""
+    pol = normalize_policy(policy)
+    mid = (INTERVIEW_SCORE_MIN + INTERVIEW_SCORE_MAX) // 2
+    scores = {d: mid for d in INTERVIEW_DIMENSIONS}
+    return OpenResponseVerdict(
+        kind="interview_typed",
+        result={
+            "scores": scores,
+            "feedback": "Answer recorded (automatic scoring was unavailable for this one).",
+        },
+        policy=pol,
+    )
+
+
+def evaluate_interview_coding_turn(
+    *,
+    source: str,
+    language_id: int,
+    passed: int,
+    total: int,
+    error: str | None = None,
+    first_fail: dict[str, Any] | None = None,
+    policy: str | None = None,
+) -> OpenResponseVerdict:
+    """Pass/fail + feedback for an interview coding turn. Runner stays plumbing."""
+    pol = normalize_policy(policy)
+    ok = bool(total) and int(passed) == int(total)
+    if error:
+        feedback = f"Couldn't run your code: {error}"
+    elif ok:
+        feedback = f"All {total} tests passed — clean solution."
+    else:
+        hint = ""
+        if first_fail:
+            detail = first_fail.get("stderr") or (
+                f"got {first_fail.get('stdout')!r}, expected {first_fail.get('expected')!r}"
+            )
+            hint = f" First failing case: {detail}"
+        feedback = f"{passed}/{total} tests passed.{hint}"
+    return OpenResponseVerdict(
+        kind="interview_coding",
+        result={
+            "answer": source,
+            "language_id": language_id,
+            "passed": int(passed),
+            "total": int(total),
+            "correct": ok,
+            "feedback": feedback,
         },
         policy=pol,
     )

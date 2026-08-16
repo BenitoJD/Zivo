@@ -255,3 +255,79 @@ def test_session_soft_matches_budget_constant() -> None:
     from app.services.session_design import SESSION_SOFT_DEFAULT
 
     assert SESSION_SOFT_DEFAULT == SESSION_SOFT
+
+
+def test_prep_progress_blend_and_cook_schedule() -> None:
+    from app.services.session_design import (
+        PREP_COOK_WEIGHT,
+        PREP_INDEX_WEIGHT,
+        evaluate_background_cook_tick,
+        evaluate_newspaper_edition_tick,
+        evaluate_prep_progress,
+    )
+
+    indexing = evaluate_prep_progress(
+        index_pct=50, cook_pct=0, phase="indexing", has_study_pages=True
+    )
+    assert indexing.phase == "indexing"
+    assert indexing.overall_pct == 50
+    cooking = evaluate_prep_progress(
+        index_pct=100, cook_pct=20, phase="cooking", has_study_pages=True
+    )
+    assert cooking.overall_pct == int(100 * PREP_INDEX_WEIGHT + 20 * PREP_COOK_WEIGHT)
+    empty = evaluate_prep_progress(
+        index_pct=80, cook_pct=10, phase="indexing", has_study_pages=False
+    )
+    assert empty.overall_pct == 0
+
+    wait = evaluate_background_cook_tick(
+        phase="indexing",
+        all_indexed=False,
+        has_ingest_missing=False,
+        triage_page=None,
+        cook_page=None,
+        total_generated=0,
+        max_questions=200,
+        remaining_on_page=None,
+    )
+    assert wait.action == "idle"
+    cap = evaluate_background_cook_tick(
+        phase="cooking",
+        all_indexed=True,
+        has_ingest_missing=False,
+        triage_page=None,
+        cook_page=3,
+        total_generated=200,
+        max_questions=200,
+        remaining_on_page=4,
+    )
+    assert cap.action == "complete_cap"
+    cook = evaluate_background_cook_tick(
+        phase="cooking",
+        all_indexed=True,
+        has_ingest_missing=False,
+        triage_page=None,
+        cook_page=3,
+        total_generated=10,
+        max_questions=200,
+        remaining_on_page=4,
+    )
+    assert cook.action == "cook" and cook.page == 3
+
+    edition = evaluate_newspaper_edition_tick(
+        has_ingest_missing=True,
+        cook_page=2,
+        cook_mode="learn",
+        remaining=5,
+        triage_page=1,
+    )
+    assert edition.action == "cook"
+    assert edition.also_ingest is True
+    triage = evaluate_newspaper_edition_tick(
+        has_ingest_missing=True,
+        cook_page=None,
+        cook_mode=None,
+        remaining=0,
+        triage_page=4,
+    )
+    assert triage.action == "triage" and triage.page == 4

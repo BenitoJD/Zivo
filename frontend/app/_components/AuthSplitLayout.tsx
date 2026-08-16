@@ -86,13 +86,37 @@ export function AuthSplitLayout({
         {/* Form panel */}
         <Box
           bg="var(--mantine-color-body)"
-          style={{ flex: "1 1 0", minHeight: "100dvh", minWidth: 0, overflowY: "auto", WebkitOverflowScrolling: "touch" }}
+          style={{
+            flex: "1 1 0",
+            minHeight: "100dvh",
+            minWidth: 0,
+            overflowY: "auto",
+            WebkitOverflowScrolling: "touch",
+            display: "flex",
+            flexDirection: "column",
+          }}
           p={{ base: "md", md: "xl" }}
         >
-          <Stack align="center" justify="center" mih={{ base: "auto", md: "100dvh" }} gap="lg" py={{ base: "lg", md: 0 }}>
+          <Stack align="center" justify="center" flex={1} gap="lg" py={{ base: "lg", md: 0 }} w="100%">
             <Container size="xs" w="100%" p={0}>
-              <Group justify="space-between" mb="lg" hiddenFrom="md" wrap="nowrap">
-                <BrandMark height={26} />
+              <Group justify="space-between" mb="lg" hiddenFrom="md" wrap="nowrap" gap="sm">
+                <Box
+                  component={Link}
+                  href="/"
+                  style={{ textDecoration: "none", color: "inherit", minWidth: 0 }}
+                >
+                  <BrandMark height={26} />
+                </Box>
+                <Text
+                  size="sm"
+                  c="dimmed"
+                  component={Link}
+                  href="/"
+                  style={{ cursor: "pointer", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}
+                >
+                  <IconArrowLeft size={14} stroke={1.75} />
+                  Home
+                </Text>
               </Group>
 
               <Group mb="xl" visibleFrom="md">

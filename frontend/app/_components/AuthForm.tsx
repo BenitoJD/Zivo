@@ -154,7 +154,7 @@ function AuthFormInner({ mode }: { mode: AuthMode }) {
         </Stack>
       </Box>
 
-      <Group justify="space-between" wrap="nowrap">
+      <Group justify="space-between" wrap="wrap" gap="sm">
         <Text
           size="sm"
           c="lavender.7"

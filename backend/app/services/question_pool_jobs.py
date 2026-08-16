@@ -165,32 +165,48 @@ def _enqueue_newspaper_edition_triage(db: Session, doc: Document) -> Job | None:
 def _maybe_refill_newspaper_edition(
     db: Session, document_id: uuid.UUID, doc: Document
 ) -> Job | None:
+    from app.services.session_design import evaluate_newspaper_edition_tick
+
     ingest_job = _maybe_enqueue_newspaper_missing_pages(db, document_id, doc)
     cook = _next_newspaper_cook_page(db, document_id, doc)
-    if cook is None:
-        triage_page = _next_newspaper_page_needing_triage(db, document_id, doc)
-        if triage_page is not None:
-            triage_job = enqueue_page_triage(db, doc, page=triage_page, precompute=True)
-            return ingest_job or triage_job
-        return ingest_job
-    page, cook_mode = cook
-    generated = count_assertions_on_page(
-        db, document_id, page, serve_mode=cook_mode
+    cook_page, cook_mode = (cook if cook is not None else (None, None))
+    remaining = 0
+    if cook_page is not None:
+        generated = count_assertions_on_page(
+            db, document_id, cook_page, serve_mode=cook_mode
+        )
+        remaining = get_question_budget(doc, cook_page, mode=cook_mode) - generated
+    triage_page = (
+        _next_newspaper_page_needing_triage(db, document_id, doc) if cook is None else None
     )
-    budget = get_question_budget(doc, page, mode=cook_mode)
-    remaining = budget - generated
-    batch = min(REFILL_BATCH_SIZE, remaining)
-    if batch <= 0:
-        return ingest_job
-    gen_job = enqueue_page_batch(
-        db,
-        doc,
-        page=page,
-        batch_size=batch,
-        start_sequence=generated,
+    verdict = evaluate_newspaper_edition_tick(
+        has_ingest_missing=ingest_job is not None,
+        cook_page=cook_page,
         cook_mode=cook_mode,
+        remaining=remaining,
+        triage_page=triage_page,
     )
-    return gen_job or ingest_job
+    if verdict.action == "triage" and verdict.page is not None:
+        triage_job = enqueue_page_triage(db, doc, page=verdict.page, precompute=True)
+        return ingest_job or triage_job
+    if verdict.action == "cook" and verdict.page is not None:
+        generated = count_assertions_on_page(
+            db, document_id, verdict.page, serve_mode=verdict.cook_mode
+        )
+        budget = get_question_budget(doc, verdict.page, mode=verdict.cook_mode)
+        batch = min(REFILL_BATCH_SIZE, budget - generated)
+        if batch <= 0:
+            return ingest_job
+        gen_job = enqueue_page_batch(
+            db,
+            doc,
+            page=verdict.page,
+            batch_size=batch,
+            start_sequence=generated,
+            cook_mode=verdict.cook_mode,
+        )
+        return gen_job or ingest_job
+    return ingest_job
 
 
 def enqueue_page_triage(db: Session, doc: Document, *, page: int, precompute: bool = False) -> Job:

@@ -80,7 +80,7 @@ export function SourceOrbit() {
           p={{ base: 24, md: 56 }}
         >
           {/* Left - copy */}
-          <Stack gap={22} maw={440} style={{ flex: "1 1 320px" }}>
+          <Stack gap={22} maw={440} miw={0} style={{ flex: "1 1 280px" }}>
             <Reveal>
               <Group gap={8} wrap="wrap">
                 {["Mac", "Windows", "iPhone", "Android"].map((p) => (
@@ -146,7 +146,8 @@ export function SourceOrbit() {
               width: "100%",
               maxWidth: VISUAL,
               height: VISUAL * orbitScale,
-              flex: "1 1 340px",
+              flex: "1 1 260px",
+              minWidth: 0,
               margin: "0 auto",
             }}
           >

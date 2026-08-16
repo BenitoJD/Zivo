@@ -177,10 +177,11 @@ export function Personas() {
                   display: "flex",
                   alignItems: "center",
                   gap: 10,
+                  minWidth: 0,
                 }}
               >
                 <persona.icon size={16} stroke={1.7} color="var(--mantine-color-lavender-7)" />
-                <Text size="xs" fw={500} c="gray.6" style={{ fontFamily: "var(--font-sans)" }}>
+                <Text size="xs" fw={500} c="gray.6" lineClamp={1} style={{ fontFamily: "var(--font-sans)", minWidth: 0 }}>
                   Source: {persona.source}
                 </Text>
               </Box>
