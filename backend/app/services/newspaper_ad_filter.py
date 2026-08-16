@@ -17,7 +17,7 @@ from typing import Final
 
 from sqlalchemy.orm import Session
 
-from app.services.content_worthiness import evaluate_newspaper_structure
+from app.services.content_worthiness import evaluate_newspaper_cook_gate, evaluate_newspaper_structure
 
 NEWSPAPER_EXAM_CONTENT_TYPE: Final[str] = "newspaper_upsc"
 
@@ -44,22 +44,15 @@ def newspaper_page_verdict(db: Session | None, page_text: str) -> tuple[str, str
     when ``db`` is None (no LLM available), relevance is skipped permissively so
     the page proceeds to ``cook`` and downstream gates still filter junk.
     """
-    label, rationale = classify_page_text(page_text)
-    if label != "editorial":
-        return label, rationale
+    judged = None
+    if db is not None:
+        structure = evaluate_newspaper_structure(page_text)
+        if structure.label == "editorial":
+            from app.services.newspaper_relevance import judge_newspaper_relevance
 
-    # Exam relevance is now a meaning judgment, not a keyword allowlist.
-    if db is None:
-        return "cook", "Editorial; relevance judge unavailable, allowing."
-    from app.services.newspaper_relevance import judge_newspaper_relevance
-
-    judged = judge_newspaper_relevance(db, page_text)
-    if not judged.get("relevant"):
-        return "off_syllabus", str(judged.get("rationale") or "Not exam-relevant.")
-    theme = judged.get("theme") or ""
-    theme_bit = f" theme={theme}" if theme else ""
-    why = str(judged.get("rationale") or "Exam-relevant.").strip()
-    return "cook", f"Editorial + exam-relevant.{theme_bit} {why}".strip()
+            judged = judge_newspaper_relevance(db, page_text)
+    verdict = evaluate_newspaper_cook_gate(page_text, relevance=judged)
+    return verdict.label, verdict.rationale
 
 
 def should_cook_newspaper_page(db: Session | None, page_text: str) -> bool:

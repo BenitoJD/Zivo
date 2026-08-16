@@ -186,3 +186,50 @@ def plan_document_budget(
         n_info=n_info,
         mode=mode,
     )
+
+
+def exceeds_page_budget(sequence: int, budget: int) -> bool:
+    """True when the next sequence slot is past this page's N."""
+    return int(sequence) > max(0, int(budget))
+
+
+def evaluate_generation_stop(
+    *,
+    generated: int,
+    budget: int,
+    coverage_complete: bool,
+) -> bool:
+    """Stop refill when coverage is done or generated items already meet N."""
+    if coverage_complete:
+        return True
+    return int(generated) >= max(0, int(budget))
+
+
+def resolve_page_budget(
+    *,
+    non_content: bool,
+    newspaper_test: bool,
+    newspaper_test_n: int,
+    serve_mode: Mode,
+    persisted_mode: Mode,
+    units: Sequence[Unit] | None,
+    confidence: Literal["high", "medium", "low"] | None,
+    stored_budget: int | None,
+    missing: Literal["speculative", "omit"] = "speculative",
+) -> int | None:
+    """Stored vs replanned N_page for the active serve mode.
+
+    ``missing='omit'`` skips untriaged pages in a document rollup; serve uses
+    ``'speculative'`` so a page without stored N still has a seed budget.
+    """
+    if non_content:
+        return 0
+    if newspaper_test:
+        return max(0, int(newspaper_test_n))
+    if units and serve_mode != persisted_mode:
+        return plan_page_budget(units, mode=serve_mode, confidence=confidence).n_page
+    if stored_budget is None:
+        if missing == "omit":
+            return None
+        return speculative_page_budget(mode=serve_mode).n_page
+    return max(0, int(stored_budget))

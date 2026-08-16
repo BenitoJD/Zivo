@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.repositories import seo as seo_repo
 from app.services.embed import embed_texts
 from app.services.mcq_dedup import cosine_similarity
-from app.services.seo_gate import NEAR_DUPE_COSINE
+from app.services.seo_gate import NEAR_DUPE_COSINE, evaluate_embedding_near_dupe
 
 _NON_WORD = re.compile(r"[^\w\s-]+", re.UNICODE)
 _SPACE = re.compile(r"\s+")
@@ -67,7 +67,8 @@ def embedding_near_dupe(db: Session, title: str, lede: str) -> tuple[bool, float
     if not vectors or not vectors[0]:
         return False, 0.0
     sim = seo_repo.max_published_cosine(db, vectors[0])
-    return sim >= NEAR_DUPE_COSINE, sim
+    verdict = evaluate_embedding_near_dupe(sim)
+    return verdict.is_dupe, verdict.similarity
 
 
 def embed_title_lede(title: str, lede: str) -> list[float] | None:

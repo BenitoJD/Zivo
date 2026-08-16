@@ -99,3 +99,56 @@ def is_page_covered(entry: Mapping[str, Any] | None) -> bool:
         if a.get("asked") or a.get("answered") or a.get("covered")
     ]
     return coverage_state(plan, covered).complete
+
+
+@dataclass(frozen=True)
+class PageCoverageVerdict:
+    complete: bool
+    reason: str
+    policy_version: str = KC_VERSION
+
+
+def evaluate_page_coverage_complete(
+    entry: Mapping[str, Any] | None,
+) -> PageCoverageVerdict:
+    """Serve-path completeness: non-content, persist flag, or aspect coverage."""
+    entry = entry or {}
+    if entry.get("non_content"):
+        return PageCoverageVerdict(True, "non_content")
+    aspects = entry.get("aspects") or []
+    if not aspects:
+        return PageCoverageVerdict(False, "no_aspects")
+    if entry.get("coverage_complete"):
+        return PageCoverageVerdict(True, "flag")
+    if is_page_covered(entry):
+        return PageCoverageVerdict(True, "aspects_covered")
+    return PageCoverageVerdict(False, "uncovered")
+
+
+def should_persist_coverage_complete(entry: Mapping[str, Any] | None) -> bool:
+    """Do not stamp complete on a page that never landed triage aspects."""
+    return bool((entry or {}).get("aspects"))
+
+
+def mark_aspects_answered(
+    aspects: Sequence[Mapping[str, Any]],
+    concept_key: str,
+) -> list[dict[str, Any]]:
+    """Mark the matching aspect answered after a grade."""
+    key = str(concept_key or "")
+    out: list[dict[str, Any]] = []
+    for aspect in aspects:
+        row = dict(aspect)
+        if row.get("key") == key:
+            row["answered"] = True
+        out.append(row)
+    return out
+
+
+def evaluate_aspect_exhaustion_close(
+    *,
+    has_aspects: bool,
+    unasked_count: int,
+) -> bool:
+    """Close coverage when triage landed and nothing remains unasked."""
+    return bool(has_aspects) and int(unasked_count) <= 0

@@ -353,11 +353,16 @@ async def _generate_question(
     q = (data.get("question") or "").strip()
     out: dict[str, Any] = {"kind": rnd["kind"], "round_name": rnd["name"], "focus": rnd["focus"],
                            "question": q or _fallback_question(rnd)}
+    from app.services.session_design import plan_interview_question_shape, pick_interview_coding_fallback
+
     if rnd["kind"] == "mcq":
         opts = [str(o).strip() for o in (data.get("options") or []) if str(o).strip()]
         ci = int(data.get("correct_index", 0)) if str(data.get("correct_index", "")).strip() != "" else 0
-        if len(opts) < 2 or not (0 <= ci < len(opts)):
-            # Degrade to a typed question rather than serve a broken MCQ.
+        mcq_valid = len(opts) >= 2 and 0 <= ci < len(opts)
+        shape = plan_interview_question_shape(
+            planned_kind="mcq", mcq_valid=mcq_valid, coding_has_tests=True
+        )
+        if shape == "typed":
             out["kind"] = "typed"
         else:
             out["options"] = opts[:6]
@@ -371,10 +376,11 @@ async def _generate_question(
             for t in (data.get("tests") or [])
             if isinstance(t, dict) and str(t.get("expected_output", "")).strip() != ""
         ]
-        if not tests:
-            # LLM gave no gradable tests (weak model / bad JSON) — keep it a REAL coding round
-            # with a built-in problem rather than degrading to typed.
-            fb = _FALLBACK_CODING[len(asked) % len(_FALLBACK_CODING)]
+        shape = plan_interview_question_shape(
+            planned_kind="coding", mcq_valid=True, coding_has_tests=bool(tests)
+        )
+        if shape == "coding_fallback":
+            fb = pick_interview_coding_fallback(len(asked), _FALLBACK_CODING)
             out.update({
                 "kind": "coding", "question": fb["question"], "starter_code": fb["starter_code"],
                 "language_id": DEFAULT_LANGUAGE_ID, "tests": fb["tests"], "explanation": fb["explanation"],

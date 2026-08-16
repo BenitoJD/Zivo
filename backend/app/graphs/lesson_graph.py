@@ -65,7 +65,7 @@ def _complete_chat_sync(
         )
 
 
-def _aspects_block(aspects: list[dict[str, Any]]) -> str:
+def _aspects_block(aspects: list[dict[str, Any]] | None) -> str:
     """Render triage aspects as the "- label (angle)" spine the prompt consumes.
 
     Only ``central`` aspects are taught (supporting/peripheral ones are not
@@ -74,21 +74,9 @@ def _aspects_block(aspects: list[dict[str, Any]]) -> str:
     The triage aspect shape carries both ``centrality`` ("central"|"support"|"skip")
     and a derived ``central`` bool; we skip anything that is not central.
     """
-    lines: list[str] = []
-    for a in aspects or []:
-        is_central = a.get("central")
-        if is_central is None:
-            # Older rows may carry only the string form.
-            is_central = a.get("centrality") == "central"
-        if not is_central:
-            continue
-        label = str(a.get("label") or "").strip()
-        if not label:
-            continue
-        angle = str(a.get("cognitive_angle") or "").strip()
-        suffix = f" ({angle})" if angle and angle.lower() != "recall" else ""
-        lines.append(f"- {label}{suffix}")
-    return "\n".join(lines) if lines else "- the main idea of this page"
+    from app.services.page_lessons import plan_lesson_aspects
+
+    return plan_lesson_aspects(aspects).as_block()
 
 
 def _parse_lesson(raw: str) -> dict[str, str] | None:

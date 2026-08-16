@@ -26,7 +26,7 @@ from app.services.question_budget import (
     parse_budget_mode,
     plan_document_budget,
     plan_page_budget,
-    speculative_page_budget,
+    resolve_page_budget,
     units_from_aspect_dicts,
 )
 from app.services import aspect_discovery as _aspect_discovery
@@ -442,33 +442,34 @@ def get_question_budget(doc: Document, page: int, *, mode: Mode | None = None) -
     from app.services.newspaper import is_newspaper_document
 
     cov = get_page_coverage(doc, page)
-    # A deliberate zero verdict is honoured exactly (no floor) — the whole point
-    # of open-world: ask nothing on a cover page rather than force filler.
-    if cov.get("non_content"):
-        return 0
     serve_mode = mode if mode is not None else serve_budget_mode(doc)
-    if is_newspaper_document(doc) and serve_mode == "test":
-        return get_test_question_budget(doc, page)
-    # When serve mode differs from the cook plan (typically Test after Learn cook),
-    # re-plan from stored aspects so Y and refill target follow the multiplier.
-    persisted_mode = parse_budget_mode(cov.get("budget_mode") if isinstance(cov.get("budget_mode"), str) else None)
+    newspaper = is_newspaper_document(doc)
+    persisted_mode = parse_budget_mode(
+        cov.get("budget_mode") if isinstance(cov.get("budget_mode"), str) else None
+    )
     aspects = cov.get("aspects") if isinstance(cov.get("aspects"), list) else None
-    if aspects and serve_mode != persisted_mode:
-        units = units_from_aspect_dicts(aspects)
-        conf_raw = cov.get("budget_confidence")
-        conf: Literal["high", "medium", "low"] | None = None
-        if conf_raw in ("high", "medium", "low"):
-            conf = conf_raw
-        plan = plan_page_budget(units, mode=serve_mode, confidence=conf)
-        return plan.n_page
-    # Page cook target N_page from plan_page_budget (persisted at triage). A
-    # missing budget means triage hasn't landed yet — seed speculative N_page
-    # (confidence=low) so generation can start; a triaged 0 is honoured.
-    raw = cov.get("question_budget")
-    if raw is None:
-        return speculative_page_budget(mode=serve_mode).n_page
-    budget = int(raw)
-    return max(0, budget)
+    units = units_from_aspect_dicts(aspects) if aspects else None
+    conf_raw = cov.get("budget_confidence")
+    conf: Literal["high", "medium", "low"] | None = None
+    if conf_raw in ("high", "medium", "low"):
+        conf = conf_raw
+    stored = cov.get("question_budget")
+    stored_budget = int(stored) if stored is not None else None
+    non_content = bool(cov.get("non_content"))
+    test_n = 0
+    if not non_content and newspaper and serve_mode == "test":
+        test_n = get_test_question_budget(doc, page)
+    n = resolve_page_budget(
+        non_content=non_content,
+        newspaper_test=newspaper and serve_mode == "test",
+        newspaper_test_n=test_n,
+        serve_mode=serve_mode,
+        persisted_mode=persisted_mode,
+        units=units,
+        confidence=conf,
+        stored_budget=stored_budget,
+    )
+    return 0 if n is None else n
 
 
 def page_budgets_for_document(doc: Document, *, mode: Mode | None = None) -> list[int]:
@@ -485,25 +486,36 @@ def page_budgets_for_document(doc: Document, *, mode: Mode | None = None) -> lis
         entry = coverage.get(_page_key(page))
         if not isinstance(entry, dict):
             continue
-        if entry.get("non_content"):
-            out.append(0)
-            continue
-        if newspaper and serve_mode == "test":
-            out.append(get_test_question_budget(doc, page))
-            continue
-        # Prefer mode-aware planner when aspects exist; else persisted cook N.
         aspects = entry.get("aspects") if isinstance(entry.get("aspects"), list) else None
         persisted_mode = parse_budget_mode(
             entry.get("budget_mode") if isinstance(entry.get("budget_mode"), str) else None
         )
-        if aspects and serve_mode != persisted_mode:
-            units = units_from_aspect_dicts(aspects)
-            out.append(plan_page_budget(units, mode=serve_mode).n_page)
+        conf_raw = entry.get("budget_confidence")
+        conf: Literal["high", "medium", "low"] | None = None
+        if conf_raw in ("high", "medium", "low"):
+            conf = conf_raw
+        units = units_from_aspect_dicts(aspects) if aspects else None
+        stored = entry.get("question_budget")
+        stored_budget = int(stored) if stored is not None else None
+        non_content = bool(entry.get("non_content"))
+        newspaper_test = newspaper and serve_mode == "test"
+        test_n = 0
+        if newspaper_test and not non_content:
+            test_n = get_test_question_budget(doc, page)
+        n = resolve_page_budget(
+            non_content=non_content,
+            newspaper_test=newspaper_test,
+            newspaper_test_n=test_n,
+            serve_mode=serve_mode,
+            persisted_mode=persisted_mode,
+            units=units,
+            confidence=conf,
+            stored_budget=stored_budget,
+            missing="omit",
+        )
+        if n is None:
             continue
-        raw = entry.get("question_budget")
-        if raw is None:
-            continue
-        out.append(max(0, int(raw)))
+        out.append(n)
     return out
 
 
@@ -541,20 +553,9 @@ def effective_question_budget(
 
 
 def is_coverage_complete(doc: Document, page: int) -> bool:
-    cov = get_page_coverage(doc, page)
-    # A deliberate zero-question verdict is complete the moment triage lands —
-    # empty aspects here mean "nothing to ask", not "not triaged yet".
-    if cov.get("non_content"):
-        return True
-    aspects = cov.get("aspects") or []
-    if not aspects:
-        # coverage_complete without triage aspects is stale (e.g. pre-index race).
-        return False
-    if cov.get("coverage_complete"):
-        return True
-    from app.services.kc_coverage import is_page_covered
+    from app.services.kc_coverage import evaluate_page_coverage_complete
 
-    return is_page_covered(cov)
+    return evaluate_page_coverage_complete(get_page_coverage(doc, page)).complete
 
 
 def count_assertions_on_page(
@@ -922,21 +923,11 @@ def selection_reason_for(
 
 
 def human_selection_reason(rationale: str, state: object | None = None) -> str:
-    """Map the engine's internal rationale to a short, learner-facing label."""
-    r = (rationale or "").lower()
-    if "focus" in r or "mastery_reinforce" in r:
-        return "focus concept"
-    if "revisit" in r or "due" in r or "spaced" in r:
-        return "spaced revisit"
-    if "lineage" in r:
-        return "follows your last question"
-    if "new_page" in r or "page" in r:
-        return "new page"
-    if "difficulty" in r or "edge" in r:
-        return "right at your level"
-    if "reinforce" in r:
-        return "reinforces a recent miss"
-    return "in order through this page"
+    """Compat wrapper: Adaptive Selection owns the learner-facing label."""
+    del state
+    from app.services.adaptive_selection import label_selection_reason
+
+    return label_selection_reason(rationale)
 
 
 def _candidates_matching_concept_label(
@@ -1029,41 +1020,39 @@ def is_page_complete(
     *,
     page_ids: list[str] | None = None,
 ) -> bool:
-    # Non-content pages are complete by definition — never block advancement on
-    # a cover page just because it produced zero questions.
-    page = int(progress.get("current_page") or 1)
-    if is_non_content_page(doc, page):
-        return True
-    # Unanswered questions on this page → not complete. Never let a pending flag
-    # strand the learner when the pool still has cards to show.
-    if next_assertion_id(db, doc.id, progress, page_ids=page_ids):
-        return False
-    rows = page_ids if page_ids is not None else page_assertion_ids(db, doc.id, page)
-    answered = {str(x) for x in progress.get("answered_ids") or []}
-    # Learner answered every card on the served page list and nothing is cooking —
-    # resolve even when triage budget > generated (LLM stall / abandoned aspects).
-    if rows and all(rid in answered for rid in rows):
-        from app.services.question_pool_jobs import _has_active_generate_job_for_page
+    from app.services.session_design import evaluate_page_complete
 
-        if not _has_active_generate_job_for_page(db, doc.id, page):
-            return True
-    budget = get_question_budget(doc, page)
-    generated = len(page_ids) if page_ids is not None else count_assertions_on_page(db, doc.id, page)
-    if generated == 0:
-        return False
-    coverage_done = is_coverage_complete(doc, page)
-    # generation_pending is doc-level and can be set by next-page prefetch. Only
-    # treat it as "still cooking THIS page" when we still have room under the
-    # page plan and coverage is not done — otherwise advance.
-    if (
-        progress.get("generation_pending")
-        and not coverage_done
-        and generated < budget
-    ):
-        return False
-    if coverage_done:
-        return True
-    return generated >= budget
+    page = int(progress.get("current_page") or 1)
+    non_content = is_non_content_page(doc, page)
+    has_next = False
+    all_served = False
+    has_active = False
+    generated = 0
+    budget = 0
+    coverage_done = False
+    if not non_content:
+        has_next = bool(next_assertion_id(db, doc.id, progress, page_ids=page_ids))
+        rows = page_ids if page_ids is not None else page_assertion_ids(db, doc.id, page)
+        answered = {str(x) for x in progress.get("answered_ids") or []}
+        all_served = bool(rows) and all(rid in answered for rid in rows)
+        if all_served:
+            from app.services.question_pool_jobs import _has_active_generate_job_for_page
+
+            has_active = bool(_has_active_generate_job_for_page(db, doc.id, page))
+        budget = get_question_budget(doc, page)
+        generated = len(page_ids) if page_ids is not None else count_assertions_on_page(db, doc.id, page)
+        coverage_done = is_coverage_complete(doc, page)
+    verdict = evaluate_page_complete(
+        non_content=non_content,
+        has_next_card=has_next,
+        all_served_answered=all_served,
+        has_active_generate=has_active,
+        generated=generated,
+        budget=budget,
+        coverage_done=coverage_done,
+        generation_pending=bool(progress.get("generation_pending")),
+    )
+    return verdict.complete
 
 
 def build_learn_queue_state(
@@ -1076,7 +1065,13 @@ def build_learn_queue_state(
     learner_key: str | None = None,
 ) -> dict[str, Any]:
     from app.services.newspaper import is_newspaper_document
-    from app.services.session_design import SESSION_SOFT_DEFAULT, plan_session
+    from app.services.session_design import (
+        SESSION_SOFT_DEFAULT,
+        evaluate_document_complete,
+        evaluate_newspaper_learn_complete,
+        evaluate_session_break,
+        plan_session,
+    )
 
     serve_mode = mode if mode is not None else serve_budget_mode(doc, learner_key=learner_key)
     newspaper = is_newspaper_document(doc)
@@ -1108,10 +1103,12 @@ def build_learn_queue_state(
     if newspaper:
         plan_budget = max(questions_generated, 1)
         learn_answered_set = set(mode_answered_ids(progress, "learn"))
-        learn_complete = (
-            len(learn_pool_ids) > 0
-            and all(row_id in learn_answered_set for row_id in learn_pool_ids)
-            and not bool(progress.get("generation_pending"))
+        learn_complete = evaluate_newspaper_learn_complete(
+            learn_pool_count=len(learn_pool_ids),
+            all_learn_answered=all(
+                row_id in learn_answered_set for row_id in learn_pool_ids
+            ),
+            generation_pending=bool(progress.get("generation_pending")),
         )
         test_pool_ready = len(test_pool_ids) > 0
     else:
@@ -1127,7 +1124,9 @@ def build_learn_queue_state(
         mode=serve_mode,
     )
     session_items = int(progress.get("session_items_answered") or 0)
-    session_break = bool(session.n_session > 0 and session_items >= session.n_session)
+    session_break = evaluate_session_break(
+        session_items=session_items, n_session=session.n_session
+    ).should_break
     # Loop's choosing step (policy-driven; defaults to sequence order).
     next_id = select_next_assertion(db, document_id, doc, progress, page_ids=selection_ids)
     selection_reason = (
@@ -1148,24 +1147,32 @@ def build_learn_queue_state(
     coverage_complete = is_coverage_complete(doc, page)
     last_study_page = study_pages[-1] if study_pages else page_to
     page_complete = is_page_complete(db, doc, progress, page_ids=selection_ids)
-    if newspaper:
-        document_complete = (
-            page_complete
-            and page == last_study_page
-            and not bool(progress.get("generation_pending"))
-        )
-    else:
-        document_complete = page_complete and page == last_study_page
+    document_complete = evaluate_document_complete(
+        page_complete=page_complete,
+        on_last_page=page == last_study_page,
+        newspaper=newspaper,
+        generation_pending=bool(progress.get("generation_pending")),
+    )
 
-    # Open-world empty state: surface a reason only when the whole study range
-    # genuinely produced nothing to ask, so the UI can say so instead of spinning.
-    no_questions_reason: str | None = None
-    if document_complete and questions_generated == 0 and questions_answered == 0:
-        if _study_range_has_no_questions(db, document_id, doc):
-            no_questions_reason = "no_testable_content"
-    elif newspaper and questions_generated == 0 and not bool(progress.get("generation_pending")):
-        if _study_range_has_no_questions(db, document_id, doc):
-            no_questions_reason = "no_testable_content"
+    from app.services.content_worthiness import evaluate_empty_study_reason
+
+    maybe_empty = (
+        document_complete and questions_generated == 0 and questions_answered == 0
+    ) or (
+        newspaper
+        and questions_generated == 0
+        and not bool(progress.get("generation_pending"))
+    )
+    no_questions_reason = evaluate_empty_study_reason(
+        document_complete=document_complete,
+        newspaper=newspaper,
+        questions_generated=questions_generated,
+        questions_answered=questions_answered,
+        generation_pending=bool(progress.get("generation_pending")),
+        range_has_no_questions=(
+            _study_range_has_no_questions(db, document_id, doc) if maybe_empty else False
+        ),
+    )
 
     from app.services.rag_window import chat_rag_window, get_rag_window, is_rag_window_ready
 
@@ -1177,7 +1184,12 @@ def build_learn_queue_state(
     non_content = is_non_content_page(doc, page)
     triage_complete = bool(cov)
     if newspaper:
-        triage_complete = any(get_page_coverage(doc, p) for p in study_pages) or questions_generated > 0
+        from app.services.session_design import evaluate_newspaper_triage_complete
+
+        triage_complete = evaluate_newspaper_triage_complete(
+            has_any_coverage=any(get_page_coverage(doc, p) for p in study_pages),
+            questions_generated=questions_generated,
+        )
 
     # Learn lesson: ready lessons surface to the UI; everything else (missing /
     # generating / failed) collapses to null so the frontend falls straight

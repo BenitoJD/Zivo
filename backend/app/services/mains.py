@@ -32,8 +32,8 @@ from app.services.open_response import (
     MAINS_AXES as AXES,
     MAINS_AXIS_ANCHORS as _AXIS_ANCHORS,
     MAINS_AXIS_MAX as AXIS_MAX,
-    MAINS_STRICTNESS as STRICTNESS,
     clamp_int as _clamp_int,
+    plan_mains_attempt,
     shape_mains_result,
     unreadable_mains_result,
 )
@@ -186,8 +186,9 @@ def load_mains(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
 
 def start_mains(db: Session, document_id: uuid.UUID, *, strictness: str, marks_max: int) -> dict[str, Any]:
     """Begin a fresh attempt: overwrite the row and enqueue question generation."""
-    strictness = strictness if strictness in STRICTNESS else DEFAULT_STRICTNESS
-    marks_max = 15 if int(marks_max or 10) >= 13 else 10
+    plan = plan_mains_attempt(strictness=strictness, marks_max=marks_max)
+    strictness = plan.strictness
+    marks_max = plan.marks_max
     _save(
         db,
         document_id,
@@ -342,7 +343,7 @@ async def _generate(db: Session, document_id: uuid.UUID, *, marks_max: int) -> d
     chunks = load_document_chunk_texts(db, document_id)
     body = "\n\n".join(chunks).strip()
     source = truncate_to_tokens(body, SUMMARIZE_SINGLE_SHOT_MAX_TOKENS) if body else ""
-    words = "250" if marks_max >= 13 else "150"
+    words = str(plan_mains_attempt(strictness=DEFAULT_STRICTNESS, marks_max=marks_max).word_target)
     user = (
         f"SOURCE MATERIAL:\n{source or '(no extracted text — infer a sensible topic from the document)'}\n\n"
         f"Set ONE descriptive question worth {marks_max} marks (a good answer is about {words} words). "

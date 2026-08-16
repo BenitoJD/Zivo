@@ -217,3 +217,173 @@ def plan_article_presentation(
             fmt = "list"
     kind = "system_design" if stream == "system_design" else picker.choice(["practice", "signup", "system_design"])
     return SeoPresentationPlan(format=fmt, cta_kind=kind, policy=pol)
+
+
+SD_DAILY_MIN = 1
+
+
+@dataclass(frozen=True)
+class SdDailyCookPlan:
+    cook: bool
+    reason: str
+    source_order: tuple[str, ...] = ()
+    policy: str = DEFAULT_POLICY
+    policy_version: str = SEO_GATE_VERSION
+
+
+def plan_sd_daily_cook(
+    *,
+    cook_enabled: bool,
+    sd_published_today: int,
+    cap_allow: bool,
+    policy: str | None = None,
+) -> SdDailyCookPlan:
+    """At least one system-design post per IST day; problem bank before topic queue."""
+    pol = normalize_policy(policy)
+    if not cook_enabled:
+        return SdDailyCookPlan(False, "cook_disabled", policy=pol)
+    if int(sd_published_today) >= SD_DAILY_MIN:
+        return SdDailyCookPlan(False, "already_have_sd", policy=pol)
+    if not cap_allow:
+        return SdDailyCookPlan(False, "soft_max", policy=pol)
+    return SdDailyCookPlan(
+        True,
+        "need_sd",
+        source_order=("problem", "topic"),
+        policy=pol,
+    )
+
+
+SEO_MCQ_ATTACH_MIN = 4
+SEO_MCQ_ATTACH_MAX = 6
+NEWSPAPER_DIGEST_MAX_CHARS = 12_000
+
+
+@dataclass(frozen=True)
+class EmbeddingNearDupeVerdict:
+    is_dupe: bool
+    similarity: float
+    threshold: float = NEAR_DUPE_COSINE
+    policy: str = DEFAULT_POLICY
+    policy_version: str = SEO_GATE_VERSION
+
+
+def evaluate_embedding_near_dupe(
+    similarity: float,
+    *,
+    threshold: float = NEAR_DUPE_COSINE,
+    policy: str | None = None,
+) -> EmbeddingNearDupeVerdict:
+    """Reject SEO cook when published cosine meets the near-dupe floor."""
+    pol = normalize_policy(policy)
+    sim = float(similarity)
+    floor = float(threshold)
+    return EmbeddingNearDupeVerdict(
+        is_dupe=sim >= floor,
+        similarity=sim,
+        threshold=floor,
+        policy=pol,
+    )
+
+
+def evaluate_newspaper_seo_candidate(
+    page_text: str,
+    *,
+    db: Session | None = None,
+) -> bool:
+    """Newspaper page may enter the SEO cook queue."""
+    from app.services.content_worthiness import evaluate_worthiness
+
+    return evaluate_worthiness(page_text=page_text, newspaper=True, db=db).worthy
+
+
+def evaluate_seo_mcq_attach_ready(
+    attached_count: int,
+    *,
+    min_count: int = SEO_MCQ_ATTACH_MIN,
+) -> bool:
+    """True when related MCQs already fill the attach floor (skip generate)."""
+    return int(attached_count) >= max(1, int(min_count))
+
+
+def evaluate_digest_source_ready(text: str, *, filename: str = "") -> SeoUsefulnessVerdict:
+    """Edition digest uses the usefulness gate; syllabus keywords are optional."""
+    verdict = evaluate_usefulness(text, filename=filename)
+    if verdict.reason == "no_useful_signal":
+        return SeoUsefulnessVerdict(True, "ok", policy=verdict.policy)
+    return verdict
+
+
+def digest_skip_reason(verdict: SeoUsefulnessVerdict) -> str | None:
+    """Map a digest usefulness miss to the cook skip taxonomy."""
+    if verdict.useful:
+        return None
+    if verdict.reason == "too_short":
+        return "insufficient_text"
+    return verdict.reason
+
+
+def plan_seo_mcq_attach(
+    rows: list[tuple[Any, str]],
+    *,
+    min_count: int = SEO_MCQ_ATTACH_MIN,
+    max_count: int = SEO_MCQ_ATTACH_MAX,
+    policy: str | None = None,
+) -> list[Any]:
+    """Prefer distinct concept keys, then backfill to min_count."""
+    del policy
+    if not rows:
+        return []
+    lo = max(1, int(min_count))
+    hi = max(lo, int(max_count))
+    picked: list[Any] = []
+    seen: set[str] = set()
+    for aid, ck in rows:
+        if ck in seen:
+            continue
+        seen.add(ck)
+        picked.append(aid)
+        if len(picked) >= hi:
+            break
+    if len(picked) < lo:
+        for aid, _ck in rows:
+            if aid in picked:
+                continue
+            picked.append(aid)
+            if len(picked) >= lo:
+                break
+    return picked[:hi]
+
+
+@dataclass(frozen=True)
+class NewspaperDigestPage:
+    page: int
+    text: str
+    mcq_count: int
+    worthy: bool
+
+
+def plan_newspaper_digest(
+    pages: list[NewspaperDigestPage],
+    *,
+    max_chars: int = NEWSPAPER_DIGEST_MAX_CHARS,
+    policy: str | None = None,
+) -> str:
+    """Rank cooked MCQ pages first, else worthy fallback; cap digest length."""
+    del policy
+    cap = max(1, int(max_chars))
+    cooked = [p for p in pages if int(p.mcq_count) > 0]
+    if cooked:
+        ranked = sorted(cooked, key=lambda p: (-int(p.mcq_count), int(p.page)))
+    else:
+        ranked = sorted([p for p in pages if p.worthy], key=lambda p: int(p.page))
+    parts: list[str] = []
+    total = 0
+    for page in ranked:
+        if total >= cap:
+            break
+        room = cap - total
+        chunk = page.text if len(page.text) <= room else page.text[:room]
+        parts.append(chunk)
+        total += len(chunk) + 2
+    return "\n\n".join(parts)

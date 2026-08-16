@@ -112,6 +112,140 @@ def evaluate_newspaper_structure(page_text: str, *, policy: str | None = None) -
     return NewspaperStructureVerdict("editorial", "Usable editorial signal.", policy=pol)
 
 
+NewspaperCookLabel = Literal["cook", "ad", "masthead", "low_signal", "off_syllabus"]
+
+
+@dataclass(frozen=True)
+class NewspaperCookVerdict:
+    label: NewspaperCookLabel
+    rationale: str
+    policy: str = DEFAULT_WORTH_POLICY
+    policy_version: str = WORTH_VERSION
+
+
+def evaluate_newspaper_cook_gate(
+    page_text: str,
+    *,
+    relevance: dict | None,
+    policy: str | None = None,
+) -> NewspaperCookVerdict:
+    """Structure + exam-relevance cook/skip. LLM judge stays plumbing."""
+    structure = evaluate_newspaper_structure(page_text, policy=policy)
+    pol = structure.policy
+    if structure.label == "ad":
+        return NewspaperCookVerdict("ad", structure.rationale, policy=pol)
+    if structure.label == "masthead":
+        return NewspaperCookVerdict("masthead", structure.rationale, policy=pol)
+    if structure.label == "low_signal":
+        return NewspaperCookVerdict("low_signal", structure.rationale, policy=pol)
+    if relevance is None:
+        return NewspaperCookVerdict(
+            "cook",
+            "Editorial; relevance judge unavailable, allowing.",
+            policy=pol,
+        )
+    if not relevance.get("relevant"):
+        why = str(relevance.get("rationale") or "Not exam-relevant.")
+        return NewspaperCookVerdict("off_syllabus", why, policy=pol)
+    theme = relevance.get("theme") or ""
+    theme_bit = f" theme={theme}" if theme else ""
+    why = str(relevance.get("rationale") or "Exam-relevant.").strip()
+    return NewspaperCookVerdict(
+        "cook",
+        f"Editorial + exam-relevant.{theme_bit} {why}".strip(),
+        policy=pol,
+    )
+
+
+def evaluate_empty_study_reason(
+    *,
+    document_complete: bool,
+    newspaper: bool,
+    questions_generated: int,
+    questions_answered: int,
+    generation_pending: bool,
+    range_has_no_questions: bool,
+) -> str | None:
+    """When the UI should say the study range has nothing to ask."""
+    if not range_has_no_questions:
+        return None
+    empty_pool = int(questions_generated) == 0 and int(questions_answered) == 0
+    if document_complete and empty_pool:
+        return "no_testable_content"
+    if newspaper and int(questions_generated) == 0 and not generation_pending:
+        return "no_testable_content"
+    return None
+
+
+@dataclass(frozen=True)
+class LlmTriageUnitsVerdict:
+    zero_question: bool
+    reason: str
+    policy_version: str = WORTH_VERSION
+
+
+def evaluate_llm_triage_units(
+    *,
+    content_type: str | None,
+    usable: bool | None,
+    aspect_count: int,
+) -> LlmTriageUnitsVerdict:
+    """Honest zero when the model judged non-content, unusable, or no units."""
+    if (content_type or "") == "non_content":
+        return LlmTriageUnitsVerdict(True, "non_content")
+    if usable is False:
+        return LlmTriageUnitsVerdict(True, "unusable")
+    if int(aspect_count) <= 0:
+        return LlmTriageUnitsVerdict(True, "no_aspects")
+    return LlmTriageUnitsVerdict(False, "ok")
+
+
+def evaluate_digest_page_worthy(
+    *,
+    mcq_count: int,
+    page_text: str,
+    db: "Session | None" = None,
+) -> bool:
+    """Cooked MCQ pages are digest-worthy; otherwise run the newspaper gate."""
+    if int(mcq_count) > 0:
+        return True
+    return evaluate_worthiness(page_text=page_text, newspaper=True, db=db).worthy
+
+
+@dataclass(frozen=True)
+class NewspaperPageSkipPlan:
+    skip: bool
+    reason: str
+    details: str = ""
+    question_budget: int = 0
+    non_content: bool = True
+    mark_complete: bool = True
+    policy_version: str = WORTH_VERSION
+
+
+def plan_newspaper_batch_gate(
+    *,
+    page_text: str,
+    db: "Session | None" = None,
+) -> NewspaperPageSkipPlan:
+    """Cook skip plan when newspaper worthiness fails mid-batch."""
+    worth = evaluate_worthiness(page_text=page_text, newspaper=True, db=db)
+    if worth.worthy:
+        return NewspaperPageSkipPlan(
+            skip=False,
+            reason="ok",
+            details="",
+            question_budget=0,
+            non_content=False,
+            mark_complete=False,
+        )
+    return NewspaperPageSkipPlan(
+        skip=True,
+        reason=worth.reason,
+        details=str(worth.details or worth.reason),
+    )
+
+
 def normalize_policy(policy: str | None) -> str:
     p = (policy or DEFAULT_WORTH_POLICY).strip().lower()
     return _POLICY_ALIASES.get(p, p or DEFAULT_WORTH_POLICY)

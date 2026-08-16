@@ -22,6 +22,30 @@ def test_kc_coverage_complete_when_central_asked() -> None:
     st = coverage_state(plan, ["osmosis"])
     assert st.complete
     assert st.uncovered_central == ()
+    from app.services.kc_coverage import (
+        evaluate_page_coverage_complete,
+        mark_aspects_answered,
+        should_persist_coverage_complete,
+    )
+
+    flagged = evaluate_page_coverage_complete(
+        {"aspects": [{"key": "osmosis", "central": True}], "coverage_complete": True}
+    )
+    assert flagged.complete and flagged.reason == "flag"
+    empty = evaluate_page_coverage_complete({"coverage_complete": True})
+    assert empty.complete is False and empty.reason == "no_aspects"
+    assert should_persist_coverage_complete({"aspects": [{"key": "a"}]})
+    assert not should_persist_coverage_complete({})
+    marked = mark_aspects_answered(
+        [{"key": "osmosis", "answered": False}, {"key": "other", "answered": False}],
+        "osmosis",
+    )
+    assert marked[0]["answered"] is True
+    assert marked[1]["answered"] is False
+    from app.services.kc_coverage import evaluate_aspect_exhaustion_close
+
+    assert evaluate_aspect_exhaustion_close(has_aspects=True, unasked_count=0)
+    assert not evaluate_aspect_exhaustion_close(has_aspects=False, unasked_count=0)
 
 
 def test_mastery_stop_learn_and_test() -> None:
@@ -44,6 +68,9 @@ def test_question_graph_plans_follow_up_and_harder() -> None:
     kinds = {e.kind for e in plan.edges}
     assert LINK_FOLLOW_UP_AFTER_MISS in kinds
     assert "harder_than" in kinds
+    by_kind = {e.kind: e.confidence for e in plan.edges}
+    assert by_kind[LINK_FOLLOW_UP_AFTER_MISS] == 0.85
+    assert by_kind["harder_than"] == 0.7
 
 
 def test_question_graph_mcq_reuse_scope() -> None:
@@ -103,6 +130,21 @@ def test_worthiness_junk_and_newspaper_seam() -> None:
     )
     assert ad.worthy is False
     assert ad.reason.startswith("newspaper_")
+    from app.services.content_worthiness import (
+        evaluate_digest_page_worthy,
+        evaluate_llm_triage_units,
+        plan_newspaper_batch_gate,
+    )
+
+    zero = evaluate_llm_triage_units(content_type="non_content", usable=True, aspect_count=3)
+    assert zero.zero_question and zero.reason == "non_content"
+    ok = evaluate_llm_triage_units(content_type="prose", usable=True, aspect_count=2)
+    assert ok.zero_question is False
+    assert evaluate_digest_page_worthy(mcq_count=2, page_text="ignored")
+    skip = plan_newspaper_batch_gate(
+        page_text="Advertisement: buy now limited period offer call toll free flat for sale"
+    )
+    assert skip.skip is True and skip.mark_complete is True
 
 
 def test_practice_selection_overlap() -> None:
@@ -167,6 +209,10 @@ def test_aspect_abandon_and_fallback() -> None:
     text = ("Idea one about cells.\n\n" * 20) + ("Another paragraph with enough words here.\n\n" * 5)
     pick = heuristic_fallback_aspects(text, page_number=2)
     assert pick.n_kept >= 1
+    from app.services.aspect_discovery import substantial_paragraphs
+
+    dense = substantial_paragraphs("Short.\n\n" + ("word " * 20))
+    assert len(dense) == 1
 
 
 def test_empty_page_reselect_and_serve_schedule() -> None:
@@ -237,10 +283,65 @@ def test_spaced_revisit_expands_on_success() -> None:
 
 
 def test_session_design_caps() -> None:
+    from app.services.session_design import evaluate_session_break
+
     s = plan_session(100, soft_cap=20, mode="learn")
     assert s.n_session == 20
     t = plan_session(100, soft_cap=20, mode="test")
     assert t.n_session == 25
+    full = evaluate_session_break(session_items=20, n_session=s.n_session)
+    assert full.should_break is True and full.reason == "session_full"
+    mid = evaluate_session_break(session_items=3, n_session=s.n_session)
+    assert mid.should_break is False and mid.reason == "in_session"
+    none = evaluate_session_break(session_items=5, n_session=0)
+    assert none.should_break is False and none.reason == "no_cap"
+    from app.services.session_design import (
+        evaluate_empty_batch_coverage_close,
+        evaluate_learn_cook_coverage_close,
+        evaluate_newspaper_triage_complete,
+    )
+
+    assert evaluate_learn_cook_coverage_close(hit_budget=True, serve_mode="learn")
+    assert not evaluate_learn_cook_coverage_close(hit_budget=True, serve_mode="test")
+    assert evaluate_empty_batch_coverage_close(
+        saved=0, start_sequence=4, batch_size=2, budget=6, has_targets=False, has_aspects=True
+    )
+    assert not evaluate_empty_batch_coverage_close(
+        saved=1, start_sequence=4, batch_size=2, budget=6, has_targets=False, has_aspects=True
+    )
+    assert evaluate_newspaper_triage_complete(has_any_coverage=False, questions_generated=2)
+    assert not evaluate_newspaper_triage_complete(has_any_coverage=False, questions_generated=0)
+    from app.services.session_design import (
+        alias_debuggable,
+        evaluate_auxiliary_cook_spawn,
+        evaluate_background_first_batch,
+        plan_first_cook_batch,
+        plan_transition_next,
+    )
+
+    spawn = evaluate_auxiliary_cook_spawn(programmable=True, debuggable=False)
+    assert spawn.spawn_coding is True and spawn.spawn_debug is False
+    assert alias_debuggable(programmable=True, debuggable=None) is True
+    assert plan_first_cook_batch(budget=6, first_batch=1) == 1
+    assert plan_first_cook_batch(budget=0, first_batch=1) == 0
+    assert evaluate_background_first_batch(budget=6, generated=0, first_batch=1) == 1
+    assert evaluate_background_first_batch(budget=6, generated=2, first_batch=1) == 0
+    nxt = plan_transition_next(
+        has_next=True,
+        next_has_coverage=True,
+        next_generated=0,
+        generate_next_page=True,
+        current_budget=6,
+    )
+    assert nxt.cook_next is True and nxt.triage_next is False
+    triage = plan_transition_next(
+        has_next=True,
+        next_has_coverage=False,
+        next_generated=0,
+        generate_next_page=True,
+        current_budget=6,
+    )
+    assert triage.triage_next is True and triage.cook_next is False
 
 
 def test_item_health_retire_and_keep() -> None:
@@ -331,3 +432,144 @@ def test_prep_progress_blend_and_cook_schedule() -> None:
         triage_page=4,
     )
     assert triage.action == "triage" and triage.page == 4
+
+
+def test_page_complete_and_catalog_ready() -> None:
+    from app.services.session_design import (
+        evaluate_newspaper_catalog_ready,
+        evaluate_newspaper_learn_complete,
+        evaluate_page_complete,
+        plan_interview_question_shape,
+    )
+
+    cover = evaluate_page_complete(
+        non_content=True,
+        has_next_card=True,
+        all_served_answered=False,
+        has_active_generate=False,
+        generated=0,
+        budget=6,
+        coverage_done=False,
+        generation_pending=True,
+    )
+    assert cover.complete is True
+    pending = evaluate_page_complete(
+        non_content=False,
+        has_next_card=False,
+        all_served_answered=False,
+        has_active_generate=False,
+        generated=2,
+        budget=6,
+        coverage_done=False,
+        generation_pending=True,
+    )
+    assert pending.complete is False
+    done = evaluate_page_complete(
+        non_content=False,
+        has_next_card=False,
+        all_served_answered=True,
+        has_active_generate=False,
+        generated=2,
+        budget=6,
+        coverage_done=False,
+        generation_pending=True,
+    )
+    assert done.complete is True
+    assert evaluate_newspaper_learn_complete(
+        learn_pool_count=3, all_learn_answered=True, generation_pending=False
+    )
+    assert evaluate_newspaper_catalog_ready(
+        is_newspaper=True, has_coverage=True, budget=6, non_content=False, page1_mcq_count=1
+    )
+    assert not evaluate_newspaper_catalog_ready(
+        is_newspaper=True, has_coverage=True, budget=6, non_content=False, page1_mcq_count=0
+    )
+    assert plan_interview_question_shape(
+        planned_kind="mcq", mcq_valid=False, coding_has_tests=True
+    ) == "typed"
+    assert plan_interview_question_shape(
+        planned_kind="coding", mcq_valid=True, coding_has_tests=False
+    ) == "coding_fallback"
+
+
+def test_path_focus_and_newspaper_cook_gate() -> None:
+    from app.services.content_worthiness import evaluate_empty_study_reason, evaluate_newspaper_cook_gate
+    from app.services.mastery_evidence import plan_path_focus, sample_path_mastery
+
+    assert plan_path_focus([("a", "strong"), ("b", "needs_work")]) == "b"
+    assert plan_path_focus([("a", "strong")]) == "a"
+    weak = sample_path_mastery(dimension_scores=[4, 4, 4, 4], is_weak=True)
+    strong = sample_path_mastery(dimension_scores=[4, 4, 4, 4], is_weak=False)
+    assert weak < strong
+    ad = evaluate_newspaper_cook_gate("LIMITED PERIOD OFFER buy now call toll free 1800123456. Subscribe now scan QR. Advertisement for cars. Another advertisement.", relevance={"relevant": True})
+    assert ad.label == "ad"
+    editorial = (
+        "The central bank raised rates by 25 basis points yesterday, "
+        "citing persistent inflation in food and fuel. Markets reacted "
+        "cautiously as bond yields edged higher across the curve. "
+        "Economists said the move was widely anticipated after recent data."
+    )
+    skipped = evaluate_newspaper_cook_gate(editorial, relevance=None)
+    assert skipped.label == "cook"
+    off = evaluate_newspaper_cook_gate(editorial, relevance={"relevant": False, "rationale": "sports"})
+    assert off.label == "off_syllabus"
+    assert evaluate_empty_study_reason(
+        document_complete=True,
+        newspaper=False,
+        questions_generated=0,
+        questions_answered=0,
+        generation_pending=False,
+        range_has_no_questions=True,
+    ) == "no_testable_content"
+
+
+def test_document_complete_prep_ready_and_newspaper_cook_target() -> None:
+    from app.services.session_design import (
+        NewspaperPageCookSignal,
+        evaluate_document_complete,
+        evaluate_page_prep_ready,
+        pick_interview_coding_fallback,
+        plan_newspaper_cook_target,
+    )
+
+    assert evaluate_document_complete(
+        page_complete=True, on_last_page=True, newspaper=False, generation_pending=True
+    )
+    assert not evaluate_document_complete(
+        page_complete=True, on_last_page=True, newspaper=True, generation_pending=True
+    )
+    assert evaluate_page_prep_ready(
+        has_coverage=True, non_content=False, budget=6, generated=6, coverage_complete=False
+    )
+    assert evaluate_page_prep_ready(
+        has_coverage=True, non_content=False, budget=6, generated=1, coverage_complete=True
+    )
+    learn_page = NewspaperPageCookSignal(
+        page=2,
+        has_active_generate=False,
+        has_coverage=True,
+        non_content=False,
+        learn_budget=4,
+        learn_generated=1,
+        coverage_complete=True,
+        test_budget=6,
+        test_generated=0,
+    )
+    test_page = NewspaperPageCookSignal(
+        page=3,
+        has_active_generate=False,
+        has_coverage=True,
+        non_content=False,
+        learn_budget=4,
+        learn_generated=4,
+        coverage_complete=True,
+        test_budget=6,
+        test_generated=0,
+    )
+    target = plan_newspaper_cook_target([learn_page, test_page])
+    assert target.action == "cook" and target.cook_mode == "learn" and target.page == 2
+    test_only = plan_newspaper_cook_target([test_page])
+    assert test_only.cook_mode == "test" and test_only.page == 3
+    bank = [{"question": "a"}, {"question": "b"}]
+    assert pick_interview_coding_fallback(0, bank)["question"] == "a"
+    assert pick_interview_coding_fallback(3, bank)["question"] == "b"

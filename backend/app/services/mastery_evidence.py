@@ -62,6 +62,37 @@ def label_path_mastery(
         state = "needs_work"
     return PathLabelVerdict(state, mastery)
 
+
+PATH_FOCUS_STATES: tuple[PathState, ...] = ("not_started", "needs_work", "in_progress")
+SD_NEUTRAL_MASTERY = 0.4
+SD_WEAK_PENALTY = 0.25
+
+
+def sample_path_mastery(
+    *,
+    dimension_scores: list[float] | None,
+    is_weak: bool,
+) -> float:
+    """Map one SD session into a 0-1 mastery sample for a concept."""
+    vals = [float(v) for v in (dimension_scores or [])]
+    if vals:
+        avg = (sum(vals) / len(vals) - 1) / 3
+    else:
+        avg = SD_NEUTRAL_MASTERY
+    sample = avg - (SD_WEAK_PENALTY if is_weak else 0.0)
+    return max(0.0, min(1.0, sample))
+
+
+def plan_path_focus(items: list[tuple[str, PathState]]) -> str | None:
+    """Next practice-hub concept: first non-strong, else the first item."""
+    for key, state in items:
+        if state in PATH_FOCUS_STATES:
+            return key
+    if items:
+        return items[0][0]
+    return None
+
+
 def p_mastery_from_ability(ability: float, *, threshold_difficulty: float = 0.0) -> float:
     """Logistic P(correct) vs a reference difficulty as a cheap mastery proxy."""
     return 1.0 / (1.0 + math.exp(-(ability - threshold_difficulty)))

@@ -95,6 +95,29 @@ def clamp_interview_score(value: Any) -> int:
     return clamp_int(value, INTERVIEW_SCORE_MIN, INTERVIEW_SCORE_MAX, default=2)
 
 
+@dataclass(frozen=True)
+class MainsAttemptPlan:
+    strictness: str
+    marks_max: int
+    word_target: int
+    policy: str = DEFAULT_POLICY
+    policy_version: str = OPEN_RESPONSE_VERSION
+
+
+def plan_mains_attempt(
+    *,
+    strictness: str,
+    marks_max: int,
+    policy: str | None = None,
+) -> MainsAttemptPlan:
+    """Clamp mains marks band and matching word target."""
+    pol = normalize_policy(policy)
+    s = strictness if strictness in MAINS_STRICTNESS else DEFAULT_MAINS_STRICTNESS
+    marks = 15 if int(marks_max or 10) >= 13 else 10
+    words = 250 if marks >= 13 else 150
+    return MainsAttemptPlan(strictness=s, marks_max=marks, word_target=words, policy=pol)
+
+
 def mains_band(marks: int, marks_max: int, strictness: str = DEFAULT_MAINS_STRICTNESS) -> str:
     pct = (marks / marks_max * 100) if marks_max else 0
     hi, mid, lo = {
@@ -486,6 +509,52 @@ def heuristic_system_design_grade(
     return OpenResponseVerdict(kind="system_design", result=result, policy=pol)
 
 
+def merge_system_design_grade(
+    llm: dict[str, Any],
+    fallback: dict[str, Any],
+    *,
+    policy: str | None = None,
+) -> OpenResponseVerdict:
+    """Clamp LLM SD dims and fill gaps from the heuristic fallback."""
+    pol = normalize_policy(policy)
+    dims_in = llm.get("dimensions") or []
+    dims = []
+    for key in SD_DIMENSIONS:
+        found = next(
+            (d for d in dims_in if isinstance(d, dict) and d.get("key") == key),
+            None,
+        )
+        dims.append(
+            {
+                "key": key,
+                "score": clamp_interview_score((found or {}).get("score")),
+                "note": str((found or {}).get("note") or "")[:280],
+            }
+        )
+    weak = [str(w) for w in (llm.get("weak_concepts") or []) if str(w)][:3]
+    if not weak:
+        weak = list(fallback.get("weak_concepts") or [])
+    lesson_in = llm.get("lesson") if isinstance(llm.get("lesson"), dict) else {}
+    fb_lesson = fallback.get("lesson") if isinstance(fallback.get("lesson"), dict) else {}
+    result = {
+        "mentor_summary": str(llm.get("mentor_summary") or "").strip()
+        or str(fallback.get("mentor_summary") or ""),
+        "dimensions": dims,
+        "weak_concepts": weak,
+        "lesson": {
+            "title": str(lesson_in.get("title") or fb_lesson.get("title") or "")[:120],
+            "body": str(lesson_in.get("body") or fb_lesson.get("body") or "")[:2000],
+            "try_this": str(lesson_in.get("try_this") or fb_lesson.get("try_this") or "")[:400],
+        },
+    }
+    return OpenResponseVerdict(kind="system_design", result=result, policy=pol)
+
+
+def should_record_coding_solve(*, has_subject: bool, passed: bool) -> bool:
+    """Persist measurement only on the first full pass, never on a fail."""
+    return bool(has_subject) and bool(passed)
+
+
 # --- Coding bank structural gate ---------------------------------------------
 
 
@@ -524,4 +593,66 @@ def evaluate_coding_bank_item(
     if len(title) < min_title_len:
         return CodingBankVerdict(False, "title_too_short", policy=pol)
     return CodingBankVerdict(True, "ok", policy=pol)
+
+
+CODING_SAMPLE_TEST_COUNT = 2
+
+
+@dataclass(frozen=True)
+class CodingTestVisibilityPlan:
+    sample: list[dict[str, str]]
+    hidden: list[dict[str, str]]
+    policy: str = DEFAULT_POLICY
+    policy_version: str = OPEN_RESPONSE_VERSION
+
+
+def plan_coding_test_visibility(
+    tests: list[dict[str, Any]] | None,
+    *,
+    sample_n: int = CODING_SAMPLE_TEST_COUNT,
+    policy: str | None = None,
+) -> CodingTestVisibilityPlan:
+    """First N cases are public samples; the rest stay hidden."""
+    pol = normalize_policy(policy)
+    n = max(1, int(sample_n))
+    clean = [
+        {
+            "stdin": str(t.get("stdin", "")),
+            "expected_output": str(t.get("expected_output", "")),
+        }
+        for t in (tests or [])
+        if isinstance(t, dict)
+    ]
+    if len(clean) <= n:
+        return CodingTestVisibilityPlan(clean, [], policy=pol)
+    return CodingTestVisibilityPlan(clean[:n], clean[n:], policy=pol)
+
+
+@dataclass(frozen=True)
+class CodingVerifyVerdict:
+    persist: bool
+    retry: bool
+    reason: str
+    policy: str = DEFAULT_POLICY
+    policy_version: str = OPEN_RESPONSE_VERSION
+
+
+def evaluate_coding_reference_verify(
+    *,
+    has_tests: bool,
+    has_reference: bool,
+    sandbox_error: bool,
+    passed: int,
+    total: int,
+    policy: str | None = None,
+) -> CodingVerifyVerdict:
+    """Pass/fail of one generate-and-verify attempt. Retry loop stays plumbing."""
+    pol = normalize_policy(policy)
+    if not has_tests or not has_reference:
+        return CodingVerifyVerdict(False, True, "missing_tests_or_reference", policy=pol)
+    if sandbox_error:
+        return CodingVerifyVerdict(False, True, "sandbox_error", policy=pol)
+    if int(total) and int(passed) == int(total):
+        return CodingVerifyVerdict(True, False, "passed", policy=pol)
+    return CodingVerifyVerdict(False, True, "failed_tests", policy=pol)
 

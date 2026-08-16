@@ -113,3 +113,82 @@ def test_plan_article_presentation_mix() -> None:
         "general", format_override="faq", rng=_FixedRng(0.10, "practice")
     )
     assert forced.format == "faq"
+
+
+def test_plan_seo_mcq_attach_and_digest() -> None:
+    from app.services.seo_gate import NewspaperDigestPage, plan_newspaper_digest, plan_seo_mcq_attach
+
+    rows = [
+        ("a", "polity"),
+        ("b", "polity"),
+        ("c", "economy"),
+        ("d", "history"),
+        ("e", "geo"),
+    ]
+    picked = plan_seo_mcq_attach(rows, min_count=4, max_count=6)
+    assert picked == ["a", "c", "d", "e"]
+    backfill = plan_seo_mcq_attach(rows[:2], min_count=2, max_count=6)
+    assert "b" in backfill
+    cooked = plan_newspaper_digest(
+        [
+            NewspaperDigestPage(2, "page-two", 1, True),
+            NewspaperDigestPage(1, "page-one", 5, True),
+        ],
+        max_chars=40,
+    )
+    assert cooked.startswith("page-one")
+    fallback = plan_newspaper_digest(
+        [
+            NewspaperDigestPage(2, "keep", 0, True),
+            NewspaperDigestPage(1, "skip", 0, False),
+        ]
+    )
+    assert fallback == "keep"
+
+
+def test_seo_mcq_attach_ready_and_digest_source() -> None:
+    from app.services.seo_gate import (
+        SEO_MCQ_ATTACH_MIN,
+        evaluate_digest_source_ready,
+        evaluate_seo_mcq_attach_ready,
+        evaluate_usefulness,
+    )
+
+    assert evaluate_seo_mcq_attach_ready(SEO_MCQ_ATTACH_MIN)
+    assert not evaluate_seo_mcq_attach_ready(SEO_MCQ_ATTACH_MIN - 1)
+    short = evaluate_digest_source_ready("too short")
+    assert not short.useful and short.reason == "too_short"
+    news = (
+        "Parliament passed a bill on inflation and the economy today. "
+        "The cabinet discussed policy for rural employment and tax slabs. "
+    ) * 12
+    ready = evaluate_digest_source_ready(news)
+    assert ready.useful
+    no_kw = ("The city council met and listed several municipal notices. ") * 20
+    digest = evaluate_digest_source_ready(no_kw)
+    assert digest.useful
+    useful = evaluate_usefulness(no_kw)
+    assert not useful.useful and useful.reason == "no_useful_signal"
+    from app.services.seo_gate import evaluate_embedding_near_dupe
+
+    dupe = evaluate_embedding_near_dupe(0.90)
+    assert dupe.is_dupe
+    fresh = evaluate_embedding_near_dupe(0.10)
+    assert not fresh.is_dupe
+    from app.services.seo_gate import evaluate_newspaper_seo_candidate
+
+    assert not evaluate_newspaper_seo_candidate(
+        "Advertisement: buy now limited period offer call toll free flat for sale"
+    )
+
+
+def test_plan_sd_daily_cook() -> None:
+    from app.services.seo_gate import plan_sd_daily_cook
+
+    off = plan_sd_daily_cook(cook_enabled=False, sd_published_today=0, cap_allow=True)
+    assert off.cook is False and off.reason == "cook_disabled"
+    have = plan_sd_daily_cook(cook_enabled=True, sd_published_today=1, cap_allow=True)
+    assert have.reason == "already_have_sd"
+    need = plan_sd_daily_cook(cook_enabled=True, sd_published_today=0, cap_allow=True)
+    assert need.cook is True
+    assert need.source_order == ("problem", "topic")

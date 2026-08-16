@@ -113,3 +113,73 @@ def test_document_test_applies_info_floor() -> None:
 def test_information_floor_rejects_nonpositive() -> None:
     with pytest.raises(ValueError):
         information_floor_items(se_target=0)
+
+
+def test_resolve_page_budget_replans_and_honours_zero() -> None:
+    from app.services.question_budget import Unit, resolve_page_budget
+
+    units = [Unit(key="a", centrality="central"), Unit(key="b", centrality="central")]
+    assert resolve_page_budget(
+        non_content=True,
+        newspaper_test=False,
+        newspaper_test_n=9,
+        serve_mode="learn",
+        persisted_mode="learn",
+        units=units,
+        confidence="high",
+        stored_budget=11,
+    ) == 0
+    replanned = resolve_page_budget(
+        non_content=False,
+        newspaper_test=False,
+        newspaper_test_n=0,
+        serve_mode="test",
+        persisted_mode="learn",
+        units=units,
+        confidence="high",
+        stored_budget=2,
+    )
+    assert replanned == 6
+    stored = resolve_page_budget(
+        non_content=False,
+        newspaper_test=False,
+        newspaper_test_n=0,
+        serve_mode="learn",
+        persisted_mode="learn",
+        units=None,
+        confidence=None,
+        stored_budget=11,
+    )
+    assert stored == 11
+    news = resolve_page_budget(
+        non_content=False,
+        newspaper_test=True,
+        newspaper_test_n=8,
+        serve_mode="test",
+        persisted_mode="learn",
+        units=units,
+        confidence="high",
+        stored_budget=2,
+    )
+    assert news == 8
+    omitted = resolve_page_budget(
+        non_content=False,
+        newspaper_test=False,
+        newspaper_test_n=0,
+        serve_mode="learn",
+        persisted_mode="learn",
+        units=None,
+        confidence=None,
+        stored_budget=None,
+        missing="omit",
+    )
+    assert omitted is None
+    from app.services.question_budget import exceeds_page_budget
+
+    assert exceeds_page_budget(7, 6)
+    assert not exceeds_page_budget(6, 6)
+    from app.services.question_budget import evaluate_generation_stop
+
+    assert evaluate_generation_stop(generated=6, budget=6, coverage_complete=False)
+    assert not evaluate_generation_stop(generated=2, budget=6, coverage_complete=False)
+    assert evaluate_generation_stop(generated=0, budget=6, coverage_complete=True)

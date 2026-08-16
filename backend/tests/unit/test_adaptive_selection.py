@@ -191,3 +191,16 @@ def test_difficulty_edge_cold_lineage_flips_to_reinforce() -> None:
     )
     assert v.policy == "concept_reinforce"
     assert v.assertion_id == "a"
+
+
+def test_label_selection_reason() -> None:
+    from app.services.adaptive_selection import label_selection_reason
+
+    assert label_selection_reason("adaptive_v1:focus_concept") == "focus concept"
+    assert label_selection_reason("mastery_reinforce") == "focus concept"
+    assert label_selection_reason("spaced_revisit_due") == "spaced revisit"
+    assert label_selection_reason("lineage:follow_up") == "follows your last question"
+    assert label_selection_reason("new_page") == "new page"
+    assert label_selection_reason("difficulty_edge:band") == "right at your level"
+    assert label_selection_reason("concept_reinforce") == "reinforces a recent miss"
+    assert label_selection_reason("sequence") == "in order through this page"

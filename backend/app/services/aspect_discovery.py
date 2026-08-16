@@ -29,6 +29,22 @@ FALLBACK_MIN_SUBSTANTIAL_WORDS = 12
 Centrality = Literal["central", "support", "skip"]
 
 
+def split_paragraphs(page_text: str | None) -> list[str]:
+    if not page_text:
+        return []
+    return [p.strip() for p in page_text.split("\n\n") if p.strip()]
+
+
+def substantial_paragraphs(
+    page_text: str | None,
+    *,
+    min_words: int = FALLBACK_MIN_SUBSTANTIAL_WORDS,
+) -> list[str]:
+    """Paragraphs dense enough to count as a testable idea."""
+    floor = max(1, int(min_words))
+    return [p for p in split_paragraphs(page_text) if len(p.split()) >= floor]
+
+
 @dataclass(frozen=True)
 class AspectPickVerdict:
     aspects: tuple[dict[str, Any], ...]
@@ -98,8 +114,8 @@ def heuristic_fallback_aspects(
     """
     pol = normalize_policy(policy)
     words = len(page_text.split()) if page_text else 0
-    paragraphs = [p.strip() for p in page_text.split("\n\n") if p.strip()] if page_text else []
-    substantial = [p for p in paragraphs if len(p.split()) >= min_substantial_words]
+    paragraphs = split_paragraphs(page_text)
+    substantial = substantial_paragraphs(page_text, min_words=min_substantial_words)
     word_estimate = words // max(1, words_per_aspect)
     if words > 0 and word_estimate == 0:
         word_estimate = 1

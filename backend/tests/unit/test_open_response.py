@@ -132,3 +132,61 @@ def test_degraded_interview_scores_are_mid_scale() -> None:
     v = degraded_interview_scores()
     assert v.kind == "interview_typed"
     assert v.result["scores"] == {d: 2 for d in INTERVIEW_DIMENSIONS}
+
+
+def test_mains_attempt_and_coding_verify_gates() -> None:
+    from app.services.open_response import (
+        evaluate_coding_reference_verify,
+        plan_coding_test_visibility,
+        plan_mains_attempt,
+    )
+
+    ten = plan_mains_attempt(strictness="nope", marks_max=10)
+    assert ten.strictness == "coaching"
+    assert ten.marks_max == 10
+    assert ten.word_target == 150
+    fifteen = plan_mains_attempt(strictness="exam", marks_max=15)
+    assert fifteen.marks_max == 15
+    assert fifteen.word_target == 250
+    vis = plan_coding_test_visibility(
+        [
+            {"stdin": "1", "expected_output": "1"},
+            {"stdin": "2", "expected_output": "2"},
+            {"stdin": "3", "expected_output": "3"},
+        ]
+    )
+    assert len(vis.sample) == 2 and len(vis.hidden) == 1
+    ok = evaluate_coding_reference_verify(
+        has_tests=True, has_reference=True, sandbox_error=False, passed=3, total=3
+    )
+    assert ok.persist is True
+    miss = evaluate_coding_reference_verify(
+        has_tests=False, has_reference=True, sandbox_error=False, passed=0, total=0
+    )
+    assert miss.persist is False and miss.retry is True
+
+
+def test_merge_sd_grade_and_coding_solve_record() -> None:
+    from app.services.open_response import (
+        heuristic_system_design_grade,
+        merge_system_design_grade,
+        should_record_coding_solve,
+    )
+
+    fallback = heuristic_system_design_grade({"requirements": "x" * 90}, ["cache"]).result
+    merged = merge_system_design_grade(
+        {
+            "mentor_summary": "LLM note",
+            "dimensions": [{"key": "api", "score": 4, "note": "good"}],
+            "weak_concepts": [],
+            "lesson": {},
+        },
+        fallback,
+    )
+    assert merged.result["mentor_summary"] == "LLM note"
+    assert merged.result["weak_concepts"] == fallback["weak_concepts"]
+    api = next(d for d in merged.result["dimensions"] if d["key"] == "api")
+    assert api["score"] == 4
+    assert should_record_coding_solve(has_subject=True, passed=True)
+    assert not should_record_coding_solve(has_subject=True, passed=False)
+    assert not should_record_coding_solve(has_subject=False, passed=True)

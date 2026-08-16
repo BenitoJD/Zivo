@@ -28,13 +28,55 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Sequence
 
 from sqlalchemy.orm import Session
 
 from app.services.artifact_store import ArtifactStore, coerce_jsonb
 
 logger = logging.getLogger(__name__)
+
+LESSON_ASPECT_FALLBACK = "- the main idea of this page"
+
+
+@dataclass(frozen=True)
+class LessonAspectPlan:
+    lines: tuple[str, ...]
+    fallback: str = LESSON_ASPECT_FALLBACK
+    policy_version: str = "qb.lesson.v1"
+
+    def as_block(self) -> str:
+        return "\n".join(self.lines) if self.lines else self.fallback
+
+
+def _aspect_is_central(aspect: dict[str, Any]) -> bool:
+    is_central = aspect.get("central")
+    if is_central is None:
+        return aspect.get("centrality") == "central"
+    return bool(is_central)
+
+
+def _aspect_prompt_line(aspect: dict[str, Any]) -> str | None:
+    label = str(aspect.get("label") or "").strip()
+    if not label:
+        return None
+    angle = str(aspect.get("cognitive_angle") or "").strip()
+    suffix = f" ({angle})" if angle and angle.lower() != "recall" else ""
+    return f"- {label}{suffix}"
+
+
+def plan_lesson_aspects(aspects: Sequence[dict[str, Any]] | None) -> LessonAspectPlan:
+    """Only central aspects are taught; recall angle is the default (omitted)."""
+    lines: list[str] = []
+    for aspect in aspects or []:
+        if not _aspect_is_central(aspect):
+            continue
+        line = _aspect_prompt_line(aspect)
+        if line:
+            lines.append(line)
+    return LessonAspectPlan(tuple(lines))
+
 
 # Natural key (document_id, page_number); payload is the JSONB `lesson` object;
 # `content_hash` is an extra non-key column written on every upsert so a ready

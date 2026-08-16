@@ -15,6 +15,7 @@ from app.models import Document, JobWorkload
 from app.repositories import newspaper as newspaper_repo
 from app.services.document_purge import purge_document, purge_ingest_tmp
 from app.services.parse import count_pdf_pages
+from app.services.session_design import evaluate_newspaper_learn_complete
 from app.services.storage import _safe_storage_filename, ensure_bucket, put_bytes
 
 logger = logging.getLogger(__name__)
@@ -125,8 +126,12 @@ def list_paper_days(
             answered_count = len(answered) if isinstance(answered, list) else 0
             total = question_totals.get(str(document_id), 0)
             learn_complete = bool(progress.get("learn_complete"))
-            if not learn_complete and total > 0 and answered_count >= total:
-                learn_complete = True
+            if not learn_complete:
+                learn_complete = evaluate_newspaper_learn_complete(
+                    learn_pool_count=total,
+                    all_learn_answered=answered_count >= total,
+                    generation_pending=False,
+                )
             item["learner"] = {
                 "questions_answered": answered_count,
                 "questions_total": total,
@@ -494,14 +499,12 @@ def aggregate_worthy_newspaper_text(db: Session, document_id: uuid.UUID) -> str:
     exist yet (first digest enqueue right after page 1 cooks).
     """
     from app.repositories import seo as seo_repo
-    from app.services.content_worthiness import evaluate_worthiness
+    from app.services.content_worthiness import evaluate_digest_page_worthy
     from app.services.question_pool import count_assertions_on_page
+    from app.services.seo_gate import NewspaperDigestPage, plan_newspaper_digest
 
-    max_chars = 12_000
     page_rows = seo_repo.list_document_page_texts(db, document_id)
-    cooked: list[tuple[int, int, str]] = []
-    fallback: list[tuple[int, str]] = []
-
+    pages: list[NewspaperDigestPage] = []
     for row in page_rows:
         page = int(row["page_start"])
         page_text = (row.get("text") or "").strip()
@@ -510,31 +513,15 @@ def aggregate_worthy_newspaper_text(db: Session, document_id: uuid.UUID) -> str:
         mcq_count = count_assertions_on_page(
             db, document_id, page, serve_mode="learn"
         )
-        if mcq_count > 0:
-            cooked.append((mcq_count, page, page_text))
-            continue
-        worth = evaluate_worthiness(page_text=page_text, newspaper=True, db=db)
-        if worth.worthy:
-            fallback.append((page, page_text))
-
-    ranked: list[str]
-    if cooked:
-        cooked.sort(key=lambda item: (-item[0], item[1]))
-        ranked = [text for _, _, text in cooked]
-    else:
-        fallback.sort(key=lambda item: item[0])
-        ranked = [text for _, text in fallback]
-
-    parts: list[str] = []
-    total = 0
-    for page_text in ranked:
-        if total >= max_chars:
-            break
-        room = max_chars - total
-        chunk = page_text if len(page_text) <= room else page_text[:room]
-        parts.append(chunk)
-        total += len(chunk) + 2
-    return "\n\n".join(parts)
+        worth = evaluate_digest_page_worthy(
+            mcq_count=mcq_count, page_text=page_text, db=db
+        )
+        pages.append(
+            NewspaperDigestPage(
+                page=page, text=page_text, mcq_count=mcq_count, worthy=worth
+            )
+        )
+    return plan_newspaper_digest(pages)
 
 
 def newspaper_learn_ready(db: Session, doc: Document) -> bool:
@@ -547,15 +534,18 @@ def newspaper_learn_ready(db: Session, doc: Document) -> bool:
         return False
     from app.services.question_pool import get_page_coverage, page_range_bounds
     from app.services.question_pool_jobs import count_assertions_on_page
+    from app.services.session_design import evaluate_newspaper_catalog_ready
 
     page_from, _ = page_range_bounds(doc)
     cov = get_page_coverage(doc, page_from)
-    if not cov:
-        return False
-    budget = int(cov.get("question_budget") or 0)
-    if budget <= 0 or cov.get("non_content"):
-        return True
-    return count_assertions_on_page(db, doc.id, page_from) >= 1
+    budget = int((cov or {}).get("question_budget") or 0)
+    return evaluate_newspaper_catalog_ready(
+        is_newspaper=True,
+        has_coverage=bool(cov),
+        budget=budget,
+        non_content=bool((cov or {}).get("non_content")),
+        page1_mcq_count=count_assertions_on_page(db, doc.id, page_from) if cov else 0,
+    )
 
 
 def mark_doc_ready_hook(db: Session, doc: Document) -> None:

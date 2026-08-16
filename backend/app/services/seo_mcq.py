@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.models import Document
 from app.repositories import seo as seo_repo
 from app.services.mcq_quality import generate_quality_mcq
+from app.services.seo_gate import evaluate_seo_mcq_attach_ready
 
 logger = logging.getLogger(__name__)
 
@@ -69,26 +70,14 @@ def find_diverse_edition_assertions(
     if not rows:
         return []
 
-    picked: list[uuid.UUID] = []
-    seen_keys: set[str] = set()
-    for row in rows:
-        ck = str(row["ck"] or "")
-        if ck in seen_keys:
-            continue
-        seen_keys.add(ck)
-        picked.append(uuid.UUID(str(row["id"])))
-        if len(picked) >= max_count:
-            break
+    from app.services.seo_gate import plan_seo_mcq_attach
 
-    if len(picked) < min_count:
-        for row in rows:
-            aid = uuid.UUID(str(row["id"]))
-            if aid in picked:
-                continue
-            picked.append(aid)
-            if len(picked) >= min_count:
-                break
-    return picked[:max_count]
+    planned = plan_seo_mcq_attach(
+        [(uuid.UUID(str(row["id"])), str(row["ck"] or "")) for row in rows],
+        min_count=min_count,
+        max_count=max_count,
+    )
+    return planned
 
 
 def ensure_public_artifact(
@@ -207,7 +196,7 @@ def attach_or_generate_mcqs(
     attached = find_related_assertions(
         db, document_id=source_document_id, limit=target_count
     )
-    if len(attached) >= 3:
+    if evaluate_seo_mcq_attach_ready(len(attached)):
         seo_repo.attach_assertions(db, post_id, attached[:target_count])
         return attached[:target_count]
 

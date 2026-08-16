@@ -106,6 +106,24 @@ def normalize_policy(policy: str | None) -> str:
     return _POLICY_ALIASES.get(p, p or DEFAULT_SELECTION_POLICY)
 
 
+def label_selection_reason(rationale: str) -> str:
+    """Map the engine's internal rationale to a short, learner-facing label."""
+    r = (rationale or "").lower()
+    if "focus" in r or "mastery_reinforce" in r:
+        return "focus concept"
+    if "revisit" in r or "due" in r or "spaced" in r:
+        return "spaced revisit"
+    if "lineage" in r:
+        return "follows your last question"
+    if "new_page" in r or "page" in r:
+        return "new page"
+    if "difficulty" in r or "edge" in r:
+        return "right at your level"
+    if "reinforce" in r:
+        return "reinforces a recent miss"
+    return "in order through this page"
+
+
 def build_learner_state(progress: Mapping[str, Any]) -> LearnerState:
     """Read the learner's latest confirmed answer + calibrated ability from progress."""
     last = progress.get("last_confirmed_answer") or {}

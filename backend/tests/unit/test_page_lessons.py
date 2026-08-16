@@ -16,7 +16,7 @@ import uuid
 from unittest.mock import MagicMock
 
 from app.graphs.lesson_graph import LESSON_POLICY_VERSION, _aspects_block, _parse_lesson
-from app.services.page_lessons import _LESSON_STORE, _row_to_state
+from app.services.page_lessons import _LESSON_STORE, _row_to_state, plan_lesson_aspects
 
 
 # ----------------------------------------------------------------------- parser
@@ -105,6 +105,9 @@ def test_aspects_block_skips_peripheral_aspects() -> None:
 def test_aspects_block_empty_falls_back_to_default() -> None:
     assert _aspects_block([]) == "- the main idea of this page"
     assert _aspects_block(None) == "- the main idea of this page"
+    empty = plan_lesson_aspects([])
+    assert empty.as_block() == "- the main idea of this page"
+    assert empty.lines == ()
 
 
 # ------------------------------------------------------- store SQL construction

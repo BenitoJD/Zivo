@@ -15,6 +15,10 @@ LINK_FOLLOW_UP_AFTER_MISS = "follow_up_after_miss"
 LINK_HARDER_THAN = "harder_than"
 LINK_SAME_CONCEPT = "same_concept"
 
+FOLLOW_UP_CONFIDENCE = 0.85
+HARDER_THAN_CONFIDENCE = 0.7
+SAME_CONCEPT_CONFIDENCE = 0.7
+
 McqReuseScope = Literal["off", "demo", "all"]
 
 
@@ -23,6 +27,16 @@ class LineageEdge:
     from_id: str
     to_id: str
     kind: str
+    confidence: float = HARDER_THAN_CONFIDENCE
+
+
+def lineage_confidence(kind: str) -> float:
+    """Persist confidence for a planned edge kind."""
+    if kind == LINK_FOLLOW_UP_AFTER_MISS:
+        return FOLLOW_UP_CONFIDENCE
+    if kind == LINK_SAME_CONCEPT:
+        return SAME_CONCEPT_CONFIDENCE
+    return HARDER_THAN_CONFIDENCE
 
 
 @dataclass(frozen=True)
@@ -81,10 +95,16 @@ def plan_batch_lineage(finalized: Sequence[dict[str, Any]]) -> LineagePlan:
             by_concept.setdefault(ck, []).append(aid)
     for ids in by_concept.values():
         for a, b in zip(ids, ids[1:]):
-            edges.append(LineageEdge(a, b, LINK_FOLLOW_UP_AFTER_MISS))
-            edges.append(LineageEdge(a, b, LINK_SAME_CONCEPT))
+            edges.append(
+                LineageEdge(
+                    a, b, LINK_FOLLOW_UP_AFTER_MISS, lineage_confidence(LINK_FOLLOW_UP_AFTER_MISS)
+                )
+            )
+            edges.append(
+                LineageEdge(a, b, LINK_SAME_CONCEPT, lineage_confidence(LINK_SAME_CONCEPT))
+            )
     for a, b in zip(ordered, ordered[1:]):
-        edges.append(LineageEdge(a, b, LINK_HARDER_THAN))
+        edges.append(LineageEdge(a, b, LINK_HARDER_THAN, lineage_confidence(LINK_HARDER_THAN)))
     # Dedup
     seen: set[tuple[str, str, str]] = set()
     uniq: list[LineageEdge] = []

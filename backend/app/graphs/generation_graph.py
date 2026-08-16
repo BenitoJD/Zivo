@@ -17,6 +17,7 @@ from app.repositories.intel import update_activity
 from app.services.aspect_discovery import next_unasked, speculative_targets
 from app.services.mcq_dedup import prior_mcq_from_payload
 from app.services.mcq_quality import generate_quality_mcq_batch
+from app.services.question_budget import exceeds_page_budget
 from app.services.question_pool import (
     clear_stale_coverage_complete,
     bump_aspect_attempts,
@@ -217,7 +218,7 @@ def _clone_reusable_mcqs(
         if verdict.decision == "fail":
             continue
         sequence += 1
-        if sequence > budget:
+        if exceeds_page_budget(sequence, budget):
             break
         if _assertion_sequence_exists(db, document_id, page_number, sequence):
             continue
@@ -417,24 +418,25 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
     # Close parallel first-batch race: triage may still be running while this
     # batch uses speculative aspects. Worthiness Engine owns newspaper gate.
     if (doc.meta or {}).get("newspaper"):
-        from app.services.content_worthiness import evaluate_worthiness
+        from app.services.content_worthiness import plan_newspaper_batch_gate
 
-        worth = evaluate_worthiness(page_text=page_text, newspaper=True, db=db)
-        if not worth.worthy:
+        skip = plan_newspaper_batch_gate(page_text=page_text, db=db)
+        if skip.skip:
             save_page_coverage(
                 db,
                 document_id,
                 page=page_number,
-                question_budget=0,
+                question_budget=skip.question_budget,
                 aspects=[],
                 rationale=(
-                    f"Newspaper filter ({worth.reason}): {worth.details or worth.reason}"
+                    f"Newspaper filter ({skip.reason}): {skip.details or skip.reason}"
                 ),
                 content_type="non_content",
-                non_content=True,
+                non_content=skip.non_content,
                 programmable=False,
             )
-            set_coverage_complete(db, document_id, page_number)
+            if skip.mark_complete:
+                set_coverage_complete(db, document_id, page_number)
             on_batch_completed(db, document_id, page=page_number, saved=0)
             if activity_id:
                 update_activity(
@@ -444,7 +446,7 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
                     stats={
                         "questions_saved": 0,
                         "page_number": page_number,
-                        "newspaper_filter": worth.reason,
+                        "newspaper_filter": skip.reason,
                         "non_content": True,
                     },
                     finished=True,
@@ -454,7 +456,7 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
                 "questions_saved": 0,
                 "page_number": page_number,
                 "non_content": True,
-                "newspaper_filter": worth.reason,
+                "newspaper_filter": skip.reason,
             }
 
     clear_stale_coverage_complete(db, document_id, page_number)
@@ -469,9 +471,13 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
         doc, page_number, min(batch_size, max(0, remaining)), cook_mode=cook_mode
     )
     if not targets:
+        from app.services.kc_coverage import evaluate_aspect_exhaustion_close
+
         coverage = get_page_coverage(doc, page_number)
-        triage_ran = bool(coverage.get("aspects"))
-        if triage_ran:
+        if evaluate_aspect_exhaustion_close(
+            has_aspects=bool(coverage.get("aspects")),
+            unasked_count=0,
+        ):
             set_coverage_complete(db, document_id, page_number)
             on_batch_completed(db, document_id, page=page_number, saved=0)
             if activity_id:
@@ -562,7 +568,7 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
     def _on_accept(target: dict[str, Any], payload: dict[str, Any]) -> bool:
         state["sequence"] += 1
         seq = state["sequence"]
-        if seq > budget:
+        if exceeds_page_budget(seq, budget):
             state["hit_budget"] = True
             return False
         if _assertion_sequence_exists(
@@ -610,7 +616,12 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
             sequence=sequence,
             saved_total=saved,
         )
-    if hit_budget and serve_mode == "learn":
+    from app.services.session_design import (
+        evaluate_empty_batch_coverage_close,
+        evaluate_learn_cook_coverage_close,
+    )
+
+    if evaluate_learn_cook_coverage_close(hit_budget=hit_budget, serve_mode=serve_mode):
         set_coverage_complete(db, document_id, page_number)
 
     if saved == 0 and targets:
@@ -621,7 +632,7 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
             if target.get("asked"):
                 continue
             sequence += 1
-            if sequence > budget:
+            if exceeds_page_budget(sequence, budget):
                 break
             if _assertion_sequence_exists(
                 db, document_id, page_number, sequence, serve_mode=serve_mode
@@ -671,8 +682,13 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
                 saved_total=saved,
             )
 
-    if saved == 0 and start_sequence + batch_size >= budget and not targets and bool(
-        get_page_coverage(doc, page_number).get("aspects")
+    if evaluate_empty_batch_coverage_close(
+        saved=saved,
+        start_sequence=start_sequence,
+        batch_size=batch_size,
+        budget=budget,
+        has_targets=bool(targets),
+        has_aspects=bool(get_page_coverage(doc, page_number).get("aspects")),
     ):
         set_coverage_complete(db, document_id, page_number)
 
@@ -955,13 +971,12 @@ def _write_batch_lineage(db: Session, finalized: list[dict[str, Any]]) -> None:
         lt = kind_to_id.get(edge.kind)
         if lt is None:
             continue
-        conf = 0.85 if edge.kind == LINK_FOLLOW_UP_AFTER_MISS else 0.7
         rows.append(
             {
                 "f": uuid.UUID(edge.from_id),
                 "t": uuid.UUID(edge.to_id),
                 "lt": lt,
-                "conf": conf,
+                "conf": edge.confidence,
             }
         )
     if not rows:

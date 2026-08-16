@@ -15,7 +15,12 @@ from sqlalchemy.orm import Session
 from app.repositories.intel import update_activity
 from app.services.llm_router import acomplete_chat
 from app.services.llm_sync import run_coro_in_worker
-from app.services.aspect_discovery import dedupe_aspects, parse_centrality, pick_for_plan
+from app.services.aspect_discovery import (
+    dedupe_aspects,
+    parse_centrality,
+    pick_for_plan,
+    substantial_paragraphs,
+)
 from app.services.prompts import get_prompt
 from app.services.question_budget import (
     Centrality,
@@ -315,6 +320,8 @@ def _persist_triage_coverage(
     activity_id: str | None,
 ) -> None:
     """Write page_coverage including planner metadata (budget_version, confidence)."""
+    from app.services.session_design import alias_debuggable
+
     save_page_coverage(
         db,
         document_id,
@@ -327,7 +334,10 @@ def _persist_triage_coverage(
         content_type=result.get("content_type"),
         non_content=bool(result.get("non_content")),
         programmable=bool(result.get("programmable")),
-        debuggable=bool(result.get("debuggable") or result.get("programmable")),
+        debuggable=alias_debuggable(
+            programmable=bool(result.get("programmable")),
+            debuggable=result.get("debuggable") if "debuggable" in result else None,
+        ),
         budget_confidence=result.get("budget_confidence"),
         budget_mode=result.get("budget_mode"),
         budget_version=result.get("budget_version"),
@@ -422,18 +432,12 @@ def _non_content_result(
 
 def _fallback_triage(page_text: str, page_number: int, *, mode: Mode = "learn") -> dict[str, Any]:
     # Density prior via Aspect Discovery; planner owns N after units are built.
-    from app.services.aspect_discovery import (
-        FALLBACK_MIN_SUBSTANTIAL_WORDS,
-        heuristic_fallback_aspects,
-    )
+    from app.services.aspect_discovery import heuristic_fallback_aspects
 
     pick = heuristic_fallback_aspects(page_text, page_number)
     aspects = list(pick.aspects)
     words = len(page_text.split()) if page_text else 0
-    paragraphs = [p.strip() for p in page_text.split("\n\n") if p.strip()] if page_text else []
-    substantial = [
-        p for p in paragraphs if len(p.split()) >= FALLBACK_MIN_SUBSTANTIAL_WORDS
-    ]
+    substantial = substantial_paragraphs(page_text)
     # No testable text at all → genuinely non-content. Must be marked so the page
     # completes (is_page_complete treats 0 generated + not non_content as "not done"
     # and would otherwise strand the learner here with nothing to answer).
@@ -647,16 +651,19 @@ def _triage_page(
                         aspects.append(norm)
                 rationale = (parsed.get("rationale") or "").strip()
                 words = len(page_text.split()) if page_text else 0
-                substantial = sum(
-                    1
-                    for p in (page_text.split("\n\n") if page_text else [])
-                    if p.strip() and len(p.split()) >= 12
-                )
+                substantial = len(substantial_paragraphs(page_text))
 
                 if allow_zero:
                     # Honest zero: model judged non-content / unusable / no units.
                     # N itself comes from plan_page_budget — never raw LLM yield.
-                    if content_type == "non_content" or usable is False or not aspects:
+                    from app.services.content_worthiness import evaluate_llm_triage_units
+
+                    zero = evaluate_llm_triage_units(
+                        content_type=content_type,
+                        usable=usable,
+                        aspect_count=len(aspects),
+                    )
+                    if zero.zero_question:
                         return _store(
                             _non_content_result(
                                 content_type=content_type or "non_content",

@@ -32,6 +32,12 @@ from app.repositories.intel import _concept_id, _source_id
 from app.services.code_execution import DEFAULT_LANGUAGE_ID, LANGUAGES, run_tests
 from app.services.llm_router import acomplete_chat
 from app.services.llm_sync import run_coro_in_worker
+from app.services.open_response import (
+    evaluate_coding_bank_item,
+    evaluate_coding_reference_verify,
+    plan_coding_test_visibility,
+    should_record_coding_solve,
+)
 from app.services.token_budget import truncate_to_tokens
 
 logger = logging.getLogger(__name__)
@@ -143,28 +149,35 @@ def _generate_and_verify(db: Session, page_excerpt: str) -> dict[str, Any] | Non
         if not problem:
             continue
         last_problem = problem
-        tests = problem.get("tests") or []
-        reference = problem.get("reference_solution") or ""
         language_id = int(problem.get("language_id") or DEFAULT_LANGUAGE_ID)
         if language_id not in LANGUAGES:
             language_id = DEFAULT_LANGUAGE_ID
             problem["language_id"] = language_id
-        if not tests or not reference:
-            continue
-        try:
-            verdict = run_coro_in_worker(run_tests(reference, language_id, tests))
-        except Exception:
-            logger.debug("coding verify: sandbox error; retrying", exc_info=True)
-            continue
-        if verdict.get("error"):
-            continue
-        if verdict.get("total") and verdict.get("passed") == verdict.get("total"):
-            return problem  # passed the gate
-        logger.debug(
-            "coding verify: reference failed %d/%d tests; retrying",
-            verdict.get("total", 0) - verdict.get("passed", 0),
-            verdict.get("total", 0),
+        tests = problem.get("tests") or []
+        reference = problem.get("reference_solution") or ""
+        sandbox_error = False
+        passed = 0
+        total = 0
+        if tests and reference:
+            try:
+                sandbox = run_coro_in_worker(run_tests(reference, language_id, tests))
+            except Exception:
+                logger.debug("coding verify: sandbox error; retrying", exc_info=True)
+                sandbox_error = True
+            else:
+                sandbox_error = bool(sandbox.get("error"))
+                passed = int(sandbox.get("passed") or 0)
+                total = int(sandbox.get("total") or 0)
+        gate = evaluate_coding_reference_verify(
+            has_tests=bool(tests),
+            has_reference=bool(reference),
+            sandbox_error=sandbox_error,
+            passed=passed,
+            total=total,
         )
+        if gate.persist:
+            return problem
+        logger.debug("coding verify: %s; retrying", gate.reason)
     if last_problem:
         logger.info(
             "coding generation: discarding problem '%s' — reference failed verify gate",
@@ -260,17 +273,8 @@ def _next_sequence(db: Session, document_id: uuid.UUID, page_number: int) -> int
 
 def _split_tests(tests: list[dict[str, str]]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """First two cases are sample (shown to the learner); the rest are hidden."""
-    clean = [
-        {
-            "stdin": str(t.get("stdin", "")),
-            "expected_output": str(t.get("expected_output", "")),
-        }
-        for t in tests
-        if isinstance(t, dict)
-    ]
-    if len(clean) <= 2:
-        return clean, []
-    return clean[:2], clean[2:]
+    plan = plan_coding_test_visibility(tests)
+    return plan.sample, plan.hidden
 
 
 def _persist(
@@ -284,8 +288,6 @@ def _persist(
 
     Returns the *public* payload (sample tests only, no reference/hidden) for logging.
     """
-    from app.services.open_response import evaluate_coding_bank_item
-
     bank = evaluate_coding_bank_item(problem)
     if not bank.ok:
         return None
@@ -459,11 +461,7 @@ def record_coding_submit(
 
     The per-case breakdown for the first SOLVE is captured in value_json for analytics.
     """
-    if subject_entity_id is None:
-        return
-    if not passed:
-        # Don't record failures — see docstring. The idempotency index would otherwise
-        # pin the learner to 'attempted' even after they later solve it.
+    if not should_record_coding_solve(has_subject=subject_entity_id is not None, passed=passed):
         return
     value_json = {
         "passed_count": int(passed_count),

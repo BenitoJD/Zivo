@@ -26,7 +26,7 @@ from app.services.rag_window import (
     save_rag_window,
     sync_rag_window,
 )
-from app.services.session_design import evaluate_background_cook_tick, evaluate_prep_progress
+from app.services.session_design import evaluate_background_cook_tick, evaluate_page_prep_ready, evaluate_prep_progress
 
 PREP_MODE_NOW = "now"
 PREP_MODE_BACKGROUND = "background"
@@ -75,15 +75,15 @@ def study_pages_for_doc(doc: Document) -> list[int]:
 
 def page_learn_prep_ready(db: Session, doc: Document, page: int) -> bool:
     coverage = get_page_coverage(doc, page)
-    if not coverage:
-        return False
-    if coverage.get("non_content"):
-        return True
-    budget = get_question_budget(doc, page)
-    if budget <= 0:
-        return True
-    generated = count_assertions_on_page(db, doc.id, page)
-    return generated >= budget or is_coverage_complete(doc, page)
+    budget = get_question_budget(doc, page) if coverage else 0
+    generated = count_assertions_on_page(db, doc.id, page) if coverage else 0
+    return evaluate_page_prep_ready(
+        has_coverage=bool(coverage),
+        non_content=bool((coverage or {}).get("non_content")),
+        budget=budget,
+        generated=generated,
+        coverage_complete=is_coverage_complete(doc, page) if coverage else False,
+    )
 
 
 def all_study_pages_indexed(db: Session, doc: Document) -> bool:
@@ -376,14 +376,21 @@ def on_background_triage_completed(
     if not doc or not is_background_prep(doc):
         return None
     from app.services.question_pool_jobs import enqueue_page_batch
+    from app.services.session_design import evaluate_background_first_batch
 
     budget = get_question_budget(doc, page)
-    if budget > 0 and count_assertions_on_page(db, document_id, page) == 0:
+    generated = count_assertions_on_page(db, document_id, page)
+    batch = evaluate_background_first_batch(
+        budget=budget,
+        generated=generated,
+        first_batch=FIRST_QUESTION_BATCH_SIZE,
+    )
+    if batch > 0:
         job = enqueue_page_batch(
             db,
             doc,
             page=page,
-            batch_size=min(FIRST_QUESTION_BATCH_SIZE, budget),
+            batch_size=batch,
             start_sequence=0,
         )
         tick_background_cook(db, document_id)

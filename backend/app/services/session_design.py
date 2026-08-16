@@ -7,7 +7,7 @@ Version: qb.session.v1
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 from app.services.question_budget import SESSION_SOFT
 
@@ -284,6 +284,24 @@ def plan_session(
     return SessionPlan(n_session=min(rem, soft) if rem else 0, soft_cap=soft)
 
 
+@dataclass(frozen=True)
+class SessionBreakVerdict:
+    should_break: bool
+    reason: str
+    policy_version: str = SESSION_VERSION
+
+
+def evaluate_session_break(*, session_items: int, n_session: int) -> SessionBreakVerdict:
+    """Soft break when the learner has filled this session's planned slice."""
+    cap = max(0, int(n_session))
+    items = max(0, int(session_items))
+    if cap <= 0:
+        return SessionBreakVerdict(False, "no_cap")
+    if items >= cap:
+        return SessionBreakVerdict(True, "session_full")
+    return SessionBreakVerdict(False, "in_session")
+
+
 def evaluate_serve_schedule(
     *,
     ready_count: int | None = None,
@@ -425,3 +443,287 @@ def evaluate_newspaper_edition_tick(
         also_ingest=has_ingest_missing,
         reason="edition_cook",
     )
+
+
+@dataclass(frozen=True)
+class PageCompleteVerdict:
+    complete: bool
+    reason: str
+    policy_version: str = SESSION_VERSION
+
+
+def evaluate_page_complete(
+    *,
+    non_content: bool,
+    has_next_card: bool,
+    all_served_answered: bool,
+    has_active_generate: bool,
+    generated: int,
+    budget: int,
+    coverage_done: bool,
+    generation_pending: bool,
+) -> PageCompleteVerdict:
+    """When the current study page is done and the queue may advance."""
+    if non_content:
+        return PageCompleteVerdict(True, "non_content")
+    if has_next_card:
+        return PageCompleteVerdict(False, "unanswered")
+    if all_served_answered and not has_active_generate:
+        return PageCompleteVerdict(True, "served_answered")
+    if int(generated) <= 0:
+        return PageCompleteVerdict(False, "none_generated")
+    if generation_pending and not coverage_done and int(generated) < int(budget):
+        return PageCompleteVerdict(False, "still_cooking")
+    if coverage_done:
+        return PageCompleteVerdict(True, "coverage_done")
+    met = int(generated) >= int(budget)
+    return PageCompleteVerdict(met, "budget_met" if met else "under_budget")
+
+
+def evaluate_newspaper_learn_complete(
+    *,
+    learn_pool_count: int,
+    all_learn_answered: bool,
+    generation_pending: bool,
+) -> bool:
+    """Edition Learn pool is finished (no pending cook)."""
+    return learn_pool_count > 0 and all_learn_answered and not generation_pending
+
+
+def evaluate_newspaper_catalog_ready(
+    *,
+    is_newspaper: bool,
+    has_coverage: bool,
+    budget: int,
+    non_content: bool,
+    page1_mcq_count: int,
+) -> bool:
+    """When a newspaper edition can leave indexing in the catalog."""
+    if not is_newspaper:
+        return False
+    if not has_coverage:
+        return False
+    if int(budget) <= 0 or non_content:
+        return True
+    return int(page1_mcq_count) >= 1
+
+
+def plan_interview_question_shape(
+    *,
+    planned_kind: str,
+    mcq_valid: bool,
+    coding_has_tests: bool,
+) -> str:
+    """Degrade a broken MCQ to typed; keep coding rounds via fallback bank."""
+    if planned_kind == "mcq" and not mcq_valid:
+        return "typed"
+    if planned_kind == "coding" and not coding_has_tests:
+        return "coding_fallback"
+    return planned_kind
+
+
+def pick_interview_coding_fallback(
+    asked_count: int,
+    bank: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    """Rotate the built-in coding bank when the LLM produced no tests."""
+    if not bank:
+        return {}
+    idx = int(asked_count) % len(bank)
+    return dict(bank[idx])
+
+
+def evaluate_document_complete(
+    *,
+    page_complete: bool,
+    on_last_page: bool,
+    newspaper: bool,
+    generation_pending: bool,
+) -> bool:
+    """Whole study range is done; newspaper waits for in-flight cook."""
+    if not page_complete or not on_last_page:
+        return False
+    if newspaper and generation_pending:
+        return False
+    return True
+
+
+def evaluate_page_prep_ready(
+    *,
+    has_coverage: bool,
+    non_content: bool,
+    budget: int,
+    generated: int,
+    coverage_complete: bool,
+) -> bool:
+    """Background-prep page is cooked enough to count as ready."""
+    if not has_coverage:
+        return False
+    if non_content or int(budget) <= 0:
+        return True
+    return int(generated) >= int(budget) or coverage_complete
+
+
+@dataclass(frozen=True)
+class NewspaperPageCookSignal:
+    page: int
+    has_active_generate: bool
+    has_coverage: bool
+    non_content: bool
+    learn_budget: int
+    learn_generated: int
+    coverage_complete: bool
+    test_budget: int
+    test_generated: int
+
+
+def evaluate_newspaper_page_cook(
+    page: NewspaperPageCookSignal,
+    *,
+    phase: Literal["learn", "test"],
+) -> CookScheduleVerdict:
+    """Whether this edition page should cook in the current learn/test pass."""
+    if page.has_active_generate or not page.has_coverage or page.non_content:
+        return CookScheduleVerdict(action="idle", page=page.page, reason="skip_page")
+    if phase == "learn":
+        if int(page.learn_budget) <= 0:
+            return CookScheduleVerdict(action="idle", page=page.page, reason="no_learn_budget")
+        if not page.coverage_complete or int(page.learn_generated) < int(page.learn_budget):
+            return CookScheduleVerdict(
+                action="cook",
+                page=page.page,
+                cook_mode="learn",
+                reason="edition_learn",
+            )
+        return CookScheduleVerdict(action="idle", page=page.page, reason="learn_met")
+    if int(page.learn_budget) > 0 and int(page.learn_generated) < int(page.learn_budget):
+        return CookScheduleVerdict(action="idle", page=page.page, reason="learn_first")
+    if int(page.test_budget) <= 0:
+        return CookScheduleVerdict(action="idle", page=page.page, reason="no_test_budget")
+    if int(page.test_generated) < int(page.test_budget):
+        return CookScheduleVerdict(
+            action="cook",
+            page=page.page,
+            cook_mode="test",
+            reason="edition_test",
+        )
+    return CookScheduleVerdict(action="idle", page=page.page, reason="test_met")
+
+
+def plan_newspaper_cook_target(
+    pages: Sequence[NewspaperPageCookSignal],
+) -> CookScheduleVerdict:
+    """Learn cook across pages first, then test cook."""
+    for page in pages:
+        verdict = evaluate_newspaper_page_cook(page, phase="learn")
+        if verdict.action == "cook":
+            return verdict
+    for page in pages:
+        verdict = evaluate_newspaper_page_cook(page, phase="test")
+        if verdict.action == "cook":
+            return verdict
+    return CookScheduleVerdict(action="idle", reason="edition_cook_idle")
+
+
+def evaluate_newspaper_triage_complete(
+    *,
+    has_any_coverage: bool,
+    questions_generated: int,
+) -> bool:
+    """Newspaper Learn UI: triage is done if any page landed or MCQs exist."""
+    return bool(has_any_coverage) or int(questions_generated) > 0
+
+
+def evaluate_learn_cook_coverage_close(*, hit_budget: bool, serve_mode: str) -> bool:
+    """Learn cook may stamp coverage complete once N_page is filled."""
+    return bool(hit_budget) and (serve_mode or "") == "learn"
+
+
+def evaluate_empty_batch_coverage_close(
+    *,
+    saved: int,
+    start_sequence: int,
+    batch_size: int,
+    budget: int,
+    has_targets: bool,
+    has_aspects: bool,
+) -> bool:
+    """Close coverage when a zero-save batch already sits at budget with no targets."""
+    if int(saved) != 0:
+        return False
+    if int(start_sequence) + int(batch_size) < int(budget):
+        return False
+    if has_targets:
+        return False
+    return bool(has_aspects)
+
+
+@dataclass(frozen=True)
+class AuxCookSpawnVerdict:
+    spawn_coding: bool
+    spawn_debug: bool
+    policy_version: str = SESSION_VERSION
+
+
+def alias_debuggable(*, programmable: bool, debuggable: bool | None) -> bool:
+    """Debug cook follows an explicit flag, else programmable pages."""
+    if debuggable is None:
+        return bool(programmable)
+    return bool(debuggable or programmable)
+
+
+def evaluate_auxiliary_cook_spawn(
+    *,
+    programmable: bool,
+    debuggable: bool,
+) -> AuxCookSpawnVerdict:
+    """Whether triage should spawn coding / debug cooks besides MCQs."""
+    return AuxCookSpawnVerdict(
+        spawn_coding=bool(programmable),
+        spawn_debug=bool(debuggable),
+    )
+
+
+def plan_first_cook_batch(*, budget: int, first_batch: int = 1) -> int:
+    """Zero-wait first MCQ batch; never larger than remaining N_page."""
+    n = max(0, int(budget))
+    if n <= 0:
+        return 0
+    return min(max(1, int(first_batch)), n)
+
+
+def evaluate_background_first_batch(
+    *,
+    budget: int,
+    generated: int,
+    first_batch: int = 1,
+) -> int:
+    """Kick the first cook after background triage, or 0 to skip."""
+    if int(generated) > 0:
+        return 0
+    return plan_first_cook_batch(budget=budget, first_batch=first_batch)
+
+
+@dataclass(frozen=True)
+class TransitionNextPlan:
+    triage_next: bool
+    cook_next: bool
+    policy_version: str = SESSION_VERSION
+
+
+def plan_transition_next(
+    *,
+    has_next: bool,
+    next_has_coverage: bool,
+    next_generated: int,
+    generate_next_page: bool,
+    current_budget: int,
+) -> TransitionNextPlan:
+    """Page-turn: triage the next page, or cook its first batch."""
+    if not has_next:
+        return TransitionNextPlan(False, False)
+    if not next_has_coverage:
+        return TransitionNextPlan(True, False)
+    allow = bool(generate_next_page) and int(current_budget) > 0
+    cook = allow and int(next_generated) == 0
+    return TransitionNextPlan(False, cook)

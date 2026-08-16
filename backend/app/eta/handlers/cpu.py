@@ -330,7 +330,12 @@ def transition_prep_job(payload: dict) -> dict:
         mark_transition_prep_done,
         selected_page_list,
     )
-    from app.services.session_design import evaluate_serve_schedule
+    from app.services.question_budget import evaluate_generation_stop
+    from app.services.session_design import (
+        evaluate_serve_schedule,
+        plan_first_cook_batch,
+        plan_transition_next,
+    )
 
     document_id = UUID(payload["document_id"])
     current_page = int(payload["current_page"])
@@ -342,7 +347,9 @@ def transition_prep_job(payload: dict) -> dict:
         progress = get_progress(doc)
         budget = effective_question_budget(doc, current_page, progress)
         generated = count_assertions_on_page(db, document_id, current_page)
-        if generated < budget:
+        if not evaluate_generation_stop(
+            generated=generated, budget=budget, coverage_complete=False
+        ):
             remaining = budget - generated
             # Rolling refill only — never one job for the entire remaining plan.
             enqueue_page_batch(
@@ -362,24 +369,35 @@ def transition_prep_job(payload: dict) -> dict:
 
         answered_on_page = int(progress.get("answered_on_page") or 0)
         triage_budget = get_question_budget(doc, current_page)
-        allow_next_page_generation = evaluate_serve_schedule(
+        generate_next = evaluate_serve_schedule(
             answered_on_page=answered_on_page,
             page_budget=triage_budget,
-        ).generate_next_page if triage_budget > 0 else False
-
+        ).generate_next_page
+        next_plan = plan_transition_next(
+            has_next=next_page is not None,
+            next_has_coverage=bool(
+                get_page_coverage(doc, next_page) if next_page is not None else {}
+            ),
+            next_generated=(
+                count_assertions_on_page(db, document_id, next_page)
+                if next_page is not None
+                else 0
+            ),
+            generate_next_page=generate_next,
+            current_budget=triage_budget,
+        )
         if next_page is not None:
-            if not get_page_coverage(doc, next_page):
+            if next_plan.triage_next:
                 enqueue_page_triage(db, doc, page=next_page)
-            elif (
-                allow_next_page_generation
-                and count_assertions_on_page(db, document_id, next_page) == 0
-            ):
+            elif next_plan.cook_next:
                 next_budget = effective_question_budget(doc, next_page, progress)
                 enqueue_page_batch(
                     db,
                     doc,
                     page=next_page,
-                    batch_size=min(FIRST_QUESTION_BATCH_SIZE, next_budget),
+                    batch_size=plan_first_cook_batch(
+                        budget=next_budget, first_batch=FIRST_QUESTION_BATCH_SIZE
+                    ),
                     start_sequence=0,
                 )
             enqueue_job(

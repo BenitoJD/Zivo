@@ -67,42 +67,46 @@ def _next_newspaper_cook_page(
 ) -> tuple[int, Mode] | None:
     """First study page that still needs MCQ batches under learn or test cook budget."""
     from app.services.question_pool import get_test_question_budget
+    from app.services.session_design import (
+        NewspaperPageCookSignal,
+        evaluate_newspaper_page_cook,
+    )
 
-    for page in selected_page_list(doc):
-        if _has_active_generate_job_for_page(db, document_id, page):
-            continue
-        cov = get_page_coverage(doc, page)
-        if not cov or cov.get("non_content"):
-            continue
-        learn_budget = get_question_budget(doc, page, mode="learn")
-        if learn_budget <= 0:
-            continue
-        learn_generated = count_assertions_on_page(
-            db, document_id, page, serve_mode="learn"
-        )
-        if not is_coverage_complete(doc, page) or learn_generated < learn_budget:
-            return page, "learn"
-
-    for page in selected_page_list(doc):
-        if _has_active_generate_job_for_page(db, document_id, page):
-            continue
-        cov = get_page_coverage(doc, page)
-        if not cov or cov.get("non_content"):
-            continue
-        learn_budget = get_question_budget(doc, page, mode="learn")
-        learn_generated = count_assertions_on_page(
-            db, document_id, page, serve_mode="learn"
-        )
-        if learn_budget > 0 and learn_generated < learn_budget:
-            continue
-        test_budget = get_test_question_budget(doc, page)
-        if test_budget <= 0:
-            continue
-        test_generated = count_assertions_on_page(
-            db, document_id, page, serve_mode="test"
-        )
-        if test_generated < test_budget:
-            return page, "test"
+    for phase in ("learn", "test"):
+        for page in selected_page_list(doc):
+            active = _has_active_generate_job_for_page(db, document_id, page)
+            cov = get_page_coverage(doc, page)
+            non_content = bool((cov or {}).get("non_content"))
+            learn_budget = 0
+            learn_generated = 0
+            coverage_complete = False
+            test_budget = 0
+            test_generated = 0
+            if cov and not active and not non_content:
+                learn_budget = get_question_budget(doc, page, mode="learn")
+                learn_generated = count_assertions_on_page(
+                    db, document_id, page, serve_mode="learn"
+                )
+                coverage_complete = is_coverage_complete(doc, page)
+                if phase == "test":
+                    test_budget = get_test_question_budget(doc, page)
+                    test_generated = count_assertions_on_page(
+                        db, document_id, page, serve_mode="test"
+                    )
+            signal = NewspaperPageCookSignal(
+                page=page,
+                has_active_generate=active,
+                has_coverage=bool(cov),
+                non_content=non_content,
+                learn_budget=learn_budget,
+                learn_generated=learn_generated,
+                coverage_complete=coverage_complete,
+                test_budget=test_budget,
+                test_generated=test_generated,
+            )
+            verdict = evaluate_newspaper_page_cook(signal, phase=phase)
+            if verdict.action == "cook" and verdict.cook_mode:
+                return page, verdict.cook_mode
     return None
 
 
@@ -342,8 +346,10 @@ def _enqueue_first_question_batch(
     generated = count_assertions_on_page(db, doc.id, page)
     if generated > 0:
         return _maybe_enqueue_initial_pool_remainder(db, doc, page=page)
+    from app.services.session_design import plan_first_cook_batch
+
     budget = get_question_budget(doc, page)
-    batch = min(FIRST_QUESTION_BATCH_SIZE, budget)
+    batch = plan_first_cook_batch(budget=budget, first_batch=FIRST_QUESTION_BATCH_SIZE)
     if batch <= 0:
         return None
     return enqueue_page_batch(db, doc, page=page, batch_size=batch, start_sequence=0)
@@ -386,13 +392,21 @@ def on_triage_completed(
     # touch the current-page generation_pending flag or auto-generate a batch.
     if precompute:
         if _is_newspaper_doc(doc):
+            from app.services.session_design import evaluate_background_first_batch
+
             budget = get_question_budget(doc, page)
-            if budget > 0 and count_assertions_on_page(db, document_id, page) == 0:
+            generated = count_assertions_on_page(db, document_id, page)
+            batch = evaluate_background_first_batch(
+                budget=budget,
+                generated=generated,
+                first_batch=FIRST_QUESTION_BATCH_SIZE,
+            )
+            if batch > 0:
                 job = enqueue_page_batch(
                     db,
                     doc,
                     page=page,
-                    batch_size=min(FIRST_QUESTION_BATCH_SIZE, budget),
+                    batch_size=batch,
                     start_sequence=0,
                 )
                 _enqueue_newspaper_edition_triage(db, doc)
@@ -432,7 +446,9 @@ def on_triage_completed(
 
         maybe_mark_newspaper_edition_ready(db, doc)
         return None
-    batch = min(FIRST_QUESTION_BATCH_SIZE, budget)
+    from app.services.session_design import plan_first_cook_batch
+
+    batch = plan_first_cook_batch(budget=budget, first_batch=FIRST_QUESTION_BATCH_SIZE)
     job = enqueue_page_batch(db, doc, page=page, batch_size=batch, start_sequence=0)
     # Coding generation is independent of MCQ budget — a programmable page spawns
     # one coding problem whether or not MCQs are also being generated for it.
@@ -443,8 +459,14 @@ def on_triage_completed(
 
 def _maybe_spawn_debug(db: Session, doc: Document, *, page: int) -> None:
     """Spawn debug diagnostics cook when triage flagged the page as debuggable."""
+    from app.services.session_design import evaluate_auxiliary_cook_spawn
+
     coverage = get_page_coverage(doc, page)
-    if not coverage.get("debuggable"):
+    plan = evaluate_auxiliary_cook_spawn(
+        programmable=bool(coverage.get("programmable")),
+        debuggable=bool(coverage.get("debuggable")),
+    )
+    if not plan.spawn_debug:
         return
     try:
         from app.services.question_generation import enqueue_debug_generation_for_page
@@ -466,8 +488,14 @@ def _maybe_spawn_coding(db: Session, doc: Document, *, page: int) -> None:
     roll back the MCQ batch enqueue that just happened. The feature degrades to
     'no coding problems for this page' silently.
     """
+    from app.services.session_design import evaluate_auxiliary_cook_spawn
+
     coverage = get_page_coverage(doc, page)
-    if not coverage.get("programmable"):
+    plan = evaluate_auxiliary_cook_spawn(
+        programmable=bool(coverage.get("programmable")),
+        debuggable=bool(coverage.get("debuggable")),
+    )
+    if not plan.spawn_coding:
         return
     try:
         from app.services.question_generation import enqueue_coding_generation_for_page
@@ -771,11 +799,13 @@ def bump_aspect_attempts(
 
 
 def set_coverage_complete(db: Session, document_id: uuid.UUID, page: int) -> None:
+    from app.services.kc_coverage import should_persist_coverage_complete
+
     doc = db.get(Document, document_id)
     if not doc:
         return
     entry = dict(get_page_coverage(doc, page))
-    if not entry.get("aspects"):
+    if not should_persist_coverage_complete(entry):
         return
     entry["coverage_complete"] = True
     save_progress(db, doc, {"page_coverage": {_page_key(page): entry}})
@@ -1015,13 +1045,17 @@ def kick_generation_sync(db: Session, document_id: uuid.UUID) -> None:
         db, document_id
     ):
         budget = get_question_budget(doc, page)
+        from app.services.session_design import plan_first_cook_batch
+
         run_generation(
             db,
             document_id,
             {
                 "mode": "page_batch",
                 "page_number": page,
-                "batch_size": min(FIRST_QUESTION_BATCH_SIZE, budget),
+                "batch_size": plan_first_cook_batch(
+                    budget=budget, first_batch=FIRST_QUESTION_BATCH_SIZE
+                ),
                 "start_sequence": 0,
             },
         )
@@ -1342,8 +1376,15 @@ def record_answer(
         "answered_on_page": int(progress.get("answered_on_page") or 0) + 1,
     }
     if newspaper and serve_mode == "learn":
+        from app.services.session_design import evaluate_newspaper_learn_complete
+
         learn_ids = edition_assertion_ids(db, document_id, doc, serve_mode="learn")
-        if learn_ids and all(row_id in answered for row_id in learn_ids):
+        if evaluate_newspaper_learn_complete(
+            learn_pool_count=len(learn_ids),
+            all_learn_answered=bool(learn_ids)
+            and all(row_id in answered for row_id in learn_ids),
+            generation_pending=False,
+        ):
             patch["learn_complete"] = True
     row = db.execute(
         text(
@@ -1358,13 +1399,11 @@ def record_answer(
     from app.services.document_learner_state import document_uses_learner_overlay
 
     if row and row.get("key") and row.get("page") and not document_uses_learner_overlay(doc):
+        from app.services.kc_coverage import mark_aspects_answered
+
         page_num = int(row["page"])
         entry = dict(get_page_coverage(doc, page_num))
-        aspects = list(entry.get("aspects") or [])
-        for aspect in aspects:
-            if aspect.get("key") == row["key"]:
-                aspect["answered"] = True
-        entry["aspects"] = aspects
+        entry["aspects"] = mark_aspects_answered(entry.get("aspects") or [], str(row["key"]))
         patch["page_coverage"] = {_page_key(page_num): entry}
     save_progress(db, doc, patch, learner_key=learner_key)
     db.commit()
@@ -1398,7 +1437,13 @@ def maybe_refill_pool(db: Session, document_id: uuid.UUID) -> Job | None:
     answered_on_page = count_answered_on_page(db, document_id, page, answered_ids)
     available = _count_available(db, doc.id, progress)
 
-    if is_coverage_complete(doc, page) or generated_on_page >= budget:
+    from app.services.question_budget import evaluate_generation_stop
+
+    if evaluate_generation_stop(
+        generated=generated_on_page,
+        budget=budget,
+        coverage_complete=is_coverage_complete(doc, page),
+    ):
         return None
 
     # Stage another batch whenever the ready buffer is running low, on the periodic

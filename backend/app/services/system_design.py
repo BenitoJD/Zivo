@@ -444,17 +444,20 @@ def _concept_scores_for_subject(
         params,
     ).mappings().all()
     out: dict[str, list[float]] = {}
+    from app.services.mastery_evidence import sample_path_mastery
+
     for r in rows:
         scores = r["scores"] or {}
         dims = scores.get("dimensions") if isinstance(scores, dict) else None
+        vals = None
         if isinstance(dims, list) and dims:
             vals = [float(d.get("score") or 2) for d in dims if isinstance(d, dict)]
-            avg = (sum(vals) / len(vals) - 1) / 3 if vals else 0.4
-        else:
-            avg = 0.4
         weak = set(r["weak_concepts"] or [])
         for key in r["concept_keys"] or []:
-            sample = max(0.0, min(1.0, avg - (0.25 if key in weak else 0.0)))
+            sample = sample_path_mastery(
+                dimension_scores=vals,
+                is_weak=key in weak,
+            )
             out.setdefault(str(key), []).append(sample)
     return out
 
@@ -462,21 +465,19 @@ def _concept_scores_for_subject(
 def build_path(
     db: Session, account_id: uuid.UUID | None, guest_id: str | None
 ) -> dict[str, Any]:
-    from app.services.mastery_evidence import label_path_mastery
+    from app.services.mastery_evidence import label_path_mastery, plan_path_focus
 
     concepts = list_concepts(db)
     samples = _concept_scores_for_subject(db, account_id, guest_id)
     items = []
-    focus_key: str | None = None
+    labeled_keys: list[tuple[str, Any]] = []
     for c in concepts:
         key = c["key"]
         hist = samples.get(key) or []
         labeled = label_path_mastery(hist)
         state = labeled.state
         mastery = labeled.mastery
-        if focus_key is None and state in ("not_started", "needs_work", "in_progress"):
-            if state != "strong":
-                focus_key = key
+        labeled_keys.append((key, state))
         items.append(
             {
                 "key": key,
@@ -487,8 +488,7 @@ def build_path(
                 "mastery": mastery,
             }
         )
-    if focus_key is None and items:
-        focus_key = items[0]["key"]
+    focus_key = plan_path_focus(labeled_keys)
     focus_title = next((i["title"] for i in items if i["key"] == focus_key), "")
     return {"concepts": items, "focus_key": focus_key, "focus_title": focus_title}
 
@@ -724,13 +724,6 @@ def save_design(
     return get_session(db, session_id, account_id, guest_id) or sess
 
 
-def _clamp_score(v: Any) -> int:
-    try:
-        return max(1, min(4, int(round(float(v)))))
-    except (TypeError, ValueError):
-        return 2
-
-
 def _heuristic_grade(design: dict[str, Any], concept_keys: list[str]) -> dict[str, Any]:
     """Compat wrapper: Open Response owns the heuristic SD grade."""
     from app.services.open_response import heuristic_system_design_grade
@@ -781,34 +774,10 @@ async def submit_and_grade(
                 log_tag="sd_grade",
             )
             data = extract_json_obj(raw) or {}
-            dims_in = data.get("dimensions") or []
-            dims = []
-            for key in ("framing", "api", "data", "scale", "tradeoffs", "communication"):
-                found = next((d for d in dims_in if isinstance(d, dict) and d.get("key") == key), None)
-                dims.append(
-                    {
-                        "key": key,
-                        "score": _clamp_score((found or {}).get("score")),
-                        "note": str((found or {}).get("note") or "")[:280],
-                    }
-                )
-            # Fill gaps from heuristic so lesson shape always matches coding teach-gap.
+            from app.services.open_response import merge_system_design_grade
+
             fallback = _heuristic_grade(design_clean, concept_keys)
-            weak = [str(w) for w in (data.get("weak_concepts") or []) if str(w)][:3]
-            if not weak:
-                weak = fallback["weak_concepts"]
-            lesson = data.get("lesson") if isinstance(data.get("lesson"), dict) else {}
-            graded = {
-                "mentor_summary": str(data.get("mentor_summary") or "").strip()
-                or fallback["mentor_summary"],
-                "dimensions": dims,
-                "weak_concepts": weak,
-                "lesson": {
-                    "title": str(lesson.get("title") or fallback["lesson"]["title"])[:120],
-                    "body": str(lesson.get("body") or fallback["lesson"]["body"])[:2000],
-                    "try_this": str(lesson.get("try_this") or fallback["lesson"]["try_this"])[:400],
-                },
-            }
+            graded = merge_system_design_grade(data, fallback).result
             cache_put(db, kind="sd_grade", cache_key=grade_key, value=graded)
         except Exception:
             # Best-effort LLM grade — heuristic keeps the mastery loop alive.
