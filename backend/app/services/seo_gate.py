@@ -22,6 +22,14 @@ DEFAULT_POLICY = "seo_gate_v1"
 # Anti-repeat embedding cosine (owned here; seo_dedupe is plumbing).
 NEAR_DUPE_COSINE = 0.85
 DEFAULT_SOFT_MAX_PER_DAY = 20
+SEO_USEFUL_MIN_CHARS = 400
+SEO_USEFUL_SIGNAL_MIN_CHARS = 1200
+SEO_UPLOAD_CANDIDATE_MIN_CHARS = 500
+SEO_NEWSPAPER_CANDIDATE_QUERY_MAX = 20
+SEO_UPLOAD_CANDIDATE_QUERY_MAX = 10
+SEO_DIGEST_MIN_WORDS = 400
+SEO_DIGEST_MAX_WORDS = 900
+SEO_DIGEST_SOURCE_CHARS = 16000
 
 UsefulnessReason = Literal[
     "ok",
@@ -100,7 +108,7 @@ def evaluate_usefulness(
     pol = normalize_policy(policy)
     body = (text or "").strip()
     name = (filename or "").strip().lower()
-    if len(body) < 400:
+    if len(body) < SEO_USEFUL_MIN_CHARS:
         return SeoUsefulnessVerdict(False, "too_short", policy=pol)
     if _INTERNAL_MARKERS.search(body) or _INTERNAL_MARKERS.search(name):
         return SeoUsefulnessVerdict(False, "internal_markers", policy=pol)
@@ -112,7 +120,7 @@ def evaluate_usefulness(
     ):
         return SeoUsefulnessVerdict(False, "internal_filename", policy=pol)
     if not _USEFUL_SIGNALS.search(body):
-        if len(body) < 1200:
+        if len(body) < SEO_USEFUL_SIGNAL_MIN_CHARS:
             return SeoUsefulnessVerdict(False, "no_useful_signal", policy=pol)
     return SeoUsefulnessVerdict(True, "ok", policy=pol)
 
@@ -193,6 +201,34 @@ class SeoPresentationPlan:
     policy_version: str = SEO_GATE_VERSION
 
 
+@dataclass(frozen=True)
+class SeoFormatContract:
+    format: Literal["explainer", "faq", "list"]
+    prompt_rule: str
+    policy_version: str = SEO_GATE_VERSION
+
+
+def plan_article_format_contract(fmt: str) -> SeoFormatContract:
+    """Prompt contract for the chosen article format (word band / item counts)."""
+    kind: Literal["explainer", "faq", "list"]
+    if fmt == "faq":
+        kind = "faq"
+        rule = (
+            "Write an FAQ post. body_md with ## questions. "
+            "Also fill faq_items as [{question, answer}, ...] (3-6 items)."
+        )
+    elif fmt == "list":
+        kind = "list"
+        rule = "Write a numbered list post (5-9 concrete points). body_md markdown."
+    else:
+        kind = "explainer"
+        rule = (
+            "Write an explainer (800-1500 words target in body_md). "
+            "Markdown with short headings."
+        )
+    return SeoFormatContract(kind, rule)
+
+
 def plan_article_presentation(
     stream: str,
     *,
@@ -256,6 +292,14 @@ def plan_sd_daily_cook(
 
 SEO_MCQ_ATTACH_MIN = 4
 SEO_MCQ_ATTACH_MAX = 6
+SEO_MCQ_GENERATION_ATTEMPTS = 2
+SEO_RELATED_MCQ_QUERY_MAX = 10
+SEO_RELATED_MCQ_QUERY_DEFAULT = 5
+SEO_CANDIDATE_BATCH_DEFAULT = 5
+SEO_FAQ_ITEM_MAX = 8
+SEO_ARTICLE_SOURCE_CHARS = 12_000
+SEO_MCQ_PAGE_CHARS = 8_000
+SEO_SD_SOURCE_CHARS = 4_000
 NEWSPAPER_DIGEST_MAX_CHARS = 12_000
 
 
@@ -297,6 +341,88 @@ def evaluate_newspaper_seo_candidate(
     return evaluate_worthiness(page_text=page_text, newspaper=True, db=db).worthy
 
 
+SEO_CANDIDATE_SOURCES = ("newspaper", "upload")
+
+
+@dataclass(frozen=True)
+class SeoCandidateSchedule:
+    batch_size: int
+    sources: tuple[str, ...]
+    policy: str = DEFAULT_POLICY
+    policy_version: str = SEO_GATE_VERSION
+
+
+def plan_seo_candidate_schedule(
+    *,
+    batch_size: int | None = None,
+    policy: str | None = None,
+) -> SeoCandidateSchedule:
+    """Newspaper pages first, then uploads, until batch_size."""
+    pol = normalize_policy(policy)
+    n = SEO_CANDIDATE_BATCH_DEFAULT if batch_size is None else int(batch_size)
+    cap = max(1, n)
+    return SeoCandidateSchedule(
+        batch_size=cap,
+        sources=SEO_CANDIDATE_SOURCES,
+        policy=pol,
+    )
+
+
+def seo_candidate_slots_remaining(*, accepted: int, batch_size: int) -> int:
+    """How many more SEO cook candidates this tick may accept."""
+    return max(0, int(batch_size) - int(accepted))
+
+
+def seo_candidate_min_chars(source_kind: str) -> int:
+    """Pre-filter floor before a newspaper page or upload enters the SEO cook queue."""
+    if (source_kind or "").strip().lower() == "newspaper":
+        return SEO_USEFUL_MIN_CHARS
+    return SEO_UPLOAD_CANDIDATE_MIN_CHARS
+
+
+def plan_seo_candidate_query_limit(*, source_kind: str, requested: int) -> int:
+    """Hard cap on how many candidate rows one SEO query may load."""
+    kind = (source_kind or "").strip().lower()
+    cap = (
+        SEO_NEWSPAPER_CANDIDATE_QUERY_MAX
+        if kind == "newspaper"
+        else SEO_UPLOAD_CANDIDATE_QUERY_MAX
+    )
+    return max(1, min(int(requested), int(cap)))
+
+
+@dataclass(frozen=True)
+class SeoDigestWriterContract:
+    min_words: int
+    max_words: int
+    source_chars: int
+    policy_version: str = SEO_GATE_VERSION
+
+
+def plan_seo_digest_writer_contract() -> SeoDigestWriterContract:
+    """Word band and source trim for the edition-digest rewrite prompt."""
+    return SeoDigestWriterContract(
+        SEO_DIGEST_MIN_WORDS,
+        SEO_DIGEST_MAX_WORDS,
+        SEO_DIGEST_SOURCE_CHARS,
+    )
+
+
+def plan_seo_fingerprint(
+    *,
+    source_kind: str,
+    source_key: str,
+    default_fingerprint: str,
+) -> str:
+    """Stable fingerprints for bank/topic sources so we do not recook the same item."""
+    kind = (source_kind or "").strip().lower()
+    if kind == "sd_bank":
+        return f"sd:{source_key}"
+    if kind == "topic_queue":
+        return f"topic:{source_key}"
+    return default_fingerprint
+
+
 def evaluate_seo_mcq_attach_ready(
     attached_count: int,
     *,
@@ -321,6 +447,34 @@ def digest_skip_reason(verdict: SeoUsefulnessVerdict) -> str | None:
     if verdict.reason == "too_short":
         return "insufficient_text"
     return verdict.reason
+
+
+def should_bypass_digest_dedupe(*, force: bool, existing_post_id: Any) -> bool:
+    """Force recook of an already-linked edition post skips the near-dupe gate."""
+    return bool(force) and existing_post_id is not None
+
+
+RETRYABLE_EDITION_DIGEST_REASONS = frozenset({"write_failed"})
+SEO_COOK_TICK_DEFAULT = 3
+SEO_COOK_TICK_MAX = 5
+EditionDigestSkipStatus = Literal["failed", "skipped"]
+
+
+def evaluate_edition_digest_skip_status(reason: str) -> EditionDigestSkipStatus:
+    """Transient write failures stay retryable; other skips are terminal."""
+    if str(reason) in RETRYABLE_EDITION_DIGEST_REASONS:
+        return "failed"
+    return "skipped"
+
+
+def plan_seo_cook_tick(
+    *,
+    limit: int,
+    remaining: int,
+    max_batch: int = SEO_COOK_TICK_MAX,
+) -> int:
+    """How many SEO candidates this tick may cook (cap, remaining slots, hard max)."""
+    return max(0, min(int(limit), int(remaining), int(max_batch)))
 
 
 def plan_seo_mcq_attach(
@@ -387,3 +541,53 @@ def plan_newspaper_digest(
         parts.append(chunk)
         total += len(chunk) + 2
     return "\n\n".join(parts)
+
+
+def plan_seo_faq_item_cap() -> int:
+    """How many FAQ Q/A pairs a cooked SEO post may keep."""
+    return SEO_FAQ_ITEM_MAX
+
+
+def plan_seo_related_mcq_query_limit(requested: int | None = None) -> int:
+    """Cap on related-assertion lookup when attaching MCQs to an SEO post."""
+    n = SEO_RELATED_MCQ_QUERY_DEFAULT if requested is None else int(requested)
+    return max(1, min(n, SEO_RELATED_MCQ_QUERY_MAX))
+
+
+def plan_seo_article_source_chars() -> int:
+    """How much scrubbed source an SEO article rewrite may send to the LLM."""
+    return SEO_ARTICLE_SOURCE_CHARS
+
+
+def plan_seo_mcq_page_chars() -> int:
+    """How much post body to treat as the page text when cooking SEO MCQs."""
+    return SEO_MCQ_PAGE_CHARS
+
+
+def plan_seo_sd_source_chars() -> int:
+    """How much SD-bank reference design to clip into an SEO candidate."""
+    return SEO_SD_SOURCE_CHARS
+
+
+@dataclass(frozen=True)
+class SeoMcqAttachPlan:
+    target_count: int
+    min_count: int
+    max_count: int
+    generation_attempts: int
+    policy_version: str = SEO_GATE_VERSION
+
+
+def plan_seo_mcq_attach_defaults() -> SeoMcqAttachPlan:
+    """How many MCQs an SEO post should attach, and SEO-only generate retries."""
+    return SeoMcqAttachPlan(
+        SEO_MCQ_ATTACH_MIN,
+        SEO_MCQ_ATTACH_MIN,
+        SEO_MCQ_ATTACH_MAX,
+        SEO_MCQ_GENERATION_ATTEMPTS,
+    )
+
+
+def plan_seo_digest_backfill_batch() -> int:
+    """How many unlinked newspaper editions one digest-backfill tick may enqueue."""
+    return plan_seo_candidate_schedule().batch_size

@@ -1,11 +1,11 @@
 """Unit tests for the Question Generator parsing/validation (pure, no DB/network)."""
 
 from app.graphs.quiz_graph import (
-    MAX_QUESTIONS,
     _finalize,
     _parse_questions,
     quiz_config_signature,
 )
+from app.services.session_design import QUIZ_MAX_QUESTIONS
 
 
 def test_config_signature_normalizes():
@@ -67,7 +67,7 @@ def test_finalize_respects_requested_types_and_cap():
     items.append({"type": "essay", "prompt": "essay", "answer": "x"})
     out = _finalize(items, ["mcq"], 5)  # only mcq requested, cap 5
     assert len(out) == 5 and all(q["type"] == "mcq" for q in out)
-    assert MAX_QUESTIONS == 40
+    assert QUIZ_MAX_QUESTIONS == 40
 
 
 def test_parse_empty():

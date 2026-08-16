@@ -144,6 +144,18 @@ def test_plan_seo_mcq_attach_and_digest() -> None:
         ]
     )
     assert fallback == "keep"
+    from app.services.seo_gate import (
+        plan_seo_article_source_chars,
+        plan_seo_faq_item_cap,
+        plan_seo_mcq_page_chars,
+        plan_seo_related_mcq_query_limit,
+    )
+
+    assert plan_seo_faq_item_cap() == 8
+    assert plan_seo_related_mcq_query_limit(5) == 5
+    assert plan_seo_related_mcq_query_limit(99) == 10
+    assert plan_seo_article_source_chars() == 12_000
+    assert plan_seo_mcq_page_chars() == 8_000
 
 
 def test_seo_mcq_attach_ready_and_digest_source() -> None:
@@ -192,3 +204,83 @@ def test_plan_sd_daily_cook() -> None:
     need = plan_sd_daily_cook(cook_enabled=True, sd_published_today=0, cap_allow=True)
     assert need.cook is True
     assert need.source_order == ("problem", "topic")
+
+
+def test_plan_seo_candidate_schedule() -> None:
+    from app.services.seo_gate import (
+        plan_seo_candidate_schedule,
+        seo_candidate_slots_remaining,
+    )
+
+    plan = plan_seo_candidate_schedule(batch_size=5)
+    assert plan.sources == ("newspaper", "upload")
+    assert plan.batch_size == 5
+    assert seo_candidate_slots_remaining(accepted=2, batch_size=5) == 3
+    assert seo_candidate_slots_remaining(accepted=5, batch_size=5) == 0
+
+
+def test_plan_seo_fingerprint() -> None:
+    from app.services.seo_gate import plan_seo_fingerprint
+
+    assert plan_seo_fingerprint(
+        source_kind="sd_bank", source_key="p1", default_fingerprint="x"
+    ) == "sd:p1"
+    assert plan_seo_fingerprint(
+        source_kind="topic_queue", source_key="t1", default_fingerprint="x"
+    ) == "topic:t1"
+    assert plan_seo_fingerprint(
+        source_kind="upload", source_key="u1", default_fingerprint="fp-default"
+    ) == "fp-default"
+
+
+def test_edition_digest_skip_and_cook_tick() -> None:
+    from app.services.seo_gate import (
+        evaluate_edition_digest_skip_status,
+        plan_seo_cook_tick,
+    )
+
+    assert evaluate_edition_digest_skip_status("write_failed") == "failed"
+    assert evaluate_edition_digest_skip_status("too_short") == "skipped"
+    assert plan_seo_cook_tick(limit=3, remaining=10) == 3
+    assert plan_seo_cook_tick(limit=8, remaining=10) == 5
+    assert plan_seo_cook_tick(limit=8, remaining=2) == 2
+    assert plan_seo_cook_tick(limit=8, remaining=0) == 0
+    from app.services.seo_gate import SEO_COOK_TICK_DEFAULT
+
+    assert SEO_COOK_TICK_DEFAULT == 3
+    assert plan_seo_cook_tick(limit=SEO_COOK_TICK_DEFAULT, remaining=10) == 3
+    from app.services.seo_gate import (
+        plan_seo_candidate_query_limit,
+        plan_seo_digest_writer_contract,
+        seo_candidate_min_chars,
+    )
+
+    assert seo_candidate_min_chars("newspaper") == 400
+    assert seo_candidate_min_chars("upload") == 500
+    assert plan_seo_candidate_query_limit(source_kind="newspaper", requested=99) == 20
+    digest = plan_seo_digest_writer_contract()
+    assert digest.min_words == 400 and digest.max_words == 900 and digest.source_chars == 16000
+    from app.services.seo_gate import (
+        plan_article_format_contract,
+        plan_seo_digest_backfill_batch,
+        plan_seo_mcq_attach_defaults,
+        plan_seo_sd_source_chars,
+    )
+
+    attach = plan_seo_mcq_attach_defaults()
+    assert attach.target_count == 4 and attach.min_count == 4
+    assert attach.max_count == 6 and attach.generation_attempts == 2
+    assert plan_seo_sd_source_chars() == 4000
+    assert plan_seo_digest_backfill_batch() == 5
+    from app.services.seo_gate import plan_seo_candidate_schedule, plan_seo_related_mcq_query_limit
+
+    assert plan_seo_candidate_schedule().batch_size == 5
+    assert plan_seo_related_mcq_query_limit() == 5
+    explainer = plan_article_format_contract("explainer")
+    assert "800-1500" in explainer.prompt_rule
+    assert plan_article_format_contract("nope").format == "explainer"
+    from app.services.seo_gate import should_bypass_digest_dedupe
+
+    assert should_bypass_digest_dedupe(force=True, existing_post_id="x")
+    assert not should_bypass_digest_dedupe(force=True, existing_post_id=None)
+    assert not should_bypass_digest_dedupe(force=False, existing_post_id="x")

@@ -26,6 +26,7 @@ from app.services.question_budget import (
     Centrality,
     Mode,
     Unit,
+    plan_newspaper_test_triage,
     plan_page_budget,
 )
 from app.services.question_pool import (
@@ -121,14 +122,17 @@ def run_page_triage(
         from app.services.content_worthiness import (
             evaluate_vision_glance,
             evaluate_worthiness,
+            plan_worthiness_probe,
         )
 
         vision_usable = False
         rationale = "No extractable text on this page."
+        probe = plan_worthiness_probe("empty_page")
         worth = evaluate_worthiness(
             page_text=page_text or "",
-            empty=True,
-            min_chars=40,
+            empty=probe.empty,
+            check_junk=probe.check_junk,
+            min_chars=probe.min_chars,
         )
         doc = db.get(Document, document_id)
         if doc and should_skip_empty_page_vision(doc):
@@ -220,31 +224,23 @@ def run_page_triage(
     )
 
     content_type = result.get("content_type")
-    if is_newspaper and not result.get("non_content"):
-        from app.services.newspaper_ad_filter import NEWSPAPER_EXAM_CONTENT_TYPE
-
-        content_type = NEWSPAPER_EXAM_CONTENT_TYPE
-        aspects_raw = result.get("aspects") or []
-        units = _units_from_aspects(aspects_raw)
-        conf_raw = result.get("budget_confidence")
-        conf: Literal["high", "medium", "low"] | None = None
-        if conf_raw in ("high", "medium", "low"):
-            conf = conf_raw
-        test_plan = plan_page_budget(
-            units if units else None,
-            mode="test",
-            non_content=False,
-            words=len(page_text.split()) if page_text else 0,
-            substantial_paragraphs=len(
-                [p for p in page_text.split("\n\n") if p.strip()] if page_text else []
-            ),
-            confidence=conf,
-        )
-        test_selected = _select_aspects_for_plan(aspects_raw, n_page=test_plan.n_page)
+    conf_raw = result.get("budget_confidence")
+    aspects_raw = result.get("aspects") or []
+    test_overlay = plan_newspaper_test_triage(
+        is_newspaper=is_newspaper,
+        non_content=bool(result.get("non_content")),
+        aspects=aspects_raw,
+        units=_units_from_aspects(aspects_raw) if is_newspaper else None,
+        words=len(page_text.split()) if page_text else 0,
+        substantial_paragraphs=len(substantial_paragraphs(page_text)),
+        confidence=conf_raw if conf_raw in ("high", "medium", "low") else None,
+    )
+    if test_overlay.apply:
+        content_type = test_overlay.content_type
         result = {
             **result,
-            "test_question_budget": test_plan.n_page,
-            "test_aspects": test_selected,
+            "test_question_budget": test_overlay.test_question_budget,
+            "test_aspects": list(test_overlay.test_aspects),
         }
 
     if content_type is not None:
@@ -474,7 +470,7 @@ def _finalize_triage(
     confidence: Literal["high", "medium", "low"] | None = None,
 ) -> dict[str, Any]:
     """Dedup aspects, normalize via KC engine, then let plan_page_budget own N."""
-    from app.services.kc_coverage import normalize_aspects, normalize_key
+    from app.services.kc_coverage import normalize_aspects, normalize_key, stamp_aspect_flags, stamp_kc_centrality
 
     dedupe_verdict = dedupe_aspects(aspects)
     deduped = list(dedupe_verdict.aspects)
@@ -487,8 +483,9 @@ def _finalize_triage(
         # Aspect Discovery owns centrality tokens (incl. peripheral→support, skip≠central).
         cent = parse_centrality(aspect.get("centrality"))
         aspect["centrality"] = cent
-        aspect["central"] = cent == "central"
-        if cent == "support":
+        central, peripheral = stamp_aspect_flags(cent)
+        aspect["central"] = central
+        if peripheral:
             aspect["peripheral"] = True
     plan_aspects = normalize_aspects(deduped)
     # Merge engine keys back onto triage aspect dicts (preserve angles, etc.).
@@ -505,13 +502,11 @@ def _finalize_triage(
         base["key"] = a.key
         base["label"] = a.label or base.get("label") or a.key
         orig_cent = parse_centrality(base.get("centrality"))
-        if orig_cent == "skip":
-            # KC only has central bool; keep skip string for pick_for_plan / budget weights.
-            base["centrality"] = "skip"
-            base["central"] = False
-        else:
-            base["centrality"] = "central" if a.central else "support"
-            base["central"] = a.central
+        centrality, central = stamp_kc_centrality(
+            orig_centrality=orig_cent, central=a.central
+        )
+        base["centrality"] = centrality
+        base["central"] = central
         normalized_dicts.append(base)
     deduped = normalized_dicts
     units = _units_from_aspects(deduped)
@@ -589,13 +584,14 @@ def _triage_page(
 
     # Empty / junk → Worthiness Engine owns honest zero (no parallel if-ladder).
     if allow_zero:
-        from app.services.content_worthiness import evaluate_worthiness
+        from app.services.content_worthiness import evaluate_worthiness, plan_worthiness_probe
 
+        probe = plan_worthiness_probe("pre_llm", has_text=bool(excerpt))
         worth = evaluate_worthiness(
             page_text=excerpt or "",
-            empty=not bool(excerpt),
-            check_junk=True,
-            min_chars=24,
+            empty=probe.empty,
+            check_junk=probe.check_junk,
+            min_chars=probe.min_chars,
         )
         if not worth.worthy:
             return _store(
@@ -687,7 +683,13 @@ def _triage_page(
 
                 # Legacy path (flag off): still formula-owned N; no floor/ceiling
                 # beyond the planner. Empty aspects → heuristic fallback.
-                if not aspects:
+                from app.services.content_worthiness import (
+                    should_heuristic_fallback_empty_aspects,
+                )
+
+                if should_heuristic_fallback_empty_aspects(
+                    allow_zero=allow_zero, aspect_count=len(aspects)
+                ):
                     return _store(_fallback_triage(page_text, page_number, mode=mode))
                 return _store(
                     _finalize_triage(

@@ -24,6 +24,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
+from app.services.content_worthiness import is_import_extract_too_short
 from app.services.web_import import ImportedArticle, WebImportError
 
 _YT_HOSTS = {
@@ -160,7 +161,7 @@ def _fetch_transcript_text(video_id: str) -> str:
         if text and text != "[Music]":
             parts.append(text)
     joined = re.sub(r"\s+", " ", " ".join(parts)).strip()
-    if len(joined) < 80:
+    if is_import_extract_too_short(joined):
         raise WebImportError(
             "This video's transcript was too short to study. Try another video or paste the text.",
             code="empty_content",

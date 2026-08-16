@@ -22,16 +22,18 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models import Document
+from app.services.content_worthiness import (
+    plan_vision_ocr_cache,
+    should_revalidate_ocr_blank,
+)
 from app.services.llm_registry import vision_chat_model_id
 from app.services.llm_router import acomplete_chat
 from app.services.llm_sync import run_coro_in_worker
 
 logger = logging.getLogger(__name__)
 
-# Vision OCR is the priciest per-call cache entry and its inputs never change
-# (a stored page image is immutable), so it outlives the 24h default TTL:
-# offline-pack rebuilds and re-ingests weeks later must not re-bill the model.
-VISION_OCR_TTL_SECONDS = 30 * 24 * 60 * 60
+# Successful transcriptions last a month (immutable page image). Whether a
+# cached BLANK is trusted is Content Worthiness policy, not this plumbing.
 
 _OCR_SYSTEM = (
     "You are a precise OCR engine for study material. Transcribe the text "
@@ -79,11 +81,18 @@ def transcribe_page_with_vision(
         "vision_ocr", doc.storage_key or str(doc.id), int(page_number),
         str(model_id), _OCR_SYSTEM, _OCR_USER,
     )
-    hit = cache_get(db, kind="vision_ocr", cache_key=cache_key, ttl_seconds=VISION_OCR_TTL_SECONDS)
-    if hit == "BLANK":
-        # A provider returning an empty 200 (filtered/degraded) also lands here,
-        # not just genuinely blank pages — trust BLANK only for the 24h default
-        # so a transient empty response can't suppress a page for a month.
+    cache_plan = plan_vision_ocr_cache()
+    hit = cache_get(
+        db,
+        kind="vision_ocr",
+        cache_key=cache_key,
+        ttl_seconds=cache_plan.transcription_ttl_seconds,
+    )
+    if should_revalidate_ocr_blank(
+        hit=hit if isinstance(hit, str) else None,
+        requested_ttl_seconds=cache_plan.transcription_ttl_seconds,
+        blank_trust_ttl_seconds=cache_plan.blank_trust_ttl_seconds,
+    ):
         hit = cache_get(db, kind="vision_ocr", cache_key=cache_key)
     if isinstance(hit, str) and hit:
         return "" if hit == "BLANK" else hit
@@ -121,9 +130,19 @@ def transcribe_page_with_vision(
 
     out = (raw or "").strip()
     if not out or out.upper() == "BLANK":
-        cache_put(db, kind="vision_ocr", cache_key=cache_key, value="BLANK",
-                  ttl_seconds=VISION_OCR_TTL_SECONDS)
+        cache_put(
+            db,
+            kind="vision_ocr",
+            cache_key=cache_key,
+            value="BLANK",
+            ttl_seconds=cache_plan.transcription_ttl_seconds,
+        )
         return ""
-    cache_put(db, kind="vision_ocr", cache_key=cache_key, value=out,
-              ttl_seconds=VISION_OCR_TTL_SECONDS)
+    cache_put(
+        db,
+        kind="vision_ocr",
+        cache_key=cache_key,
+        value=out,
+        ttl_seconds=cache_plan.transcription_ttl_seconds,
+    )
     return out

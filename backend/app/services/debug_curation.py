@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.repositories.intel import _concept_id, _source_id
+from app.services.open_response import evaluate_debug_scenario_shape
 
 logger = logging.getLogger(__name__)
 
@@ -138,8 +139,11 @@ def build_full_payload(
     st = scenario_type if scenario_type in _VALID_SCENARIO_TYPES else "code_reading"
     diff = difficulty if difficulty in _VALID_DIFFICULTIES else "medium"
     steps_clean = _normalize_steps(steps)
-    if len(steps_clean) < 1:
-        raise ValueError("At least one diagnostic step is required")
+    shape = evaluate_debug_scenario_shape(title=title, step_count=len(steps_clean))
+    if not shape.ok:
+        if shape.reason == "no_steps":
+            raise ValueError("At least one diagnostic step is required")
+        raise ValueError("Title is required")
     return {
         "format": "qb.debug.v1",
         "artifact_id": artifact_id,
@@ -176,8 +180,6 @@ def upsert_curated_scenario(
 ) -> dict[str, Any]:
     """Create or update a curated debug scenario."""
     title_clean = title.strip()[:200]
-    if len(title_clean) < 2:
-        raise ValueError("Title is required")
     review = review_status if review_status in _VALID_REVIEW else "draft"
     full_payload = build_full_payload(
         title=title_clean,

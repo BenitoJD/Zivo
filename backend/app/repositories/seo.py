@@ -11,6 +11,11 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.services.chunks import pgvector_literal
+from app.services.seo_gate import (
+    RETRYABLE_EDITION_DIGEST_REASONS,
+    plan_seo_candidate_query_limit,
+    seo_candidate_min_chars,
+)
 
 
 def get_settings(db: Session) -> dict[str, Any]:
@@ -97,10 +102,6 @@ def attempt_exists(db: Session, source_kind: str, source_key: str) -> bool:
         {"k": source_kind, "s": source_key},
     ).first()
     return row is not None
-
-
-# Transient digest failures (LLM timeout, bad JSON) should be retried by backfill.
-RETRYABLE_EDITION_DIGEST_REASONS = frozenset({"write_failed"})
 
 
 def latest_attempt(
@@ -623,7 +624,7 @@ def list_newspaper_cook_candidates(db: Session, *, limit: int = 8) -> list[dict[
             JOIN qb.documents d ON d.id = pt.document_id
             WHERE e.status = 'ready'
               AND COALESCE(d.meta->>'newspaper', 'false') IN ('true', 'True')
-              AND length(trim(pt.text)) > 400
+              AND length(trim(pt.text)) > :min_chars
               AND NOT EXISTS (
                 SELECT 1 FROM qb.seo_cook_attempt a
                 WHERE a.source_kind = 'newspaper'
@@ -633,7 +634,12 @@ def list_newspaper_cook_candidates(db: Session, *, limit: int = 8) -> list[dict[
             LIMIT :lim
             """
         ),
-        {"lim": max(1, min(limit, 20))},
+        {
+            "lim": plan_seo_candidate_query_limit(
+                source_kind="newspaper", requested=limit
+            ),
+            "min_chars": seo_candidate_min_chars("newspaper"),
+        },
     ).mappings().all()
     return [dict(r) for r in rows]
 
@@ -664,12 +670,12 @@ def list_upload_candidates(db: Session, *, limit: int = 5) -> list[dict[str, Any
             LIMIT :lim
             """
         ),
-        {"lim": max(1, min(limit, 10))},
+        {"lim": plan_seo_candidate_query_limit(source_kind="upload", requested=limit)},
     ).mappings().all()
     out = []
     for r in rows:
         text_body = (r.get("text") or "").strip()
-        if len(text_body) < 500:
+        if len(text_body) < seo_candidate_min_chars("upload"):
             continue
         out.append(dict(r))
     return out

@@ -25,7 +25,7 @@ from app.services.question_budget import (
     SPECULATIVE_PAGE_N,
     parse_budget_mode,
     plan_document_budget,
-    plan_page_budget,
+    plan_newspaper_display_budget,
     resolve_page_budget,
     units_from_aspect_dicts,
 )
@@ -41,22 +41,11 @@ READY_LOW_WATER = _session_design.READY_LOW_WATER
 TRANSITION_GENERATION_RATIO = _session_design.TRANSITION_GENERATION_RATIO
 TRANSITION_PREFETCH_RATIO = _session_design.TRANSITION_PREFETCH_RATIO
 REFILL_AFTER_ANSWERED = _session_design.REFILL_AFTER_ANSWERED
-
+FIRST_QUESTION_BATCH_SIZE = _session_design.FIRST_QUESTION_BATCH_SIZE
+REFILL_BATCH_SIZE = _session_design.REFILL_BATCH_SIZE
+MAX_GENERATE_BATCH_SIZE = REFILL_BATCH_SIZE
 # Warm-pool fill target matches Budget speculative seed (pipe only, not N_page).
 INITIAL_BATCH_SIZE = SPECULATIVE_PAGE_N
-# First job writes ONE question so the learner can start immediately. Critic +
-# verify run per draft after the shared draft call — a batch of 5 delays "go"
-# by four quality-gate round-trips. Warm pool fills right after via remainder /
-# refill jobs (capped at REFILL_BATCH_SIZE).
-FIRST_QUESTION_BATCH_SIZE = 1
-# Pipeline chunk only (docs/QUESTION_BUDGET_ENGINE.md). Product cook target is
-# N_page from plan_page_budget / page_coverage.question_budget — never treat
-# REFILL_BATCH_SIZE as the page budget.
-REFILL_BATCH_SIZE = 5
-# Hard ceiling on any single generate.questions job. Callers sometimes pass
-# `remaining` (= full page budget); without this a large N_page becomes one
-# multi-hour job instead of small rolling batches.
-MAX_GENERATE_BATCH_SIZE = REFILL_BATCH_SIZE
 # A generate job left in 'running' after a worker crash blocks recovery until reclaimed.
 # Must sit well above p99 generation wall-clock — reclaiming a live job duplicates LLM
 # work and races assertion writes. Workers do not heartbeat locked_at during the handler.
@@ -285,12 +274,13 @@ def get_study_mode(doc: Document, *, learner_key: str | None = None) -> str:
     """The learner's per-document choice: 'adaptive' (adaptive_v1) or 'classic'
     (sequence). Falls back to the global default policy when unset."""
     from app.config import get_settings
+    from app.services.adaptive_selection import label_study_mode
 
     policy = (
         str(get_progress(doc, learner_key=learner_key).get("selection_policy") or "").strip().lower()
         or (get_settings().selection_policy or "sequence").lower()
     )
-    return "classic" if policy == "sequence" else "adaptive"
+    return label_study_mode(policy)
 
 
 def set_study_mode(
@@ -298,9 +288,11 @@ def set_study_mode(
 ) -> str:
     """Persist the learner's Adaptive/Classic choice for this document and return it.
     Both policies run over the same question pool, so no regeneration is needed."""
-    policy = "sequence" if str(mode).strip().lower() == "classic" else "adaptive_v1"
+    from app.services.adaptive_selection import label_study_mode, persist_study_mode
+
+    policy = persist_study_mode(mode)
     save_progress(db, doc, {"selection_policy": policy}, learner_key=learner_key)
-    return "classic" if policy == "sequence" else "adaptive"
+    return label_study_mode(policy)
 
 
 def _page_key(page: int) -> str:
@@ -379,7 +371,9 @@ def is_non_content_page(doc: Document, page: int) -> bool:
 
 def should_skip_empty_page_vision(doc: Document) -> bool:
     """Once we already asked the learner to reselect, stop burning vision calls."""
-    return bool(get_progress(doc).get("prompt_reselect_pages"))
+    return _content_worthiness.should_skip_empty_page_vision(
+        already_prompted=bool(get_progress(doc).get("prompt_reselect_pages"))
+    )
 
 
 def note_empty_page_triage(
@@ -421,21 +415,23 @@ def reset_empty_page_streak(db: Session, document_id: uuid.UUID) -> None:
 
 def get_test_question_budget(doc: Document, page: int) -> int:
     """Newspaper test pool cook target (m=3); 0 when non-content or unset."""
+    from app.services.question_budget import resolve_test_question_budget
+
     cov = get_page_coverage(doc, page)
-    if cov.get("non_content"):
-        return 0
-    raw = cov.get("test_question_budget")
-    if raw is not None:
-        return max(0, int(raw))
     aspects = cov.get("aspects") if isinstance(cov.get("aspects"), list) else None
-    if aspects:
-        units = units_from_aspect_dicts(aspects)
-        conf_raw = cov.get("budget_confidence")
-        conf: Literal["high", "medium", "low"] | None = None
-        if conf_raw in ("high", "medium", "low"):
-            conf = conf_raw
-        return plan_page_budget(units, mode="test", confidence=conf).n_page
-    return 0
+    units = units_from_aspect_dicts(aspects) if aspects else None
+    conf_raw = cov.get("budget_confidence")
+    conf: Literal["high", "medium", "low"] | None = None
+    if conf_raw in ("high", "medium", "low"):
+        conf = conf_raw
+    stored = cov.get("test_question_budget")
+    stored_budget = int(stored) if stored is not None else None
+    return resolve_test_question_budget(
+        non_content=bool(cov.get("non_content")),
+        stored_test_budget=stored_budget,
+        units=units,
+        confidence=conf,
+    )
 
 
 def get_question_budget(doc: Document, page: int, *, mode: Mode | None = None) -> int:
@@ -773,6 +769,45 @@ def _exposure_for_ids(db: Session, ids: list[str]) -> dict[str, int]:
     ).mappings().all()
     return {r["id"]: int(r["n"]) for r in rows}
 
+
+def _load_selection_signals(
+    db: Session,
+    candidates: list[str],
+    *,
+    policy: str,
+    state: Any,
+) -> tuple[
+    dict[str, str | None],
+    dict[str, str | None],
+    dict[str, float],
+    dict[str, str],
+    dict[str, int],
+]:
+    from app.services.adaptive_selection import plan_signal_load
+
+    plan = plan_signal_load(policy=policy, state=state)
+    concept_by_id: dict[str, str | None] = {}
+    concept_label_by_id: dict[str, str | None] = {}
+    difficulty_by_id: dict[str, float] = {}
+    lineage_by_id: dict[str, str] = {}
+    exposure_by_id: dict[str, int] = {}
+    if plan.load_concepts:
+        concept_by_id, concept_label_by_id = _concept_signals_for_ids(db, candidates)
+    if plan.load_difficulty:
+        difficulty_by_id = _difficulty_for_ids(db, candidates)
+    if plan.load_lineage and state.last_assertion_id:
+        lineage_by_id = _lineage_successors(db, state.last_assertion_id, candidates)
+    if plan.load_exposure:
+        exposure_by_id = _exposure_for_ids(db, candidates)
+    return (
+        concept_by_id,
+        concept_label_by_id,
+        difficulty_by_id,
+        lineage_by_id,
+        exposure_by_id,
+    )
+
+
 def select_next_assertion(
     db: Session,
     document_id: uuid.UUID,
@@ -818,21 +853,13 @@ def select_next_assertion(
     concept_label_by_id: dict[str, str | None] = {}
     exposure_by_id: dict[str, int] = {}
 
-    # Always load concept key/label when serve hygiene or adaptive scoring may need them.
-    needs_concepts = (
-        bool(state.focus_concept)
-        or state.mastery_stop
-        or bool(state.concept_revisit_hours)
-        or policy in ("adaptive_v1", "difficulty_edge", "concept_reinforce")
-    )
-    if needs_concepts:
-        concept_by_id, concept_label_by_id = _concept_signals_for_ids(db, candidates)
-    if policy in ("adaptive_v1", "difficulty_edge"):
-        difficulty_by_id = _difficulty_for_ids(db, candidates)
-        if state.last_assertion_id:
-            lineage_by_id = _lineage_successors(db, state.last_assertion_id, candidates)
-        if policy == "adaptive_v1":
-            exposure_by_id = _exposure_for_ids(db, candidates)
+    (
+        concept_by_id,
+        concept_label_by_id,
+        difficulty_by_id,
+        lineage_by_id,
+        exposure_by_id,
+    ) = _load_selection_signals(db, candidates, policy=policy, state=state)
 
     verdict = select_next(
         candidates,
@@ -891,20 +918,13 @@ def selection_reason_for(
     lineage_by_id: dict[str, str] = {}
     exposure_by_id: dict[str, int] = {}
 
-    needs_concepts = (
-        bool(state.focus_concept)
-        or state.mastery_stop
-        or bool(state.concept_revisit_hours)
-        or policy in ("adaptive_v1", "difficulty_edge", "concept_reinforce")
-    )
-    if needs_concepts:
-        concept_by_id, concept_label_by_id = _concept_signals_for_ids(db, candidates)
-    if policy in ("adaptive_v1", "difficulty_edge"):
-        difficulty_by_id = _difficulty_for_ids(db, candidates)
-        if state.last_assertion_id:
-            lineage_by_id = _lineage_successors(db, state.last_assertion_id, candidates)
-        if policy == "adaptive_v1":
-            exposure_by_id = _exposure_for_ids(db, candidates)
+    (
+        concept_by_id,
+        concept_label_by_id,
+        difficulty_by_id,
+        lineage_by_id,
+        exposure_by_id,
+    ) = _load_selection_signals(db, candidates, policy=policy, state=state)
 
     verdict = select_next(
         candidates,
@@ -1070,6 +1090,7 @@ def build_learn_queue_state(
         evaluate_document_complete,
         evaluate_newspaper_learn_complete,
         evaluate_session_break,
+        plan_newspaper_serve_scope,
         plan_session,
     )
 
@@ -1081,13 +1102,11 @@ def build_learn_queue_state(
     answered_ids = [str(x) for x in progress.get("answered_ids") or []]
     answered_set = set(answered_ids)
     pool_mode: Mode | None = serve_mode if newspaper else None
-    selection_ids: list[str]
-    if newspaper:
+    scope = plan_newspaper_serve_scope(newspaper=newspaper)
+    if scope.stats_from_edition:
         page_ids = edition_assertion_ids(db, document_id, doc, serve_mode=pool_mode)
         learn_pool_ids = edition_assertion_ids(db, document_id, doc, serve_mode="learn")
         test_pool_ids = edition_assertion_ids(db, document_id, doc, serve_mode="test")
-        # Edition stats stay edition-wide; the loop serves one newspaper page at a time
-        # so Page N in the chrome does not jump when adaptive picks the next card.
         selection_ids = page_assertion_ids(db, document_id, page, serve_mode=pool_mode)
     else:
         page_ids = page_assertion_ids(db, document_id, page)
@@ -1100,8 +1119,8 @@ def build_learn_queue_state(
     edition_page_questions_answered: int | None = None
     current_page_question_number: int | None = None
     cov = get_page_coverage(doc, page)
-    if newspaper:
-        plan_budget = max(questions_generated, 1)
+    if scope.edition_budget:
+        plan_budget = plan_newspaper_display_budget(generated=questions_generated)
         learn_answered_set = set(mode_answered_ids(progress, "learn"))
         learn_complete = evaluate_newspaper_learn_complete(
             learn_pool_count=len(learn_pool_ids),
@@ -1134,7 +1153,7 @@ def build_learn_queue_state(
         if next_id
         else None
     )
-    if newspaper:
+    if scope.stats_from_edition:
         edition_page_question_total = len(selection_ids)
         edition_page_questions_answered = sum(
             1 for row_id in selection_ids if row_id in answered_set
@@ -1154,14 +1173,14 @@ def build_learn_queue_state(
         generation_pending=bool(progress.get("generation_pending")),
     )
 
-    from app.services.content_worthiness import evaluate_empty_study_reason
+    from app.services.content_worthiness import evaluate_empty_study_reason, should_probe_empty_study_range
 
-    maybe_empty = (
-        document_complete and questions_generated == 0 and questions_answered == 0
-    ) or (
-        newspaper
-        and questions_generated == 0
-        and not bool(progress.get("generation_pending"))
+    maybe_empty = should_probe_empty_study_range(
+        document_complete=document_complete,
+        newspaper=newspaper,
+        questions_generated=questions_generated,
+        questions_answered=questions_answered,
+        generation_pending=bool(progress.get("generation_pending")),
     )
     no_questions_reason = evaluate_empty_study_reason(
         document_complete=document_complete,
@@ -1174,12 +1193,17 @@ def build_learn_queue_state(
         ),
     )
 
-    from app.services.rag_window import chat_rag_window, get_rag_window, is_rag_window_ready
+    from app.services.rag_window import get_rag_window, is_rag_window_ready
+    from app.services.tutor_retrieval import plan_queue_rag_pages
 
-    if newspaper:
-        rag_pages = chat_rag_window(page, study_pages)
-    else:
-        rag_pages = get_rag_window(doc)
+    rag_pages = list(
+        plan_queue_rag_pages(
+            newspaper=newspaper,
+            current_page=page,
+            study_pages=study_pages,
+            stored_window=None if newspaper else get_rag_window(doc),
+        )
+    )
     rag_ready = is_rag_window_ready(db, document_id, doc)
     non_content = is_non_content_page(doc, page)
     triage_complete = bool(cov)

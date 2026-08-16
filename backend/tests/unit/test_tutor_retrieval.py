@@ -153,3 +153,114 @@ def test_plan_chunk_retrieval_pin_then_vector() -> None:
         page_chunk_count=0,
     )
     assert miss.strategy == "vector_only"
+
+
+def test_plan_tutor_weak_concepts() -> None:
+    from app.services.tutor_retrieval import plan_tutor_weak_concepts
+
+    plan = plan_tutor_weak_concepts({"strong": 2.0, "weak": -1.5, "mid": 0.1, "skip": None})
+    assert plan.concepts[0][0] == "weak"
+    assert len(plan.concepts) == 3
+
+
+def test_plan_learn_context_rag() -> None:
+    from app.services.tutor_retrieval import plan_learn_context_rag
+
+    news = plan_learn_context_rag(4, list(range(1, 10)), newspaper=True)
+    assert news.pages == (4,)
+    upload = plan_learn_context_rag(1, list(range(1, 10)), newspaper=False)
+    assert upload.pages[0] == 1
+    assert len(upload.pages) > 1
+
+
+def test_queue_rag_and_learn_session_attach() -> None:
+    from app.services.tutor_retrieval import (
+        plan_queue_rag_pages,
+        should_attach_learn_session_context,
+    )
+
+    assert not should_attach_learn_session_context(scope_mode="read")
+    assert should_attach_learn_session_context(scope_mode="learn")
+    assert should_attach_learn_session_context(scope_mode=None)
+    news = plan_queue_rag_pages(
+        newspaper=True,
+        current_page=2,
+        study_pages=[1, 2, 3],
+        stored_window=[9, 10],
+    )
+    assert 2 in news and 9 not in news
+    stored = plan_queue_rag_pages(
+        newspaper=False,
+        current_page=2,
+        study_pages=[1, 2, 3],
+        stored_window=[9, 10],
+    )
+    assert stored == (9, 10)
+
+
+def test_unconfirmed_tutor_policy() -> None:
+    from app.services.tutor_retrieval import plan_unconfirmed_tutor_policy
+
+    hint = plan_unconfirmed_tutor_policy(
+        has_mcq_options=True, confirmed_choice_index=None
+    )
+    assert hint is not None and "hints only" in hint
+    assert (
+        plan_unconfirmed_tutor_policy(
+            has_mcq_options=True, confirmed_choice_index=0
+        )
+        is None
+    )
+    assert (
+        plan_unconfirmed_tutor_policy(
+            has_mcq_options=False, confirmed_choice_index=None
+        )
+        is None
+    )
+
+
+def test_rag_chunk_split_defaults() -> None:
+    from app.services.tutor_retrieval import (
+        RAG_CHUNK_MAX_CHARS,
+        RAG_CHUNK_OVERLAP,
+        plan_rag_chunk_split,
+    )
+
+    plan = plan_rag_chunk_split()
+    assert plan.max_chars == RAG_CHUNK_MAX_CHARS == 900
+    assert plan.overlap == RAG_CHUNK_OVERLAP == 120
+    custom = plan_rag_chunk_split(max_chars=400, overlap=40)
+    assert custom.max_chars == 400 and custom.overlap == 40
+    from app.services.tutor_retrieval import plan_cook_aspect_hint_context
+
+    hint = plan_cook_aspect_hint_context()
+    assert hint.hit_limit == 5 and hint.snippet_chars == 600
+    from app.services.tutor_retrieval import plan_topic_explain_context
+
+    topic = plan_topic_explain_context()
+    assert topic.chunk_limit == 8
+    from app.services.tutor_retrieval import plan_coding_assist_history, plan_chat_thread_history
+
+    assert plan_coding_assist_history() == 12
+    from app.services.tutor_retrieval import plan_coding_assist_code_chars
+
+    assert plan_coding_assist_code_chars() == 12_000
+    assert plan_chat_thread_history() == 6
+    from app.services.tutor_retrieval import evaluate_chat_cache_eligible
+
+    ok = evaluate_chat_cache_eligible(
+        include_image=False,
+        selection_text=None,
+        has_citations=True,
+        doc_count=1,
+        has_history=False,
+    )
+    assert ok.eligible and ok.reason == "ok"
+    blocked = evaluate_chat_cache_eligible(
+        include_image=True,
+        selection_text=None,
+        has_citations=True,
+        doc_count=1,
+        has_history=False,
+    )
+    assert not blocked.eligible and blocked.reason == "image"

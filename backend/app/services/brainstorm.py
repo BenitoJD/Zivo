@@ -25,11 +25,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.services.owner_scope import note_owner_scope, owner_scope_sql
-
-_MAX_IDEAS = 500
-# ponytail: depth cap exists so a cycle or a runaway branch can't hang the renderer.
-# Raise it if real mind maps ever get deeper than this; nothing else depends on it.
-_MAX_DEPTH = 12
+from app.services.session_design import plan_brainstorm_tree_depth, plan_learner_list_cap
 
 
 def _row(r: Any) -> dict[str, Any]:
@@ -56,7 +52,7 @@ def list_ideas(
             f"WHERE {owner_scope_sql()} "
             "ORDER BY created_at DESC LIMIT :lim"
         ),
-        {"d": document_id, "uid": uid, "gid": gid, "lim": _MAX_IDEAS},
+        {"d": document_id, "uid": uid, "gid": gid, "lim": plan_learner_list_cap("brainstorm")},
     ).mappings().all()
     return [_row(r) for r in rows]
 
@@ -154,7 +150,7 @@ def to_markdown(title: str, ideas: list[dict[str, Any]]) -> str:
         return "\n".join(lines) + "\n"
 
     def walk(nodes: list[dict[str, Any]], depth: int) -> None:
-        if depth > _MAX_DEPTH:
+        if depth > plan_brainstorm_tree_depth():
             return
         for node in nodes:
             angle = f" _({node['angle']})_" if node["angle"] else ""

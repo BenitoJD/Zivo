@@ -77,6 +77,23 @@ def plan_mcq_reuse(scope: str | None = None) -> McqReusePlan:
     return McqReusePlan(enabled=True, scope="all", demo_only=False)
 
 
+def filter_reusable_templates(
+    payloads: Sequence[dict[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    """Clone from the first source page only; later hash twins are near-dupes."""
+    src_page: tuple[Any, Any] | None = None
+    out: list[dict[str, Any]] = []
+    for payload in payloads:
+        key = (payload.get("artifact_id"), payload.get("page_number"))
+        if src_page is None:
+            src_page = key
+        elif key != src_page:
+            continue
+        if payload.get("question") and payload.get("options"):
+            out.append(dict(payload))
+    return tuple(out)
+
+
 def plan_batch_lineage(finalized: Sequence[dict[str, Any]]) -> LineagePlan:
     """Plan edges for a cook batch: same-concept follow-ups + sequential harder_than.
 

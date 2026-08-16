@@ -20,6 +20,10 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.services.mcq_parsing import _parse_mcq_json
+from app.services.session_design import (
+    evaluate_option_coach_eligible,
+    plan_option_coach_page_limit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -146,11 +150,12 @@ def generate_option_feedback(
 
 def _is_single_answer(payload: dict) -> bool:
     ci = payload.get("correct_indices")
-    return not (isinstance(ci, list) and len(ci) >= 2)
+    is_multi = isinstance(ci, list) and len(ci) >= 2
+    return evaluate_option_coach_eligible(is_multi=is_multi)
 
 
 def coach_page_assertions(
-    db: Session, *, document_id, page_number: int, limit: int = 60
+    db: Session, *, document_id, page_number: int, limit: int | None = None
 ) -> int:
     """Precompute option feedback for every single-answer MCQ on a page that lacks it.
 
@@ -162,6 +167,8 @@ def coach_page_assertions(
     import json
 
     from sqlalchemy import text
+
+    cap = plan_option_coach_page_limit() if limit is None else int(limit)
 
     rows = db.execute(
         text(
@@ -176,7 +183,7 @@ def coach_page_assertions(
             LIMIT :lim
             """
         ),
-        {"doc": str(document_id), "page": int(page_number), "lim": int(limit)},
+        {"doc": str(document_id), "page": int(page_number), "lim": cap},
     ).fetchall()
 
     coached = 0

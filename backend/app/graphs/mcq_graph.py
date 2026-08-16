@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import uuid
 from typing import Any, Literal, TypedDict
 
@@ -14,14 +13,15 @@ from sqlalchemy.orm import Session
 from app.services.llm_router import complete_chat
 from app.services.mcq_dedup import sanitize_mcq_explanation
 from app.services.prompts import get_prompt
+from app.services.session_design import (
+    evaluate_option_coach_eligible,
+    plan_grade_feedback_timeout,
+)
 from app.services.token_budget import GRADE_CONTEXT_MAX_TOKENS, truncate_to_tokens
 
 logger = logging.getLogger(__name__)
 
-# Hard cap on the (optional) selection-aware coaching LLM call at grade time. Grading
-# must feel instant, so if the provider is slow we abandon the richer feedback and use
-# the question's pre-generated explanation instead.
-GRADE_FEEDBACK_TIMEOUT = int(os.getenv("ZIVO_GRADE_FEEDBACK_TIMEOUT", "12"))
+GRADE_FEEDBACK_TIMEOUT = plan_grade_feedback_timeout()
 
 
 def _sanitize_feedback(text: str) -> str:
@@ -256,7 +256,7 @@ async def grade_mcq_answer(
     # generation time (or warmed by an earlier miss), the feedback for the chosen
     # option is already written — return it instantly with ZERO LLM calls. Only the
     # single-best-answer path is precomputed; multi-select depends on the chosen set.
-    if not is_multi and option_feedback:
+    if evaluate_option_coach_eligible(is_multi=is_multi) and option_feedback:
         cached = option_feedback.get(str(selected_index))
         if isinstance(cached, str) and cached.strip():
             return {"is_correct": is_correct, "feedback": cached.strip(), "feedback_source": "precomputed"}

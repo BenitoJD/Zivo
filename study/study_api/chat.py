@@ -28,10 +28,14 @@ from app.services.llm_router import is_failover_eligible, stream_chat_completion
 from app.services.prompts import get_prompt
 from app.services.guest import can_access_document
 from app.services.document_access import require_document
+from app.services.tutor_retrieval import (
+    compress_chat_history,
+    evaluate_chat_cache_eligible,
+    plan_chat_thread_history,
+)
 from app.services.guest_session import guest_session_for_read, optional_guest_session
 from app.services.response_cache import get_cached_response, store_response
 from app.services.rate_limit import rate_limit_dependency
-from app.services.tutor_retrieval import compress_chat_history
 from app.services.usage import reserve_message_slot
 from app.services.vision import build_user_message, is_image_document
 
@@ -39,10 +43,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Recent turns kept in the LLM prefix. Lowering from 20 → 6 shrinks the
-# (cacheable) prefix and the per-turn input-token cost; recent context
-# dominates answer quality in a tutor chat.
-_HISTORY_LIMIT = 6
 _LIST_MESSAGES_LIMIT = 100
 _CHAT_BUSY_MESSAGE = "Tutor is busy. Try again."
 
@@ -166,24 +166,18 @@ def _cache_eligible(
 ) -> bool:
     """Whether a semantic cache lookup/store is safe for this turn.
 
-    Cache matches by embedding similarity within a scope_hash that folds prior
-    user turns (``history_digest``). Conversational follow-ups ("go deeper",
-    "thanks") stay uncached — they need the live model. Standalone paraphrases
-    after history remain eligible when the digest matches.
+    Policy lives in Tutor Retrieval; this wrapper keeps the study chat call site
+    and unit tests on a bool.
     """
-    if include_image:
-        return False
-    if prefetched_reference:
-        return False
-    if selection_text:
-        return False
-    if not has_citations:
-        return False
-    if doc_count != 1:
-        return False
-    if has_history and conversational_followup:
-        return False
-    return True
+    return evaluate_chat_cache_eligible(
+        include_image=include_image,
+        selection_text=selection_text,
+        has_citations=has_citations,
+        doc_count=doc_count,
+        has_history=has_history,
+        conversational_followup=conversational_followup,
+        prefetched_reference=prefetched_reference,
+    ).eligible
 
 
 def _stream_error_event(message: str) -> dict[str, str]:
@@ -518,7 +512,7 @@ def _prepare_chat_stream(
             db.query(ChatMessage)
             .filter(ChatMessage.thread_id == thread.id)
             .order_by(ChatMessage.created_at.desc())
-            .limit(_HISTORY_LIMIT)
+            .limit(plan_chat_thread_history())
             .all()
         )
         history = list(reversed(history))

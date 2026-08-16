@@ -9,6 +9,12 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.services.open_response import (
+    evaluate_debug_cook_input,
+    plan_debug_cook_store_caps,
+    plan_debug_cook_yield,
+)
+
 logger = logging.getLogger(__name__)
 
 _VALID_SOURCE_TYPES = frozenset({"paste", "upload", "document_page", "admin_author"})
@@ -28,11 +34,13 @@ def create_cook_job(
 ) -> dict[str, Any]:
     st = source_type if source_type in _VALID_SOURCE_TYPES else "paste"
     og = origin if origin in _VALID_ORIGINS else "contributed"
-    count = max(1, min(int(scenario_count or 3), 10))
+    count = plan_debug_cook_yield(scenario_count)
     material_clean = (material or "").strip()
-    if len(material_clean) < 20 and len((brief or "").strip()) < 10:
+    intake = evaluate_debug_cook_input(material=material_clean, brief=brief)
+    if not intake.ok:
         raise ValueError("Provide material or a cook brief")
 
+    store = plan_debug_cook_store_caps()
     job_id = uuid.uuid4()
     db.execute(
         text(
@@ -52,8 +60,8 @@ def create_cook_job(
             "owner": owner_user_id,
             "source_type": st,
             "source_ref": source_ref,
-            "material": material_clean[:100000],
-            "brief": (brief or "").strip()[:4000],
+            "material": material_clean[: store.material],
+            "brief": (brief or "").strip()[: store.brief],
             "count": count,
             "origin": og,
         },

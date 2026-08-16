@@ -33,26 +33,20 @@ from app.services.code_execution import DEFAULT_LANGUAGE_ID, LANGUAGES, run_test
 from app.services.llm_router import acomplete_chat
 from app.services.llm_sync import run_coro_in_worker
 from app.services.open_response import (
+    CODING_VERIFY_MAX_ATTEMPTS,
     evaluate_coding_bank_item,
     evaluate_coding_reference_verify,
+    plan_coding_page_input_tokens,
     plan_coding_test_visibility,
     should_record_coding_solve,
 )
+from app.services.question_budget import plan_coding_page_yield
 from app.services.token_budget import truncate_to_tokens
 
 logger = logging.getLogger(__name__)
 
-# Page context budget — same shape as the MCQ graph's RAG input. Coding problems need
-# the surrounding concept, not the whole chapter.
-_PAGE_MAX_TOKENS = 6000
-
-# Retry budget for the verify gate. Each attempt costs one generation call + one
-# sandbox batch; kept modest so one rough page can't monopolize the worker.
-_MAX_VERIFY_ATTEMPTS = 3
-
-# How many coding problems to generate per programmable page. One strong problem beats
-# three weak ones; the bank grows across pages, not within them.
-_DEFAULT_PROBLEMS_PER_PAGE = 1
+# Retry budget lives in Open Response (orchestration re-exports).
+_MAX_VERIFY_ATTEMPTS = CODING_VERIFY_MAX_ATTEMPTS
 
 _GEN_SYSTEM = (
     "You are Zivo, an author of competitive programming practice problems in the style "
@@ -103,7 +97,7 @@ def generate_coding_for_page(
     *,
     page_number: int,
     page_text: str,
-    count: int = _DEFAULT_PROBLEMS_PER_PAGE,
+    count: int | None = None,
 ) -> list[dict[str, Any]]:
     """Generate + verify + persist up to ``count`` coding problems for one page.
 
@@ -114,8 +108,8 @@ def generate_coding_for_page(
     if not page_text or not page_text.strip():
         return persisted
 
-    excerpt = truncate_to_tokens(page_text, _PAGE_MAX_TOKENS)
-    target = max(1, int(count))
+    excerpt = truncate_to_tokens(page_text, plan_coding_page_input_tokens())
+    target = plan_coding_page_yield(count)
 
     for _ in range(target):
         problem = _generate_and_verify(db, excerpt)
@@ -297,10 +291,7 @@ def _persist(
         return None
 
     assertion_id = uuid.uuid4()
-    title = str(problem.get("title") or "").strip()
-    if len(title) < 3:
-        title = str(problem.get("concept") or "").strip()
-    title = title[:200]
+    title = bank.resolved_title[:200]
     difficulty = (str(problem.get("difficulty") or "medium").strip().lower() or "medium")
     language_id = int(problem.get("language_id") or DEFAULT_LANGUAGE_ID)
     statement = str(problem.get("statement") or "")

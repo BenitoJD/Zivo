@@ -16,22 +16,15 @@ from app.eta.stale_jobs import (
 )
 from app.models import Document
 from app.services.rag_window import maybe_recover_stuck_indexing
+from app.services.session_design import plan_ingest_recovery_schedule
 
 logger = logging.getLogger(__name__)
-
-_STUCK_INDEXING_GRACE_MINUTES = 2
-# Background-prep docs in the cooking phase (status='prepping') are re-driven
-# only by job-success callbacks (tick_background_cook). If the cook chain dies
-# (job exhausted retries / worker pod terminated), the doc is stranded at its
-# last prep_progress forever. Generous grace so we don't race a legitimately
-# slow cook; the per-artifact GET still recovers on open, but the sources list
-# never triggers it — this schedule is the only backstop there.
-_STUCK_PREPPING_GRACE_MINUTES = 5
 
 
 def _recover_stuck_indexing_documents() -> int:
     recovered = 0
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=_STUCK_INDEXING_GRACE_MINUTES)
+    schedule = plan_ingest_recovery_schedule()
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=schedule.indexing_grace_minutes)
     with SessionLocal() as db:
         doc_ids = db.execute(
             text(
@@ -46,7 +39,7 @@ def _recover_stuck_indexing_documents() -> int:
                       AND {ACTIVE_JOB_LIVENESS_SQL}
                   )
                 ORDER BY d.created_at ASC
-                LIMIT 50
+                LIMIT {int(schedule.indexing_batch)}
                 """
             ),
             {
@@ -91,7 +84,8 @@ def _recover_stuck_prepping_documents() -> int:
     cook-stage job names so a genuinely-running cook is never double-enqueued.
     """
     recovered = 0
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=_STUCK_PREPPING_GRACE_MINUTES)
+    schedule = plan_ingest_recovery_schedule()
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=schedule.prepping_grace_minutes)
     with SessionLocal() as db:
         doc_ids = db.execute(
             text(
@@ -109,7 +103,7 @@ def _recover_stuck_prepping_documents() -> int:
                       AND {ACTIVE_JOB_LIVENESS_SQL}
                   )
                 ORDER BY d.created_at ASC
-                LIMIT 25
+                LIMIT {int(schedule.prepping_batch)}
                 """
             ),
             {

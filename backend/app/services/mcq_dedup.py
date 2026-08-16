@@ -8,6 +8,10 @@ from typing import Any
 
 from app.services.aspect_discovery import ASPECT_CLUSTER_THRESHOLD
 from app.services.embed import embed_texts
+from app.services.kc_coverage import (
+    CONCEPT_LABEL_MAX_CHARS,
+    normalize_concept_label,
+)
 
 # MCQ threshold lives on Quality Evaluation; resolved lazily to avoid
 # mcq_dedup → quality_evaluation → mcq_heuristics → mcq_dedup cycle.
@@ -81,86 +85,12 @@ _DOCUMENT_META_RESIDUE_RE = re.compile(
 
 SUBJECT_MATTER_PREFIX = "Subject matter (internal reference — never mention in the question):"
 
-_CONCEPT_LABEL_MAX_CHARS = 56
-_CONCEPT_LABEL_MAX_WORDS = 8
 
-
-def short_concept_label(raw: str | None, *, max_chars: int = _CONCEPT_LABEL_MAX_CHARS) -> str:
-    """Clamp aspect/concept labels for report cards and bank metadata.
-
-    Fallback triage sometimes uses a whole paragraph as the aspect label; that
-    must not land as a "topic" chip. Prefer a noun-phrase subject before a
-    copula, else the first clause, then word/char caps.
-    """
-    s = re.sub(r"\s+", " ", (raw or "").strip())
-    if not s:
-        return "General"
-    for sep in (". ", "? ", "! ", "; ", " — ", " – ", " - "):
-        if sep in s:
-            s = s.split(sep, 1)[0].strip()
-            break
-    # Mid-word residue from newspaper/OCR extracts ("ngress government…").
-    if s[:1].islower():
-        parts = s.split()
-        for i, w in enumerate(parts):
-            if w[:1].isupper():
-                s = " ".join(parts[i:])
-                break
-        else:
-            return "General"
-    # Sentence-as-aspect → keep the subject ("Osmosis is the net…" → "Osmosis").
-    copula = re.search(
-        r"\s+(?:is|are|was|were|means|refers|describes|involves)\s+",
-        s,
-        flags=re.IGNORECASE,
-    )
-    if copula and copula.start() > 0:
-        subject = s[: copula.start()].strip(" ,;:-")
-        if 1 <= len(subject.split()) <= _CONCEPT_LABEL_MAX_WORDS:
-            s = subject
-    words = s.split()
-    if len(words) > _CONCEPT_LABEL_MAX_WORDS:
-        s = " ".join(words[:_CONCEPT_LABEL_MAX_WORDS])
-        words = s.split()
-    # Drop dangling clause openers left by mid-sentence truncation
-    # ("… in plants that" → "… in plants").
-    while words and words[-1].lower() in {
-        "a",
-        "an",
-        "the",
-        "and",
-        "or",
-        "of",
-        "in",
-        "on",
-        "to",
-        "for",
-        "with",
-        "from",
-        "into",
-        "onto",
-        "across",
-        "by",
-        "via",
-        "as",
-        "at",
-        "that",
-        "which",
-        "who",
-        "whom",
-        "whose",
-        "where",
-        "when",
-        "is",
-        "are",
-        "was",
-        "were",
-    }:
-        words.pop()
-        s = " ".join(words)
-    if len(s) > max_chars:
-        s = s[: max(1, max_chars - 1)].rstrip(" ,;:-") + "…"
-    return s or "General"
+def short_concept_label(
+    raw: str | None, *, max_chars: int = CONCEPT_LABEL_MAX_CHARS
+) -> str:
+    """Clamp aspect/concept labels. Policy lives on KC Coverage."""
+    return normalize_concept_label(raw, max_chars=max_chars)
 
 
 def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
@@ -307,10 +237,15 @@ def prior_mcq_from_payload(payload: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def format_prior_mcqs_block(prior_mcqs: list[dict[str, Any]] | None, *, max_items: int = 6) -> str:
+def format_prior_mcqs_block(
+    prior_mcqs: list[dict[str, Any]] | None, *, max_items: int | None = None
+) -> str:
     if not prior_mcqs:
         return ""
-    recent = list(prior_mcqs[-max_items:])
+    from app.services.quality_evaluation import plan_prior_mcq_prompt_items
+
+    cap = plan_prior_mcq_prompt_items(max_items)
+    recent = list(prior_mcqs[-cap:])
     lines = [
         "Recent questions already used — do NOT repeat these stems or test the same fact:"
     ]

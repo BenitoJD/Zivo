@@ -13,7 +13,6 @@ the optimizer is computed live because it depends on the pasted job description.
 from __future__ import annotations
 
 import json
-import re
 import uuid
 from typing import Any
 
@@ -23,49 +22,21 @@ from sqlalchemy.orm import Session
 from app.models import Document, DocumentChunk
 from app.services.llm_json import extract_json_obj
 from app.services.llm_router import complete_chat
+from app.services.open_response import (
+    evaluate_resume_deterministic_checks,
+    plan_resume_analysis_caps,
+    plan_resume_ats_score,
+    plan_resume_chunk_limit,
+    plan_resume_input_tokens,
+    plan_resume_jd_input_tokens,
+    plan_resume_optimize_caps,
+)
 from app.services.token_budget import truncate_to_tokens
-
-RESUME_MAX_TOKENS = 6000
-
-# ---------------------------------------------------------------- deterministic ATS checks
-# Each returns (passed, detail). These mirror the mechanical checks an ATS/recruiter applies
-# before any human reads the content — the parts an LLM shouldn't be trusted to "judge".
-_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-_PHONE = re.compile(r"(\+?\d[\d\s().-]{7,}\d)")
-_ACTION_VERBS = {
-    "led", "built", "designed", "developed", "created", "launched", "improved", "increased",
-    "reduced", "managed", "shipped", "implemented", "optimized", "delivered", "owned",
-    "drove", "architected", "automated", "scaled", "migrated", "spearheaded",
-}
-_SECTIONS = {
-    "experience": ("experience", "work history", "employment"),
-    "education": ("education",),
-    "skills": ("skills", "technical skills", "technologies"),
-}
 
 
 def deterministic_checks(resume: str) -> list[dict[str, Any]]:
-    low = resume.lower()
-    words = resume.split()
-    wc = len(words)
-    bullets = sum(low.count(b) for b in ("•", "- ", "* ", "▪"))
-    quantified = len(re.findall(r"\b\d+%?\b", resume))
-    action_hits = sum(1 for w in _ACTION_VERBS if w in low)
-    first_person = sum(low.count(p) for p in (" i ", " my ", " me "))
-
-    checks = [
-        ("Contact email", bool(_EMAIL.search(resume)), "A parseable email address is present." if _EMAIL.search(resume) else "No email found — ATS needs one to contact you."),
-        ("Phone number", bool(_PHONE.search(resume)), "Phone number present." if _PHONE.search(resume) else "Add a phone number."),
-        ("Experience section", any(s in low for s in _SECTIONS["experience"]), "Found a work-experience section." if any(s in low for s in _SECTIONS["experience"]) else "Add a clearly labelled Experience section."),
-        ("Education section", any(s in low for s in _SECTIONS["education"]), "Found an education section." if any(s in low for s in _SECTIONS["education"]) else "Add an Education section."),
-        ("Skills section", any(s in low for s in _SECTIONS["skills"]), "Found a skills section." if any(s in low for s in _SECTIONS["skills"]) else "Add a Skills section with relevant keywords."),
-        ("Reasonable length", 250 <= wc <= 900, f"{wc} words — good length." if 250 <= wc <= 900 else f"{wc} words — aim for ~1 page (250-900 words)."),
-        ("Bullet points", bullets >= 3, f"{bullets} bullet points." if bullets >= 3 else "Use bullet points for achievements, not paragraphs."),
-        ("Quantified impact", quantified >= 3, f"{quantified} numbers/metrics found." if quantified >= 3 else "Quantify achievements (%, $, counts) — ATS and recruiters reward metrics."),
-        ("Strong action verbs", action_hits >= 4, f"{action_hits} action verbs." if action_hits >= 4 else "Start bullets with action verbs (Led, Built, Improved…)."),
-        ("Third-person voice", first_person == 0, "No first-person pronouns." if first_person == 0 else "Drop first-person pronouns (I, my) — resumes are written impersonally."),
-    ]
-    return [{"name": n, "pass": bool(p), "detail": d} for (n, p, d) in checks]
+    """Mechanical ATS checks live in Open Response; this is the orchestration alias."""
+    return evaluate_resume_deterministic_checks(resume)
 
 
 # ---------------------------------------------------------------- LLM analysis + extraction
@@ -143,19 +114,20 @@ async def ensure_ats(db: Session, document_id: uuid.UUID) -> dict[str, Any]:
         raw = await complete_chat(
             [
                 {"role": "system", "content": _ANALYZE_SYSTEM},
-                {"role": "user", "content": f"RESUME:\n{truncate_to_tokens(resume, RESUME_MAX_TOKENS)}"},
+                {"role": "user", "content": f"RESUME:\n{truncate_to_tokens(resume, plan_resume_input_tokens())}"},
             ],
             db, log_tag="resume_ats",
         )
         data = _parse_json_obj(raw)
         content_score = _clamp(data.get("content_score"), 50)
-        strengths = [str(s) for s in (data.get("strengths") or [])][:6]
-        improvements = [str(s) for s in (data.get("improvements") or [])][:8]
+        caps = plan_resume_analysis_caps()
+        strengths = [str(s) for s in (data.get("strengths") or [])][: caps.strengths]
+        improvements = [str(s) for s in (data.get("improvements") or [])][: caps.improvements]
         structured = data.get("structured") if isinstance(data.get("structured"), dict) else {}
     except Exception:
         pass  # deterministic checks still give a usable score
 
-    overall = round(0.5 * det_score + 0.5 * content_score)
+    overall = plan_resume_ats_score(det_score=det_score, content_score=content_score)
     analysis = {
         "score": overall,
         "det_score": det_score,
@@ -180,28 +152,31 @@ async def optimize(db: Session, document_id: uuid.UUID, job_description: str = "
 
     opt_key = content_hash_key(
         "resume_opt",
-        truncate_to_tokens(resume, RESUME_MAX_TOKENS),
-        truncate_to_tokens(jd, 2000) if jd else "",
+        truncate_to_tokens(resume, plan_resume_input_tokens()),
+        truncate_to_tokens(jd, plan_resume_jd_input_tokens()) if jd else "",
     )
     hit = cache_get(db, kind="resume_optimize", cache_key=opt_key)
     if isinstance(hit, dict) and ("bullets" in hit or "summary" in hit):
         return hit
-    user = f"RESUME:\n{truncate_to_tokens(resume, RESUME_MAX_TOKENS)}"
+    user = f"RESUME:\n{truncate_to_tokens(resume, plan_resume_input_tokens())}"
     if jd:
-        user += f"\n\nTARGET JOB DESCRIPTION:\n{truncate_to_tokens(jd, 2000)}"
+        user += f"\n\nTARGET JOB DESCRIPTION:\n{truncate_to_tokens(jd, plan_resume_jd_input_tokens())}"
     try:
         raw = await complete_chat(
             [{"role": "system", "content": _OPTIMIZE_SYSTEM}, {"role": "user", "content": user}],
             db, log_tag="resume_optimize",
         )
         data = _parse_json_obj(raw)
+        opt_caps = plan_resume_optimize_caps()
         out = {
             "summary": str(data.get("summary") or ""),
             "bullets": [
                 {"original": str(b.get("original", "")), "improved": str(b.get("improved", ""))}
                 for b in (data.get("bullets") or []) if isinstance(b, dict) and b.get("improved")
-            ][:20],
-            "missing_keywords": [str(k) for k in (data.get("missing_keywords") or [])][:20],
+            ][: opt_caps.bullets],
+            "missing_keywords": [
+                str(k) for k in (data.get("missing_keywords") or [])
+            ][: opt_caps.missing_keywords],
             "notes": str(data.get("notes") or ""),
         }
         cache_put(db, kind="resume_optimize", cache_key=opt_key, value=out)
@@ -236,7 +211,7 @@ def _resume_text(db: Session, document_id: uuid.UUID) -> str:
         db.query(DocumentChunk)
         .filter(DocumentChunk.document_id == document_id)
         .order_by(DocumentChunk.page_start.asc())
-        .limit(60)
+        .limit(plan_resume_chunk_limit())
         .all()
     )
     return "\n\n".join(r.text for r in rows if r.text)

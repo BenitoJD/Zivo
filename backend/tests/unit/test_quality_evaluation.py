@@ -177,6 +177,140 @@ def test_should_run_critic_force_and_sample() -> None:
     )
 
 
+def test_plan_cook_gate_schedule_serial_first() -> None:
+    from app.services.quality_evaluation import plan_cook_gate_schedule
+
+    split = plan_cook_gate_schedule(
+        target_count=4, pipeline_split=True, generation_concurrency=4
+    )
+    assert split.split_first_draft is True
+    assert split.first_force_critic is True
+    assert split.rest_force_critic is False
+    assert split.target_count == 4
+    assert split.rest_concurrency == 4
+    single = plan_cook_gate_schedule(
+        target_count=1, pipeline_split=True, generation_concurrency=4
+    )
+    assert single.split_first_draft is False
+    capped = plan_cook_gate_schedule(
+        target_count=20, pipeline_split=True, generation_concurrency=2, batch_cap=5
+    )
+    assert capped.target_count == 5
+
+
+def test_plan_cook_gate_knobs_and_best_of_n() -> None:
+    from app.services.quality_evaluation import (
+        CRITIC_SAMPLE_RATE,
+        DEFAULT_CANDIDATES_PER_ASPECT,
+        GENERATION_CONCURRENCY,
+        PIPELINE_DRAFT_SPLIT,
+        plan_best_of_n_candidates,
+        plan_cook_gate_knobs,
+    )
+
+    knobs = plan_cook_gate_knobs()
+    assert knobs.generation_concurrency == GENERATION_CONCURRENCY
+    assert knobs.pipeline_draft_split == PIPELINE_DRAFT_SPLIT
+    assert knobs.critic_sample_rate == CRITIC_SAMPLE_RATE
+    override = plan_cook_gate_knobs(
+        generation_concurrency=0, pipeline_split=False, critic_sample_rate=0.25
+    )
+    assert override.generation_concurrency == 1
+    assert override.pipeline_draft_split is False
+    assert override.critic_sample_rate == 0.25
+    assert plan_best_of_n_candidates() == DEFAULT_CANDIDATES_PER_ASPECT == 2
+    assert plan_best_of_n_candidates(0) == 1
+    assert plan_best_of_n_candidates(5) == 5
+    from app.services.quality_evaluation import plan_prior_mcq_prompt_items
+
+    assert plan_prior_mcq_prompt_items() == 6
+    assert plan_prior_mcq_prompt_items(2) == 2
+
+
+def test_evaluate_pre_critic_reject() -> None:
+    from app.services.quality_evaluation import evaluate_pre_critic_reject
+
+    similar = evaluate_pre_critic_reject(QualitySignals(too_similar=True))
+    assert similar is not None and similar.decision == "fail"
+    clean = evaluate_pre_critic_reject(QualitySignals(verify_ran=True))
+    assert clean is None
+
+
+def test_content_style_fast_path_and_prefilter() -> None:
+    from app.services.quality_evaluation import (
+        evaluate_parallel_gate_prefilter,
+        hard_fail_rewrite_bundle,
+        should_fast_path_accept,
+        should_inject_mcq_content_style,
+    )
+
+    assert should_inject_mcq_content_style("newspaper_upsc", content_aware=False)
+    assert not should_inject_mcq_content_style("narrative", content_aware=False)
+    assert should_inject_mcq_content_style("narrative", content_aware=True)
+    clean = QualitySignals(verify_ran=True)
+    assert should_fast_path_accept(clean)
+    similar = QualitySignals(too_similar=True, max_similarity=0.95)
+    assert not should_fast_path_accept(similar)
+    bundle = hard_fail_rewrite_bundle(similar)
+    assert bundle is not None and "too_similar_to_prior" in bundle["fatal_flaws"]
+    assert evaluate_parallel_gate_prefilter(
+        heuristic_flaws=[{"code": "invalid_structure", "message": "x"}],
+        too_similar=False,
+    ) == "fatal"
+    assert evaluate_parallel_gate_prefilter(
+        heuristic_flaws=[], too_similar=True
+    ) == "too_similar"
+    assert evaluate_parallel_gate_prefilter(
+        heuristic_flaws=[], too_similar=False
+    ) == "keep"
+    from app.services.quality_evaluation import (
+        should_positional_best_of_n,
+        should_run_answer_key_verify,
+        should_run_similarity_gate,
+    )
+
+    assert should_run_answer_key_verify(
+        verify_enabled=True, has_fatal_heuristics=False, too_similar=False
+    )
+    assert not should_run_answer_key_verify(
+        verify_enabled=True, has_fatal_heuristics=True, too_similar=False
+    )
+    assert not should_run_answer_key_verify(
+        verify_enabled=True, has_fatal_heuristics=False, too_similar=True
+    )
+    assert should_run_similarity_gate(has_fatal_heuristics=False, verify_flaw=None)
+    assert not should_run_similarity_gate(
+        has_fatal_heuristics=False, verify_flaw={"code": "wrong_answer_key"}
+    )
+    assert should_positional_best_of_n(selected_count=0)
+    assert not should_positional_best_of_n(selected_count=2)
+
+
+def test_clone_template_and_rewrite_step() -> None:
+    from app.services.quality_evaluation import (
+        MAX_GENERATION_ATTEMPTS,
+        evaluate_clone_template,
+        plan_rewrite_step,
+    )
+
+    assert MAX_GENERATION_ATTEMPTS == 3
+    assert evaluate_clone_template({}).decision == "fail"
+    clean = {
+        "question": "A catalyst lowers the ___ of a reaction.",
+        "options": ["activation energy", "temperature", "concentration", "pressure"],
+        "correct_index": 0,
+    }
+    assert evaluate_clone_template(clean).decision == "pass"
+    assert plan_rewrite_step(attempt=0, has_draft=False, has_rewrite_brief=False) == "draft"
+    assert plan_rewrite_step(attempt=1, has_draft=True, has_rewrite_brief=True) == "rewrite"
+    assert plan_rewrite_step(attempt=1, has_draft=False, has_rewrite_brief=True) == "regenerate"
+    assert plan_rewrite_step(attempt=1, has_draft=True, has_rewrite_brief=False) == "regenerate"
+    from app.services.quality_evaluation import resolve_cook_content_type
+
+    assert resolve_cook_content_type(newspaper=True, coverage_type="narrative") == "newspaper_upsc"
+    assert resolve_cook_content_type(newspaper=False, coverage_type="narrative") == "narrative"
+
+
 def test_empirical_broken_fails() -> None:
     v = evaluate_empirical(p_correct=0.05, n_exposure=12)
     assert v.decision == "fail"

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models import Document, DocumentChunk
+from app.services.session_design import plan_auxiliary_chunk_load_limit
 
 settings = get_settings()
 
@@ -71,7 +72,9 @@ _INDEXED_PAGES_SQL = text(
 )
 
 
-def load_document_chunk_texts(db: Session, document_id: uuid.UUID, *, limit: int = 200) -> list[str]:
+def load_document_chunk_texts(
+    db: Session, document_id: uuid.UUID, *, limit: int | None = None
+) -> list[str]:
     """Return the document's chunk texts in page order (empty list if no document/chunks).
 
     Shared by every longform generation graph (summarize / topics / notes / cards /
@@ -79,11 +82,12 @@ def load_document_chunk_texts(db: Session, document_id: uuid.UUID, *, limit: int
     """
     if not db.get(Document, document_id):
         return []
+    n = plan_auxiliary_chunk_load_limit() if limit is None else int(limit)
     rows = (
         db.query(DocumentChunk)
         .filter(DocumentChunk.document_id == document_id)
         .order_by(DocumentChunk.page_start.asc())
-        .limit(limit)
+        .limit(n)
         .all()
     )
     return [r.text for r in rows if r.text]

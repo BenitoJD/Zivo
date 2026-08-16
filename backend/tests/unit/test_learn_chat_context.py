@@ -6,6 +6,7 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 from app.services.learn_chat_context import build_learn_chat_context, learn_scope_fields
+from app.services.tutor_retrieval import RagWindowPlan
 
 
 def test_build_learn_chat_context_includes_position_and_stem() -> None:
@@ -31,7 +32,10 @@ def test_build_learn_chat_context_includes_position_and_stem() -> None:
         patch("app.services.learn_chat_context.build_learn_queue_state", return_value=state),
         patch("app.services.learn_chat_context.page_range_bounds", return_value=(25, 33)),
         patch("app.services.learn_chat_context.selected_page_list", return_value=[25, 26, 27]),
-        patch("app.services.learn_chat_context.chat_rag_window", return_value=[25, 26]),
+        patch(
+            "app.services.learn_chat_context.plan_learn_context_rag",
+            return_value=RagWindowPlan(pages=(25, 26), current_page=25),
+        ),
         patch("app.services.learn_chat_context.assertion_page_number", return_value=None),
         patch(
             "app.services.learn_chat_context._assertion_mcq",
@@ -87,7 +91,10 @@ def test_build_learn_chat_context_includes_confirmed_answer() -> None:
         patch("app.services.learn_chat_context.build_learn_queue_state", return_value=state),
         patch("app.services.learn_chat_context.page_range_bounds", return_value=(1, 3)),
         patch("app.services.learn_chat_context.selected_page_list", return_value=[1, 2, 3]),
-        patch("app.services.learn_chat_context.chat_rag_window", return_value=[1, 2]),
+        patch(
+            "app.services.learn_chat_context.plan_learn_context_rag",
+            return_value=RagWindowPlan(pages=(1, 2), current_page=1),
+        ),
         patch(
             "app.services.learn_chat_context._assertion_mcq",
             return_value={

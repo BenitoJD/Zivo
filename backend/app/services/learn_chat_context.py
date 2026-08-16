@@ -17,7 +17,11 @@ from app.services.question_pool import (
     page_range_bounds,
     selected_page_list,
 )
-from app.services.rag_window import chat_rag_window
+from app.services.tutor_retrieval import (
+    plan_learn_context_rag,
+    plan_unconfirmed_tutor_policy,
+    should_attach_learn_session_context,
+)
 
 
 def _assertion_mcq(db: Session, assertion_id: str) -> dict[str, Any] | None:
@@ -161,7 +165,8 @@ def build_learn_chat_context(
 ) -> str | None:
     """Return a short authoritative block for the tutor when Learn mode is active."""
     # Read-mode chat is about the document being read, not the Learn loop.
-    if scope and str(scope.get("mode") or "").lower() == "read":
+    scope_mode = str(scope.get("mode") or "") if scope else None
+    if not should_attach_learn_session_context(scope_mode=scope_mode):
         return None
     meta = doc.meta or {}
     if not meta.get("question_pool_initialized"):
@@ -181,12 +186,11 @@ def build_learn_chat_context(
     generated = int(state["questions_generated"])
     qnum = int(state["question_number"])
 
-    if newspaper:
-        rag_pages = [page]
-        supplementary: list[int] = []
-    else:
-        rag_pages = chat_rag_window(page, selected_page_list(doc))
-        supplementary = [p for p in rag_pages if p != page]
+    rag_plan = plan_learn_context_rag(
+        page, selected_page_list(doc), newspaper=newspaper
+    )
+    rag_pages = list(rag_plan.pages)
+    supplementary = [p for p in rag_pages if p != page]
 
     lines = [
         "Learn session (authoritative — use this for progress/position questions):",
@@ -296,10 +300,12 @@ def build_learn_chat_context(
                         f'- Learner is currently leaning toward option {_choice_letter(sel)} '
                         f'("{options[sel]}") but has NOT checked it yet.'
                     )
-            lines.append(
-                "- Tutor policy: explain concepts and give hints only; do not reveal "
-                "which option is correct unless the learner explicitly asks for the answer."
+            hint_policy = plan_unconfirmed_tutor_policy(
+                has_mcq_options=True,
+                confirmed_choice_index=choice_index,
             )
+            if hint_policy:
+                lines.append(hint_policy)
         if choice_index is not None and mcq and mcq.get("options"):
             options = mcq["options"]
             outcome = (
@@ -332,12 +338,11 @@ def build_learn_chat_context(
     # questions instead of re-teaching what's already strong.
     concept_ability = progress.get("concept_ability") or {}
     if isinstance(concept_ability, dict) and concept_ability:
-        weak = sorted(
-            ((str(k), float(v)) for k, v in concept_ability.items() if v is not None),
-            key=lambda kv: kv[1],
-        )[:3]
-        if weak:
-            weak_txt = "; ".join(f"{k} ({v:.2f})" for k, v in weak)
+        from app.services.tutor_retrieval import plan_tutor_weak_concepts
+
+        weak = plan_tutor_weak_concepts(concept_ability)
+        if weak.concepts:
+            weak_txt = "; ".join(f"{k} ({v:.2f})" for k, v in weak.concepts)
             lines.append(
                 f"- Learner's weakest concepts so far (lowest calibrated ability): {weak_txt}. "
                 "When teaching, prefer these concepts."

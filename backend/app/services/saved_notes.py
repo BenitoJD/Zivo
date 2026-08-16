@@ -19,8 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.services.owner_scope import note_owner_scope, owner_scope_sql
-
-_MAX_NOTES = 500
+from app.services.session_design import plan_learner_list_cap
 
 
 def list_notes(
@@ -37,7 +36,7 @@ def list_notes(
             f"WHERE {owner_scope_sql()} "
             "ORDER BY created_at DESC LIMIT :lim"
         ),
-        {"d": document_id, "uid": uid, "gid": gid, "lim": _MAX_NOTES},
+        {"d": document_id, "uid": uid, "gid": gid, "lim": plan_learner_list_cap("saved_notes")},
     ).mappings().all()
     return [
         {

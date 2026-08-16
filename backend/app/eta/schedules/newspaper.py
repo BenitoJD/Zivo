@@ -17,14 +17,19 @@ from app.eta.stale_jobs import (
 from app.models import Document, JobWorkload
 from app.services.jobs import enqueue_job, enqueue_rag_window
 from app.services.newspaper import purge_expired_editions
+from app.services.session_design import (
+    STUCK_INDEXING_TIMEOUT_MINUTES,
+    STUCK_READY_DOC_TIMEOUT_MINUTES,
+    plan_newspaper_recovery_batch,
+    plan_newspaper_uncooked_followup,
+)
 
 logger = logging.getLogger(__name__)
 
-_STUCK_INDEXING_TIMEOUT_MINUTES = 30
 # How long a READY document's edition may stay indexing before we conclude the
 # cook job died / exhausted retries and re-enqueue it. Generous so we don't race
-# a legitimately slow first MCQ cook on a large edition.
-_STUCK_READY_DOC_TIMEOUT_MINUTES = 20
+# a legitimately slow first MCQ cook on a large edition. Timeouts live in
+# Session Design.
 
 
 def _recover_stuck_editions() -> int:
@@ -38,7 +43,7 @@ def _recover_stuck_editions() -> int:
     recovered = 0
     with SessionLocal() as db:
         cutoff = datetime.now(timezone.utc) - timedelta(
-            minutes=_STUCK_INDEXING_TIMEOUT_MINUTES
+            minutes=STUCK_INDEXING_TIMEOUT_MINUTES
         )
         stuck = db.execute(
             text(
@@ -118,7 +123,7 @@ def _recover_editions_doc_ready_uncooked() -> int:
     recovered = 0
     with SessionLocal() as db:
         cutoff = datetime.now(timezone.utc) - timedelta(
-            minutes=_STUCK_READY_DOC_TIMEOUT_MINUTES
+            minutes=STUCK_READY_DOC_TIMEOUT_MINUTES
         )
         stuck = db.execute(
             text(
@@ -136,13 +141,14 @@ def _recover_editions_doc_ready_uncooked() -> int:
                       AND {ACTIVE_JOB_LIVENESS_SQL}
                   )
                 ORDER BY e.edition_date DESC
-                LIMIT 10
+                LIMIT :lim
                 """
             ),
             {
                 "cutoff": cutoff,
                 "stale_cutoff": stale_running_cutoff(),
                 "queued_cutoff": stale_queued_cutoff(),
+                "lim": plan_newspaper_recovery_batch(),
             },
         ).mappings().all()
 
@@ -156,7 +162,10 @@ def _recover_editions_doc_ready_uncooked() -> int:
                     continue
                 page_from, _ = page_range_bounds(doc)
                 job = _enqueue_first_question_batch(db, doc, page=page_from)
-                if job is not None:
+                followup = plan_newspaper_uncooked_followup(
+                    cook_enqueued=job is not None
+                )
+                if followup == "wait":
                     db.commit()
                     recovered += 1
                     logger.info(
@@ -199,6 +208,7 @@ def run_newspaper_purge() -> None:
 def _backfill_edition_digests() -> int:
     """Enqueue digest cook for ready editions that never published a blog."""
     from app.repositories import seo as seo_repo
+    from app.services.seo_gate import plan_seo_digest_backfill_batch
 
     n = 0
     with SessionLocal() as db:
@@ -215,9 +225,10 @@ def _backfill_edition_digests() -> int:
                   AND e.blog_post_id IS NULL
                   AND e.blog_status IN ('none', 'skipped', 'failed')
                 ORDER BY e.edition_date DESC
-                LIMIT 5
+                LIMIT :lim
                 """
-            )
+            ),
+            {"lim": plan_seo_digest_backfill_batch()},
         ).mappings().all()
 
         for row in rows:

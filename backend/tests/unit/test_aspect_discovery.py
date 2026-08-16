@@ -64,6 +64,29 @@ def test_speculative_empty_page() -> None:
     assert v.n_kept == 0
 
 
+def test_plan_cook_target_fallback_and_stall() -> None:
+    from app.services.aspect_discovery import (
+        plan_cook_target_fallback,
+        plan_stalled_aspect_keys,
+    )
+
+    unasked = [{"key": "a", "asked": False}]
+    cook = plan_cook_target_fallback(unasked=unasked, has_aspects=True)
+    assert cook.action == "cook" and cook.reason == "unasked"
+    close = plan_cook_target_fallback(unasked=[], has_aspects=True)
+    assert close.action == "close_coverage"
+    spec = plan_cook_target_fallback(
+        unasked=[], has_aspects=False, speculative=[{"key": "s"}]
+    )
+    assert spec.action == "cook" and spec.reason == "speculative"
+    none = plan_cook_target_fallback(unasked=[], has_aspects=False, speculative=[])
+    assert none.action == "none"
+    stalled = plan_stalled_aspect_keys(
+        [{"key": "a"}, {"key": "b"}, {"key": ""}], ["a"]
+    )
+    assert stalled == ("b",)
+
+
 def test_dedupe_aspects_clusters_near_duplicates() -> None:
     from unittest.mock import patch
 

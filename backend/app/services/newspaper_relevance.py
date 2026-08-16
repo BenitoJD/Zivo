@@ -19,12 +19,12 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-logger = logging.getLogger(__name__)
+from app.services.content_worthiness import (
+    evaluate_newspaper_relevance_outcome,
+    plan_newspaper_relevance_input,
+)
 
-# Cap on page text sent to the judge. A page can run ~25k chars (many chunk
-# windows aggregated); a relevance verdict needs the gist, not every word, so
-# cap to keep the call cheap and well within the model's budget.
-_MAX_JUDGE_CHARS = 6000
+logger = logging.getLogger(__name__)
 
 _NEWS_RELEVANCE_SYSTEM = (
     "You judge whether ONE newspaper page is relevant to Indian competitive exams "
@@ -62,6 +62,24 @@ def _parse_relevance(raw: str) -> dict[str, Any] | None:
     return parsed
 
 
+def _relevance_payload(
+    page_text: str,
+    *,
+    parsed: dict | None = None,
+    judge_error: bool = False,
+) -> dict[str, Any]:
+    outcome = evaluate_newspaper_relevance_outcome(
+        page_text=page_text,
+        parsed=parsed,
+        judge_error=judge_error,
+    )
+    return {
+        "relevant": outcome.relevant,
+        "theme": outcome.theme,
+        "rationale": outcome.rationale,
+    }
+
+
 def judge_newspaper_relevance(db: Session, page_text: str) -> dict[str, Any]:
     """Judge whether a newspaper page is exam-relevant.
 
@@ -86,9 +104,9 @@ def judge_newspaper_relevance(db: Session, page_text: str) -> dict[str, Any]:
             "rationale": str(hit.get("rationale") or ""),
         }
 
-    text = (page_text or "").strip()[:_MAX_JUDGE_CHARS]
+    text = plan_newspaper_relevance_input(page_text)
     if not text:
-        verdict = {"relevant": False, "theme": "", "rationale": "Empty page text."}
+        verdict = _relevance_payload("")
         cache_put(db, kind=_CACHE_KIND, cache_key=cache_key, value=verdict)
         return verdict
 
@@ -107,26 +125,11 @@ def judge_newspaper_relevance(db: Session, page_text: str) -> dict[str, Any]:
         )
     except Exception:
         logger.warning("newspaper relevance judge failed", exc_info=True)
-        verdict = {
-            "relevant": True,
-            "theme": "",
-            "rationale": "Relevance judge unavailable; allowing.",
-        }
+        verdict = _relevance_payload(text, judge_error=True)
         cache_put(db, kind=_CACHE_KIND, cache_key=cache_key, value=verdict)
         return verdict
 
     parsed = _parse_relevance(raw or "")
-    if not parsed:
-        verdict = {
-            "relevant": True,
-            "theme": "",
-            "rationale": "Relevance judge returned no judgment; allowing.",
-        }
-    else:
-        verdict = {
-            "relevant": bool(parsed.get("relevant")),
-            "theme": str(parsed.get("theme") or "").strip(),
-            "rationale": str(parsed.get("rationale") or "").strip(),
-        }
+    verdict = _relevance_payload(text, parsed=parsed)
     cache_put(db, kind=_CACHE_KIND, cache_key=cache_key, value=verdict)
     return verdict

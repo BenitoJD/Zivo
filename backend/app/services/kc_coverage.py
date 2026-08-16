@@ -13,12 +13,101 @@ from typing import Any, Mapping, Sequence
 KC_VERSION = "qb.kc.v1"
 DEFAULT_KC_POLICY = "aspect_v1"
 
+CONCEPT_LABEL_MAX_CHARS = 56
+CONCEPT_LABEL_MAX_WORDS = 8
+CONCEPT_LABEL_FALLBACK = "General"
+
 _SLUG = re.compile(r"[^a-z0-9]+")
+_CONCEPT_COPULA = re.compile(
+    r"\s+(?:is|are|was|were|means|refers|describes|involves)\s+",
+    flags=re.IGNORECASE,
+)
+_DANGLING_LABEL_WORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "of",
+        "in",
+        "on",
+        "to",
+        "for",
+        "with",
+        "from",
+        "into",
+        "onto",
+        "across",
+        "by",
+        "via",
+        "as",
+        "at",
+        "that",
+        "which",
+        "who",
+        "whom",
+        "whose",
+        "where",
+        "when",
+        "is",
+        "are",
+        "was",
+        "were",
+    }
+)
 
 
 def normalize_key(raw: str | None) -> str:
     s = _SLUG.sub("-", (raw or "").strip().lower()).strip("-")
     return s or "unknown"
+
+
+def normalize_concept_label(
+    raw: str | None,
+    *,
+    max_chars: int = CONCEPT_LABEL_MAX_CHARS,
+) -> str:
+    """Clamp aspect/concept labels for report cards and bank metadata.
+
+    Fallback triage sometimes uses a whole paragraph as the aspect label; that
+    must not land as a topic chip. Prefer a noun-phrase subject before a
+    copula, else the first clause, then word/char caps.
+    """
+    s = re.sub(r"\s+", " ", (raw or "").strip())
+    if not s:
+        return CONCEPT_LABEL_FALLBACK
+    for sep in (". ", "? ", "! ", "; ", " — ", " – ", " - "):
+        if sep in s:
+            s = s.split(sep, 1)[0].strip()
+            break
+    # Mid-word residue from newspaper/OCR extracts ("ngress government…").
+    if s[:1].islower():
+        parts = s.split()
+        for i, w in enumerate(parts):
+            if w[:1].isupper():
+                s = " ".join(parts[i:])
+                break
+        else:
+            return CONCEPT_LABEL_FALLBACK
+    # Sentence-as-aspect → keep the subject ("Osmosis is the net…" → "Osmosis").
+    copula = _CONCEPT_COPULA.search(s)
+    if copula and copula.start() > 0:
+        subject = s[: copula.start()].strip(" ,;:-")
+        if 1 <= len(subject.split()) <= CONCEPT_LABEL_MAX_WORDS:
+            s = subject
+    words = s.split()
+    if len(words) > CONCEPT_LABEL_MAX_WORDS:
+        s = " ".join(words[:CONCEPT_LABEL_MAX_WORDS])
+        words = s.split()
+    # Drop dangling clause openers left by mid-sentence truncation
+    # ("… in plants that" → "… in plants").
+    while words and words[-1].lower() in _DANGLING_LABEL_WORDS:
+        words.pop()
+        s = " ".join(words)
+    if len(s) > max_chars:
+        s = s[: max(1, max_chars - 1)].rstrip(" ,;:-") + "…"
+    return s or CONCEPT_LABEL_FALLBACK
 
 
 @dataclass(frozen=True)
@@ -152,3 +241,35 @@ def evaluate_aspect_exhaustion_close(
 ) -> bool:
     """Close coverage when triage landed and nothing remains unasked."""
     return bool(has_aspects) and int(unasked_count) <= 0
+
+
+def stamp_kc_centrality(*, orig_centrality: str, central: bool) -> tuple[str, bool]:
+    """Keep skip for budget weights; otherwise KC central bool maps to central/support."""
+    if orig_centrality == "skip":
+        return "skip", False
+    return ("central" if central else "support"), bool(central)
+
+
+def stamp_aspect_flags(centrality: str) -> tuple[bool, bool]:
+    """(central, peripheral) from a parsed centrality token."""
+    cent = (centrality or "").strip().lower()
+    return cent == "central", cent == "support"
+
+
+def evaluate_stale_coverage_stamp(
+    entry: Mapping[str, Any] | None,
+    *,
+    mcq_count: int,
+) -> bool:
+    """True when coverage_complete was stamped before triage aspects landed."""
+    entry = entry or {}
+    if not entry.get("coverage_complete"):
+        return False
+    if entry.get("aspects"):
+        return False
+    return int(mcq_count) <= 0
+
+
+def coverage_aspects_field(serve_mode: str) -> str:
+    """Learn cooks `aspects`; Test cooks the dual-mode `test_aspects` overlay."""
+    return "test_aspects" if serve_mode == "test" else "aspects"

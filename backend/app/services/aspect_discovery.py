@@ -306,3 +306,49 @@ def speculative_targets(
         n_kept=len(targets),
         policy=pol,
     )
+
+
+CookTargetAction = Literal["cook", "close_coverage", "try_speculative", "none"]
+
+
+@dataclass(frozen=True)
+class CookTargetPlan:
+    action: CookTargetAction
+    targets: tuple[dict[str, Any], ...]
+    reason: str
+    policy: str = DEFAULT_POLICY
+    policy_version: str = ASPECT_DISCOVERY_VERSION
+
+
+def plan_cook_target_fallback(
+    *,
+    unasked: Sequence[dict[str, Any]],
+    has_aspects: bool,
+    speculative: Sequence[dict[str, Any]] | None = None,
+) -> CookTargetPlan:
+    """Unasked first; if none, close coverage or fall back to speculative."""
+    if unasked:
+        return CookTargetPlan("cook", tuple(dict(t) for t in unasked), "unasked")
+    if speculative is None:
+        from app.services.kc_coverage import evaluate_aspect_exhaustion_close
+
+        if evaluate_aspect_exhaustion_close(has_aspects=has_aspects, unasked_count=0):
+            return CookTargetPlan("close_coverage", (), "exhausted")
+        return CookTargetPlan("try_speculative", (), "need_speculative")
+    if speculative:
+        return CookTargetPlan("cook", tuple(dict(t) for t in speculative), "speculative")
+    return CookTargetPlan("none", (), "none")
+
+
+def plan_stalled_aspect_keys(
+    targets: Sequence[dict[str, Any]],
+    asked_keys: Sequence[str],
+) -> tuple[str, ...]:
+    """Targeted aspects that still have no saved question after this batch."""
+    asked = {str(k) for k in asked_keys}
+    out: list[str] = []
+    for target in targets:
+        key = str(target.get("key") or "")
+        if key and key not in asked:
+            out.append(key)
+    return tuple(out)

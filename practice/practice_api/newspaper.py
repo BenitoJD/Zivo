@@ -13,6 +13,10 @@ from app.services import newspaper as newspaper_svc
 from app.services.auth import get_optional_user
 from app.services.document_learner_state import learner_key_for_user
 from app.services.guest_session import guest_session_for_read
+from app.services.session_design import (
+    NEWSPAPER_EDITION_QUESTIONS_DEFAULT,
+    plan_newspaper_edition_questions_limit,
+)
 
 router = APIRouter()
 
@@ -57,7 +61,7 @@ def get_edition(edition_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
 @router.get("/editions/{edition_id}/questions")
 def edition_questions(
     edition_id: uuid.UUID,
-    limit: int = 40,
+    limit: int = NEWSPAPER_EDITION_QUESTIONS_DEFAULT,
     db: Session = Depends(get_db),
 ) -> dict:
     from app.repositories import newspaper as newspaper_repo
@@ -65,7 +69,9 @@ def edition_questions(
     ed = newspaper_repo.get_edition(db, edition_id)
     if ed and not newspaper_repo.is_brand_allowed(db, ed["paper_slug"]):
         raise HTTPException(status_code=404, detail="Edition not found")
-    out = newspaper_svc.list_edition_questions(db, edition_id, limit=min(limit, 80))
+    out = newspaper_svc.list_edition_questions(
+        db, edition_id, limit=plan_newspaper_edition_questions_limit(limit)
+    )
     if out["edition"] is None:
         raise HTTPException(status_code=404, detail="Edition not found")
     return out

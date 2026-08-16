@@ -15,7 +15,14 @@ from app.models import Document, JobWorkload
 from app.repositories import newspaper as newspaper_repo
 from app.services.document_purge import purge_document, purge_ingest_tmp
 from app.services.parse import count_pdf_pages
-from app.services.session_design import evaluate_newspaper_learn_complete
+from app.services.session_design import (
+    NEWSPAPER_RETENTION_DAYS,
+    evaluate_edition_practice_window,
+    evaluate_newspaper_learn_complete_counts,
+    plan_newspaper_edition_questions_limit,
+    plan_newspaper_hub_heal,
+    plan_newspaper_uncooked_followup,
+)
 from app.services.storage import _safe_storage_filename, ensure_bucket, put_bytes
 
 logger = logging.getLogger(__name__)
@@ -31,7 +38,8 @@ def window_start(today: date | None = None) -> date:
     """Earliest edition_date learners may see (UTC date, last RETENTION_DAYS)."""
     today = today or datetime.now(timezone.utc).date()
     return newspaper_repo.retention_cutoff(
-        datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
+        datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc),
+        days=NEWSPAPER_RETENTION_DAYS,
     )
 
 
@@ -39,14 +47,16 @@ def edition_in_practice_window(
     edition_date: date, *, today: date | None = None
 ) -> bool:
     """True when edition_date is within the practice retention window."""
-    return edition_date >= window_start(today)
+    return evaluate_edition_practice_window(
+        edition_date, cutoff=window_start(today)
+    )
 
 
 def list_catalog(db: Session) -> dict[str, Any]:
     since = window_start()
     papers = newspaper_repo.list_papers(db, since=since)
     return {
-        "retention_days": newspaper_repo.RETENTION_DAYS,
+        "retention_days": NEWSPAPER_RETENTION_DAYS,
         "since": since.isoformat(),
         "papers": [
             {
@@ -127,9 +137,9 @@ def list_paper_days(
             total = question_totals.get(str(document_id), 0)
             learn_complete = bool(progress.get("learn_complete"))
             if not learn_complete:
-                learn_complete = evaluate_newspaper_learn_complete(
-                    learn_pool_count=total,
-                    all_learn_answered=answered_count >= total,
+                learn_complete = evaluate_newspaper_learn_complete_counts(
+                    answered_count=answered_count,
+                    pool_count=total,
                     generation_pending=False,
                 )
             item["learner"] = {
@@ -184,20 +194,21 @@ def _heal_stuck_editions_for_hub(db: Session, paper_slug: str, *, since: date) -
             doc = db.get(Document, document_id)
             if doc is None:
                 continue
-            if doc.status in ("indexing", "pending"):
-                # RAG not done — re-queue missing ingest pages.
+            action = plan_newspaper_hub_heal(doc_status=doc.status)
+            if action == "reingest":
                 from app.services.rag_window import maybe_recover_stuck_indexing
 
                 maybe_recover_stuck_indexing(db, doc)
-            elif doc.status == "ready":
-                # RAG done but the first-MCQ cook died — re-enqueue it, or
-                # promote the edition if page 1 has nothing to cook.
+            elif action == "recook":
                 from app.services.question_pool import page_range_bounds
                 from app.services.question_pool_jobs import _enqueue_first_question_batch
 
                 page_from, _ = page_range_bounds(doc)
                 job = _enqueue_first_question_batch(db, doc, page=page_from)
-                if job is None:
+                followup = plan_newspaper_uncooked_followup(
+                    cook_enqueued=job is not None
+                )
+                if followup == "promote_ready":
                     maybe_mark_newspaper_edition_ready(db, doc)
                 db.commit()
         except Exception:
@@ -399,7 +410,7 @@ def purge_edition(db: Session, edition_id: uuid.UUID, *, hard_delete: bool = Fal
 def purge_expired_editions(db: Session) -> int:
     from app.services.storage import delete_object
 
-    cutoff = newspaper_repo.retention_cutoff()
+    cutoff = newspaper_repo.retention_cutoff(days=NEWSPAPER_RETENTION_DAYS)
     expired = newspaper_repo.list_expired_ready(db, before=cutoff)
     purged = 0
     for row in expired:
@@ -420,7 +431,9 @@ def purge_expired_editions(db: Session) -> int:
     return purged
 
 
-def list_edition_questions(db: Session, edition_id: uuid.UUID, *, limit: int = 40) -> dict[str, Any]:
+def list_edition_questions(
+    db: Session, edition_id: uuid.UUID, *, limit: int | None = None
+) -> dict[str, Any]:
     ed = newspaper_repo.get_edition(db, edition_id)
     if not ed:
         return {"edition": None, "items": []}
@@ -453,7 +466,7 @@ def list_edition_questions(db: Session, edition_id: uuid.UUID, *, limit: int = 4
             LIMIT :limit
             """
         ),
-        {"aid": str(doc_id), "limit": limit},
+        {"aid": str(doc_id), "limit": plan_newspaper_edition_questions_limit(limit)},
     ).mappings().all()
 
     items = []

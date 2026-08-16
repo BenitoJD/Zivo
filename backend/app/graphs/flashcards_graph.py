@@ -20,19 +20,22 @@ from app.services.chunks import load_document_chunk_texts
 from app.services.llm_json import extract_json_array
 from app.services.llm_router import complete_chat
 from app.services.prompts import get_prompt
+from app.services.session_design import (
+    plan_auxiliary_artifact_cap,
+    plan_auxiliary_field_caps,
+    plan_auxiliary_generation_strategy,
+    plan_auxiliary_map_concurrency,
+)
 from app.services.token_budget import (
     SUMMARIZE_CHUNK_INPUT_MAX_TOKENS,
     SUMMARIZE_ROLLUP_INPUT_MAX_TOKENS,
-    SUMMARIZE_SINGLE_SHOT_MAX_TOKENS,
     count_tokens,
     truncate_to_tokens,
 )
 
 _CHUNK_MAP_MAX_TOKENS = SUMMARIZE_CHUNK_INPUT_MAX_TOKENS
 _ROLLUP_INPUT_MAX_TOKENS = SUMMARIZE_ROLLUP_INPUT_MAX_TOKENS
-_SINGLE_SHOT_MAX_TOKENS = SUMMARIZE_SINGLE_SHOT_MAX_TOKENS
-_MAP_CONCURRENCY = 6
-_MAX_CARDS = 24
+_MAX_CARDS = plan_auxiliary_artifact_cap("flashcards").max_count
 
 
 def _parse_cards(raw: str) -> list[dict[str, str]]:
@@ -46,7 +49,14 @@ def _parse_cards(raw: str) -> list[dict[str, str]]:
         kind = str(item.get("kind") or "qa").strip().lower()
         if kind not in ("qa", "cloze"):
             kind = "qa"
-        out.append({"front": front[:400], "back": back[:600], "kind": kind})
+        caps = plan_auxiliary_field_caps("flashcards")
+        out.append(
+            {
+                "front": front[: caps.limit("front")],
+                "back": back[: caps.limit("back")],
+                "kind": kind,
+            }
+        )
     return out
 
 
@@ -75,20 +85,21 @@ async def generate_flashcards(db: Session, document_id: uuid.UUID) -> list[dict[
     model_id = default_chat_model_id(db)
     system = get_prompt(db, "flashcards_system")
     body = "\n\n".join(chunk_texts)
+    gen = plan_auxiliary_generation_strategy(count_tokens(body))
 
-    if count_tokens(body) <= _SINGLE_SHOT_MAX_TOKENS:
+    if gen.mode == "single_shot":
         from app.services.chunk_map_cache import content_hash_key
         from app.services.generation_cache import get as cache_get, put as cache_put
 
         single_key = content_hash_key(
-            "flashcards_generate", system, truncate_to_tokens(body, _SINGLE_SHOT_MAX_TOKENS), str(model_id)
+            "flashcards_generate", system, truncate_to_tokens(body, gen.single_shot_max_tokens), str(model_id)
         )
         hit = cache_get(db, kind="flashcards_generate", cache_key=single_key)
         if isinstance(hit, str) and hit.strip():
             return _finalize(_parse_cards(hit))
         messages = [
             {"role": "system", "content": system},
-            {"role": "user", "content": f"SOURCE:\n\n{truncate_to_tokens(body, _SINGLE_SHOT_MAX_TOKENS)}"},
+            {"role": "user", "content": f"SOURCE:\n\n{truncate_to_tokens(body, gen.single_shot_max_tokens)}"},
         ]
         raw = await complete_chat(messages, db, log_tag="flashcards_generate", model_id=model_id)
         cards = _finalize(_parse_cards(raw))
@@ -100,7 +111,7 @@ async def generate_flashcards(db: Session, document_id: uuid.UUID) -> list[dict[
             cache_put(db, kind="flashcards_generate", cache_key=single_key, value=raw)
         return cards
 
-    sem = asyncio.Semaphore(_MAP_CONCURRENCY)
+    sem = asyncio.Semaphore(plan_auxiliary_map_concurrency("flashcards"))
 
     async def _map_one(text: str) -> list[dict[str, str]]:
         async with sem:

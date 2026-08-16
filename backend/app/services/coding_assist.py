@@ -21,12 +21,16 @@ from app.db import SessionLocal
 from app.models import Account, ChatMessage, ChatThread
 from app.services.code_execution import LANGUAGES
 from app.services.llm_router import stream_chat_completion
+from app.services.open_response import plan_coding_assist_sample_display
+from app.services.tutor_retrieval import (
+    plan_coding_assist_code_chars,
+    plan_coding_assist_history,
+)
 from app.services.usage import reserve_message_slot
 
 logger = logging.getLogger(__name__)
 
 _SURFACE = "coding"
-_HISTORY_LIMIT = 12
 _LIST_MESSAGES_LIMIT = 200
 
 _ASSIST_SYSTEM = """You are Zivo's coding practice assistant for one programming problem.
@@ -159,7 +163,7 @@ def clear_assist_thread(
 def _problem_context_block(public: dict[str, Any]) -> str:
     samples = public.get("sample_tests") or []
     sample_lines: list[str] = []
-    for i, t in enumerate(samples[:4], start=1):
+    for i, t in enumerate(samples[: plan_coding_assist_sample_display()], start=1):
         sample_lines.append(
             f"Sample {i}:\nstdin:\n{t.get('stdin', '')}\nexpected:\n{t.get('expected_output', '')}"
         )
@@ -195,7 +199,7 @@ def _editor_context_block(
         parts.append(f"Custom stdin:\n{stdin}")
     if code is not None and str(code).strip():
         # Cap so a huge paste cannot blow the prompt.
-        clipped = str(code)[:12000]
+        clipped = str(code)[: plan_coding_assist_code_chars()]
         parts.append(f"Learner's current code:\n```\n{clipped}\n```")
     return "\n\n".join(parts)
 
@@ -229,7 +233,7 @@ def prepare_assist_stream(
             db.query(ChatMessage)
             .filter(ChatMessage.thread_id == thread.id)
             .order_by(ChatMessage.created_at.desc())
-            .limit(_HISTORY_LIMIT)
+            .limit(plan_coding_assist_history())
             .all()
         )
         history = list(reversed(history))

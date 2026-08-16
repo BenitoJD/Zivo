@@ -18,6 +18,12 @@ DEFAULT_POLICY = "overlap_v1"
 _DIFF_SCORE = {"easy": 1, "medium": 2, "hard": 3}
 ATTEMPT_BONUS = 5
 ATTEMPT_PENALTY = 3
+CODING_NEXT_POOL_LIMIT = 80
+
+
+def plan_coding_next_pool_limit() -> int:
+    """How many published coding problems to rank before picking the next one."""
+    return CODING_NEXT_POOL_LIMIT
 
 
 @dataclass(frozen=True)

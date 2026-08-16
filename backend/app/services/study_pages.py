@@ -12,10 +12,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.web_import import READER_PAGE_CHARS, paginate_reader_text
+from app.services.content_worthiness import (
+    plan_study_page_split,
+    should_split_native_unit,
+)
+from app.services.web_import import paginate_reader_text
 
-# Allow a native page/slide to be ~2× the soft budget before we subdivide it.
-NATIVE_SOFT_SPLIT_CHARS = READER_PAGE_CHARS * 2
+NATIVE_SOFT_SPLIT_CHARS = plan_study_page_split().native_split_chars
 
 
 def study_pages_from_native_units(
@@ -38,7 +41,7 @@ def study_pages_from_native_units(
     out: list[dict[str, Any]] = []
     page_num = 1
     for unit in cleaned:
-        if len(unit) <= NATIVE_SOFT_SPLIT_CHARS:
+        if not should_split_native_unit(unit):
             out.append({"page": page_num, "text": unit})
             page_num += 1
             continue

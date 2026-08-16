@@ -22,18 +22,19 @@ from app.services.chunk_map_cache import map_chunk_cached
 from app.services.chunks import load_document_chunk_texts
 from app.services.llm_router import complete_chat
 from app.services.prompts import get_prompt
+from app.services.session_design import (
+    plan_auxiliary_generation_strategy,
+    plan_auxiliary_map_concurrency,
+)
 from app.services.token_budget import (
     SUMMARIZE_CHUNK_INPUT_MAX_TOKENS,
     SUMMARIZE_ROLLUP_INPUT_MAX_TOKENS,
-    SUMMARIZE_SINGLE_SHOT_MAX_TOKENS,
     count_tokens,
     truncate_to_tokens,
 )
 
 _CHUNK_MAP_MAX_TOKENS = SUMMARIZE_CHUNK_INPUT_MAX_TOKENS
 _ROLLUP_INPUT_MAX_TOKENS = SUMMARIZE_ROLLUP_INPUT_MAX_TOKENS
-_SINGLE_SHOT_MAX_TOKENS = SUMMARIZE_SINGLE_SHOT_MAX_TOKENS
-_MAP_CONCURRENCY = 6
 
 # kind → (map/single-shot prompt key, reduce/rollup prompt key)
 _PROMPTS = {
@@ -73,14 +74,15 @@ async def generate_notes(db: Session, document_id: uuid.UUID, *, kind: str = "no
     body = "\n\n".join(chunk_texts)
 
     title_hint = (doc.meta or {}).get("page_title") or (doc.filename or "this material")
+    gen = plan_auxiliary_generation_strategy(count_tokens(body))
 
-    if count_tokens(body) <= _SINGLE_SHOT_MAX_TOKENS:
+    if gen.mode == "single_shot":
         from app.services.chunk_map_cache import content_hash_key
         from app.services.generation_cache import get as cache_get, put as cache_put
 
         single_key = content_hash_key(
             "notes_generate", kind, system, title_hint,
-            truncate_to_tokens(body, _SINGLE_SHOT_MAX_TOKENS), str(model_id),
+            truncate_to_tokens(body, gen.single_shot_max_tokens), str(model_id),
         )
         hit = cache_get(db, kind="notes_generate", cache_key=single_key)
         if isinstance(hit, str) and hit.strip():
@@ -91,7 +93,7 @@ async def generate_notes(db: Session, document_id: uuid.UUID, *, kind: str = "no
                 "role": "user",
                 "content": (
                     f'Source title: "{title_hint}"\n\n'
-                    f"SOURCE:\n\n{truncate_to_tokens(body, _SINGLE_SHOT_MAX_TOKENS)}"
+                    f"SOURCE:\n\n{truncate_to_tokens(body, gen.single_shot_max_tokens)}"
                 ),
             },
         ]
@@ -102,7 +104,7 @@ async def generate_notes(db: Session, document_id: uuid.UUID, *, kind: str = "no
         return out
 
     # Map: notes per section; Reduce: merge into one cohesive document.
-    sem = asyncio.Semaphore(_MAP_CONCURRENCY)
+    sem = asyncio.Semaphore(plan_auxiliary_map_concurrency("notes"))
 
     async def _map_one(text: str) -> str:
         async with sem:

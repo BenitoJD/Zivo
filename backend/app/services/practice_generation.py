@@ -27,10 +27,13 @@ from app.repositories.intel import (
 )
 from app.services import wikidata
 from app.services.jobs import enqueue_generate
+from app.services.question_budget import (
+    PRACTICE_CONCEPT_MIN_QUESTIONS,
+    plan_practice_concept_ready,
+    plan_practice_source_chunk_chars,
+)
 
-DEFAULT_MIN_QUESTIONS = 5
-# Roughly how many chars per "page" chunk — keeps each generation batch focused.
-_CHARS_PER_CHUNK = 2500
+DEFAULT_MIN_QUESTIONS = PRACTICE_CONCEPT_MIN_QUESTIONS
 
 
 @dataclass
@@ -93,7 +96,7 @@ def ensure_concept_questions(
 
     # 2. Enough questions already?
     existing = count_concept_questions(db, concept_entity_id)
-    if existing >= min_count:
+    if plan_practice_concept_ready(existing=existing, min_count=min_count):
         return EnsureOutcome(
             status="ready", qid=qid, label=detail.label, question_count=existing
         )
@@ -168,7 +171,7 @@ def _create_public_doc_from_article(db: Session, article: wikidata.WikipediaArti
     safe_title = (article.title or article.qid).replace(" ", "-").lower()[:80]
     text_body = article.text or ""
     # Split into page-sized chunks so the page-scoped generator has something to chew on.
-    chunks = _split_text(text_body, _CHARS_PER_CHUNK)
+    chunks = _split_text(text_body, plan_practice_source_chunk_chars())
     if not chunks:
         chunks = [text_body]
 

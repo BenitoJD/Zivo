@@ -25,13 +25,10 @@ from app.services.document_learn_state import save_progress_row
 from app.services.jobs import enqueue_generate, enqueue_rag_window, enqueue_transition_prep
 from app.services.question_budget import Mode
 
-# Background-prep cap: a single very large document must not flood the ETA
-# queue with an unbounded chain of cook batches (a 496-page PDF generated
-# ~2400 jobs and starved every other document). Once a doc's total cooked
-# questions reach this, prep stops and the partial pool is marked ready.
-BACKGROUND_PREP_MAX_QUESTIONS = 200
+# Background-prep cap lives in Session Design (orchestration re-exports).
+from app.services.session_design import plan_refill_batch
+from app.services.session_design import BACKGROUND_PREP_MAX_QUESTIONS as BACKGROUND_PREP_MAX_QUESTIONS
 from app.services.question_pool import (
-    EAGER_TRIAGE_LOOKAHEAD,
     FIRST_QUESTION_BATCH_SIZE,
     GENERATE_JOB_STALE_SECONDS,
     INITIAL_BATCH_SIZE,
@@ -133,13 +130,14 @@ def _maybe_enqueue_newspaper_missing_pages(
     """Queue ingest.page for study pages not yet embedded (full-edition cook)."""
     from app.services.jobs import batch_enqueue_jobs
     from app.services.rag_window import pages_ready_for_document
+    from app.services.session_design import plan_newspaper_ingest_batch
 
     study = selected_page_list(doc)
     ready = pages_ready_for_document(db, document_id, doc)
     missing = [p for p in study if p not in ready]
-    if not missing:
+    batch = plan_newspaper_ingest_batch(missing)
+    if not batch:
         return None
-    batch = missing[:8]
     jobs = batch_enqueue_jobs(
         db,
         [
@@ -198,7 +196,7 @@ def _maybe_refill_newspaper_edition(
             db, document_id, verdict.page, serve_mode=verdict.cook_mode
         )
         budget = get_question_budget(doc, verdict.page, mode=verdict.cook_mode)
-        batch = min(REFILL_BATCH_SIZE, budget - generated)
+        batch = plan_refill_batch(remaining=budget - generated)
         if batch <= 0:
             return ingest_job
         gen_job = enqueue_page_batch(
@@ -328,7 +326,7 @@ def _maybe_enqueue_initial_pool_remainder(
         return None
     if _has_active_generate_job_for_page(db, doc.id, page):
         return None
-    remaining = min(REFILL_BATCH_SIZE, target - generated)
+    remaining = plan_refill_batch(remaining=target - generated)
     if remaining <= 0:
         return None
     return enqueue_page_batch(
@@ -753,7 +751,9 @@ def mark_aspects_asked(
 
     mode = parse_budget_mode(cook_mode)
     entry = dict(get_page_coverage(doc, page))
-    aspect_field = "test_aspects" if mode == "test" else "aspects"
+    from app.services.kc_coverage import coverage_aspects_field
+
+    aspect_field = coverage_aspects_field(mode)
     aspects = list(entry.get(aspect_field) or entry.get("aspects") or [])
     wanted = set(aspect_keys)
     for aspect in aspects:
@@ -813,13 +813,14 @@ def set_coverage_complete(db: Session, document_id: uuid.UUID, page: int) -> Non
 
 def clear_stale_coverage_complete(db: Session, document_id: uuid.UUID, page: int) -> bool:
     """Drop coverage_complete when triage never landed (pre-index race poison)."""
+    from app.services.kc_coverage import evaluate_stale_coverage_stamp
+
     doc = db.get(Document, document_id)
     if not doc:
         return False
     entry = dict(get_page_coverage(doc, page))
-    if not entry.get("coverage_complete") or entry.get("aspects"):
-        return False
-    if count_assertions_on_page(db, document_id, page) > 0:
+    mcq_count = count_assertions_on_page(db, document_id, page)
+    if not evaluate_stale_coverage_stamp(entry, mcq_count=mcq_count):
         return False
     entry.pop("coverage_complete", None)
     if entry:
@@ -956,15 +957,24 @@ def _enqueue_eager_triage_lookahead(db: Session, doc: Document, *, from_page: in
     window ahead of the reader. Idempotent: skips pages already triaged or with a
     triage job in flight, so calling it on every advance adds no duplicate work.
     """
+    from app.services.session_design import plan_eager_triage_pages
+
     study = selected_page_list(doc)
-    if from_page not in study:
+    preview = plan_eager_triage_pages(from_page=from_page, study_pages=study)
+    if not preview:
         return
-    start = study.index(from_page) + 1
-    for ahead_page in study[start : start + EAGER_TRIAGE_LOOKAHEAD]:
-        if get_page_coverage(doc, ahead_page):
-            continue
-        if _has_active_triage_job_for_page(db, doc.id, ahead_page):
-            continue
+    covered = {p for p in preview if get_page_coverage(doc, p)}
+    active = {
+        p
+        for p in preview
+        if p not in covered and _has_active_triage_job_for_page(db, doc.id, p)
+    }
+    for ahead_page in plan_eager_triage_pages(
+        from_page=from_page,
+        study_pages=study,
+        covered_pages=covered,
+        active_triage_pages=active,
+    ):
         enqueue_page_triage(db, doc, page=ahead_page, precompute=True)
 
 
@@ -1133,16 +1143,42 @@ def advance_to_next_page(
     # pre-generate a next page whose coverage already exists).
     _enqueue_eager_triage_lookahead(db, doc, from_page=new_page)
 
-    if not get_page_coverage(doc, new_page):
+    from app.services.rag_window import is_rag_window_ready
+    from app.services.session_design import (
+        plan_page_advance_next,
+        should_require_rag_on_page_advance,
+    )
+
+    has_coverage = bool(get_page_coverage(doc, new_page))
+    generated = (
+        count_assertions_on_page(db, doc.id, new_page) if has_coverage else 0
+    )
+    rag_ready = (
+        not should_require_rag_on_page_advance(
+            has_coverage=has_coverage, generated=generated
+        )
+        or is_rag_window_ready(db, doc.id, doc)
+    )
+    plan = plan_page_advance_next(
+        has_coverage=has_coverage,
+        generated=generated,
+        rag_ready=rag_ready,
+    )
+    if plan.action == "triage":
         return enqueue_page_triage(db, doc, page=new_page)
-    generated = count_assertions_on_page(db, doc.id, new_page)
-    if generated == 0:
+    if plan.action == "cook_first_batch":
         job = _enqueue_first_question_batch(db, doc, page=new_page)
         if job is not None:
             return job
-    from app.services.rag_window import is_rag_window_ready
-
-    if not is_rag_window_ready(db, doc.id, doc):
+        if not is_rag_window_ready(db, doc.id, doc):
+            return enqueue_rag_window(
+                db,
+                doc.id,
+                account_id=doc.account_id,
+                current_page=new_page,
+            )
+        return None
+    if plan.action == "ingest_rag":
         return enqueue_rag_window(
             db,
             doc.id,
@@ -1457,7 +1493,7 @@ def maybe_refill_pool(db: Session, document_id: uuid.UUID) -> Job | None:
     )
     if sched.refill_now or sched.periodic_refill:
         remaining = budget - generated_on_page
-        batch = min(REFILL_BATCH_SIZE, remaining)
+        batch = plan_refill_batch(remaining=remaining)
         if batch > 0:
             return enqueue_page_batch(
                 db,

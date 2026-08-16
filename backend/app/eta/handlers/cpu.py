@@ -212,10 +212,11 @@ def ingest_page_job(payload: dict) -> dict:
         # with a vision LLM (cached per page, never re-bills, degrades to
         # blank on failure). Gated so the flag controls cost.
         from app.config import get_settings
+        from app.services.content_worthiness import is_sparse_page_text
 
         if (
             get_settings().vision_ocr_enabled
-            and len((page.get("text") or "").strip()) < 40
+            and is_sparse_page_text(page.get("text"))
             and (doc.content_type.startswith("application/pdf") or raw[:4] == b"%PDF")
         ):
             from app.services.vision_ocr import transcribe_page_with_vision
@@ -319,7 +320,6 @@ def ingest_full_range_job(payload: dict) -> dict:
 def transition_prep_job(payload: dict) -> dict:
     from app.services.question_pool import (
         FIRST_QUESTION_BATCH_SIZE,
-        REFILL_BATCH_SIZE,
         count_assertions_on_page,
         effective_question_budget,
         enqueue_page_batch,
@@ -334,6 +334,7 @@ def transition_prep_job(payload: dict) -> dict:
     from app.services.session_design import (
         evaluate_serve_schedule,
         plan_first_cook_batch,
+        plan_refill_batch,
         plan_transition_next,
     )
 
@@ -356,7 +357,7 @@ def transition_prep_job(payload: dict) -> dict:
                 db,
                 doc,
                 page=current_page,
-                batch_size=min(REFILL_BATCH_SIZE, remaining),
+                batch_size=plan_refill_batch(remaining=remaining),
                 start_sequence=generated,
             )
 
@@ -442,7 +443,9 @@ def generate_coding_job(payload: dict) -> dict:
 
     document_id = UUID(payload["document_id"])
     page_number = int(payload.get("page_number") or 0)
-    count = int(payload.get("count") or 1)
+    from app.services.question_budget import plan_coding_page_yield
+
+    count = plan_coding_page_yield(payload.get("count"))
     with SessionLocal() as db:
         chunks = fetch_chunks_for_page_range(
             db,
@@ -477,7 +480,9 @@ def generate_debug_job(payload: dict) -> dict:
 
     document_id = UUID(payload["document_id"])
     page_number = int(payload.get("page_number") or 0)
-    count = int(payload.get("count") or 2)
+    from app.services.open_response import plan_debug_cook_yield
+
+    count = plan_debug_cook_yield(payload.get("count"))
     with SessionLocal() as db:
         from app.services.retrieval import fetch_chunks_for_page_range
 

@@ -430,6 +430,8 @@ def _concept_scores_for_subject(
 ) -> dict[str, list[float]]:
     """Map concept_key → list of 0-1 mastery samples from done sessions."""
     where, params = _subject_filter(account_id, guest_id)
+    from app.services.mastery_evidence import plan_sd_path_sample_limit, sample_path_mastery
+
     rows = db.execute(
         text(
             f"""
@@ -438,13 +440,12 @@ def _concept_scores_for_subject(
             JOIN qb.sd_problem p ON p.id = s.problem_id
             WHERE s.status = 'done' AND {where}
             ORDER BY s.updated_at DESC
-            LIMIT 40
+            LIMIT :lim
             """
         ),
-        params,
+        {**params, "lim": plan_sd_path_sample_limit()},
     ).mappings().all()
     out: dict[str, list[float]] = {}
-    from app.services.mastery_evidence import sample_path_mastery
 
     for r in rows:
         scores = r["scores"] or {}
@@ -698,17 +699,20 @@ def save_design(
     guest_id: str | None,
     design: dict[str, Any],
 ) -> dict[str, Any]:
+    from app.services.open_response import plan_sd_design_caps
+
     sess = get_session(db, session_id, account_id, guest_id)
     if not sess:
         raise LookupError("session not found")
     if sess["status"] != "active":
         raise ValueError("session already finished")
+    caps = plan_sd_design_caps()
     clean = {
-        "requirements": str(design.get("requirements") or "")[:12000],
-        "apis": str(design.get("apis") or "")[:12000],
-        "data": str(design.get("data") or "")[:12000],
-        "scale": str(design.get("scale") or "")[:12000],
-        "blocks": [str(b) for b in (design.get("blocks") or []) if str(b)][:24],
+        "requirements": str(design.get("requirements") or "")[: caps.field_chars],
+        "apis": str(design.get("apis") or "")[: caps.field_chars],
+        "data": str(design.get("data") or "")[: caps.field_chars],
+        "scale": str(design.get("scale") or "")[: caps.field_chars],
+        "blocks": [str(b) for b in (design.get("blocks") or []) if str(b)][: caps.blocks],
     }
     db.execute(
         text(

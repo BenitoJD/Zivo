@@ -16,7 +16,13 @@ import uuid
 from unittest.mock import MagicMock
 
 from app.graphs.lesson_graph import LESSON_POLICY_VERSION, _aspects_block, _parse_lesson
-from app.services.page_lessons import _LESSON_STORE, _row_to_state, plan_lesson_aspects
+from app.services.page_lessons import (
+    _LESSON_STORE,
+    _row_to_state,
+    plan_lesson_aspects,
+    plan_lesson_output_caps,
+    should_cook_lesson,
+)
 
 
 # ----------------------------------------------------------------------- parser
@@ -73,8 +79,9 @@ def test_parse_lesson_truncates_overlong_fields() -> None:
     long_title = "t" * 500
     parsed = _parse_lesson(f'{{"title":"{long_title}","body":"{long_body}"}}')
     assert parsed is not None
-    assert len(parsed["body"]) <= 2400
-    assert len(parsed["title"]) <= 160
+    caps = plan_lesson_output_caps()
+    assert len(parsed["body"]) == caps.body_chars
+    assert len(parsed["title"]) == caps.title_chars
 
 
 # ------------------------------------------------------------------ aspects fmt
@@ -183,3 +190,10 @@ def test_row_to_state_generating_returns_none_body() -> None:
     state = _row_to_state(row)
     assert state["status"] == "generating"
     assert state["body"] is None
+
+
+def test_should_cook_lesson_learn_only() -> None:
+    aspects = [{"key": "a", "label": "A", "central": True}]
+    assert should_cook_lesson(serve_mode="learn", aspects=aspects)
+    assert not should_cook_lesson(serve_mode="test", aspects=aspects)
+    assert not should_cook_lesson(serve_mode="learn", aspects=[])

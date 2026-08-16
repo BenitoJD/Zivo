@@ -23,20 +23,25 @@ from app.services.chunks import load_document_chunk_texts
 from app.services.llm_json import extract_json_obj
 from app.services.llm_router import complete_chat
 from app.services.prompts import get_prompt
+from app.services.session_design import (
+    evaluate_auxiliary_output,
+    plan_auxiliary_artifact_cap,
+    plan_auxiliary_field_caps,
+    plan_auxiliary_generation_strategy,
+    plan_auxiliary_map_concurrency,
+)
 from app.services.token_budget import (
     SUMMARIZE_CHUNK_INPUT_MAX_TOKENS,
     SUMMARIZE_ROLLUP_INPUT_MAX_TOKENS,
-    SUMMARIZE_SINGLE_SHOT_MAX_TOKENS,
     count_tokens,
     truncate_to_tokens,
 )
 
 _CHUNK_MAP_MAX_TOKENS = SUMMARIZE_CHUNK_INPUT_MAX_TOKENS
 _ROLLUP_INPUT_MAX_TOKENS = SUMMARIZE_ROLLUP_INPUT_MAX_TOKENS
-_SINGLE_SHOT_MAX_TOKENS = SUMMARIZE_SINGLE_SHOT_MAX_TOKENS
-_MAP_CONCURRENCY = 6
-_MIN_STATIONS = 4
-_MAX_STATIONS = 8
+_palace_cap = plan_auxiliary_artifact_cap("memory_palace")
+_MAX_STATIONS = _palace_cap.max_count
+_MIN_STATIONS = _palace_cap.min_count
 
 
 def _slugify(term: str, taken: set[str]) -> str:
@@ -69,23 +74,25 @@ def _finalize(data: dict, fallback_setting: str) -> dict:
         image = str(item.get("image") or "").strip()
         if not term or not fact or not image:
             continue
+        caps = plan_auxiliary_field_caps("memory_palace")
         stations.append(
             {
                 "key": _slugify(term, taken),
-                "locus": str(item.get("locus") or "").strip()[:120],
-                "term": term[:120],
-                "fact": fact[:400],
-                "image": image[:600],
-                "cue": str(item.get("cue") or "").strip()[:200],
+                "locus": str(item.get("locus") or "").strip()[: caps.limit("locus")],
+                "term": term[: caps.limit("term")],
+                "fact": fact[: caps.limit("fact")],
+                "image": image[: caps.limit("image")],
+                "cue": str(item.get("cue") or "").strip()[: caps.limit("cue")],
             }
         )
         if len(stations) >= _MAX_STATIONS:
             break
-    if len(stations) < _MIN_STATIONS:
+    if not evaluate_auxiliary_output("memory_palace", len(stations)).keep:
         return {}
+    caps = plan_auxiliary_field_caps("memory_palace")
     return {
-        "setting": str(data.get("setting") or fallback_setting or "").strip()[:160],
-        "intro": str(data.get("intro") or "").strip()[:400],
+        "setting": str(data.get("setting") or fallback_setting or "").strip()[: caps.limit("setting")],
+        "intro": str(data.get("intro") or "").strip()[: caps.limit("intro")],
         "stations": stations,
     }
 
@@ -114,6 +121,7 @@ async def generate_memory_palace(
     model_id = default_chat_model_id(db)
     system = get_prompt(db, "memory_palace_system")
     body = "\n\n".join(chunk_texts)
+    gen = plan_auxiliary_generation_strategy(count_tokens(body))
 
     async def _build(source: str) -> dict:
         # The palace JSON (6-8 stations × 5 fields) is large; providers
@@ -152,12 +160,12 @@ async def generate_memory_palace(
                 return palace
         return {}
 
-    if count_tokens(body) <= _SINGLE_SHOT_MAX_TOKENS:
-        return await _build(truncate_to_tokens(body, _SINGLE_SHOT_MAX_TOKENS))
+    if gen.mode == "single_shot":
+        return await _build(truncate_to_tokens(body, gen.single_shot_max_tokens))
 
     # Large source: gather the highest-yield facts per section, then build from them.
     fact_system = get_prompt(db, "memory_facts_system")
-    sem = asyncio.Semaphore(_MAP_CONCURRENCY)
+    sem = asyncio.Semaphore(plan_auxiliary_map_concurrency("memory_palace"))
 
     async def _facts(text: str) -> str:
         async with sem:

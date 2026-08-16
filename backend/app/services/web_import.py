@@ -13,9 +13,16 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from app.services.content_worthiness import (
+    is_import_extract_too_short,
+    is_section_title_line,
+    is_sparse_page_text,
+    plan_study_page_split,
+    should_break_on_section_heading,
+)
 from app.services.http_client import HTTP_TIMEOUT_S, zivo_http_client
 
-READER_PAGE_CHARS = 3200
+READER_PAGE_CHARS = plan_study_page_split().chars_per_page
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 FETCH_TIMEOUT_S = HTTP_TIMEOUT_S
 MAX_REDIRECTS = 3
@@ -39,8 +46,7 @@ def _looks_like_section_start(paragraph: str) -> bool:
     first = stripped.split("\n", 1)[0].strip()
     if not first or not _SECTION_START_RE.match(first):
         return False
-    # Title line (or title + tiny blurb) — not a long body that opens with "Part 1".
-    return len(stripped) <= 160
+    return is_section_title_line(stripped)
 
 
 @dataclass(frozen=True)
@@ -187,7 +193,9 @@ def _assert_public_host(hostname: str) -> None:
             raise WebImportError("That link points to a private address", code="blocked_url")
 
 
-def paginate_reader_text(text: str, chars_per_page: int = READER_PAGE_CHARS) -> list[dict]:
+def paginate_reader_text(text: str, chars_per_page: int | None = None) -> list[dict]:
+    split = plan_study_page_split()
+    chars_per_page = split.chars_per_page if chars_per_page is None else int(chars_per_page)
     cleaned = _BLANK_RE.sub("\n\n", _WS_RE.sub("\n", text.strip()))
     if not cleaned:
         return [{"page": 1, "text": ""}]
@@ -197,9 +205,6 @@ def paginate_reader_text(text: str, chars_per_page: int = READER_PAGE_CHARS) -> 
     current: list[str] = []
     current_len = 0
     page_num = 1
-    # Don't open a new page for TOC-style "Part N" lines until the current page
-    # already holds real study content (~half a short screen of text).
-    min_chars_before_heading_break = 600
 
     def flush() -> None:
         nonlocal page_num, current, current_len
@@ -211,10 +216,9 @@ def paginate_reader_text(text: str, chars_per_page: int = READER_PAGE_CHARS) -> 
         current_len = 0
 
     for para in paragraphs:
-        if (
-            current
-            and current_len >= min_chars_before_heading_break
-            and _looks_like_section_start(para)
+        if should_break_on_section_heading(
+            current_len=current_len,
+            looks_like_heading=bool(current) and _looks_like_section_start(para),
         ):
             flush()
 
@@ -264,7 +268,7 @@ def extract_article(content: bytes, content_type: str, url: str) -> ImportedArti
 
     if ct.startswith("text/plain"):
         text = _clean_text(content.decode("utf-8", errors="replace"))
-        if len(text) < 80:
+        if is_import_extract_too_short(text):
             raise WebImportError("This page did not contain enough text to study", code="empty_content")
         return ImportedArticle(title=domain, text=text, source_url=url, source_domain=domain)
 
@@ -274,7 +278,7 @@ def extract_article(content: bytes, content_type: str, url: str) -> ImportedArti
     parser.close()
     title, text = parser.result()
     text = _clean_text(text)
-    if len(text) < 80:
+    if is_import_extract_too_short(text):
         raise WebImportError(
             "We couldn't extract readable article text from this page. Try pasting the article instead.",
             code="empty_content",
@@ -356,7 +360,7 @@ async def fetch_and_extract(url: str) -> ImportedArticle:
 
 def article_from_pasted_text(text: str, *, title: str | None = None, source_url: str | None = None) -> ImportedArticle:
     cleaned = _clean_text(text)
-    if len(cleaned) < 40:
+    if is_sparse_page_text(cleaned):
         raise WebImportError("Add a bit more text to study from", code="empty_content")
     url = normalize_public_url(source_url) if source_url and source_url.strip() else ""
     domain = source_domain(url) if url else "pasted"

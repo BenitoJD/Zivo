@@ -13,12 +13,13 @@ from app.services.document_access import forbid_stale_newspaper_practice
 from app.models import Document
 from app.repositories import newspaper as newspaper_repo
 from app.services.newspaper import edition_in_practice_window, window_start
+from app.services.session_design import NEWSPAPER_RETENTION_DAYS
 
 
 def test_window_start_is_retention_days_back() -> None:
     today = date(2026, 7, 24)
-    assert window_start(today) == today - timedelta(days=newspaper_repo.RETENTION_DAYS)
-    assert newspaper_repo.RETENTION_DAYS == 30
+    assert window_start(today) == today - timedelta(days=NEWSPAPER_RETENTION_DAYS)
+    assert newspaper_repo.RETENTION_DAYS == NEWSPAPER_RETENTION_DAYS == 30
 
 
 def test_edition_in_practice_window_boundary() -> None:

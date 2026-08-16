@@ -124,6 +124,47 @@ def label_selection_reason(rationale: str) -> str:
     return "in order through this page"
 
 
+@dataclass(frozen=True)
+class SignalLoadPlan:
+    load_concepts: bool
+    load_difficulty: bool
+    load_lineage: bool
+    load_exposure: bool
+    policy_version: str = SELECTION_VERSION
+
+
+def plan_signal_load(*, policy: str, state: LearnerState) -> SignalLoadPlan:
+    """Which DB signals orchestration must load before select_next."""
+    pol = normalize_policy(policy)
+    load_concepts = (
+        bool(state.focus_concept)
+        or state.mastery_stop
+        or bool(state.concept_revisit_hours)
+        or pol in ("adaptive_v1", "difficulty_edge", "concept_reinforce")
+    )
+    load_difficulty = pol in ("adaptive_v1", "difficulty_edge")
+    return SignalLoadPlan(
+        load_concepts=load_concepts,
+        load_difficulty=load_difficulty,
+        load_lineage=load_difficulty and bool(state.last_assertion_id),
+        load_exposure=pol == "adaptive_v1",
+    )
+
+
+StudyMode = Literal["classic", "adaptive"]
+
+
+def label_study_mode(policy: str | None) -> StudyMode:
+    """Learner-facing Adaptive/Classic from a stored selection_policy."""
+    pol = (policy or "").strip().lower()
+    return "classic" if pol == "sequence" else "adaptive"
+
+
+def persist_study_mode(mode: str) -> str:
+    """UI Adaptive/Classic to stored selection_policy."""
+    return "sequence" if str(mode).strip().lower() == "classic" else "adaptive_v1"
+
+
 def build_learner_state(progress: Mapping[str, Any]) -> LearnerState:
     """Read the learner's latest confirmed answer + calibrated ability from progress."""
     last = progress.get("last_confirmed_answer") or {}

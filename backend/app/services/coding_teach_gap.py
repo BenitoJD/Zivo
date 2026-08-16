@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.services.llm_json import extract_json_obj
 from app.services.llm_router import complete_chat
+from app.services.open_response import plan_coding_teach_output_caps
 
 _TEACH_SYSTEM = """You are a sharp coding mentor. The learner just submitted a solution to a programming problem.
 Be fair but exacting. Reply ONLY with JSON:
@@ -39,7 +40,7 @@ def _normalize_focus(tags: list[str], concept: str) -> list[str]:
     c = str(concept or "").strip().lower()
     if c and c not in out:
         out.append(c)
-    return out[:6]
+    return out[: plan_coding_teach_output_caps().focus_tags]
 
 
 def heuristic_teach_gap(
@@ -76,7 +77,11 @@ def pick_next_coding_id(
     attempted_ids: list[str] | None = None,
 ) -> uuid.UUID | None:
     """Prefer published problems overlapping weak tags/concept (Practice Selection Engine)."""
-    from app.services.practice_selection import PracticeCandidate, pick_next
+    from app.services.practice_selection import (
+        PracticeCandidate,
+        pick_next,
+        plan_coding_next_pool_limit,
+    )
 
     focus = list(_normalize_focus(list(weak_concepts) + list(tags), concept))
     rows = db.execute(
@@ -89,10 +94,10 @@ def pick_next_coding_id(
             WHERE f.published = true AND a.status = 'active'
               AND f.assertion_id <> :exclude
             ORDER BY f.title ASC
-            LIMIT 80
+            LIMIT :lim
             """
         ),
-        {"exclude": exclude},
+        {"exclude": exclude, "lim": plan_coding_next_pool_limit()},
     ).mappings().all()
     cands: list[PracticeCandidate] = []
     for r in rows:
@@ -151,10 +156,11 @@ async def teach_after_submit(
     from app.services.chunk_map_cache import content_hash_key
     from app.services.generation_cache import get as cache_get, put as cache_put
 
+    caps = plan_coding_teach_output_caps()
     tags = list(payload.get("tags") or [])
     concept = str(payload.get("concept") or "")
     title = str(payload.get("title") or "Coding problem")
-    statement = str(payload.get("statement") or "")[:1200]
+    statement = str(payload.get("statement") or "")[: caps.statement]
     first_fail = next((c for c in cases if not c.get("ok")), None)
     graded = heuristic_teach_gap(
         all_passed=all_passed,
@@ -171,7 +177,7 @@ async def teach_after_submit(
             f"expected={first_fail.get('expected')!r} "
             f"stdout={first_fail.get('stdout')!r} stderr={first_fail.get('stderr')!r}"
         )
-    source_trim = str(source)[:2500]
+    source_trim = str(source)[: caps.source]
     teach_key = content_hash_key(
         "coding_teach_gap",
         str(assertion_id),
@@ -185,13 +191,20 @@ async def teach_after_submit(
     if isinstance(cached, dict) and cached.get("mentor_summary") and cached.get("lesson"):
         graded = {
             "mentor_summary": str(cached["mentor_summary"]),
-            "weak_concepts": list(cached.get("weak_concepts") or graded["weak_concepts"])[:3],
+            "weak_concepts": list(
+                cached.get("weak_concepts") or graded["weak_concepts"]
+            )[: caps.weak_concepts],
             "lesson": {
-                "title": str((cached.get("lesson") or {}).get("title") or graded["lesson"]["title"])[:120],
-                "body": str((cached.get("lesson") or {}).get("body") or graded["lesson"]["body"])[:2000],
+                "title": str(
+                    (cached.get("lesson") or {}).get("title") or graded["lesson"]["title"]
+                )[: caps.title],
+                "body": str(
+                    (cached.get("lesson") or {}).get("body") or graded["lesson"]["body"]
+                )[: caps.body],
                 "try_this": str(
-                    (cached.get("lesson") or {}).get("try_this") or graded["lesson"]["try_this"]
-                )[:400],
+                    (cached.get("lesson") or {}).get("try_this")
+                    or graded["lesson"]["try_this"]
+                )[: caps.try_this],
             },
         }
     else:
@@ -218,7 +231,7 @@ async def teach_after_submit(
                 str(w).strip().lower()
                 for w in (data.get("weak_concepts") or [])
                 if str(w).strip()
-            ][:3]
+            ][: caps.weak_concepts]
             if not weak:
                 weak = graded["weak_concepts"]
             graded = {
@@ -226,9 +239,15 @@ async def teach_after_submit(
                 or graded["mentor_summary"],
                 "weak_concepts": weak,
                 "lesson": {
-                    "title": str(lesson_in.get("title") or graded["lesson"]["title"])[:120],
-                    "body": str(lesson_in.get("body") or graded["lesson"]["body"])[:2000],
-                    "try_this": str(lesson_in.get("try_this") or graded["lesson"]["try_this"])[:400],
+                    "title": str(lesson_in.get("title") or graded["lesson"]["title"])[
+                        : caps.title
+                    ],
+                    "body": str(lesson_in.get("body") or graded["lesson"]["body"])[
+                        : caps.body
+                    ],
+                    "try_this": str(
+                        lesson_in.get("try_this") or graded["lesson"]["try_this"]
+                    )[: caps.try_this],
                 },
             }
             cache_put(db, kind="coding_teach_gap", cache_key=teach_key, value=graded)

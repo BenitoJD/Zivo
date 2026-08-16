@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import random
 import uuid
 from collections import Counter
@@ -38,21 +37,36 @@ from app.services.mcq_parsing import (
     shuffle_mcq_option_order,
 )
 from app.services.quality_evaluation import (
+    BATCH_MCQ_CAP,
+    CRITIC_SAMPLE_RATE,
+    GENERATION_CONCURRENCY,
+    MAX_GENERATION_ATTEMPTS,
+    PIPELINE_DRAFT_SPLIT,
     QualitySignals,
     critique_passes,
     decide_verdict,
-    DEFAULT_CRITIC_SAMPLE_RATE,
+    evaluate_parallel_gate_prefilter,
+    evaluate_pre_critic_reject,
+    hard_fail_rewrite_bundle,
     judge_mcq_similarity,
     merge_critique_for_rewrite,
     pick_best_draft,
+    plan_best_of_n_candidates,
+    plan_cook_gate_knobs,
+    plan_cook_gate_schedule,
+    plan_rewrite_step,
+    should_fast_path_accept,
+    should_inject_mcq_content_style,
+    should_positional_best_of_n,
+    should_run_answer_key_verify,
     should_run_critic,
+    should_run_similarity_gate,
 )
 
 logger = logging.getLogger(__name__)
 
 _PAGE_EXCERPT_MAX_TOKENS = PAGE_INPUT_MAX_TOKENS
 
-MAX_GENERATION_ATTEMPTS = 3
 
 def _complete_chat_sync(
     db: Session, messages: list[dict], *, log_tag: str, model_id: uuid.UUID | None = None
@@ -85,13 +99,11 @@ def _content_style_line(content_type: str | None) -> str:
     from app.config import get_settings
     from app.services.prompts import content_type_style
 
-    ct = (content_type or "").strip().lower()
-    if ct == "newspaper_upsc":
-        style = content_type_style(ct)
-        return f"\nMATERIAL TYPE — {style}\n" if style else ""
-    if not get_settings().content_aware_generation:
+    if not should_inject_mcq_content_style(
+        content_type,
+        content_aware=get_settings().content_aware_generation,
+    ):
         return ""
-
     style = content_type_style(content_type)
     return f"\nMATERIAL TYPE — {style}\n" if style else ""
 
@@ -549,7 +561,26 @@ def generate_quality_mcq(
     last_critique_bundle: dict[str, Any] = {"flaws": [], "rewrite_hints": ""}
 
     for attempt in range(max_attempts):
-        if attempt == 0:
+        step = plan_rewrite_step(
+            attempt=attempt,
+            has_draft=draft is not None,
+            has_rewrite_brief=bool(
+                last_critique_bundle.get("flaws")
+                or last_critique_bundle.get("rewrite_hints")
+            ),
+        )
+        if step == "rewrite" and draft is not None:
+            draft = _rewrite_mcq(
+                db,
+                draft=draft,
+                page_text=page_text,
+                page_number=page_number,
+                target_aspect=target_aspect,
+                critique_bundle=last_critique_bundle,
+                prior_mcqs=prior_mcqs,
+                model_id=model_id,
+            )
+        else:
             draft = _generate_draft_mcq(
                 db,
                 page_text=page_text,
@@ -560,40 +591,6 @@ def generate_quality_mcq(
                 model_id=draft_model_id,
                 content_type=content_type,
             )
-        else:
-            if draft is None:
-                draft = _generate_draft_mcq(
-                    db,
-                    page_text=page_text,
-                    page_number=page_number,
-                    sequence=sequence,
-                    target_aspect=target_aspect,
-                    prior_mcqs=prior_mcqs,
-                    model_id=draft_model_id,
-                    content_type=content_type,
-                )
-            elif last_critique_bundle.get("flaws") or last_critique_bundle.get("rewrite_hints"):
-                draft = _rewrite_mcq(
-                    db,
-                    draft=draft,
-                    page_text=page_text,
-                    page_number=page_number,
-                    target_aspect=target_aspect,
-                    critique_bundle=last_critique_bundle,
-                    prior_mcqs=prior_mcqs,
-                    model_id=model_id,
-                )
-            else:
-                draft = _generate_draft_mcq(
-                    db,
-                    page_text=page_text,
-                    page_number=page_number,
-                    sequence=sequence,
-                    target_aspect=target_aspect,
-                    prior_mcqs=prior_mcqs,
-                    model_id=draft_model_id,
-                    content_type=content_type,
-                )
 
         if draft is None:
             last_critique_bundle = {
@@ -612,53 +609,36 @@ def generate_quality_mcq(
         verify_ran = False
         too_similar = False
         max_sim = 0.0
-        # Defer embed until structure/key look viable (same order as before).
-        if not has_fatal_heuristic_flaws(heuristic_flaws):
-            if get_settings().verify_answer_key:
-                key_flaw = verify_answer_key(db, mcq=draft, page_text=page_text, model_id=model_id)
-                verify_ran = True
-            if key_flaw is None:
-                sim = judge_mcq_similarity(draft, prior_mcqs)
-                too_similar, max_sim = sim.too_similar, sim.max_similarity
+        fatal = has_fatal_heuristic_flaws(heuristic_flaws)
+        if should_run_answer_key_verify(
+            verify_enabled=get_settings().verify_answer_key,
+            has_fatal_heuristics=fatal,
+            too_similar=False,
+        ):
+            key_flaw = verify_answer_key(db, mcq=draft, page_text=page_text, model_id=model_id)
+            verify_ran = True
+        if should_run_similarity_gate(
+            has_fatal_heuristics=fatal, verify_flaw=key_flaw
+        ):
+            sim = judge_mcq_similarity(draft, prior_mcqs)
+            too_similar, max_sim = sim.too_similar, sim.max_similarity
 
         rewrite_left = max(0, max_attempts - attempt - 1)
-        # Soft heuristic-only drafts still run critic below; hard fails skip LLM.
-        hard_fail = decide_verdict(
-            QualitySignals(
-                heuristic_flaws=heuristic_flaws,
-                verify_flaw=key_flaw,
-                too_similar=too_similar,
-                max_similarity=max_sim,
-                rewrite_budget_remaining=0,
-                verify_ran=verify_ran,
-            )
+        signals = QualitySignals(
+            heuristic_flaws=heuristic_flaws,
+            verify_flaw=key_flaw,
+            too_similar=too_similar,
+            max_similarity=max_sim,
+            rewrite_budget_remaining=0,
+            verify_ran=verify_ran,
         )
-        if hard_fail.decision == "fail" and (
-            has_fatal_heuristic_flaws(heuristic_flaws)
-            or key_flaw is not None
-            or too_similar
-        ):
-            if too_similar:
-                last_critique_bundle = {
-                    "flaws": [
-                        {
-                            "code": "too_similar_to_prior",
-                            "message": f"Embedding similarity {max_sim:.2f} to a prior question",
-                        }
-                    ],
-                    "rewrite_hints": (
-                        "Test a different fact and use a clearly different stem "
-                        "from all prior questions."
-                    ),
-                    "fatal_flaws": ["too_similar_to_prior"],
-                }
-            elif key_flaw is not None:
-                last_critique_bundle = merge_critique_for_rewrite([key_flaw], None)
-            else:
-                last_critique_bundle = merge_critique_for_rewrite(heuristic_flaws, None)
+        bundle = hard_fail_rewrite_bundle(signals)
+        if bundle is not None:
+            last_critique_bundle = bundle
             continue
 
-        if not heuristic_flaws and key_flaw is None and not too_similar:
+        hard_fail = decide_verdict(signals)
+        if should_fast_path_accept(signals):
             draft["quality"] = {
                 "pass": True,
                 "flaw_count": 0,
@@ -728,28 +708,8 @@ def generate_quality_mcq(
     return None
 
 
-# Cap on how many MCQs to ask for in a single LLM call. Past ~20-30 structured
-# objects, LLMs reliably degrade (repetition, dropped JSON alignment, filler
-# distractors). 5 is safely within the reliable range. For budgets > 5, call
-# this multiple times — prompt caching makes the repeat calls cheap.
-BATCH_MCQ_CAP = 5
 # Parallel LLM verify/critic slots within one batch after the first draft lands.
-# First draft always gates serially so Q1 hits the pool ASAP; remaining drafts
-# share this pool (capped further by process-wide LLM_MAX_CONCURRENT).
-GENERATION_CONCURRENCY = max(1, int(os.getenv("ZIVO_GENERATION_CONCURRENCY", "4")))
-# Overlap rest-of-batch draft with Q1 gate when cooking multiple targets.
-PIPELINE_DRAFT_SPLIT = os.getenv("ZIVO_PIPELINE_DRAFT_SPLIT", "1").lower() not in (
-    "0",
-    "false",
-    "no",
-)
-# The critic is the cheapest, highest-leverage quality gate and prompt caching makes
-# the repeated page context nearly free — so critique EVERY item by default, not a
-# 25% sample. (Evaluation is the moat; don't skip it to save a few tokens.) Still an
-# env knob for cost tuning; default owned by Quality Evaluation.
-CRITIC_SAMPLE_RATE = float(
-    os.getenv("ZIVO_CRITIC_SAMPLE_RATE", str(DEFAULT_CRITIC_SAMPLE_RATE))
-)
+# Quality Evaluation owns the cap + serial-Q1/parallel-rest schedule.
 
 
 def _select_best_draft(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -854,8 +814,7 @@ def _generate_batch_drafts(
         best = _select_best_draft(by_key.get(str(t.get("key")), []))
         if best is not None:
             selected.append(best)
-    # Fallback if key-grouping matched nothing (keys drifted): positional best-effort.
-    if not selected:
+    if should_positional_best_of_n(selected_count=len(selected)):
         for idx, data in enumerate(blocks[: len(targets)]):
             try:
                 selected.append(_normalize_mcq_payload(data, targets[idx] if idx < len(targets) else None))
@@ -937,20 +896,28 @@ def _quality_gate_one(
     heuristic_flaws = _enrich_heuristics_with_engines(
         draft, heuristic_flaws, page_text=page_text
     )
-    sim = judge_mcq_similarity(
-        draft,
-        check_against,
-        prior_embeddings=prior_embeddings,
-    )
-    too_similar, max_sim = sim.too_similar, sim.max_similarity
+    fatal = has_fatal_heuristic_flaws(heuristic_flaws)
+    too_similar = False
+    max_sim = 0.0
+    if should_run_similarity_gate(has_fatal_heuristics=fatal, verify_flaw=None):
+        sim = judge_mcq_similarity(
+            draft,
+            check_against,
+            prior_embeddings=prior_embeddings,
+        )
+        too_similar, max_sim = sim.too_similar, sim.max_similarity
     key_flaw: dict[str, str] | None = None
     verify_ran = False
-    if verify_enabled and not has_fatal_heuristic_flaws(heuristic_flaws) and not too_similar:
+    if should_run_answer_key_verify(
+        verify_enabled=verify_enabled,
+        has_fatal_heuristics=fatal,
+        too_similar=too_similar,
+    ):
         key_flaw = verify_answer_key(db, mcq=draft, page_text=page_text, model_id=model_id)
         verify_ran = True
 
     # Early reject without critic spend when engine already fails hard.
-    early = decide_verdict(
+    early = evaluate_pre_critic_reject(
         QualitySignals(
             heuristic_flaws=heuristic_flaws,
             verify_flaw=key_flaw,
@@ -960,11 +927,7 @@ def _quality_gate_one(
             verify_ran=verify_ran,
         )
     )
-    if early.decision == "fail" and (
-        too_similar
-        or key_flaw is not None
-        or has_fatal_heuristic_flaws(heuristic_flaws)
-    ):
+    if early is not None:
         return (
             "reject",
             None,
@@ -1158,7 +1121,18 @@ def generate_quality_mcq_batch(
     if not page_text or not page_text.strip() or not targets:
         return []
 
-    targets = targets[:BATCH_MCQ_CAP]
+    knobs = plan_cook_gate_knobs(
+        generation_concurrency=GENERATION_CONCURRENCY,
+        pipeline_split=PIPELINE_DRAFT_SPLIT,
+        critic_sample_rate=CRITIC_SAMPLE_RATE,
+    )
+    schedule = plan_cook_gate_schedule(
+        target_count=len(targets),
+        pipeline_split=knobs.pipeline_draft_split,
+        generation_concurrency=knobs.generation_concurrency,
+        batch_cap=BATCH_MCQ_CAP,
+    )
+    targets = targets[: schedule.batch_cap]
     if model_id is None:
         from app.services.llm_registry import default_chat_model_id
 
@@ -1171,7 +1145,7 @@ def generate_quality_mcq_batch(
     verify_enabled = settings.verify_answer_key
     # Drafts can use a faster/cheaper model; critic + verifier keep the strong default.
     draft_model_id = draft_chat_model_id(db) or model_id
-    candidates_per_aspect = max(1, settings.mcq_candidates_per_aspect)
+    candidates_per_aspect = plan_best_of_n_candidates(settings.mcq_candidates_per_aspect)
 
     # Generation response cache: skip the LLM call if we've already generated
     # drafts for this (page context, aspect set). The quality gate below still
@@ -1242,7 +1216,7 @@ def generate_quality_mcq_batch(
             page_number=page_number,
             model_id=model_id,
             verify_enabled=verify_enabled,
-            force_critic=True,
+            force_critic=schedule.first_force_critic,
         )
         if status == "accept" and gated is not None:
             if not _finalize_accept(
@@ -1267,7 +1241,7 @@ def generate_quality_mcq_batch(
         candidates_per_aspect=candidates_per_aspect,
     )
 
-    if drafts is None and PIPELINE_DRAFT_SPLIT and len(targets) > 1:
+    if drafts is None and schedule.split_first_draft:
         # Overlap rest draft with Q1 gate (hide refill latency behind studying).
         from concurrent.futures import ThreadPoolExecutor
 
@@ -1308,7 +1282,10 @@ def generate_quality_mcq_batch(
         for idx, draft in rest:
             target = targets[idx] if idx < len(targets) else None
             h = run_heuristic_checks(draft, prior_mcqs=prior_only)
-            if has_fatal_heuristic_flaws(h):
+            pre = evaluate_parallel_gate_prefilter(
+                heuristic_flaws=h, too_similar=False
+            )
+            if pre == "fatal":
                 rejected.update(
                     f.get("code", "?") for f in h if f.get("code") in FATAL_FLAW_CODES
                 )
@@ -1316,7 +1293,10 @@ def generate_quality_mcq_batch(
             too_sim = judge_mcq_similarity(
                 draft, prior_only, prior_embeddings=prior_only_embeddings
             ).too_similar
-            if too_sim:
+            pre = evaluate_parallel_gate_prefilter(
+                heuristic_flaws=h, too_similar=too_sim
+            )
+            if pre == "too_similar":
                 rejected["too_similar_to_prior"] += 1
                 continue
             work.append((idx, draft, target))
@@ -1334,7 +1314,7 @@ def generate_quality_mcq_batch(
             ],
         ] = {}
         if work:
-            workers = min(GENERATION_CONCURRENCY, len(work))
+            workers = min(schedule.rest_concurrency, len(work))
             if workers <= 1:
                 for idx, draft, target in work:
                     gated_by_idx[idx] = _quality_gate_one(
@@ -1347,7 +1327,7 @@ def generate_quality_mcq_batch(
                         page_number=page_number,
                         model_id=model_id,
                         verify_enabled=verify_enabled,
-                        force_critic=False,
+                        force_critic=schedule.rest_force_critic,
                     )
             else:
                 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1367,7 +1347,7 @@ def generate_quality_mcq_batch(
                             page_number=page_number,
                             model_id=model_id,
                             verify_enabled=verify_enabled,
-                            force_critic=False,
+                            force_critic=schedule.rest_force_critic,
                         )
                         for idx, draft, target in work
                     ]
@@ -1412,7 +1392,7 @@ def generate_quality_mcq_batch(
         len(accepted),
         sum(rejected.values()),
         dict(rejected),
-        GENERATION_CONCURRENCY,
-        PIPELINE_DRAFT_SPLIT,
+        schedule.rest_concurrency,
+        schedule.split_first_draft,
     )
     return accepted

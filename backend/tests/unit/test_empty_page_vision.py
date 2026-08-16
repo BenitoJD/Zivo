@@ -103,6 +103,12 @@ def test_should_skip_empty_page_vision() -> None:
         return_value={"prompt_reselect_pages": True},
     ):
         assert should_skip_empty_page_vision(doc) is True
+    from app.services.content_worthiness import (
+        should_skip_empty_page_vision as skip_after_prompt,
+    )
+
+    assert skip_after_prompt(already_prompted=True)
+    assert not skip_after_prompt(already_prompted=False)
 
 
 def test_judge_page_has_content_uses_cache() -> None:

@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+from app.services.tutor_retrieval import plan_rag_chunk_split
+
 
 def chunk_pages(
     pages: list[dict],
     *,
-    max_chars: int = 900,
-    overlap: int = 120,
+    max_chars: int | None = None,
+    overlap: int | None = None,
 ) -> list[dict]:
     """Split pages into chunks with page_start/page_end metadata."""
+    plan = plan_rag_chunk_split(max_chars=max_chars, overlap=overlap)
+    max_chars = plan.max_chars
+    overlap = plan.overlap
     chunks: list[dict] = []
     for page in pages:
         page_num = int(page["page"])

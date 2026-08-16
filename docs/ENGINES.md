@@ -60,45 +60,120 @@ Speculative pre-triage `N_page` lives in **Question Budget** (`speculative_page_
 | Brainstorm skips vector RAG | Tutor Retrieval | `tutor_retrieval.decide_retrieval` (`reason=brainstorm`) |
 | Brainstorm whole-source chunk sample | Tutor Retrieval | `tutor_retrieval.plan_brainstorm_sample` |
 | Chat history compress | Tutor Retrieval | `tutor_retrieval.compress_chat_history` |
+| Tutor weak-concept top-N | Tutor Retrieval | `tutor_retrieval.plan_tutor_weak_concepts` |
+| Learn-chat newspaper RAG | Tutor Retrieval | `tutor_retrieval.plan_learn_context_rag` |
+| Learn-queue RAG display window | Tutor Retrieval | `tutor_retrieval.plan_queue_rag_pages` |
+| Learn-session tutor block vs read-mode | Tutor Retrieval | `tutor_retrieval.should_attach_learn_session_context` |
+| Unconfirmed-selection hint-only | Tutor Retrieval | `tutor_retrieval.plan_unconfirmed_tutor_policy` |
+| RAG ingest chunk size / overlap | Tutor Retrieval | `tutor_retrieval.plan_rag_chunk_split` |
+| Cook-time aspect-hint retrieval | Tutor Retrieval | `tutor_retrieval.plan_cook_aspect_hint_context` |
+| Topic-explain chunk depth | Tutor Retrieval | `tutor_retrieval.plan_topic_explain_context` |
+| Coding-assist history depth | Tutor Retrieval | `tutor_retrieval.plan_coding_assist_history` |
+| Coding-assist code clip | Tutor Retrieval | `tutor_retrieval.plan_coding_assist_code_chars` |
+| Tutor chat thread history | Tutor Retrieval | `tutor_retrieval.plan_chat_thread_history` |
+| Semantic chat-cache eligibility | Tutor Retrieval | `tutor_retrieval.evaluate_chat_cache_eligible` |
 | Aspect cluster threshold / `dedupe_aspects` | Aspect Discovery | `aspect_discovery.dedupe_aspects` |
 | Heuristic fallback triage density | Aspect Discovery | `aspect_discovery.heuristic_fallback_aspects` |
 | Substantial paragraph density | Aspect Discovery | `aspect_discovery.substantial_paragraphs` |
 | Aspect abandon after failed cooks | Aspect Discovery | `aspect_discovery.should_abandon_aspect` |
+| Cook-target unasked / speculative fallback | Aspect Discovery | `aspect_discovery.plan_cook_target_fallback` |
+| Post-batch stalled aspect keys | Aspect Discovery | `aspect_discovery.plan_stalled_aspect_keys` |
 | MCQ stem similarity threshold | Quality Evaluation | `quality_evaluation.judge_mcq_similarity` |
 | Best-of-N draft structural pick | Quality Evaluation | `quality_evaluation.pick_best_draft` |
 | Critic sample-rate default | Quality Evaluation | `quality_evaluation.DEFAULT_CRITIC_SAMPLE_RATE` |
+| Cook-gate env knobs | Quality Evaluation | `quality_evaluation.plan_cook_gate_knobs` |
+| Best-of-N candidate depth | Quality Evaluation | `quality_evaluation.plan_best_of_n_candidates` |
+| Prior-MCQ prompt depth | Quality Evaluation | `quality_evaluation.plan_prior_mcq_prompt_items` |
+| MCQ cook gate schedule | Quality Evaluation | `quality_evaluation.plan_cook_gate_schedule` |
+| Pre-critic hard reject | Quality Evaluation | `quality_evaluation.evaluate_pre_critic_reject` |
+| Serial cook hard-fail rewrite | Quality Evaluation | `quality_evaluation.hard_fail_rewrite_bundle` |
+| MCQ content-type style inject | Quality Evaluation | `quality_evaluation.should_inject_mcq_content_style` |
+| Serial cook fast-path accept | Quality Evaluation | `quality_evaluation.should_fast_path_accept` |
+| Answer-key verify / similarity spend | Quality Evaluation | `quality_evaluation.should_run_answer_key_verify` / `should_run_similarity_gate` |
+| Best-of-N positional fallback | Quality Evaluation | `quality_evaluation.should_positional_best_of_n` |
+| Serial cook rewrite step | Quality Evaluation | `quality_evaluation.plan_rewrite_step` |
+| Clone template re-attest | Quality Evaluation | `quality_evaluation.evaluate_clone_template` |
+| Newspaper cook content-type | Quality Evaluation | `quality_evaluation.resolve_cook_content_type` |
+| Parallel gate prefilter | Quality Evaluation | `quality_evaluation.evaluate_parallel_gate_prefilter` |
 | Vision empty-page glance → skip reason | Content Worthiness | `content_worthiness.evaluate_vision_glance` (vision LLM stays plumbing) |
 | Empty-page reselect streak | Content Worthiness | `content_worthiness.plan_empty_page_reselect` |
+| Skip empty-page vision after reselect prompt | Content Worthiness | `content_worthiness.should_skip_empty_page_vision` |
+| Empty-study probe / sparse-page OCR | Content Worthiness | `content_worthiness.should_probe_empty_study_range` / `is_sparse_page_text` |
+| PDF sparse-text stamp | Content Worthiness | `content_worthiness.is_sparse_page_text` |
+| Import extract / transcript floor | Content Worthiness | `content_worthiness.is_import_extract_too_short` |
+| Wikipedia/web extract usable | Content Worthiness | `content_worthiness.evaluate_reference_extract` |
+| Tiny-file stored page-count trust | Content Worthiness | `content_worthiness.should_trust_stored_page_count` |
+| Stored page-count skip reparse | Content Worthiness | `content_worthiness.plan_stored_page_count_trust` |
+| Study-page unitization / heading break | Content Worthiness | `content_worthiness.plan_study_page_split` |
+| Worthiness probe thresholds (empty vs pre-LLM) | Content Worthiness | `content_worthiness.plan_worthiness_probe` |
 | Newspaper page structure (ad / masthead / low_signal) | Content Worthiness | `content_worthiness.evaluate_newspaper_structure` |
 | Newspaper cook/skip (structure + exam relevance) | Content Worthiness | `content_worthiness.evaluate_newspaper_cook_gate` |
+| Newspaper relevance fail-open | Content Worthiness | `content_worthiness.evaluate_newspaper_relevance_outcome` |
+| Newspaper relevance judge input cap | Content Worthiness | `content_worthiness.plan_newspaper_relevance_input` |
+| Vision OCR cache / BLANK revalidate | Content Worthiness | `content_worthiness.plan_vision_ocr_cache` / `should_revalidate_ocr_blank` |
 | Empty study-range reason | Content Worthiness | `content_worthiness.evaluate_empty_study_reason` |
 | LLM triage honest-zero | Content Worthiness | `content_worthiness.evaluate_llm_triage_units` |
+| Legacy empty-aspect heuristic fallback | Content Worthiness | `content_worthiness.should_heuristic_fallback_empty_aspects` |
 | Digest page worthiness | Content Worthiness | `content_worthiness.evaluate_digest_page_worthy` |
 | Newspaper batch skip coverage stamp | Content Worthiness | `content_worthiness.plan_newspaper_batch_gate` |
 | Newspaper naming confidence | Content Worthiness | `newspaper_naming.evaluate_naming_confidence` |
 | Practice attempt bias (+unattempted / −done) | Practice Selection | `practice_selection.score_candidate` / `pick_next(attempted_ids=…)` |
+| Coding next-problem pool breadth | Practice Selection | `practice_selection.plan_coding_next_pool_limit` |
 | Coding heuristic teach-gap lesson | Open Response | `open_response.heuristic_coding_teach_gap` |
 | System-design heuristic grade | Open Response | `open_response.heuristic_system_design_grade` |
 | Coding bank structural persist gate | Open Response | `open_response.evaluate_coding_bank_item` |
 | Interview coding pass/fail + degraded scores | Open Response | `open_response.evaluate_interview_coding_turn` / `degraded_interview_scores` |
 | Coding reference verify + sample/hidden split | Open Response | `open_response.evaluate_coding_reference_verify` / `plan_coding_test_visibility` |
+| Coding verify retry cap | Open Response | `open_response.CODING_VERIFY_MAX_ATTEMPTS` |
+| Debug cook inverse-QA persist | Open Response | `open_response.evaluate_debug_scenario_qa` |
+| Debug cook yield / input floor / shape | Open Response | `open_response.plan_debug_cook_yield` / `evaluate_debug_cook_input` / `evaluate_debug_scenario_shape` / `plan_debug_cook_input_tokens` |
+| Debug cook stored material / brief | Open Response | `open_response.plan_debug_cook_store_caps` |
+| Resume ATS list caps | Open Response | `open_response.plan_resume_analysis_caps` |
+| Resume / interview input tokens | Open Response | `open_response.plan_resume_input_tokens` |
+| Resume JD input tokens / chunk prefetch | Open Response | `open_response.plan_resume_jd_input_tokens` / `plan_resume_chunk_limit` |
+| Resume optimizer list caps | Open Response | `open_response.plan_resume_optimize_caps` |
+| Coding page cook input tokens | Open Response | `open_response.plan_coding_page_input_tokens` |
+| Coding-assist sample display | Open Response | `open_response.plan_coding_assist_sample_display` |
+| Coding teach-gap output caps | Open Response | `open_response.plan_coding_teach_output_caps` |
+| System-design draft caps | Open Response | `open_response.plan_sd_design_caps` |
+| Resume ATS mechanical checks + score blend | Open Response | `open_response.evaluate_resume_deterministic_checks` / `plan_resume_ats_score` |
 | Mains marks band + word target | Open Response | `open_response.plan_mains_attempt` |
 | System-design LLM/heuristic grade merge | Open Response | `open_response.merge_system_design_grade` |
 | Coding solve measurement persist | Open Response | `open_response.should_record_coding_solve` |
+| Interview round strength/focus bands | Open Response | `open_response.label_interview_round_band` |
 | Cross-doc MCQ reuse scope (`off`/`demo`/`all`) | Question Graph | `question_graph.plan_mcq_reuse` |
+| Cross-doc reuse first-source-page filter | Question Graph | `question_graph.filter_reusable_templates` |
 | Cook lineage edge confidence | Question Graph | `question_graph.lineage_confidence` |
 | Focus / mastery diversify / spaced prefer | Adaptive Selection | `adaptive_selection.narrow_serve_pool` (via `select_next`) |
 | Learner-facing selection labels | Adaptive Selection | `adaptive_selection.label_selection_reason` |
+| Selection signal-load plan | Adaptive Selection | `adaptive_selection.plan_signal_load` |
+| Adaptive/Classic study-mode aliases | Adaptive Selection | `adaptive_selection.label_study_mode` / `persist_study_mode` |
 | Cook grounding fatality (page words + min score) | Grounding / Answerability | `grounding_answerability.evaluate_grounding_for_cook` |
 | SEO near-dupe cosine | SEO Gate | `seo_gate.NEAR_DUPE_COSINE` (`seo_dedupe` plumbing) |
 | SEO daily soft publish cap | SEO Gate | `seo_gate.evaluate_publish_cap` |
 | SEO article format mix + CTA | SEO Gate | `seo_gate.plan_article_presentation` |
+| SEO article format prompt contract | SEO Gate | `seo_gate.plan_article_format_contract` |
 | SEO MCQ attach mix | SEO Gate | `seo_gate.plan_seo_mcq_attach` |
+| SEO MCQ attach defaults / generate retries | SEO Gate | `seo_gate.plan_seo_mcq_attach_defaults` |
+| SEO related-MCQ lookup cap | SEO Gate | `seo_gate.plan_seo_related_mcq_query_limit` |
+| SEO FAQ item cap | SEO Gate | `seo_gate.plan_seo_faq_item_cap` |
+| SEO article rewrite source cap | SEO Gate | `seo_gate.plan_seo_article_source_chars` |
+| SEO MCQ page-text cap | SEO Gate | `seo_gate.plan_seo_mcq_page_chars` |
+| SEO SD-bank source clip | SEO Gate | `seo_gate.plan_seo_sd_source_chars` |
 | SEO MCQ attach-ready floor | SEO Gate | `seo_gate.evaluate_seo_mcq_attach_ready` |
 | Newspaper edition digest ranking | SEO Gate | `seo_gate.plan_newspaper_digest` |
 | Newspaper digest source ready | SEO Gate | `seo_gate.evaluate_digest_source_ready` / `digest_skip_reason` |
 | SEO embedding near-dupe | SEO Gate | `seo_gate.evaluate_embedding_near_dupe` |
 | Newspaper SEO cook candidate | SEO Gate | `seo_gate.evaluate_newspaper_seo_candidate` |
+| SEO candidate source priority | SEO Gate | `seo_gate.plan_seo_candidate_schedule` |
+| SEO edition digest backfill batch | SEO Gate | `seo_gate.plan_seo_digest_backfill_batch` |
+| SEO bank/topic fingerprint | SEO Gate | `seo_gate.plan_seo_fingerprint` |
+| SEO cook tick size | SEO Gate | `seo_gate.plan_seo_cook_tick` |
+| SEO hourly cook tick default | SEO Gate | `seo_gate.SEO_COOK_TICK_DEFAULT` |
+| SEO candidate text floor / query cap | SEO Gate | `seo_gate.seo_candidate_min_chars` / `plan_seo_candidate_query_limit` |
+| SEO digest writer contract | SEO Gate | `seo_gate.plan_seo_digest_writer_contract` |
+| Edition digest skip retry vs abandon | SEO Gate | `seo_gate.evaluate_edition_digest_skip_status` |
+| Force-recook digest dedupe bypass | SEO Gate | `seo_gate.should_bypass_digest_dedupe` |
 | SEO system-design daily quota | SEO Gate | `seo_gate.plan_sd_daily_cook` |
 | Pool refill / transition / periodic cadence | Session Design | `session_design.evaluate_serve_schedule` |
 | Interview round plans by category | Session Design | `session_design.plan_interview_rounds` |
@@ -107,6 +182,7 @@ Speculative pre-triage `N_page` lives in **Question Budget** (`speculative_page_
 | Newspaper edition cook vs triage | Session Design | `session_design.evaluate_newspaper_edition_tick` |
 | Learn page-complete / advance | Session Design | `session_design.evaluate_page_complete` |
 | Newspaper learn-complete + catalog ready | Session Design | `session_design.evaluate_newspaper_learn_complete` / `evaluate_newspaper_catalog_ready` |
+| Newspaper hub learn-complete counts | Session Design | `session_design.evaluate_newspaper_learn_complete_counts` |
 | Interview MCQ/coding question shape | Session Design | `session_design.plan_interview_question_shape` |
 | Interview coding fallback bank pick | Session Design | `session_design.pick_interview_coding_fallback` |
 | Document-complete / last-page gate | Session Design | `session_design.evaluate_document_complete` |
@@ -118,17 +194,62 @@ Speculative pre-triage `N_page` lives in **Question Budget** (`speculative_page_
 | Auxiliary coding/debug cook spawn | Session Design | `session_design.evaluate_auxiliary_cook_spawn` / `alias_debuggable` |
 | First-cook batch size | Session Design | `session_design.plan_first_cook_batch` / `evaluate_background_first_batch` |
 | Transition next-page triage/cook | Session Design | `session_design.plan_transition_next` |
+| Serial cook fallback after zero-save batch | Session Design | `session_design.evaluate_serial_cook_fallback` |
+| Eager triage lookahead pages | Session Design | `session_design.plan_eager_triage_pages` |
+| Page-advance next-step | Session Design | `session_design.plan_page_advance_next` |
+| Page-advance RAG readiness | Session Design | `session_design.should_require_rag_on_page_advance` |
+| Newspaper ingest batch cap | Session Design | `session_design.plan_newspaper_ingest_batch` |
+| Newspaper uncooked recovery batch | Session Design | `session_design.plan_newspaper_recovery_batch` |
+| Newspaper edition question list | Session Design | `session_design.plan_newspaper_edition_questions_limit` |
+| Newspaper practice retention window | Session Design | `session_design.evaluate_edition_practice_window` |
+| Newspaper serve-scope (edition stats / page pick) | Session Design | `session_design.plan_newspaper_serve_scope` |
+| Rolling refill batch size | Session Design | `session_design.plan_refill_batch` |
+| Newspaper hub heal / uncooked followup | Session Design | `session_design.plan_newspaper_hub_heal` / `plan_newspaper_uncooked_followup` |
+| Cook-batch activity outcome | Session Design | `session_design.evaluate_generation_batch_outcome` |
+| Interview cursor advance | Session Design | `session_design.plan_interview_advance` |
+| Interview generation contract | Session Design | `session_design.plan_interview_gen_contract` |
+| Auxiliary single-shot vs map-reduce | Session Design | `session_design.plan_auxiliary_generation_strategy` |
+| Option-coach page batch | Session Design | `session_design.plan_option_coach_page_limit` |
+| Option-coach eligibility | Session Design | `session_design.evaluate_option_coach_eligible` |
+| Grade-feedback timeout | Session Design | `session_design.plan_grade_feedback_timeout` |
+| Interview asked-question context | Session Design | `session_design.plan_interview_asked_context` |
+| DOCX study-range heal after page-count | Session Design | `session_design.plan_study_range_heal` |
+| Auxiliary artifact caps (cards/topics/palace/quiz) | Session Design | `session_design.plan_auxiliary_artifact_cap` / `clamp_auxiliary_count` / `evaluate_auxiliary_output` |
+| Auxiliary map-reduce concurrency | Session Design | `session_design.plan_auxiliary_map_concurrency` |
+| Auxiliary chunk load cap | Session Design | `session_design.plan_auxiliary_chunk_load_limit` |
+| Auxiliary artifact field truncation | Session Design | `session_design.plan_auxiliary_field_caps` |
+| Saved notes / brainstorm list caps | Session Design | `session_design.plan_learner_list_cap` |
+| Brainstorm export tree depth | Session Design | `session_design.plan_brainstorm_tree_depth` |
+| Ingest recovery grace / batch | Session Design | `session_design.plan_ingest_recovery_schedule` |
+| Newspaper edition retention days | Session Design | `session_design.NEWSPAPER_RETENTION_DAYS` |
+| Bundle upload file cap | Session Design | `session_design.plan_bundle_upload` |
+| KC skip vs central/support stamp | KC / Coverage Label | `kc_coverage.stamp_kc_centrality` |
+| Support-aspect peripheral flag | KC / Coverage Label | `kc_coverage.stamp_aspect_flags` |
+| Stale coverage_complete race | KC / Coverage Label | `kc_coverage.evaluate_stale_coverage_stamp` |
 | Aspect-exhaustion coverage close | KC / Coverage Label | `kc_coverage.evaluate_aspect_exhaustion_close` |
 | Serve-path coverage complete | KC / Coverage Label | `kc_coverage.evaluate_page_coverage_complete` |
 | Persist coverage-complete stamp | KC / Coverage Label | `kc_coverage.should_persist_coverage_complete` |
+| Learn vs Test coverage aspect field | KC / Coverage Label | `kc_coverage.coverage_aspects_field` |
 | Aspect answered on grade | KC / Coverage Label | `kc_coverage.mark_aspects_answered` |
+| Concept-label clamp for chips / bank | KC / Coverage Label | `kc_coverage.normalize_concept_label` |
 | Sequence vs N_page | Question Budget | `question_budget.exceeds_page_budget` |
 | Serve generation/refill stop | Question Budget | `question_budget.evaluate_generation_stop` |
+| Test-mode page budget replan | Question Budget | `question_budget.resolve_test_question_budget` |
+| Newspaper dual-mode test overlay | Question Budget | `question_budget.plan_newspaper_test_triage` |
+| Newspaper UI display budget | Question Budget | `question_budget.plan_newspaper_display_budget` |
+| Public practice concept floor | Question Budget | `question_budget.plan_practice_concept_ready` |
+| Coding problems per page | Question Budget | `question_budget.plan_coding_page_yield` |
+| Practice Wikipedia pseudo-page size | Question Budget | `question_budget.plan_practice_source_chunk_chars` |
 | Speculative pre-triage `N_page` | Question Budget | `question_budget.speculative_page_budget` |
 | Serve-mode page budget replan | Question Budget | `question_budget.resolve_page_budget` |
 | Practice-hub path mastery bands | Mastery / Evidence-Stop | `mastery_evidence.label_path_mastery` |
 | SD path sample + next focus | Mastery / Evidence-Stop | `mastery_evidence.sample_path_mastery` / `plan_path_focus` |
+| SD path session sample window | Mastery / Evidence-Stop | `mastery_evidence.plan_sd_path_sample_limit` |
+| Progress weakest-topic display | Mastery / Evidence-Stop | `mastery_evidence.plan_progress_topic_display_limit` |
+| Progress recent-days window | Mastery / Evidence-Stop | `mastery_evidence.plan_progress_recent_days` |
 | Learn-lesson central aspects | Learn Lesson | `page_lessons.plan_lesson_aspects` |
+| Learn-lesson cook gate | Learn Lesson | `page_lessons.should_cook_lesson` |
+| Learn-lesson output truncation | Learn Lesson | `page_lessons.plan_lesson_output_caps` |
 
 ## Client-side seams (Offline Mode)
 

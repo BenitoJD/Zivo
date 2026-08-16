@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from app.services.llm_json import extract_json_obj
 from app.services.llm_router import acomplete_chat
 from app.services.llm_sync import run_coro_in_worker
+from app.services.page_lessons import plan_lesson_output_caps
 from app.services.prompts import get_prompt
 
 logger = logging.getLogger(__name__)
@@ -35,10 +36,6 @@ logger = logging.getLogger(__name__)
 # Policy version stamped into the persisted lesson payload. Bump when the prompt
 # voice/structure changes in a way that should invalidate older lessons.
 LESSON_POLICY_VERSION = "qb.lesson.v1"
-
-# Caps so a runaway model cannot store a wall of text where a brief belongs.
-_MAX_TITLE_CHARS = 160
-_MAX_BODY_CHARS = 2400
 
 
 def _complete_chat_sync(
@@ -95,7 +92,8 @@ def _parse_lesson(raw: str) -> dict[str, str] | None:
     if not title:
         # Fall back to the first sentence of the body so the heading is never blank.
         title = body.split("\n", 1)[0].split(". ", 1)[0].strip()
-    return {"title": title[:_MAX_TITLE_CHARS], "body": body[:_MAX_BODY_CHARS]}
+    caps = plan_lesson_output_caps()
+    return {"title": title[: caps.title_chars], "body": body[: caps.body_chars]}
 
 
 def generate_lesson(

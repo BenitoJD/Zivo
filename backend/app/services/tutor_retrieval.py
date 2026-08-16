@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 TUTOR_RETRIEVAL_VERSION = "qb.tutor_retrieval.v1"
 DEFAULT_POLICY = "tutor_retrieval_v1"
@@ -27,10 +27,21 @@ GRADE_CONTEXT_TOP_N = 4
 RESPONSE_CACHE_SIMILARITY = 0.92
 # Brainstorm: evenly spaced whole-source sample (breadth, not top-k depth).
 BRAINSTORM_CHUNK_SAMPLE = 24
+# Indexed RAG chunk split (ingest): size + overlap for tutor and cook context.
+RAG_CHUNK_MAX_CHARS = 900
+RAG_CHUNK_OVERLAP = 120
+# Cook-time aspect hints: vector hits + snippet trim.
+COOK_ASPECT_HINT_HITS = 5
+COOK_ASPECT_HINT_SNIPPET_CHARS = 600
+# Topic Explain: vector hits (and fallback leading chunks) per topic.
+TOPIC_EXPLAIN_CHUNK_LIMIT = 8
 # Chat history: compress older turns once the thread exceeds this length.
 CHAT_HISTORY_COMPRESS_ABOVE = 4
 CHAT_HISTORY_KEEP_TAIL = 2
 CHAT_HISTORY_SNIPPET_CHARS = 180
+CODING_ASSIST_HISTORY = 12
+CHAT_THREAD_HISTORY = 6
+CODING_ASSIST_CODE_CHARS = 12_000
 
 GateReason = Literal[
     "empty",
@@ -247,6 +258,54 @@ def compress_chat_history(
     return ChatHistoryVerdict(messages=tuple(compressed), compressed=True, policy=pol)
 
 
+def plan_coding_assist_history() -> int:
+    """How many prior coding-assist turns to send with the next tutor call."""
+    return CODING_ASSIST_HISTORY
+
+
+def plan_chat_thread_history() -> int:
+    """How many recent tutor-chat turns to keep in the LLM prefix."""
+    return CHAT_THREAD_HISTORY
+
+
+def plan_coding_assist_code_chars() -> int:
+    """How much learner source the coding-assist tutor prompt may include."""
+    return CODING_ASSIST_CODE_CHARS
+
+
+@dataclass(frozen=True)
+class ChatCacheEligibleVerdict:
+    eligible: bool
+    reason: str
+    policy_version: str = TUTOR_RETRIEVAL_VERSION
+
+
+def evaluate_chat_cache_eligible(
+    *,
+    include_image: bool,
+    selection_text: str | None,
+    has_citations: bool,
+    doc_count: int,
+    has_history: bool,
+    conversational_followup: bool = False,
+    prefetched_reference: bool = False,
+) -> ChatCacheEligibleVerdict:
+    """Whether a semantic chat-cache lookup/store is safe for this turn."""
+    if include_image:
+        return ChatCacheEligibleVerdict(False, "image")
+    if prefetched_reference:
+        return ChatCacheEligibleVerdict(False, "prefetched_reference")
+    if selection_text:
+        return ChatCacheEligibleVerdict(False, "selection")
+    if not has_citations:
+        return ChatCacheEligibleVerdict(False, "no_citations")
+    if int(doc_count) != 1:
+        return ChatCacheEligibleVerdict(False, "multi_doc")
+    if has_history and conversational_followup:
+        return ChatCacheEligibleVerdict(False, "conversational_followup")
+    return ChatCacheEligibleVerdict(True, "ok")
+
+
 def decide_page_pin(
     scope: dict | None,
     *,
@@ -323,6 +382,49 @@ def plan_rag_window(
         max_pages=max_pages,
         policy=pol,
     )
+
+
+def plan_learn_context_rag(
+    current_page: int,
+    study_pages: Sequence[int],
+    *,
+    newspaper: bool,
+    max_pages: int = MAX_RAG_PAGES,
+    policy: str | None = None,
+) -> RagWindowPlan:
+    """Learn-chat RAG: newspaper stays on the current page; else the usual window."""
+    if newspaper:
+        page = max(1, int(current_page))
+        pol = normalize_policy(policy)
+        return RagWindowPlan(
+            pages=(page,),
+            current_page=page,
+            max_pages=1,
+            policy=pol,
+        )
+    return plan_rag_window(
+        current_page, list(study_pages), max_pages=max_pages, policy=policy
+    )
+
+
+def should_attach_learn_session_context(*, scope_mode: str | None) -> bool:
+    """Read-mode chat is about the document, not the Learn loop."""
+    return str(scope_mode or "").strip().lower() != "read"
+
+
+def plan_queue_rag_pages(
+    *,
+    newspaper: bool,
+    current_page: int,
+    study_pages: Sequence[int],
+    stored_window: Sequence[int] | None,
+) -> tuple[int, ...]:
+    """Newspaper recomputes from the current page; uploads keep the stored window."""
+    if newspaper:
+        return plan_rag_window(current_page, list(study_pages)).pages
+    if stored_window:
+        return tuple(int(p) for p in stored_window)
+    return plan_rag_window(current_page, list(study_pages)).pages
 
 
 def finish_ranked_chunks(
@@ -517,3 +619,85 @@ def plan_chunk_retrieval(
         page_end=page_end,
         policy=pol,
     )
+
+
+WEAK_CONCEPT_TOP_N = 3
+
+
+@dataclass(frozen=True)
+class WeakConceptPlan:
+    concepts: tuple[tuple[str, float], ...]
+    policy: str = DEFAULT_POLICY
+    policy_version: str = TUTOR_RETRIEVAL_VERSION
+
+
+def plan_tutor_weak_concepts(
+    concept_ability: Mapping[str, Any] | None,
+    *,
+    top_n: int = WEAK_CONCEPT_TOP_N,
+) -> WeakConceptPlan:
+    """Lowest calibrated abilities the tutor should prefer in hints."""
+    rows: list[tuple[str, float]] = []
+    for key, value in (concept_ability or {}).items():
+        if value is None:
+            continue
+        rows.append((str(key), float(value)))
+    rows.sort(key=lambda kv: kv[1])
+    cap = max(1, int(top_n))
+    return WeakConceptPlan(tuple(rows[:cap]))
+
+
+def plan_unconfirmed_tutor_policy(
+    *,
+    has_mcq_options: bool,
+    confirmed_choice_index: int | None,
+) -> str | None:
+    """Hint-only while the learner has options but has not checked an answer."""
+    if not has_mcq_options or confirmed_choice_index is not None:
+        return None
+    return (
+        "- Tutor policy: explain concepts and give hints only; do not reveal "
+        "which option is correct unless the learner explicitly asks for the answer."
+    )
+
+
+@dataclass(frozen=True)
+class RagChunkSplitPlan:
+    max_chars: int
+    overlap: int
+    policy_version: str = TUTOR_RETRIEVAL_VERSION
+
+
+def plan_rag_chunk_split(
+    *,
+    max_chars: int | None = None,
+    overlap: int | None = None,
+) -> RagChunkSplitPlan:
+    """How large indexed RAG chunks are, and how much consecutive pieces overlap."""
+    return RagChunkSplitPlan(
+        int(max_chars) if max_chars is not None else RAG_CHUNK_MAX_CHARS,
+        int(overlap) if overlap is not None else RAG_CHUNK_OVERLAP,
+    )
+
+
+@dataclass(frozen=True)
+class CookAspectHintPlan:
+    hit_limit: int
+    snippet_chars: int
+    policy_version: str = TUTOR_RETRIEVAL_VERSION
+
+
+def plan_cook_aspect_hint_context() -> CookAspectHintPlan:
+    """How many retrieval hits and how much of each snippet to paste into cook."""
+    return CookAspectHintPlan(COOK_ASPECT_HINT_HITS, COOK_ASPECT_HINT_SNIPPET_CHARS)
+
+
+@dataclass(frozen=True)
+class TopicExplainContextPlan:
+    chunk_limit: int
+    policy_version: str = TUTOR_RETRIEVAL_VERSION
+
+
+def plan_topic_explain_context() -> TopicExplainContextPlan:
+    """How many document chunks ground a topic explanation."""
+    return TopicExplainContextPlan(TOPIC_EXPLAIN_CHUNK_LIMIT)

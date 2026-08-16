@@ -15,6 +15,10 @@ from sqlalchemy.orm import Session
 
 from app.repositories.intel import concept_id
 from app.services.answer_signal import ANSWER_CORRECT_METRIC_URI
+from app.services.mastery_evidence import (
+    plan_progress_recent_days,
+    plan_progress_topic_display_limit,
+)
 from app.services.mcq_dedup import short_concept_label
 
 
@@ -118,7 +122,7 @@ def build_learner_progress(
     account_id: uuid.UUID | None,
     guest_id: str | None,
     artifact_id: uuid.UUID | None = None,
-    recent_days: int = 14,
+    recent_days: int | None = None,
 ) -> dict[str, Any]:
     """Aggregate first-attempt answers + tutor questions for one learner.
 
@@ -129,7 +133,7 @@ def build_learner_progress(
         return _empty_progress()
 
     metric = concept_id(db, ANSWER_CORRECT_METRIC_URI)
-    days = max(1, min(int(recent_days), 90))
+    days = plan_progress_recent_days(recent_days)
     artifact_filter = ""
     params: dict[str, Any] = {
         "subject": subject_entity_id,
@@ -202,10 +206,10 @@ def build_learner_progress(
                 GROUP BY 1
                 ORDER BY (COALESCE(SUM(m.value_numeric), 0)::float / NULLIF(COUNT(*), 0)) ASC,
                          COUNT(*) DESC
-                LIMIT 24
+                LIMIT :lim
                 """
             ),
-            params,
+            {**params, "lim": plan_progress_topic_display_limit()},
         ).mappings().all()
         topics = [
             {

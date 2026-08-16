@@ -14,7 +14,12 @@ from sqlalchemy.orm import Session
 from app.graphs.page_triage_graph import run_page_triage
 from app.models import Document
 from app.repositories.intel import update_activity
-from app.services.aspect_discovery import next_unasked, speculative_targets
+from app.services.aspect_discovery import (
+    next_unasked,
+    plan_cook_target_fallback,
+    plan_stalled_aspect_keys,
+    speculative_targets,
+)
 from app.services.mcq_dedup import prior_mcq_from_payload
 from app.services.mcq_quality import generate_quality_mcq_batch
 from app.services.question_budget import exceeds_page_budget
@@ -30,6 +35,7 @@ from app.services.question_pool import (
 )
 from app.services.retrieval import fetch_chunks_for_page_range, search_chunks
 from app.services.token_budget import PAGE_INPUT_MAX_TOKENS, truncate_to_tokens
+from app.services.tutor_retrieval import plan_cook_aspect_hint_context
 
 logger = logging.getLogger(__name__)
 
@@ -85,13 +91,14 @@ def _aspect_retrieval_hints(
             return ""
         dims = len(vecs[0])
         mean_vec = [sum(v[i] for v in vecs) / len(vecs) for i in range(dims)]
+        hint = plan_cook_aspect_hint_context()
         hits = search_chunks(
             db,
             document_ids=[document_id],
             query_embedding=mean_vec,
             page_start=page_number,
             page_end=page_number,
-            limit=5,
+            limit=hint.hit_limit,
         )
         parts: list[str] = []
         seen: set[str] = set()
@@ -100,7 +107,7 @@ def _aspect_retrieval_hints(
             if not t or t in seen:
                 continue
             seen.add(t)
-            parts.append(t[:600])
+            parts.append(t[: hint.snippet_chars])
         return "\n---\n".join(parts)
     except Exception:
         return ""
@@ -152,21 +159,16 @@ def _reusable_mcq_payloads(
             "exclude_artifact": str(exclude_artifact_id),
         },
     ).scalars().all()
-    out: list[dict[str, Any]] = []
     # Several source pages can share the hash (a doc AND its re-export). Their
     # question sets are near-identical, so interleaving them would clone the
     # same question twice — take everything from the FIRST source page only.
-    src_page: tuple[Any, Any] | None = None
+    from app.services.question_graph import filter_reusable_templates
+
+    parsed: list[dict[str, Any]] = []
     for raw in rows:
         payload = raw if isinstance(raw, dict) else json.loads(raw)
-        key = (payload.get("artifact_id"), payload.get("page_number"))
-        if src_page is None:
-            src_page = key
-        elif key != src_page:
-            continue
-        if payload.get("question") and payload.get("options"):
-            out.append(payload)
-    return out
+        parsed.append(payload)
+    return list(filter_reusable_templates(parsed))
 
 
 def _clone_reusable_mcqs(
@@ -179,12 +181,7 @@ def _clone_reusable_mcqs(
     start_sequence: int,
     budget: int,
 ) -> int:
-    from app.services.quality_evaluation import (
-        QualitySignals,
-        decide_verdict,
-        has_fatal_heuristic_flaws,
-        run_heuristic_checks,
-    )
+    from app.services.quality_evaluation import evaluate_clone_template
 
     reusable = _reusable_mcq_payloads(
         db,
@@ -209,12 +206,7 @@ def _clone_reusable_mcqs(
             "correct_index": template.get("correct_index"),
             "correct_indices": template.get("correct_indices"),
         }
-        h_flaws = run_heuristic_checks(draft)
-        if has_fatal_heuristic_flaws(h_flaws):
-            continue
-        verdict = decide_verdict(
-            QualitySignals(heuristic_flaws=h_flaws, too_similar=False)
-        )
+        verdict = evaluate_clone_template(draft)
         if verdict.decision == "fail":
             continue
         sequence += 1
@@ -342,10 +334,11 @@ def _next_aspects(
 ) -> list[dict[str, Any]]:
     """The next up-to-n aspects on this page that have not been asked yet."""
     from app.services.question_budget import parse_budget_mode
+    from app.services.kc_coverage import coverage_aspects_field
 
     mode = parse_budget_mode(cook_mode)
     cov = get_page_coverage(doc, page_number)
-    aspect_field = "test_aspects" if mode == "test" else "aspects"
+    aspect_field = coverage_aspects_field(mode)
     return list(next_unasked(cov.get(aspect_field) or cov.get("aspects") or [], n=n).aspects)
 
 
@@ -467,36 +460,37 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
     budget = get_question_budget(doc, page_number, mode=serve_mode)
 
     remaining = budget - start_sequence
-    targets = _next_aspects(
-        doc, page_number, min(batch_size, max(0, remaining)), cook_mode=cook_mode
+    n = min(batch_size, max(0, remaining))
+    unasked = _next_aspects(doc, page_number, n, cook_mode=cook_mode)
+    coverage = get_page_coverage(doc, page_number)
+    cook_plan = plan_cook_target_fallback(
+        unasked=unasked,
+        has_aspects=bool(coverage.get("aspects")),
     )
-    if not targets:
-        from app.services.kc_coverage import evaluate_aspect_exhaustion_close
-
-        coverage = get_page_coverage(doc, page_number)
-        if evaluate_aspect_exhaustion_close(
+    if cook_plan.action == "try_speculative":
+        cook_plan = plan_cook_target_fallback(
+            unasked=(),
             has_aspects=bool(coverage.get("aspects")),
-            unasked_count=0,
-        ):
-            set_coverage_complete(db, document_id, page_number)
-            on_batch_completed(db, document_id, page=page_number, saved=0)
-            if activity_id:
-                update_activity(
-                    db,
-                    uuid.UUID(str(activity_id)),
-                    status="succeeded",
-                    stats={"questions_saved": 0, "page_number": page_number},
-                    finished=True,
-                )
-            db.commit()
-            return {"questions_saved": 0, "page_number": page_number}
-        targets = _speculative_aspects(
-            page_text, page_number, min(batch_size, max(0, remaining))
+            speculative=_speculative_aspects(page_text, page_number, n),
         )
-        if not targets:
-            on_batch_completed(db, document_id, page=page_number, saved=0)
-            db.commit()
-            return {"questions_saved": 0, "page_number": page_number, "error": "no_targets"}
+    if cook_plan.action == "close_coverage":
+        set_coverage_complete(db, document_id, page_number)
+        on_batch_completed(db, document_id, page=page_number, saved=0)
+        if activity_id:
+            update_activity(
+                db,
+                uuid.UUID(str(activity_id)),
+                status="succeeded",
+                stats={"questions_saved": 0, "page_number": page_number},
+                finished=True,
+            )
+        db.commit()
+        return {"questions_saved": 0, "page_number": page_number}
+    if cook_plan.action != "cook":
+        on_batch_completed(db, document_id, page=page_number, saved=0)
+        db.commit()
+        return {"questions_saved": 0, "page_number": page_number, "error": "no_targets"}
+    targets = list(cook_plan.targets)
 
     prior_mcqs = _prior_mcqs_on_page(
         db, document_id, page_number, serve_mode=serve_mode
@@ -508,27 +502,26 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
     # construction — no MCQ stems exist at this point, so it can teach the
     # concept but cannot reveal an answer. Test mode never pre-teaches. Best-effort:
     # any failure is caught inside the cook so MCQ generation is never blocked.
-    if serve_mode == "learn":
-        cov_aspects = get_page_coverage(doc, page_number).get("aspects") or targets
-        if cov_aspects:
-            try:
-                from app.services.page_lessons import cook_page_lesson
+    from app.services.page_lessons import cook_page_lesson, should_cook_lesson
 
-                cook_page_lesson(
-                    db,
-                    document_id,
-                    page=page_number,
-                    page_text=page_text,
-                    aspects=cov_aspects,
-                    content_hash=page_hash,
-                )
-            except Exception:
-                logger.warning(
-                    "lesson cook failed doc=%s page=%s",
-                    document_id,
-                    page_number,
-                    exc_info=True,
-                )
+    cov_aspects = get_page_coverage(doc, page_number).get("aspects") or targets
+    if should_cook_lesson(serve_mode=serve_mode, aspects=cov_aspects):
+        try:
+            cook_page_lesson(
+                db,
+                document_id,
+                page=page_number,
+                page_text=page_text,
+                aspects=cov_aspects,
+                content_hash=page_hash,
+            )
+        except Exception:
+            logger.warning(
+                "lesson cook failed doc=%s page=%s",
+                document_id,
+                page_number,
+                exc_info=True,
+            )
     cloned = _clone_reusable_mcqs(
         db,
         document_id,
@@ -553,11 +546,12 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
 
     stable_context = get_cacheable_page_context(db, document_id, page_number, page_text)
     aspect_hints = _aspect_retrieval_hints(db, document_id, page_number, targets, page_text)
-    content_type = get_page_coverage(doc, page_number).get("content_type")
-    if (doc.meta or {}).get("newspaper"):
-        from app.services.newspaper_ad_filter import NEWSPAPER_EXAM_CONTENT_TYPE
+    from app.services.quality_evaluation import resolve_cook_content_type
 
-        content_type = NEWSPAPER_EXAM_CONTENT_TYPE
+    content_type = resolve_cook_content_type(
+        newspaper=bool((doc.meta or {}).get("newspaper")),
+        coverage_type=get_page_coverage(doc, page_number).get("content_type"),
+    )
     # Persist each question the moment it passes the gate (not in bulk at the end), so
     # the learner gets the first question after ~one critique instead of waiting for the
     # whole batch — the rest stream in while they answer. Same critic, same dedup.
@@ -618,13 +612,15 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
         )
     from app.services.session_design import (
         evaluate_empty_batch_coverage_close,
+        evaluate_generation_batch_outcome,
         evaluate_learn_cook_coverage_close,
+        evaluate_serial_cook_fallback,
     )
 
     if evaluate_learn_cook_coverage_close(hit_budget=hit_budget, serve_mode=serve_mode):
         set_coverage_complete(db, document_id, page_number)
 
-    if saved == 0 and targets:
+    if evaluate_serial_cook_fallback(saved=saved, has_targets=bool(targets)):
         from app.services.mcq_quality import generate_quality_mcq
         from app.services.mcq_dedup import prior_mcq_from_payload
 
@@ -696,33 +692,36 @@ def _run_page_batch(db: Session, document_id: uuid.UUID, options: dict[str, Any]
     # question for gets a failed-attempt mark; after MAX_ASPECT_ATTEMPTS it's
     # abandoned so a permanently un-generatable aspect can't block completion.
     db.refresh(doc)
+    from app.services.kc_coverage import coverage_aspects_field
+
     asked_now = {
         str(a.get("key"))
         for a in (
-            get_page_coverage(doc, page_number).get(
-                "test_aspects" if serve_mode == "test" else "aspects"
-            )
+            get_page_coverage(doc, page_number).get(coverage_aspects_field(serve_mode))
             or []
         )
         if a.get("asked")
     }
-    still_unasked = {str(t["key"]) for t in targets if t.get("key") and str(t["key"]) not in asked_now}
+    still_unasked = plan_stalled_aspect_keys(targets, list(asked_now))
     if still_unasked:
         bump_aspect_attempts(db, document_id, page_number, still_unasked)
 
     on_batch_completed(db, document_id, page=page_number, saved=saved)
 
+    outcome = evaluate_generation_batch_outcome(
+        saved=saved, has_targets=bool(targets)
+    )
     if activity_id:
         update_activity(
             db,
             uuid.UUID(str(activity_id)),
-            status="succeeded" if saved > 0 or not targets else "failed",
+            status=outcome.activity_status,
             stats={"questions_saved": saved, "page_number": page_number},
             finished=True,
-            error_summary=None if saved > 0 or not targets else "No questions passed quality gates",
+            error_summary=outcome.error_summary,
         )
     db.commit()
-    if saved == 0 and targets:
+    if outcome.error_code == "generation_empty":
         return {"questions_saved": 0, "page_number": page_number, "error": "generation_empty"}
     return {"questions_saved": saved, "page_number": page_number}
 

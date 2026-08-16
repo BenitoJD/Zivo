@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Iterable, Literal, Sequence
+from typing import Any, Iterable, Literal, Sequence
 
 BUDGET_VERSION = "qb.budget.v1"
 
@@ -32,6 +32,12 @@ W_PER_UNIT = 120
 SESSION_SOFT = 20
 # Speculative N_page when triage has not landed yet (confidence=low seed).
 SPECULATIVE_PAGE_N = 5
+# Public practice: a Wikidata concept is ready once this many questions exist.
+PRACTICE_CONCEPT_MIN_QUESTIONS = 5
+# Coding bank: one verified problem per programmable page.
+CODING_PROBLEMS_PER_PAGE = 1
+# Public Wikipedia sources are split into this many chars per pseudo-page.
+PRACTICE_SOURCE_CHUNK_CHARS = 2500
 
 # Formative Test session information floor (IRT): SE=0.40 → I*=6.25
 SE_TARGET_FORMATIVE = 0.40
@@ -205,6 +211,23 @@ def evaluate_generation_stop(
     return int(generated) >= max(0, int(budget))
 
 
+def resolve_test_question_budget(
+    *,
+    non_content: bool,
+    stored_test_budget: int | None,
+    units: Sequence[Unit] | None,
+    confidence: Literal["high", "medium", "low"] | None,
+) -> int:
+    """Newspaper / Test N_page: stored cook target, else replan from aspects."""
+    if non_content:
+        return 0
+    if stored_test_budget is not None:
+        return max(0, int(stored_test_budget))
+    if units:
+        return plan_page_budget(units, mode="test", confidence=confidence).n_page
+    return 0
+
+
 def resolve_page_budget(
     *,
     non_content: bool,
@@ -233,3 +256,70 @@ def resolve_page_budget(
             return None
         return speculative_page_budget(mode=serve_mode).n_page
     return max(0, int(stored_budget))
+
+
+@dataclass(frozen=True)
+class NewspaperTestTriagePlan:
+    apply: bool
+    content_type: str | None
+    test_question_budget: int
+    test_aspects: tuple[dict[str, Any], ...]
+    budget_version: str = BUDGET_VERSION
+
+
+def plan_newspaper_test_triage(
+    *,
+    is_newspaper: bool,
+    non_content: bool,
+    aspects: Sequence[dict[str, Any]],
+    units: Sequence[Unit] | None,
+    words: int,
+    substantial_paragraphs: int,
+    confidence: Literal["high", "medium", "low"] | None,
+) -> NewspaperTestTriagePlan:
+    """Newspaper pages also persist a Test overlay (N + aspects) at Learn triage."""
+    if not is_newspaper or non_content:
+        return NewspaperTestTriagePlan(False, None, 0, ())
+    from app.services.aspect_discovery import pick_for_plan
+    from app.services.newspaper_ad_filter import NEWSPAPER_EXAM_CONTENT_TYPE
+
+    test_plan = plan_page_budget(
+        units if units else None,
+        mode="test",
+        non_content=False,
+        words=words,
+        substantial_paragraphs=substantial_paragraphs,
+        confidence=confidence,
+    )
+    picked = pick_for_plan(list(aspects), n_page=test_plan.n_page)
+    return NewspaperTestTriagePlan(
+        True,
+        NEWSPAPER_EXAM_CONTENT_TYPE,
+        test_plan.n_page,
+        tuple(picked.aspects),
+    )
+
+
+def plan_newspaper_display_budget(*, generated: int) -> int:
+    """Newspaper UI budget tracks cooked count and never shows a zero cap."""
+    return max(int(generated), 1)
+
+
+def plan_practice_concept_ready(
+    *,
+    existing: int,
+    min_count: int = PRACTICE_CONCEPT_MIN_QUESTIONS,
+) -> bool:
+    """Public practice bank already has enough questions for this concept."""
+    return int(existing) >= int(min_count)
+
+
+def plan_coding_page_yield(count: int | None = None) -> int:
+    """How many verified coding problems to cook for one programmable page."""
+    n = CODING_PROBLEMS_PER_PAGE if count is None else int(count)
+    return max(1, n)
+
+
+def plan_practice_source_chunk_chars() -> int:
+    """How large each Wikipedia pseudo-page is before practice generation."""
+    return PRACTICE_SOURCE_CHUNK_CHARS

@@ -38,6 +38,9 @@ from app.services.artifact_store import ArtifactStore, coerce_jsonb
 logger = logging.getLogger(__name__)
 
 LESSON_ASPECT_FALLBACK = "- the main idea of this page"
+# Caps so a runaway model cannot store a wall of text where a brief belongs.
+LESSON_TITLE_MAX_CHARS = 160
+LESSON_BODY_MAX_CHARS = 2400
 
 
 @dataclass(frozen=True)
@@ -51,10 +54,15 @@ class LessonAspectPlan:
 
 
 def _aspect_is_central(aspect: dict[str, Any]) -> bool:
+    from app.services.aspect_discovery import parse_centrality
+
     is_central = aspect.get("central")
-    if is_central is None:
-        return aspect.get("centrality") == "central"
-    return bool(is_central)
+    if is_central is not None:
+        return bool(is_central)
+    raw = aspect.get("centrality")
+    if raw is None:
+        return False
+    return parse_centrality(raw) == "central"
 
 
 def _aspect_prompt_line(aspect: dict[str, Any]) -> str | None:
@@ -76,6 +84,23 @@ def plan_lesson_aspects(aspects: Sequence[dict[str, Any]] | None) -> LessonAspec
         if line:
             lines.append(line)
     return LessonAspectPlan(tuple(lines))
+
+
+def should_cook_lesson(*, serve_mode: str, aspects: Sequence[dict[str, Any]] | None) -> bool:
+    """Learn-only: teach central aspects before the MCQ loop. Test never pre-teaches."""
+    return serve_mode == "learn" and bool(aspects)
+
+
+@dataclass(frozen=True)
+class LessonOutputCaps:
+    title_chars: int
+    body_chars: int
+    policy_version: str = "qb.lesson.v1"
+
+
+def plan_lesson_output_caps() -> LessonOutputCaps:
+    """Truncate generated lesson title and body before persist."""
+    return LessonOutputCaps(LESSON_TITLE_MAX_CHARS, LESSON_BODY_MAX_CHARS)
 
 
 # Natural key (document_id, page_number); payload is the JSONB `lesson` object;

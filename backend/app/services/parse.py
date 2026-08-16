@@ -18,10 +18,11 @@ from docx.oxml.ns import qn
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 
+from app.services.content_worthiness import is_sparse_page_text, plan_stored_page_count_trust
+from app.services.session_design import plan_study_range_heal
 from app.services.study_pages import study_pages_from_native_units
 from app.services.web_import import paginate_reader_text
 
-_SPARSE_PAGE_CHARS = 40
 _PPTX_CT = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 _A_NS = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
 _P_NS = {"p": "http://schemas.openxmlformats.org/presentationml/2006/main"}
@@ -58,7 +59,7 @@ def _parse_pdf(data: bytes) -> list[dict]:
     with fitz.open(stream=data, filetype="pdf") as doc:
         for i, page in enumerate(doc, start=1):
             text = page.get_text("text").strip()
-            if len(text) < _SPARSE_PAGE_CHARS:
+            if is_sparse_page_text(text):
                 blocks = page.get_text("blocks")
                 block_text = "\n".join(
                     str(block[4]).strip()
@@ -68,7 +69,7 @@ def _parse_pdf(data: bytes) -> list[dict]:
                 if len(block_text) > len(text):
                     text = block_text
             entry: dict = {"page": i, "text": text}
-            if len(text) < _SPARSE_PAGE_CHARS:
+            if is_sparse_page_text(text):
                 entry["sparse_text"] = True
             pages.append(entry)
     return pages or [{"page": 1, "text": "", "sparse_text": True}]
@@ -145,13 +146,12 @@ def refresh_document_page_count(db, doc) -> int:
     if ct.startswith("image/"):
         return stored_i or 1
 
-    # Already a real multi-page count — trust it.
-    if stored_i is not None and stored_i > 1:
-        return stored_i
-
-    # Tiny files are genuinely one page; skip a MinIO round-trip.
-    if int(getattr(doc, "size_bytes", 0) or 0) < 2500 and stored_i == 1:
-        return 1
+    trust = plan_stored_page_count_trust(
+        size_bytes=int(getattr(doc, "size_bytes", 0) or 0),
+        stored_pages=stored_i,
+    )
+    if trust.trust:
+        return trust.pages
 
     try:
         data = fetch_object(doc.storage_key)
@@ -166,21 +166,16 @@ def refresh_document_page_count(db, doc) -> int:
     # Old DOCX path stored the whole file as page 1 and auto-selected [1].
     # Clear that so the learner picks a real study range on the healed pages.
     selected = meta.get("selected_range") if isinstance(meta.get("selected_range"), dict) else None
-    if counted > 1 and selected:
-        pages = selected.get("pages")
-        only_page_one = (
-            (isinstance(pages, list) and pages == [1])
-            or (
-                int(selected.get("from") or 0) == 1
-                and int(selected.get("to") or 0) == 1
-                and not pages
-            )
-        )
-        if only_page_one:
-            meta.pop("selected_range", None)
-            if getattr(doc, "status", None) in {"ready", "indexing"}:
-                doc.status = "pending"
-                doc.index_progress = 0
+    heal = plan_study_range_heal(
+        counted_pages=counted,
+        selected_range=selected,
+        doc_status=str(getattr(doc, "status", "") or ""),
+    )
+    if heal.clear_selected_range:
+        meta.pop("selected_range", None)
+    if heal.reset_to_pending:
+        doc.status = "pending"
+        doc.index_progress = 0
     doc.meta = meta
     flag_modified(doc, "meta")
     db.commit()

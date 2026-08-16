@@ -183,3 +183,68 @@ def test_resolve_page_budget_replans_and_honours_zero() -> None:
     assert evaluate_generation_stop(generated=6, budget=6, coverage_complete=False)
     assert not evaluate_generation_stop(generated=2, budget=6, coverage_complete=False)
     assert evaluate_generation_stop(generated=0, budget=6, coverage_complete=True)
+    from app.services.question_budget import Unit, resolve_test_question_budget
+
+    units = [Unit(key="a", centrality="central"), Unit(key="b", centrality="central")]
+    assert resolve_test_question_budget(
+        non_content=True, stored_test_budget=9, units=units, confidence="high"
+    ) == 0
+    assert resolve_test_question_budget(
+        non_content=False, stored_test_budget=8, units=units, confidence="high"
+    ) == 8
+    replanned = resolve_test_question_budget(
+        non_content=False, stored_test_budget=None, units=units, confidence="high"
+    )
+    assert replanned > 0
+    from app.services.question_budget import plan_newspaper_test_triage
+
+    skip = plan_newspaper_test_triage(
+        is_newspaper=False,
+        non_content=False,
+        aspects=[],
+        units=units,
+        words=100,
+        substantial_paragraphs=2,
+        confidence="high",
+    )
+    assert skip.apply is False
+    overlay = plan_newspaper_test_triage(
+        is_newspaper=True,
+        non_content=False,
+        aspects=[{"key": "a", "centrality": "central", "label": "A"}],
+        units=units,
+        words=400,
+        substantial_paragraphs=3,
+        confidence="high",
+    )
+    assert overlay.apply is True
+    assert overlay.content_type == "newspaper_upsc"
+    assert overlay.test_question_budget >= 1
+    blank = plan_newspaper_test_triage(
+        is_newspaper=True,
+        non_content=True,
+        aspects=[],
+        units=None,
+        words=0,
+        substantial_paragraphs=0,
+        confidence="high",
+    )
+    assert blank.apply is False
+    from app.services.question_budget import plan_newspaper_display_budget
+
+    assert plan_newspaper_display_budget(generated=0) == 1
+    assert plan_newspaper_display_budget(generated=4) == 4
+    from app.services.question_budget import (
+        CODING_PROBLEMS_PER_PAGE,
+        PRACTICE_CONCEPT_MIN_QUESTIONS,
+        plan_coding_page_yield,
+        plan_practice_concept_ready,
+    )
+
+    assert plan_practice_concept_ready(existing=PRACTICE_CONCEPT_MIN_QUESTIONS)
+    assert not plan_practice_concept_ready(existing=PRACTICE_CONCEPT_MIN_QUESTIONS - 1)
+    assert plan_coding_page_yield() == CODING_PROBLEMS_PER_PAGE == 1
+    assert plan_coding_page_yield(3) == 3
+    from app.services.question_budget import plan_practice_source_chunk_chars
+
+    assert plan_practice_source_chunk_chars() == 2500

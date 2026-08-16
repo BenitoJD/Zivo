@@ -13,7 +13,12 @@ from sqlalchemy.orm import Session
 from app.models import Document
 from app.repositories import seo as seo_repo
 from app.services.mcq_quality import generate_quality_mcq
-from app.services.seo_gate import evaluate_seo_mcq_attach_ready
+from app.services.seo_gate import (
+    evaluate_seo_mcq_attach_ready,
+    plan_seo_mcq_attach_defaults,
+    plan_seo_mcq_page_chars,
+    plan_seo_related_mcq_query_limit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +27,7 @@ def find_related_assertions(
     db: Session,
     *,
     document_id: uuid.UUID | None,
-    limit: int = 5,
+    limit: int | None = None,
 ) -> list[uuid.UUID]:
     if not document_id:
         return []
@@ -39,7 +44,7 @@ def find_related_assertions(
             LIMIT :lim
             """
         ),
-        {"aid": str(document_id), "lim": max(1, min(limit, 10))},
+        {"aid": str(document_id), "lim": plan_seo_related_mcq_query_limit(limit)},
     ).all()
     return [uuid.UUID(str(r[0])) for r in rows]
 
@@ -48,8 +53,8 @@ def find_diverse_edition_assertions(
     db: Session,
     *,
     document_id: uuid.UUID,
-    min_count: int = 4,
-    max_count: int = 6,
+    min_count: int | None = None,
+    max_count: int | None = None,
 ) -> list[uuid.UUID]:
     """Pick MCQs from the edition pool with distinct primary_concept_key when possible."""
     rows = db.execute(
@@ -70,12 +75,15 @@ def find_diverse_edition_assertions(
     if not rows:
         return []
 
-    from app.services.seo_gate import plan_seo_mcq_attach
+    from app.services.seo_gate import plan_seo_mcq_attach, plan_seo_mcq_attach_defaults
 
+    attach = plan_seo_mcq_attach_defaults()
+    lo = attach.min_count if min_count is None else int(min_count)
+    hi = attach.max_count if max_count is None else int(max_count)
     planned = plan_seo_mcq_attach(
         [(uuid.UUID(str(row["id"])), str(row["ck"] or "")) for row in rows],
-        min_count=min_count,
-        max_count=max_count,
+        min_count=lo,
+        max_count=hi,
     )
     return planned
 
@@ -190,30 +198,32 @@ def attach_or_generate_mcqs(
     slug: str,
     body_md: str,
     source_document_id: uuid.UUID | None = None,
-    target_count: int = 4,
+    target_count: int | None = None,
 ) -> list[uuid.UUID]:
     """Prefer existing related assertions; else generate from rewritten post."""
+    attach = plan_seo_mcq_attach_defaults()
+    n = attach.target_count if target_count is None else int(target_count)
     attached = find_related_assertions(
-        db, document_id=source_document_id, limit=target_count
+        db, document_id=source_document_id, limit=n
     )
     if evaluate_seo_mcq_attach_ready(len(attached)):
-        seo_repo.attach_assertions(db, post_id, attached[:target_count])
-        return attached[:target_count]
+        seo_repo.attach_assertions(db, post_id, attached[:n])
+        return attached[:n]
 
     artifact_id = ensure_public_artifact(
         db, post_id=post_id, slug=slug, body_md=body_md
     )
     ids = list(attached)
     prior: list[dict[str, Any]] = []
-    for seq in range(len(ids) + 1, target_count + 1):
+    for seq in range(len(ids) + 1, n + 1):
         try:
             draft = generate_quality_mcq(
                 db,
-                page_text=body_md[:8000],
+                page_text=body_md[: plan_seo_mcq_page_chars()],
                 page_number=1,
                 sequence=seq,
                 prior_mcqs=prior,
-                max_attempts=2,
+                max_attempts=attach.generation_attempts,
             )
         except Exception:
             logger.exception("seo mcq generate failed seq=%s", seq)
@@ -236,15 +246,18 @@ def attach_edition_mcqs(
     *,
     post_id: uuid.UUID,
     document_id: uuid.UUID,
-    min_count: int = 4,
-    max_count: int = 6,
+    min_count: int | None = None,
+    max_count: int | None = None,
 ) -> list[uuid.UUID]:
     """Attach concept-diverse MCQs from the edition assertion pool."""
+    attach = plan_seo_mcq_attach_defaults()
+    lo = attach.min_count if min_count is None else int(min_count)
+    hi = attach.max_count if max_count is None else int(max_count)
     ids = find_diverse_edition_assertions(
         db,
         document_id=document_id,
-        min_count=min_count,
-        max_count=max_count,
+        min_count=lo,
+        max_count=hi,
     )
     if ids:
         seo_repo.attach_assertions(db, post_id, ids)

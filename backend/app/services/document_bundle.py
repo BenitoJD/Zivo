@@ -10,9 +10,9 @@ from app.services.document_create import (
     normalize_upload_content_type,
 )
 from app.services.parse import count_document_pages, parse_document
+from app.services.session_design import plan_bundle_upload
 from app.services.web_import import encode_article_pages
 
-_MAX_BUNDLE_FILES = 20
 _PDF_CT = "application/pdf"
 
 
@@ -64,12 +64,13 @@ def build_document_bundle(
     raw_files: list[tuple[str, str, bytes]],
 ) -> tuple[bytes, str, str, dict]:
     """Validate, merge, and return (data, content_type, filename, meta)."""
-    if len(raw_files) < 2:
+    bundle = plan_bundle_upload()
+    if len(raw_files) < bundle.min_files:
         raise HTTPException(status_code=400, detail="Select at least 2 files to combine")
-    if len(raw_files) > _MAX_BUNDLE_FILES:
+    if len(raw_files) > bundle.max_files:
         raise HTTPException(
             status_code=400,
-            detail=f"Too many files (max {_MAX_BUNDLE_FILES})",
+            detail=f"Too many files (max {bundle.max_files})",
         )
 
     normalized: list[tuple[str, str, bytes]] = []

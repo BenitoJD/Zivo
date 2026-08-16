@@ -24,6 +24,25 @@ DEFAULT_WORTH_POLICY = "worth_v1"
 import os as _os
 
 EMPTY_PAGE_RESELECT_STREAK = int(_os.getenv("ZIVO_EMPTY_PAGE_RESELECT_STREAK", "5"))
+# Extractable-text floor: below this, treat the page as sparse (OCR / empty skip).
+WORTH_MIN_CHARS = 40
+# Junk-letter gate: shorter than this is not coherent study text.
+JUNK_MIN_CHARS = 24
+# YouTube / similar imports need more than a sparse PDF page.
+IMPORT_TRANSCRIPT_MIN_CHARS = 80
+# Tiny uploads are genuinely one page; skip a storage round-trip to re-count.
+TINY_FILE_PAGE_TRUST_BYTES = 2500
+# Soft-paginate imported / native-overflow study units.
+STUDY_PAGE_CHARS = 3200
+NATIVE_SOFT_SPLIT_CHARS = STUDY_PAGE_CHARS * 2
+HEADING_BREAK_MIN_CHARS = 600
+SECTION_TITLE_MAX_CHARS = 160
+# Newspaper exam-relevance judge: gist, not the whole aggregated page.
+NEWSPAPER_RELEVANCE_MAX_CHARS = 6000
+# Vision OCR cache: successful transcriptions last a month; BLANK is trusted
+# only for the default 24h TTL so a transient empty 200 cannot hide a page.
+VISION_OCR_TTL_SECONDS = 30 * 24 * 60 * 60
+OCR_BLANK_TRUST_TTL_SECONDS = 24 * 60 * 60
 
 WorthReason = Literal[
     "ok",
@@ -113,6 +132,12 @@ def evaluate_newspaper_structure(page_text: str, *, policy: str | None = None) -
 
 
 NewspaperCookLabel = Literal["cook", "ad", "masthead", "low_signal", "off_syllabus"]
+NewspaperRelevanceReason = Literal[
+    "judged",
+    "empty",
+    "judge_unavailable",
+    "no_judgment",
+]
 
 
 @dataclass(frozen=True)
@@ -157,6 +182,81 @@ def evaluate_newspaper_cook_gate(
     )
 
 
+@dataclass(frozen=True)
+class NewspaperRelevanceVerdict:
+    relevant: bool
+    theme: str
+    rationale: str
+    reason: NewspaperRelevanceReason
+    policy: str = DEFAULT_WORTH_POLICY
+    policy_version: str = WORTH_VERSION
+
+
+def evaluate_newspaper_relevance_outcome(
+    *,
+    page_text: str,
+    parsed: dict | None = None,
+    judge_error: bool = False,
+) -> NewspaperRelevanceVerdict:
+    """Fail-open exam-relevance: empty rejects; LLM outage / unparseable allows."""
+    if not (page_text or "").strip():
+        return NewspaperRelevanceVerdict(
+            False, "", "Empty page text.", "empty"
+        )
+    if judge_error:
+        return NewspaperRelevanceVerdict(
+            True,
+            "",
+            "Relevance judge unavailable; allowing.",
+            "judge_unavailable",
+        )
+    if parsed is None:
+        return NewspaperRelevanceVerdict(
+            True,
+            "",
+            "Relevance judge returned no judgment; allowing.",
+            "no_judgment",
+        )
+    return NewspaperRelevanceVerdict(
+        bool(parsed.get("relevant")),
+        str(parsed.get("theme") or "").strip(),
+        str(parsed.get("rationale") or "").strip(),
+        "judged",
+    )
+
+
+def plan_newspaper_relevance_input(page_text: str | None) -> str:
+    """Trim page text to the exam-relevance judge budget."""
+    return (page_text or "").strip()[:NEWSPAPER_RELEVANCE_MAX_CHARS]
+
+
+@dataclass(frozen=True)
+class VisionOcrCachePlan:
+    transcription_ttl_seconds: int
+    blank_trust_ttl_seconds: int
+    policy_version: str = WORTH_VERSION
+
+
+def plan_vision_ocr_cache() -> VisionOcrCachePlan:
+    """How long to keep vision OCR hits, and when a cached BLANK is trustworthy."""
+    return VisionOcrCachePlan(VISION_OCR_TTL_SECONDS, OCR_BLANK_TRUST_TTL_SECONDS)
+
+
+def should_revalidate_ocr_blank(
+    *,
+    hit: str | None,
+    requested_ttl_seconds: int,
+    blank_trust_ttl_seconds: int | None = None,
+) -> bool:
+    """True when a BLANK hit was found under a longer TTL than we trust."""
+    trust = (
+        OCR_BLANK_TRUST_TTL_SECONDS
+        if blank_trust_ttl_seconds is None
+        else int(blank_trust_ttl_seconds)
+    )
+    return hit == "BLANK" and int(requested_ttl_seconds) > trust
+
+
 def evaluate_empty_study_reason(
     *,
     document_complete: bool,
@@ -175,6 +275,138 @@ def evaluate_empty_study_reason(
     if newspaper and int(questions_generated) == 0 and not generation_pending:
         return "no_testable_content"
     return None
+
+
+def should_probe_empty_study_range(
+    *,
+    document_complete: bool,
+    newspaper: bool,
+    questions_generated: int,
+    questions_answered: int,
+    generation_pending: bool,
+) -> bool:
+    """Run the expensive range scan only when the pool looks empty."""
+    empty_pool = int(questions_generated) == 0 and int(questions_answered) == 0
+    if document_complete and empty_pool:
+        return True
+    if newspaper and int(questions_generated) == 0 and not generation_pending:
+        return True
+    return False
+
+
+def is_sparse_page_text(text: str | None, *, min_chars: int = WORTH_MIN_CHARS) -> bool:
+    """True when extractable text is too short to quiz without OCR or a skip."""
+    return len((text or "").strip()) < int(min_chars)
+
+
+def evaluate_reference_extract(extract: str) -> bool:
+    """Wikipedia/web extract is long enough and not a disambiguation stub."""
+    if is_sparse_page_text(extract):
+        return False
+    lowered = (extract or "").strip().lower()
+    if "may refer to" in lowered or "can refer to" in lowered:
+        return False
+    return True
+
+
+def is_import_extract_too_short(
+    text: str | None,
+    *,
+    min_chars: int = IMPORT_TRANSCRIPT_MIN_CHARS,
+) -> bool:
+    """Reject a URL, YouTube, or plain-text import that has almost no study text."""
+    return is_sparse_page_text(text, min_chars=min_chars)
+
+
+def should_trust_stored_page_count(*, size_bytes: int, stored_pages: int | None) -> bool:
+    """Tiny files with a stored count of 1 do not need a reparse."""
+    return int(size_bytes or 0) < TINY_FILE_PAGE_TRUST_BYTES and stored_pages == 1
+
+
+@dataclass(frozen=True)
+class StoredPageCountTrust:
+    trust: bool
+    pages: int
+    reason: str
+    policy_version: str = WORTH_VERSION
+
+
+def plan_stored_page_count_trust(
+    *,
+    size_bytes: int,
+    stored_pages: int | None,
+) -> StoredPageCountTrust:
+    """When parse may skip a MinIO re-count and keep the stored page total."""
+    if stored_pages is not None and int(stored_pages) > 1:
+        return StoredPageCountTrust(True, int(stored_pages), "multi_page")
+    if should_trust_stored_page_count(size_bytes=size_bytes, stored_pages=stored_pages):
+        return StoredPageCountTrust(True, 1, "tiny_one_page")
+    return StoredPageCountTrust(False, int(stored_pages or 0), "recount")
+
+
+@dataclass(frozen=True)
+class StudyPageSplitPlan:
+    chars_per_page: int
+    native_split_chars: int
+    heading_break_min_chars: int
+    section_title_max_chars: int
+    policy_version: str = WORTH_VERSION
+
+
+def plan_study_page_split() -> StudyPageSplitPlan:
+    """How large a study page may be, and when to split native units or headings."""
+    return StudyPageSplitPlan(
+        STUDY_PAGE_CHARS,
+        NATIVE_SOFT_SPLIT_CHARS,
+        HEADING_BREAK_MIN_CHARS,
+        SECTION_TITLE_MAX_CHARS,
+    )
+
+
+def should_split_native_unit(text: str, *, max_chars: int | None = None) -> bool:
+    """True when a native PDF/DOCX/PPTX unit is too large to keep as one page."""
+    cap = NATIVE_SOFT_SPLIT_CHARS if max_chars is None else int(max_chars)
+    return len(text or "") > cap
+
+
+def should_break_on_section_heading(*, current_len: int, looks_like_heading: bool) -> bool:
+    """Start a new page at a TOC heading only after the current page has real text."""
+    return bool(looks_like_heading) and int(current_len) >= HEADING_BREAK_MIN_CHARS
+
+
+def is_section_title_line(text: str) -> bool:
+    """Heading lines are short titles, not a body that happens to start with Part 1."""
+    return len((text or "").strip()) <= SECTION_TITLE_MAX_CHARS
+
+
+WorthProbeStage = Literal["empty_page", "pre_llm"]
+
+
+@dataclass(frozen=True)
+class WorthinessProbe:
+    empty: bool
+    check_junk: bool
+    min_chars: int
+    policy_version: str = WORTH_VERSION
+
+
+def plan_worthiness_probe(
+    stage: WorthProbeStage,
+    *,
+    has_text: bool = True,
+) -> WorthinessProbe:
+    """Thresholds for empty-page vision vs pre-LLM junk skip."""
+    if stage == "empty_page":
+        return WorthinessProbe(
+            empty=True,
+            check_junk=False,
+            min_chars=WORTH_MIN_CHARS,
+        )
+    return WorthinessProbe(
+        empty=not has_text,
+        check_junk=True,
+        min_chars=JUNK_MIN_CHARS,
+    )
 
 
 @dataclass(frozen=True)
@@ -198,6 +430,15 @@ def evaluate_llm_triage_units(
     if int(aspect_count) <= 0:
         return LlmTriageUnitsVerdict(True, "no_aspects")
     return LlmTriageUnitsVerdict(False, "ok")
+
+
+def should_heuristic_fallback_empty_aspects(
+    *,
+    allow_zero: bool,
+    aspect_count: int,
+) -> bool:
+    """Legacy (honest-zero off): empty LLM aspects fall back to heuristic N."""
+    return not allow_zero and int(aspect_count) <= 0
 
 
 def evaluate_digest_page_worthy(
@@ -251,7 +492,7 @@ def normalize_policy(policy: str | None) -> str:
     return _POLICY_ALIASES.get(p, p or DEFAULT_WORTH_POLICY)
 
 
-def looks_like_junk(text: str | None, *, min_chars: int = 24) -> bool:
+def looks_like_junk(text: str | None, *, min_chars: int = JUNK_MIN_CHARS) -> bool:
     """Cheap coherent-language gate (ex-_looks_like_junk). Owned by this engine."""
     t = (text or "").strip()
     if len(t) < min_chars:
@@ -269,7 +510,7 @@ def evaluate_worthiness(
     non_content: bool = False,
     empty: bool = False,
     ad_likely: bool = False,
-    min_chars: int = 40,
+    min_chars: int = WORTH_MIN_CHARS,
     newspaper: bool = False,
     check_junk: bool = False,
     policy: str | None = None,
@@ -390,3 +631,8 @@ def plan_empty_page_reselect(
         reason="",
         policy=pol,
     )
+
+
+def should_skip_empty_page_vision(*, already_prompted: bool) -> bool:
+    """Stop vision LLM spend after the learner was already asked to reselect."""
+    return bool(already_prompted)

@@ -25,11 +25,10 @@ from sqlalchemy.orm import Session
 from app.services.chunk_map_cache import map_chunk_cached
 from app.services.chunks import load_document_chunk_texts
 from app.services.prompts import get_prompt
+from app.services.session_design import plan_auxiliary_map_concurrency
 from app.services.token_budget import SUMMARIZE_CHUNK_INPUT_MAX_TOKENS
 
 logger = logging.getLogger(__name__)
-
-_MAP_CONCURRENCY = 4
 
 
 def narration_system(db: Session) -> str:
@@ -50,7 +49,7 @@ async def adapt_document_for_narration(db: Session, document_id: object) -> list
 
     model_id = default_chat_model_id(db)
     system = narration_system(db)
-    sem = asyncio.Semaphore(_MAP_CONCURRENCY)
+    sem = asyncio.Semaphore(plan_auxiliary_map_concurrency("audiobook"))
 
     async def _adapt_one(text: str) -> str:
         async with sem:

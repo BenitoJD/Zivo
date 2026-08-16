@@ -402,9 +402,10 @@ def list_expired_ready(db: Session, *, before: date) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-def retention_cutoff(now: datetime | None = None) -> date:
+def retention_cutoff(now: datetime | None = None, *, days: int | None = None) -> date:
     now = now or datetime.now(timezone.utc)
-    return (now.astimezone(timezone.utc) - timedelta(days=RETENTION_DAYS)).date()
+    span = int(days) if days is not None else RETENTION_DAYS
+    return (now.astimezone(timezone.utc) - timedelta(days=span)).date()
 
 
 def make_paper_identity(title: str) -> tuple[str, str]:

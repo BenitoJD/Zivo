@@ -22,19 +22,23 @@ from app.services.chunks import load_document_chunk_texts
 from app.services.llm_json import extract_json_array
 from app.services.llm_router import complete_chat
 from app.services.prompts import get_prompt
+from app.services.session_design import (
+    plan_auxiliary_artifact_cap,
+    plan_auxiliary_field_caps,
+    plan_auxiliary_generation_strategy,
+    plan_auxiliary_map_concurrency,
+)
 from app.services.token_budget import (
     SUMMARIZE_CHUNK_INPUT_MAX_TOKENS,
     SUMMARIZE_ROLLUP_INPUT_MAX_TOKENS,
-    SUMMARIZE_SINGLE_SHOT_MAX_TOKENS,
     count_tokens,
     truncate_to_tokens,
 )
+from app.services.tutor_retrieval import plan_topic_explain_context
 
 _CHUNK_MAP_MAX_TOKENS = SUMMARIZE_CHUNK_INPUT_MAX_TOKENS
 _ROLLUP_INPUT_MAX_TOKENS = SUMMARIZE_ROLLUP_INPUT_MAX_TOKENS
-_SINGLE_SHOT_MAX_TOKENS = SUMMARIZE_SINGLE_SHOT_MAX_TOKENS
-_MAP_CONCURRENCY = 6
-_MAX_TOPICS = 15
+_MAX_TOPICS = plan_auxiliary_artifact_cap("topics").max_count
 
 
 def _slugify(title: str, taken: set[str]) -> str:
@@ -56,7 +60,13 @@ def _parse_topics(raw: str) -> list[dict[str, str]]:
         title = str(item.get("title") or "").strip()
         if not title:
             continue
-        out.append({"title": title[:120], "summary": str(item.get("summary") or "").strip()[:300]})
+        caps = plan_auxiliary_field_caps("topics")
+        out.append(
+            {
+                "title": title[: caps.limit("title")],
+                "summary": str(item.get("summary") or "").strip()[: caps.limit("summary")],
+            }
+        )
     return out
 
 
@@ -86,20 +96,21 @@ async def generate_topic_outline(db: Session, document_id: uuid.UUID) -> list[di
     model_id = default_chat_model_id(db)
     system = get_prompt(db, "topics_extract_system")
     body = "\n\n".join(chunk_texts)
+    gen = plan_auxiliary_generation_strategy(count_tokens(body))
 
-    if count_tokens(body) <= _SINGLE_SHOT_MAX_TOKENS:
+    if gen.mode == "single_shot":
         from app.services.chunk_map_cache import content_hash_key
         from app.services.generation_cache import get as cache_get, put as cache_put
 
         single_key = content_hash_key(
-            "topics_extract", system, truncate_to_tokens(body, _SINGLE_SHOT_MAX_TOKENS), str(model_id)
+            "topics_extract", system, truncate_to_tokens(body, gen.single_shot_max_tokens), str(model_id)
         )
         hit = cache_get(db, kind="topics_extract", cache_key=single_key)
         if isinstance(hit, str) and hit.strip():
             return _finalize(_parse_topics(hit))
         messages = [
             {"role": "system", "content": system},
-            {"role": "user", "content": f"Document:\n\n{truncate_to_tokens(body, _SINGLE_SHOT_MAX_TOKENS)}"},
+            {"role": "user", "content": f"Document:\n\n{truncate_to_tokens(body, gen.single_shot_max_tokens)}"},
         ]
         raw = await complete_chat(messages, db, log_tag="topics_extract", model_id=model_id)
         out = _finalize(_parse_topics(raw))
@@ -108,7 +119,7 @@ async def generate_topic_outline(db: Session, document_id: uuid.UUID) -> list[di
         return out
 
     # Map: topics per chunk; Reduce: merge into one outline.
-    sem = asyncio.Semaphore(_MAP_CONCURRENCY)
+    sem = asyncio.Semaphore(plan_auxiliary_map_concurrency("topics"))
 
     async def _map_one(text: str) -> list[dict[str, str]]:
         async with sem:
@@ -173,9 +184,13 @@ async def explain_topic(
 
     query = f"{title}. {summary}".strip()
     chunks: list[dict] = []
+    ctx = plan_topic_explain_context()
     try:
         chunks = search_chunks(
-            db, document_ids=[document_id], query_embedding=embed_query(query), limit=8
+            db,
+            document_ids=[document_id],
+            query_embedding=embed_query(query),
+            limit=ctx.chunk_limit,
         )
     except Exception:
         chunks = []
@@ -186,7 +201,7 @@ async def explain_topic(
             db.query(DocumentChunk)
             .filter(DocumentChunk.document_id == document_id)
             .order_by(DocumentChunk.page_start.asc())
-            .limit(8)
+            .limit(ctx.chunk_limit)
             .all()
         )
         context = "\n\n".join(r.text for r in rows if r.text)

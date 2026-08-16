@@ -21,6 +21,11 @@ SE_MIN_N = 5
 # Practice-hub path labeling (system-design concept map).
 PATH_STRONG = 0.72
 PATH_IN_PROGRESS = 0.35
+PATH_LABEL_SAMPLE_WINDOW = 5
+SD_PATH_SAMPLE_LIMIT = 40
+PROGRESS_TOPIC_DISPLAY_LIMIT = 24
+PROGRESS_RECENT_DAYS_DEFAULT = 14
+PROGRESS_RECENT_DAYS_MAX = 90
 
 StopReason = Literal["mastery", "se_precision", "min_items", "continue"]
 PathState = Literal["not_started", "needs_work", "in_progress", "strong"]
@@ -53,7 +58,8 @@ def label_path_mastery(
     hist = list(samples or [])
     if not hist:
         return PathLabelVerdict("not_started", None)
-    mastery = round(sum(hist[:5]) / min(5, len(hist)), 2)
+    window = min(PATH_LABEL_SAMPLE_WINDOW, len(hist))
+    mastery = round(sum(hist[:window]) / window, 2)
     if mastery >= strong_at:
         state: PathState = "strong"
     elif mastery >= in_progress_at:
@@ -61,6 +67,22 @@ def label_path_mastery(
     else:
         state = "needs_work"
     return PathLabelVerdict(state, mastery)
+
+
+def plan_sd_path_sample_limit() -> int:
+    """How many recent system-design sessions feed path-mastery samples."""
+    return SD_PATH_SAMPLE_LIMIT
+
+
+def plan_progress_topic_display_limit() -> int:
+    """How many weakest-topic rows the progress analytics view may show."""
+    return PROGRESS_TOPIC_DISPLAY_LIMIT
+
+
+def plan_progress_recent_days(requested: int | None = None) -> int:
+    """How many recent days the progress journal aggregates."""
+    n = PROGRESS_RECENT_DAYS_DEFAULT if requested is None else int(requested)
+    return max(1, min(n, PROGRESS_RECENT_DAYS_MAX))
 
 
 PATH_FOCUS_STATES: tuple[PathState, ...] = ("not_started", "needs_work", "in_progress")

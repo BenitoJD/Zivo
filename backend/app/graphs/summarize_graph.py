@@ -11,10 +11,13 @@ from app.services.chunk_map_cache import map_chunk_cached
 from app.services.chunks import load_document_chunk_texts
 from app.services.llm_router import complete_chat
 from app.services.prompts import get_prompt
+from app.services.session_design import (
+    plan_auxiliary_generation_strategy,
+    plan_auxiliary_map_concurrency,
+)
 from app.services.token_budget import (
     SUMMARIZE_CHUNK_INPUT_MAX_TOKENS,
     SUMMARIZE_ROLLUP_INPUT_MAX_TOKENS,
-    SUMMARIZE_SINGLE_SHOT_MAX_TOKENS,
     count_tokens,
     truncate_to_tokens,
 )
@@ -22,8 +25,6 @@ from app.services.token_budget import (
 # Per-chunk map step + roll-up over section summaries (cacheable prefix on roll-up).
 _CHUNK_MAP_MAX_TOKENS = SUMMARIZE_CHUNK_INPUT_MAX_TOKENS
 _ROLLUP_INPUT_MAX_TOKENS = SUMMARIZE_ROLLUP_INPUT_MAX_TOKENS
-_SINGLE_SHOT_MAX_TOKENS = SUMMARIZE_SINGLE_SHOT_MAX_TOKENS
-_CHUNK_SUMMARY_CONCURRENCY = 6
 
 
 async def _summarize_chunk(
@@ -54,27 +55,28 @@ async def generate_whole_doc_summary(db: Session, document_id: uuid.UUID) -> str
 
     model_id = default_chat_model_id(db)
     body = "\n\n".join(chunk_texts)
+    gen = plan_auxiliary_generation_strategy(count_tokens(body))
 
-    if count_tokens(body) <= _SINGLE_SHOT_MAX_TOKENS:
+    if gen.mode == "single_shot":
         from app.services.chunk_map_cache import content_hash_key
         from app.services.generation_cache import get as cache_get, put as cache_put
 
         summary_key = content_hash_key(
-            "summarize_doc", system, truncate_to_tokens(body, _SINGLE_SHOT_MAX_TOKENS), str(model_id)
+            "summarize_doc", system, truncate_to_tokens(body, gen.single_shot_max_tokens), str(model_id)
         )
         hit = cache_get(db, kind="summarize_doc", cache_key=summary_key)
         if isinstance(hit, str) and hit.strip():
             return hit
         messages = [
             {"role": "system", "content": system},
-            {"role": "user", "content": f"Summarize this document:\n\n{truncate_to_tokens(body, _SINGLE_SHOT_MAX_TOKENS)}"},
+            {"role": "user", "content": f"Summarize this document:\n\n{truncate_to_tokens(body, gen.single_shot_max_tokens)}"},
         ]
         out = (await complete_chat(messages, db, log_tag="summarize_doc", model_id=model_id)).strip()
         if out:
             cache_put(db, kind="summarize_doc", cache_key=summary_key, value=out)
         return out
 
-    section_sem = asyncio.Semaphore(_CHUNK_SUMMARY_CONCURRENCY)
+    section_sem = asyncio.Semaphore(plan_auxiliary_map_concurrency("summarize"))
 
     async def _summarize_one(text: str) -> str:
         async with section_sem:

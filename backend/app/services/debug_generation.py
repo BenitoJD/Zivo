@@ -21,13 +21,19 @@ from app.services.debug_cook import get_cook_job, set_cook_job_status
 from app.services.debug_curation import build_full_payload, public_payload
 from app.services.llm_router import acomplete_chat
 from app.services.llm_sync import run_coro_in_worker
+from app.services.open_response import (
+    CODING_VERIFY_MAX_ATTEMPTS,
+    evaluate_debug_scenario_qa,
+    evaluate_debug_scenario_shape,
+    plan_debug_cook_input_tokens,
+    plan_debug_cook_yield,
+)
 from app.services.token_budget import truncate_to_tokens
 
 logger = logging.getLogger(__name__)
 
 _DEBUG_TYPE_URI = "/vocab/assertion/question.debug"
-_MAX_VERIFY_ATTEMPTS = 3
-_MATERIAL_MAX_TOKENS = 6000
+_MAX_VERIFY_ATTEMPTS = CODING_VERIFY_MAX_ATTEMPTS
 
 _GEN_SYSTEM = (
     "You are Zivo, an author of software-engineering diagnostic scenarios. "
@@ -76,13 +82,9 @@ def _parse_json(raw: str) -> dict[str, Any] | None:
 
 def _internal_qa_passes(draft: dict[str, Any]) -> bool:
     qa = draft.get("cook_qa") or {}
-    if not isinstance(qa, dict):
-        return True
-    buggy = str(qa.get("buggy_code") or "").strip()
-    fixed = str(qa.get("reference_fix_code") or "").strip()
-    tests = qa.get("tests") or []
-    if not buggy or not fixed or not tests:
-        return True
+    buggy = str(qa.get("buggy_code") or "").strip() if isinstance(qa, dict) else ""
+    fixed = str(qa.get("reference_fix_code") or "").strip() if isinstance(qa, dict) else ""
+    tests = (qa.get("tests") or []) if isinstance(qa, dict) else []
     clean_tests = [
         {
             "stdin": str(t.get("stdin", "")),
@@ -91,17 +93,29 @@ def _internal_qa_passes(draft: dict[str, Any]) -> bool:
         for t in tests
         if isinstance(t, dict)
     ]
-    if not clean_tests:
-        return True
+    if not buggy or not fixed or not clean_tests:
+        return evaluate_debug_scenario_qa(
+            has_buggy=bool(buggy),
+            has_fixed=bool(fixed),
+            has_tests=bool(clean_tests),
+            buggy_fails=False,
+            fixed_passes=False,
+        ).persist
     buggy_result = run_tests(buggy, clean_tests, language_id=DEFAULT_LANGUAGE_ID)
     fixed_result = run_tests(fixed, clean_tests, language_id=DEFAULT_LANGUAGE_ID)
     buggy_fails = any(not r.get("passed") for r in buggy_result.get("results") or [])
     fixed_passes = all(r.get("passed") for r in fixed_result.get("results") or [])
-    return buggy_fails and fixed_passes
+    return evaluate_debug_scenario_qa(
+        has_buggy=True,
+        has_fixed=True,
+        has_tests=True,
+        buggy_fails=buggy_fails,
+        fixed_passes=fixed_passes,
+    ).persist
 
 
 def _draft_scenario(db: Session, material: str, brief: str, index: int) -> dict[str, Any] | None:
-    context = truncate_to_tokens(material, _MATERIAL_MAX_TOKENS)
+    context = truncate_to_tokens(material, plan_debug_cook_input_tokens())
     user_msg = (
         f"SOURCE MATERIAL:\n{context}\n\n"
         f"COOK BRIEF:\n{brief or 'Generate one diagnostic scenario.'}\n\n"
@@ -141,9 +155,13 @@ def _persist_scenario(
     page_number: int = 0,
 ) -> dict[str, Any] | None:
     title = str(draft.get("title") or "").strip()[:200]
-    if len(title) < 3:
-        return None
     steps = draft.get("steps") or []
+    shape = evaluate_debug_scenario_shape(
+        title=title,
+        step_count=len(steps) if isinstance(steps, list) else 0,
+    )
+    if not shape.ok:
+        return None
     case = draft.get("case") or {}
     try:
         full_payload = build_full_payload(
@@ -259,7 +277,7 @@ def run_cook_job(db: Session, cook_job_id: uuid.UUID) -> dict[str, Any]:
     m = row._mapping
     material_full = str(m["material"] or "")
     brief = str(m["brief"] or "")
-    count = int(m["scenario_count"] or 3)
+    count = plan_debug_cook_yield(m["scenario_count"])
     origin = str(m["origin"] or "generated")
     owner = m["owner_user_id"]
     source_hash = hashlib.sha256(material_full.encode()).hexdigest()[:16]
@@ -295,18 +313,19 @@ def generate_debug_for_page(
     *,
     page_number: int,
     page_text: str,
-    count: int = 2,
+    count: int | None = None,
     owner_user_id: uuid.UUID | None = None,
 ) -> int:
     """Auto-cook from a document page — creates a cook job and runs inline."""
     from app.services.debug_cook import create_cook_job
 
+    n = plan_debug_cook_yield(count)
     job = create_cook_job(
         db,
         owner_user_id=owner_user_id,
         material=page_text,
-        brief=f"Generate {count} debug diagnostic scenarios from this technical page.",
-        scenario_count=count,
+        brief=f"Generate {n} debug diagnostic scenarios from this technical page.",
+        scenario_count=n,
         source_type="document_page",
         source_ref=str(document_id),
         origin="generated",

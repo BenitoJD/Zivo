@@ -34,13 +34,12 @@ from app.services.open_response import (
     degraded_interview_scores,
     empty_interview_scores,
     evaluate_interview_coding_turn,
+    plan_resume_chunk_limit,
+    plan_resume_input_tokens,
     shape_interview_scores,
 )
 from app.services.session_design import plan_interview_rounds
 from app.services.token_budget import truncate_to_tokens
-
-# Resumes are short; a small token budget keeps generation fast and cheap.
-RESUME_MAX_TOKENS = 6000
 
 # Round plans live in Session Design (`plan_interview_rounds`).
 Round = dict[str, Any]
@@ -262,22 +261,32 @@ async def submit_answer(
     turn = await _evaluate(db, current, answer)
     transcript.append(turn)
 
-    # advance the cursor: next question in round → next round → complete
-    ri, qi = state["round_index"], state["q_in_round"] + 1
-    if qi >= int(config[ri]["questions"]):
-        ri, qi = ri + 1, 0
-    if ri >= len(config):
+    from app.services.session_design import plan_interview_advance
+
+    advance = plan_interview_advance(
+        round_index=int(state["round_index"]),
+        q_in_round=int(state["q_in_round"]),
+        round_question_count=int(config[int(state["round_index"])]["questions"]),
+        round_count=len(config),
+    )
+    if advance.complete:
         _save(
             db,
             document_id,
             learner_key=learner_key,
             category=category,
             config=config,
-            state={"round_index": len(config), "q_in_round": 0, "current": None},
+            state={
+                "round_index": advance.round_index,
+                "q_in_round": advance.q_in_round,
+                "current": None,
+            },
             transcript=transcript,
             status="complete",
         )
         return load_interview(db, document_id, learner_key=learner_key)
+
+    ri, qi = advance.round_index, advance.q_in_round
 
     resume = _resume_text(db, document_id)
     asked = [t["question"] for t in transcript]
@@ -300,33 +309,20 @@ async def _generate_question(
     db: Session, category: str, rnd: Round, resume: str, *, asked: list[str]
 ) -> dict[str, Any]:
     label = CATEGORY_META.get(category, {}).get("label", category)
-    already = "\n".join(f"- {q}" for q in asked[-8:]) or "(none yet)"
-    if rnd["kind"] == "mcq":
-        schema = (
-            '{"question":"...","options":["a","b","c","d"],"correct_index":0,'
-            '"explanation":"why the correct option is right"}'
-        )
-        rules = "Exactly 4 options, exactly one correct. correct_index is 0-3."
-    elif rnd["kind"] == "coding":
-        schema = (
-            '{"question":"full problem statement incl. the exact stdin format and expected stdout format",'
-            '"starter_code":"a runnable Python 3 stub reading stdin","language_id":71,'
-            '"tests":[{"stdin":"...","expected_output":"..."}],'
-            '"explanation":"the intended approach"}'
-        )
-        rules = (
-            "A self-contained coding problem the candidate solves by reading stdin and printing to "
-            "stdout (no function signatures — full program). Give 3-5 tests with EXACT stdin and the "
-            "EXACT expected stdout (no trailing prose). starter_code must be valid Python 3 for "
-            "language_id 71. Keep it solvable in ~10 minutes."
-        )
-    else:
-        schema = '{"question":"..."}'
-        rules = "An open-ended question the candidate answers by typing. No options."
+    from app.services.session_design import (
+        plan_interview_asked_context,
+        plan_interview_gen_contract,
+    )
+
+    already = "\n".join(f"- {q}" for q in asked[-plan_interview_asked_context():]) or "(none yet)"
+
+    contract = plan_interview_gen_contract(str(rnd.get("kind") or ""))
+    schema = contract.schema
+    rules = contract.rules
     # Prefix-cache discipline: the resume is byte-stable across every call of an
     # interview, so it leads; the asked-list changes each question and rides last.
     user = (
-        f"CANDIDATE RESUME:\n{truncate_to_tokens(resume, RESUME_MAX_TOKENS) or '(resume unavailable)'}\n\n"
+        f"CANDIDATE RESUME:\n{truncate_to_tokens(resume, plan_resume_input_tokens()) or '(resume unavailable)'}\n\n"
         f"Company type: {label}\n"
         f"Round: {rnd['name']} — focus on {rnd['focus']}.\n\n"
         f"Questions already asked this interview (do not repeat):\n{already}\n\n"
@@ -335,7 +331,7 @@ async def _generate_question(
     from app.services.chunk_map_cache import content_hash_key
     from app.services.generation_cache import get as cache_get, put as cache_put
 
-    resume_digest = content_hash_key("resume", truncate_to_tokens(resume, RESUME_MAX_TOKENS))
+    resume_digest = content_hash_key("resume", truncate_to_tokens(resume, plan_resume_input_tokens()))
     asked_digest = content_hash_key("asked", already)
     gen_key = content_hash_key(
         "interview_gen", category, rnd["name"], rnd["kind"], rnd["focus"], resume_digest, asked_digest
@@ -365,7 +361,7 @@ async def _generate_question(
         if shape == "typed":
             out["kind"] = "typed"
         else:
-            out["options"] = opts[:6]
+            out["options"] = opts[: contract.max_options]
             out["correct_index"] = min(ci, len(out["options"]) - 1)
             out["explanation"] = (data.get("explanation") or "").strip()
     elif rnd["kind"] == "coding":
@@ -389,7 +385,7 @@ async def _generate_question(
             lid = data.get("language_id", DEFAULT_LANGUAGE_ID)
             out["language_id"] = lid if lid in LANGUAGES else DEFAULT_LANGUAGE_ID
             out["starter_code"] = (data.get("starter_code") or "").rstrip()
-            out["tests"] = tests[:6]
+            out["tests"] = tests[: contract.max_tests]
             out["explanation"] = (data.get("explanation") or "").strip()
     if out.get("question"):
         cache_put(db, kind="interview_gen", cache_key=gen_key, value=out)
@@ -513,7 +509,7 @@ def _resume_text(db: Session, document_id: uuid.UUID) -> str:
         db.query(DocumentChunk)
         .filter(DocumentChunk.document_id == document_id)
         .order_by(DocumentChunk.page_start.asc())
-        .limit(60)
+        .limit(plan_resume_chunk_limit())
         .all()
     )
     return "\n\n".join(r.text for r in rows if r.text)

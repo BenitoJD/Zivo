@@ -158,12 +158,14 @@ def quiz_generate(payload: dict) -> dict:
     from app.services.quiz import run_quiz_generation
 
     document_id = UUID(payload["document_id"])
+    from app.services.session_design import clamp_auxiliary_count
+
     with SessionLocal() as db:
         questions = run_quiz_generation(
             db,
             document_id,
             types=payload.get("types", ["mcq"]),
-            count=payload.get("count", 10),
+            count=clamp_auxiliary_count("quiz", payload.get("count")),
             difficulty=payload.get("difficulty", "mixed"),
         )
     return {"document_id": str(document_id), "questions": len(questions)}
@@ -211,8 +213,9 @@ def coach_mcq_page(payload: dict) -> dict:
 def seo_cook_batch(payload: dict) -> dict:
     """Cook available SEO candidates under soft max (LLM rewrite + MCQs)."""
     from app.services.seo_cook import cook_batch
+    from app.services.seo_gate import SEO_COOK_TICK_DEFAULT
 
-    limit = int(payload.get("limit") or 3)
+    limit = int(payload.get("limit") or SEO_COOK_TICK_DEFAULT)
     with SessionLocal() as db:
         return cook_batch(db, limit=limit)
 

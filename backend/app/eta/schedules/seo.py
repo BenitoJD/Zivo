@@ -8,6 +8,7 @@ from app.db import SessionLocal
 from app.eta.scheduler_registry import eta_scheduler
 from app.models import JobWorkload
 from app.services.jobs import enqueue_job
+from app.services.seo_gate import SEO_COOK_TICK_DEFAULT
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ def run_seo_cook_batch() -> None:
             db,
             name="seo.cook_batch",
             workload=JobWorkload.io,
-            payload={"limit": 3},
+            payload={"limit": SEO_COOK_TICK_DEFAULT},
         )
 
 

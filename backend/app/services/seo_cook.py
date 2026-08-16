@@ -21,11 +21,20 @@ from app.services.seo_gate import (
     digest_skip_reason,
     evaluate_dedupe,
     evaluate_digest_source_ready,
+    evaluate_edition_digest_skip_status,
     evaluate_newspaper_seo_candidate,
     evaluate_publish_cap,
     evaluate_seo_mcq_attach_ready,
     evaluate_usefulness,
     plan_sd_daily_cook,
+    plan_seo_candidate_schedule,
+    plan_seo_cook_tick,
+    plan_seo_fingerprint,
+    plan_seo_mcq_attach_defaults,
+    plan_seo_sd_source_chars,
+    seo_candidate_slots_remaining,
+    should_bypass_digest_dedupe,
+    SEO_COOK_TICK_DEFAULT,
 )
 from app.services.seo_mcq import attach_edition_mcqs, attach_or_generate_mcqs
 from app.services.seo_pii import scrub_pii
@@ -67,11 +76,12 @@ def _skip(db: Session, cand: Candidate, reason: str) -> dict[str, Any]:
     return {"skipped": True, "reason": reason, "source_key": cand.source_key}
 
 
-def collect_candidates(db: Session, *, batch_size: int = 5) -> list[Candidate]:
+def collect_candidates(db: Session, *, batch_size: int | None = None) -> list[Candidate]:
     """Ordered: newspaper cook pages → uploads → (SD only via ensure_sd)."""
+    schedule = plan_seo_candidate_schedule(batch_size=batch_size)
     out: list[Candidate] = []
 
-    for row in seo_repo.list_newspaper_cook_candidates(db, limit=batch_size):
+    for row in seo_repo.list_newspaper_cook_candidates(db, limit=schedule.batch_size):
         page_text = (row.get("text") or "").strip()
         if not evaluate_newspaper_seo_candidate(page_text, db=db):
             # Mark so we don't keep re-checking ads
@@ -100,11 +110,15 @@ def collect_candidates(db: Session, *, batch_size: int = 5) -> list[Candidate]:
                 source_document_id=uuid.UUID(str(row["document_id"])),
             )
         )
-        if len(out) >= batch_size:
+        if seo_candidate_slots_remaining(
+            accepted=len(out), batch_size=schedule.batch_size
+        ) <= 0:
             break
 
-    if len(out) < batch_size:
-        for row in seo_repo.list_upload_candidates(db, limit=batch_size):
+    if seo_candidate_slots_remaining(
+        accepted=len(out), batch_size=schedule.batch_size
+    ) > 0:
+        for row in seo_repo.list_upload_candidates(db, limit=schedule.batch_size):
             out.append(
                 Candidate(
                     source_kind="upload",
@@ -116,7 +130,9 @@ def collect_candidates(db: Session, *, batch_size: int = 5) -> list[Candidate]:
                     source_document_id=uuid.UUID(str(row["document_id"])),
                 )
             )
-            if len(out) >= batch_size:
+            if seo_candidate_slots_remaining(
+                accepted=len(out), batch_size=schedule.batch_size
+            ) <= 0:
                 break
 
     db.commit()
@@ -128,7 +144,7 @@ def candidate_from_sd_problem(row: dict[str, Any]) -> Candidate:
         str(row.get("title") or ""),
         str(row.get("prompt") or ""),
         str(row.get("constraints") or ""),
-        str(row.get("reference_design") or "")[:4000],
+        str(row.get("reference_design") or "")[: plan_seo_sd_source_chars()],
     ]
     return Candidate(
         source_kind="sd_bank",
@@ -196,11 +212,11 @@ def cook_one(db: Session, cand: Candidate) -> dict[str, Any]:
         cand.stream,
         article.get("topic_fingerprint_hint") or article["title"],
     )
-    # SD bank uses stable fingerprint so we don't re-cook same problem
-    if cand.source_kind == "sd_bank":
-        fp = f"sd:{cand.source_key}"
-    elif cand.source_kind == "topic_queue":
-        fp = f"topic:{cand.source_key}"
+    fp = plan_seo_fingerprint(
+        source_kind=cand.source_kind,
+        source_key=cand.source_key,
+        default_fingerprint=fp,
+    )
 
     dedupe = evaluate_dedupe(
         db,
@@ -268,7 +284,7 @@ def cook_one(db: Session, cand: Candidate) -> dict[str, Any]:
     }
 
 
-def cook_batch(db: Session, *, limit: int = 3) -> dict[str, Any]:
+def cook_batch(db: Session, *, limit: int | None = None) -> dict[str, Any]:
     settings = seo_repo.get_settings(db)
     if not settings.get("cook_enabled"):
         return {"ok": True, "skipped": "cook_disabled", "results": []}
@@ -281,7 +297,8 @@ def cook_batch(db: Session, *, limit: int = 3) -> dict[str, Any]:
     if not cap.allow:
         return {"ok": True, "skipped": "soft_max", "results": []}
 
-    n = min(limit, cap.remaining, 5)
+    tick = SEO_COOK_TICK_DEFAULT if limit is None else int(limit)
+    n = plan_seo_cook_tick(limit=tick, remaining=cap.remaining)
     results = []
     for cand in collect_candidates(db, batch_size=n):
         again = evaluate_publish_cap(
@@ -397,7 +414,9 @@ def cook_edition_digest(
         title=article["title"],
         lede=article["lede"],
     )
-    if not dedupe.ok and not (force and existing_post_id):
+    if not dedupe.ok and not should_bypass_digest_dedupe(
+        force=force, existing_post_id=existing_post_id
+    ):
         if dedupe.reason == "fingerprint_taken":
             linked = _link_existing_edition_post(
                 db,
@@ -411,7 +430,7 @@ def cook_edition_digest(
 
     embedding = embed_title_lede(article["title"], article["lede"])
 
-    if force and existing_post_id:
+    if should_bypass_digest_dedupe(force=force, existing_post_id=existing_post_id):
         post_id = existing_post_id
         existing = seo_repo.get_post_by_id(db, post_id, include_internal=True) or {}
         slug = str(existing.get("slug") or f"{paper_slug}-{edition_date.isoformat()}")
@@ -462,7 +481,7 @@ def cook_edition_digest(
                 slug=slug,
                 body_md=article["body_md"],
                 source_document_id=uuid.UUID(str(doc_id)),
-                target_count=4,
+                target_count=plan_seo_mcq_attach_defaults().target_count,
             )
     except Exception:
         logger.exception("edition digest mcq attach failed post=%s", post_id)
@@ -625,11 +644,7 @@ def _skip_edition(
         outcome="skipped",
         reason=reason,
     )
-    blog_status = (
-        "failed"
-        if reason in seo_repo.RETRYABLE_EDITION_DIGEST_REASONS
-        else "skipped"
-    )
+    blog_status = evaluate_edition_digest_skip_status(reason)
     if not (ed and ed.get("blog_post_id")):
         newspaper_repo.set_edition_blog_status(db, edition_id, status=blog_status)
     db.commit()

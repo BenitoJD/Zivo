@@ -17,6 +17,7 @@ from app.services.chunks import load_document_chunk_texts
 from app.services.llm_json import extract_json_array
 from app.services.llm_router import complete_chat
 from app.services.prompts import get_prompt
+from app.services.session_design import clamp_auxiliary_count, plan_auxiliary_field_caps
 from app.services.token_budget import (
     SUMMARIZE_SINGLE_SHOT_MAX_TOKENS,
     truncate_to_tokens,
@@ -40,7 +41,6 @@ QUESTION_TYPES = {
 # (prompt, options, answer_index, explanation) — so they validate, render,
 # and export through the same single-best-answer code path.
 SINGLE_ANSWER_MCQ_TYPES = ("mcq", "mcq_negative", "assertion_reason", "scenario", "cloze")
-MAX_QUESTIONS = 40
 
 
 def _parse_questions(raw: str) -> list[dict]:
@@ -50,12 +50,14 @@ def _parse_questions(raw: str) -> list[dict]:
 
 def _norm_options(item: dict) -> list[str]:
     opts = item.get("options") or item.get("choices") or []
-    return [str(o).strip() for o in opts if str(o).strip()][:8]
+    cap = plan_auxiliary_field_caps("quiz").limit("options")
+    return [str(o).strip() for o in opts if str(o).strip()][:cap]
 
 
 def _finalize(raw_items: list, requested_types: list[str], cap: int) -> list[dict]:
     """Validate + normalize each question by its type; drop malformed ones."""
     allowed = set(requested_types) & set(QUESTION_TYPES)
+    fields = plan_auxiliary_field_caps("quiz")
     out: list[dict] = []
     for item in raw_items:
         if not isinstance(item, dict):
@@ -66,8 +68,12 @@ def _finalize(raw_items: list, requested_types: list[str], cap: int) -> list[dic
             continue
         if allowed and qtype not in allowed:
             continue
-        expl = str(item.get("explanation") or "").strip()[:600]
-        q: dict = {"type": qtype, "prompt": prompt[:600], "explanation": expl}
+        expl = str(item.get("explanation") or "").strip()[: fields.limit("explanation")]
+        q: dict = {
+            "type": qtype,
+            "prompt": prompt[: fields.limit("prompt")],
+            "explanation": expl,
+        }
 
         if qtype in SINGLE_ANSWER_MCQ_TYPES or qtype == "multi":
             opts = _norm_options(item)
@@ -98,7 +104,7 @@ def _finalize(raw_items: list, requested_types: list[str], cap: int) -> list[dic
             ans = str(item.get("answer") or "").strip()
             if not ans:
                 continue
-            q["answer"] = ans[:1200]
+            q["answer"] = ans[: fields.limit("answer")]
         elif qtype == "matching":
             pairs = item.get("pairs") or []
             clean = [
@@ -108,7 +114,7 @@ def _finalize(raw_items: list, requested_types: list[str], cap: int) -> list[dic
             ]
             if len(clean) < 2:
                 continue
-            q["pairs"] = clean[:8]
+            q["pairs"] = clean[: fields.limit("pairs")]
         out.append(q)
         if len(out) >= cap:
             break
@@ -118,7 +124,7 @@ def _finalize(raw_items: list, requested_types: list[str], cap: int) -> list[dic
 def quiz_config_signature(types: list[str], count: int, difficulty: str) -> str:
     """Stable signature so a changed config triggers regeneration."""
     t = ",".join(sorted(set(types) & set(QUESTION_TYPES))) or "mcq"
-    c = max(1, min(int(count or 10), MAX_QUESTIONS))
+    c = clamp_auxiliary_count("quiz", count)
     d = (difficulty or "mixed").strip().lower()
     return f"{t}|{c}|{d}"
 
@@ -133,7 +139,7 @@ async def generate_quiz(
         return []
 
     allowed = [t for t in types if t in QUESTION_TYPES] or ["mcq"]
-    cap = max(1, min(int(count or 10), MAX_QUESTIONS))
+    cap = clamp_auxiliary_count("quiz", count)
     diff = (difficulty or "mixed").strip().lower()
 
     from app.services.llm_registry import default_chat_model_id

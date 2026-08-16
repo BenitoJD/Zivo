@@ -34,3 +34,6 @@ def test_no_attempt_ids_skips_bias() -> None:
     assert score_candidate(hard, ["x"], attempted=True) < score_candidate(
         hard, ["x"], attempted=False
     )
+    from app.services.practice_selection import plan_coding_next_pool_limit
+
+    assert plan_coding_next_pool_limit() == 80

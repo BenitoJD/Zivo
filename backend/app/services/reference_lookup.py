@@ -13,6 +13,7 @@ from urllib.parse import quote
 import httpx
 
 from app.config import get_settings
+from app.services.content_worthiness import evaluate_reference_extract
 from app.services.http_client import zivo_http_client
 
 _DICTIONARY_API = "https://api.dictionaryapi.dev/api/v2/entries/en"
@@ -98,7 +99,7 @@ async def lookup_wikipedia_summary(query: str) -> WikipediaSummary:
     title = await _resolve_wikipedia_title(query)
     if title:
         summary = await _fetch_wikipedia_summary(title)
-        if summary and _summary_is_usable(summary.extract):
+        if summary and evaluate_reference_extract(summary.extract):
             return summary
 
     # Disambiguation or weak opensearch hit: try Wikidata entity search.
@@ -110,7 +111,7 @@ async def lookup_wikipedia_summary(query: str) -> WikipediaSummary:
             article = await wikidata.get_wikipedia_article(hit.qid)
         except wikidata.WikidataError:
             continue
-        if _summary_is_usable(article.text):
+        if evaluate_reference_extract(article.text):
             return WikipediaSummary(
                 title=article.title,
                 extract=article.text,
@@ -123,16 +124,6 @@ async def lookup_wikipedia_summary(query: str) -> WikipediaSummary:
             return summary
 
     raise ReferenceLookupError(f"No Wikipedia article for “{query}”")
-
-
-def _summary_is_usable(extract: str) -> bool:
-    text = (extract or "").strip()
-    if len(text) < 40:
-        return False
-    lowered = text.lower()
-    if "may refer to" in lowered or "can refer to" in lowered:
-        return False
-    return True
 
 
 async def _fetch_wikipedia_summary(title: str) -> WikipediaSummary | None:

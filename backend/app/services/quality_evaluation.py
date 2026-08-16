@@ -11,6 +11,7 @@ ad-hoc if-ladders.
 
 from __future__ import annotations
 
+import os as _os
 from dataclasses import dataclass, field
 from typing import Any, Literal, Sequence
 
@@ -27,6 +28,20 @@ DEFAULT_QUALITY_POLICY = "code_driven_v1"
 MCQ_SIMILARITY_THRESHOLD = 0.92
 # Critic spend rate when no heuristic flaws force a call (env can still override at cook).
 DEFAULT_CRITIC_SAMPLE_RATE = 1.0
+# Serial cook rewrite/regenerate budget (orchestration reads this; loop stays plumbing).
+MAX_GENERATION_ATTEMPTS = 3
+# Batch cook knobs (env overrides stay on this facade, not in mcq_quality).
+GENERATION_CONCURRENCY = max(1, int(_os.getenv("ZIVO_GENERATION_CONCURRENCY", "4")))
+PIPELINE_DRAFT_SPLIT = _os.getenv("ZIVO_PIPELINE_DRAFT_SPLIT", "1").lower() not in (
+    "0",
+    "false",
+    "no",
+)
+CRITIC_SAMPLE_RATE = float(
+    _os.getenv("ZIVO_CRITIC_SAMPLE_RATE", str(DEFAULT_CRITIC_SAMPLE_RATE))
+)
+DEFAULT_CANDIDATES_PER_ASPECT = 2
+PRIOR_MCQ_PROMPT_ITEMS = 6
 
 Decision = Literal["pass", "fail", "revise"]
 Stage = Literal["cook", "empirical"]
@@ -456,6 +471,221 @@ def should_run_critic(
     return sample_roll < sample_rate
 
 
+def evaluate_pre_critic_reject(signals: QualitySignals) -> QualityVerdict | None:
+    """Skip critic spend when the hard cook gate already failed."""
+    verdict = decide_verdict(signals)
+    hard = (
+        signals.too_similar
+        or signals.verify_flaw is not None
+        or has_fatal_heuristic_flaws(list(signals.heuristic_flaws))
+    )
+    if verdict.decision == "fail" and hard:
+        return verdict
+    return None
+
+
+def hard_fail_rewrite_bundle(signals: QualitySignals) -> dict[str, Any] | None:
+    """Rewrite hints when the serial cook skips critic after a hard fail."""
+    if evaluate_pre_critic_reject(signals) is None:
+        return None
+    if signals.too_similar:
+        return {
+            "flaws": [
+                {
+                    "code": "too_similar_to_prior",
+                    "message": (
+                        f"Embedding similarity {signals.max_similarity:.2f} "
+                        "to a prior question"
+                    ),
+                }
+            ],
+            "rewrite_hints": (
+                "Test a different fact and use a clearly different stem "
+                "from all prior questions."
+            ),
+            "fatal_flaws": ["too_similar_to_prior"],
+        }
+    if signals.verify_flaw is not None:
+        return merge_critique_for_rewrite([dict(signals.verify_flaw)], None)
+    return merge_critique_for_rewrite(list(signals.heuristic_flaws), None)
+
+
+def evaluate_clone_template(draft: dict[str, Any]) -> QualityVerdict:
+    """Reuse is not a bypass: re-attest a cloned MCQ before persist."""
+    h_flaws = run_heuristic_checks(draft)
+    return decide_verdict(
+        QualitySignals(
+            heuristic_flaws=h_flaws,
+            too_similar=False,
+            rewrite_budget_remaining=0,
+        )
+    )
+
+
+RewriteStep = Literal["draft", "rewrite", "regenerate"]
+
+
+def plan_rewrite_step(
+    *,
+    attempt: int,
+    has_draft: bool,
+    has_rewrite_brief: bool,
+) -> RewriteStep:
+    """First try drafts; later tries rewrite when a brief exists, else regenerate."""
+    if int(attempt) <= 0:
+        return "draft"
+    if has_draft and has_rewrite_brief:
+        return "rewrite"
+    return "regenerate"
+
+
+NEWSPAPER_CONTENT_TYPE = "newspaper_upsc"
+
+
+def resolve_cook_content_type(
+    *,
+    newspaper: bool,
+    coverage_type: str | None,
+) -> str | None:
+    """Newspaper cooks always use the exam style; others keep triage content_type."""
+    if newspaper:
+        return NEWSPAPER_CONTENT_TYPE
+    return coverage_type
+
+
+def should_inject_mcq_content_style(
+    content_type: str | None,
+    *,
+    content_aware: bool,
+) -> bool:
+    """Newspaper always injects; other types follow the content-aware flag."""
+    ct = (content_type or "").strip().lower()
+    if ct == NEWSPAPER_CONTENT_TYPE:
+        return True
+    return bool(content_aware)
+
+
+def should_fast_path_accept(signals: QualitySignals) -> bool:
+    """Serial cook: skip critic when structure, key, and similarity are clean."""
+    return (
+        not signals.heuristic_flaws
+        and signals.verify_flaw is None
+        and not signals.too_similar
+    )
+
+
+def should_run_answer_key_verify(
+    *,
+    verify_enabled: bool,
+    has_fatal_heuristics: bool,
+    too_similar: bool = False,
+) -> bool:
+    """Skip the verifier when structure already failed or the draft is a near-dupe."""
+    return bool(verify_enabled) and not has_fatal_heuristics and not too_similar
+
+
+def should_run_similarity_gate(
+    *,
+    has_fatal_heuristics: bool,
+    verify_flaw: dict[str, Any] | None = None,
+) -> bool:
+    """Skip embed when heuristics or the answer-key check already failed."""
+    return not has_fatal_heuristics and verify_flaw is None
+
+
+def should_positional_best_of_n(*, selected_count: int) -> bool:
+    """When aspect-key grouping matched nothing, pair drafts by position."""
+    return int(selected_count) <= 0
+
+
+ParallelPrefilter = Literal["fatal", "too_similar", "keep"]
+
+
+def evaluate_parallel_gate_prefilter(
+    *,
+    heuristic_flaws: Sequence[dict[str, str]],
+    too_similar: bool,
+) -> ParallelPrefilter:
+    """Drop fatal / near-dupe drafts before spending parallel critic slots."""
+    if has_fatal_heuristic_flaws(list(heuristic_flaws)):
+        return "fatal"
+    if too_similar:
+        return "too_similar"
+    return "keep"
+
+
+# Batch cook: cap + serial Q1 critic + parallel rest. Env knobs stay at cook plumbing.
+BATCH_MCQ_CAP = 5
+
+
+@dataclass(frozen=True)
+class CookGateSchedule:
+    target_count: int
+    batch_cap: int
+    split_first_draft: bool
+    first_force_critic: bool
+    rest_force_critic: bool
+    rest_concurrency: int
+    policy_version: str = QUALITY_VERSION
+
+
+def plan_cook_gate_schedule(
+    *,
+    target_count: int,
+    pipeline_split: bool,
+    generation_concurrency: int,
+    batch_cap: int = BATCH_MCQ_CAP,
+) -> CookGateSchedule:
+    """Serial first-draft critic, then parallel rest, capped per LLM batch."""
+    cap = max(1, int(batch_cap))
+    n = max(0, min(int(target_count), cap))
+    workers = max(1, int(generation_concurrency))
+    return CookGateSchedule(
+        target_count=n,
+        batch_cap=cap,
+        split_first_draft=bool(pipeline_split) and n > 1,
+        first_force_critic=True,
+        rest_force_critic=False,
+        rest_concurrency=workers,
+    )
+
+
+@dataclass(frozen=True)
+class CookGateKnobs:
+    generation_concurrency: int
+    pipeline_draft_split: bool
+    critic_sample_rate: float
+    policy_version: str = QUALITY_VERSION
+
+
+def plan_cook_gate_knobs(
+    *,
+    generation_concurrency: int | None = None,
+    pipeline_split: bool | None = None,
+    critic_sample_rate: float | None = None,
+) -> CookGateKnobs:
+    """Resolve cook-gate concurrency, pipeline split, and critic sample rate."""
+    return CookGateKnobs(
+        GENERATION_CONCURRENCY
+        if generation_concurrency is None
+        else max(1, int(generation_concurrency)),
+        PIPELINE_DRAFT_SPLIT if pipeline_split is None else bool(pipeline_split),
+        CRITIC_SAMPLE_RATE if critic_sample_rate is None else float(critic_sample_rate),
+    )
+
+
+def plan_best_of_n_candidates(requested: int | None = None) -> int:
+    """How many draft candidates to write per aspect before structural pick."""
+    n = DEFAULT_CANDIDATES_PER_ASPECT if requested is None else int(requested)
+    return max(1, n)
+
+
+def plan_prior_mcq_prompt_items(requested: int | None = None) -> int:
+    """How many already-cooked stems to paste so the next draft does not repeat them."""
+    n = PRIOR_MCQ_PROMPT_ITEMS if requested is None else int(requested)
+    return max(1, n)
+
+
 def draft_structural_score(draft: dict[str, Any]) -> tuple[int, int, float]:
     """Lower is better. Free structural signal for best-of-N draft pick.
 
@@ -506,6 +736,28 @@ __all__ = [
     "decide_verdict",
     "evaluate_empirical",
     "should_run_critic",
+    "evaluate_pre_critic_reject",
+    "hard_fail_rewrite_bundle",
+    "evaluate_clone_template",
+    "MAX_GENERATION_ATTEMPTS",
+    "plan_rewrite_step",
+    "resolve_cook_content_type",
+    "should_inject_mcq_content_style",
+    "should_fast_path_accept",
+    "should_run_answer_key_verify",
+    "should_run_similarity_gate",
+    "should_positional_best_of_n",
+    "evaluate_parallel_gate_prefilter",
+    "BATCH_MCQ_CAP",
+    "GENERATION_CONCURRENCY",
+    "PIPELINE_DRAFT_SPLIT",
+    "CRITIC_SAMPLE_RATE",
+    "CookGateSchedule",
+    "CookGateKnobs",
+    "plan_cook_gate_schedule",
+    "plan_cook_gate_knobs",
+    "plan_best_of_n_candidates",
+    "plan_prior_mcq_prompt_items",
     "draft_structural_score",
     "pick_best_draft",
     "run_heuristic_checks",

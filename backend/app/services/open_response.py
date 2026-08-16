@@ -9,6 +9,7 @@ aggregation. LLM calls / DB / OCR stay in mains.py and interview.py.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -58,6 +59,20 @@ MAINS_AXIS_ANCHORS = {
 INTERVIEW_DIMENSIONS = ("problem_framing", "depth", "tradeoffs", "communication")
 INTERVIEW_SCORE_MIN = 1
 INTERVIEW_SCORE_MAX = 4
+INTERVIEW_STRENGTH_PCT = 67
+INTERVIEW_FOCUS_PCT = 50
+
+InterviewRoundBand = Literal["strength", "focus", "mid"]
+
+
+def label_interview_round_band(score: int) -> InterviewRoundBand:
+    """Band a mock-interview round percent for strengths vs focus areas."""
+    pct = int(score)
+    if pct >= INTERVIEW_STRENGTH_PCT:
+        return "strength"
+    if pct < INTERVIEW_FOCUS_PCT:
+        return "focus"
+    return "mid"
 
 
 @dataclass(frozen=True)
@@ -362,8 +377,12 @@ def build_interview_report(
         )
         overall_pcts.append(pct)
     overall = round(sum(overall_pcts) / len(overall_pcts)) if overall_pcts else 0
-    strengths = [r["name"] for r in rounds_out if r["score"] >= 67]
-    focus = [r["name"] for r in rounds_out if r["score"] < 50]
+    strengths = [
+        r["name"] for r in rounds_out if label_interview_round_band(r["score"]) == "strength"
+    ]
+    focus = [
+        r["name"] for r in rounds_out if label_interview_round_band(r["score"]) == "focus"
+    ]
     result = {
         "overall": overall,
         "rounds": rounds_out,
@@ -562,6 +581,7 @@ def should_record_coding_solve(*, has_subject: bool, passed: bool) -> bool:
 class CodingBankVerdict:
     ok: bool
     reason: str
+    resolved_title: str = ""
     policy: str = DEFAULT_POLICY
     policy_version: str = OPEN_RESPONSE_VERSION
 
@@ -592,7 +612,7 @@ def evaluate_coding_bank_item(
         title = str(problem.get("concept") or "").strip()
     if len(title) < min_title_len:
         return CodingBankVerdict(False, "title_too_short", policy=pol)
-    return CodingBankVerdict(True, "ok", policy=pol)
+    return CodingBankVerdict(True, "ok", resolved_title=title, policy=pol)
 
 
 CODING_SAMPLE_TEST_COUNT = 2
@@ -637,6 +657,10 @@ class CodingVerifyVerdict:
     policy_version: str = OPEN_RESPONSE_VERSION
 
 
+# Retry budget for generate-and-verify. Loop stays plumbing; the cap is policy.
+CODING_VERIFY_MAX_ATTEMPTS = 3
+
+
 def evaluate_coding_reference_verify(
     *,
     has_tests: bool,
@@ -655,4 +679,278 @@ def evaluate_coding_reference_verify(
     if int(total) and int(passed) == int(total):
         return CodingVerifyVerdict(True, False, "passed", policy=pol)
     return CodingVerifyVerdict(False, True, "failed_tests", policy=pol)
+
+
+@dataclass(frozen=True)
+class DebugScenarioQaVerdict:
+    persist: bool
+    reason: str
+    policy: str = DEFAULT_POLICY
+    policy_version: str = OPEN_RESPONSE_VERSION
+
+
+def evaluate_debug_scenario_qa(
+    *,
+    has_buggy: bool,
+    has_fixed: bool,
+    has_tests: bool,
+    buggy_fails: bool,
+    fixed_passes: bool,
+    policy: str | None = None,
+) -> DebugScenarioQaVerdict:
+    """Persist a debug cook only when buggy code fails tests and the fix passes.
+
+    Missing cook_qa is not a reject: the model may omit it for non-code scenarios.
+    """
+    pol = normalize_policy(policy)
+    if not has_buggy or not has_fixed or not has_tests:
+        return DebugScenarioQaVerdict(True, "no_qa_payload", policy=pol)
+    if buggy_fails and fixed_passes:
+        return DebugScenarioQaVerdict(True, "inverse_ok", policy=pol)
+    return DebugScenarioQaVerdict(False, "qa_failed", policy=pol)
+
+
+DEBUG_COOK_DEFAULT_COUNT = 3
+DEBUG_COOK_MAX_COUNT = 10
+DEBUG_COOK_MIN_MATERIAL_CHARS = 20
+DEBUG_COOK_MIN_BRIEF_CHARS = 10
+DEBUG_COOK_INPUT_MAX_TOKENS = 6000
+DEBUG_COOK_MATERIAL_CHARS = 100_000
+DEBUG_COOK_BRIEF_CHARS = 4_000
+DEBUG_TITLE_MIN_CHARS = 3
+DEBUG_MIN_STEPS = 1
+
+
+def plan_debug_cook_yield(requested: int | None = None) -> int:
+    """How many debug scenarios one cook job may produce."""
+    n = DEBUG_COOK_DEFAULT_COUNT if not requested else int(requested)
+    return max(1, min(n, DEBUG_COOK_MAX_COUNT))
+
+
+def plan_debug_cook_input_tokens() -> int:
+    """How much source material the debug cook LLM may see."""
+    return DEBUG_COOK_INPUT_MAX_TOKENS
+
+
+@dataclass(frozen=True)
+class DebugCookStoreCaps:
+    material: int
+    brief: int
+    policy_version: str = OPEN_RESPONSE_VERSION
+
+
+def plan_debug_cook_store_caps() -> DebugCookStoreCaps:
+    """How large a debug cook job's stored material and brief may be."""
+    return DebugCookStoreCaps(DEBUG_COOK_MATERIAL_CHARS, DEBUG_COOK_BRIEF_CHARS)
+
+
+@dataclass(frozen=True)
+class DebugCookInputVerdict:
+    ok: bool
+    reason: str
+    policy: str = DEFAULT_POLICY
+    policy_version: str = OPEN_RESPONSE_VERSION
+
+
+def evaluate_debug_cook_input(
+    *,
+    material: str,
+    brief: str = "",
+    policy: str | None = None,
+) -> DebugCookInputVerdict:
+    """Reject a debug cook that has neither usable material nor a brief."""
+    pol = normalize_policy(policy)
+    has_material = len((material or "").strip()) >= DEBUG_COOK_MIN_MATERIAL_CHARS
+    has_brief = len((brief or "").strip()) >= DEBUG_COOK_MIN_BRIEF_CHARS
+    if has_material or has_brief:
+        return DebugCookInputVerdict(True, "ok", policy=pol)
+    return DebugCookInputVerdict(False, "too_thin", policy=pol)
+
+
+@dataclass(frozen=True)
+class DebugScenarioShapeVerdict:
+    ok: bool
+    reason: str
+    policy: str = DEFAULT_POLICY
+    policy_version: str = OPEN_RESPONSE_VERSION
+
+
+def evaluate_debug_scenario_shape(
+    *,
+    title: str,
+    step_count: int,
+    min_title_len: int = DEBUG_TITLE_MIN_CHARS,
+    min_steps: int = DEBUG_MIN_STEPS,
+    policy: str | None = None,
+) -> DebugScenarioShapeVerdict:
+    """Structural persist bar for a debug scenario (title + at least one step)."""
+    pol = normalize_policy(policy)
+    if int(step_count) < int(min_steps):
+        return DebugScenarioShapeVerdict(False, "no_steps", policy=pol)
+    if len((title or "").strip()) < int(min_title_len):
+        return DebugScenarioShapeVerdict(False, "title_too_short", policy=pol)
+    return DebugScenarioShapeVerdict(True, "ok", policy=pol)
+
+
+RESUME_STRENGTHS_MAX = 6
+RESUME_IMPROVEMENTS_MAX = 8
+RESUME_OPTIMIZE_BULLETS_MAX = 20
+RESUME_OPTIMIZE_KEYWORDS_MAX = 20
+RESUME_INPUT_MAX_TOKENS = 6000
+RESUME_JD_INPUT_MAX_TOKENS = 2000
+RESUME_CHUNK_LIMIT = 60
+CODING_PAGE_INPUT_MAX_TOKENS = 6000
+CODING_ASSIST_SAMPLE_DISPLAY = 4
+SD_DESIGN_BLOCKS_MAX = 24
+SD_DESIGN_FIELD_MAX_CHARS = 12_000
+CODING_TEACH_STATEMENT_CHARS = 1200
+CODING_TEACH_SOURCE_CHARS = 2500
+CODING_TEACH_WEAK_MAX = 3
+CODING_TEACH_TITLE_CHARS = 120
+CODING_TEACH_BODY_CHARS = 2000
+CODING_TEACH_TRY_THIS_CHARS = 400
+CODING_TEACH_FOCUS_TAGS = 6
+
+
+@dataclass(frozen=True)
+class ResumeAnalysisCaps:
+    strengths: int
+    improvements: int
+    policy_version: str = OPEN_RESPONSE_VERSION
+
+
+def plan_resume_analysis_caps() -> ResumeAnalysisCaps:
+    """How many ATS strengths / improvements to keep from the LLM review."""
+    return ResumeAnalysisCaps(RESUME_STRENGTHS_MAX, RESUME_IMPROVEMENTS_MAX)
+
+
+@dataclass(frozen=True)
+class ResumeOptimizeCaps:
+    bullets: int
+    missing_keywords: int
+    policy_version: str = OPEN_RESPONSE_VERSION
+
+
+def plan_resume_optimize_caps() -> ResumeOptimizeCaps:
+    """How many rewrite bullets and missing keywords the optimizer may keep."""
+    return ResumeOptimizeCaps(RESUME_OPTIMIZE_BULLETS_MAX, RESUME_OPTIMIZE_KEYWORDS_MAX)
+
+
+def plan_resume_input_tokens() -> int:
+    """How much resume text ATS analysis and interview context may send to the LLM."""
+    return RESUME_INPUT_MAX_TOKENS
+
+
+def plan_resume_jd_input_tokens() -> int:
+    """How much job-description text the resume optimizer may send to the LLM."""
+    return RESUME_JD_INPUT_MAX_TOKENS
+
+
+def plan_resume_chunk_limit() -> int:
+    """How many ingested chunks to prefetch before resume/interview token trim."""
+    return RESUME_CHUNK_LIMIT
+
+
+def plan_coding_page_input_tokens() -> int:
+    """How much page text a coding-problem cook may send to the LLM."""
+    return CODING_PAGE_INPUT_MAX_TOKENS
+
+
+def plan_coding_assist_sample_display() -> int:
+    """How many sample tests the coding-assist tutor prompt may include."""
+    return CODING_ASSIST_SAMPLE_DISPLAY
+
+
+@dataclass(frozen=True)
+class CodingTeachOutputCaps:
+    statement: int
+    source: int
+    weak_concepts: int
+    title: int
+    body: int
+    try_this: int
+    focus_tags: int
+    policy_version: str = OPEN_RESPONSE_VERSION
+
+
+def plan_coding_teach_output_caps() -> CodingTeachOutputCaps:
+    """Truncation caps for coding teach-gap LLM input and cached lesson output."""
+    return CodingTeachOutputCaps(
+        CODING_TEACH_STATEMENT_CHARS,
+        CODING_TEACH_SOURCE_CHARS,
+        CODING_TEACH_WEAK_MAX,
+        CODING_TEACH_TITLE_CHARS,
+        CODING_TEACH_BODY_CHARS,
+        CODING_TEACH_TRY_THIS_CHARS,
+        CODING_TEACH_FOCUS_TAGS,
+    )
+
+
+@dataclass(frozen=True)
+class SdDesignCaps:
+    blocks: int
+    field_chars: int
+    policy_version: str = OPEN_RESPONSE_VERSION
+
+
+def plan_sd_design_caps() -> SdDesignCaps:
+    """How large a saved system-design draft may be."""
+    return SdDesignCaps(SD_DESIGN_BLOCKS_MAX, SD_DESIGN_FIELD_MAX_CHARS)
+
+
+RESUME_WORD_MIN = 250
+RESUME_WORD_MAX = 900
+RESUME_MIN_BULLETS = 3
+RESUME_MIN_METRICS = 3
+RESUME_MIN_ACTION_VERBS = 4
+RESUME_DET_WEIGHT = 0.5
+RESUME_CONTENT_WEIGHT = 0.5
+
+_RESUME_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_RESUME_PHONE = re.compile(r"(\+?\d[\d\s().-]{7,}\d)")
+_RESUME_ACTION_VERBS = {
+    "led", "built", "designed", "developed", "created", "launched", "improved", "increased",
+    "reduced", "managed", "shipped", "implemented", "optimized", "delivered", "owned",
+    "drove", "architected", "automated", "scaled", "migrated", "spearheaded",
+}
+_RESUME_SECTIONS = {
+    "experience": ("experience", "work history", "employment"),
+    "education": ("education",),
+    "skills": ("skills", "technical skills", "technologies"),
+}
+
+
+def evaluate_resume_deterministic_checks(resume: str) -> list[dict[str, Any]]:
+    """Mechanical ATS checks (contact, sections, length, bullets, metrics, voice)."""
+    low = resume.lower()
+    words = resume.split()
+    wc = len(words)
+    bullets = sum(low.count(b) for b in ("•", "- ", "* ", "▪"))
+    quantified = len(re.findall(r"\b\d+%?\b", resume))
+    action_hits = sum(1 for w in _RESUME_ACTION_VERBS if w in low)
+    first_person = sum(low.count(p) for p in (" i ", " my ", " me "))
+    has_email = bool(_RESUME_EMAIL.search(resume))
+    has_phone = bool(_RESUME_PHONE.search(resume))
+    has_exp = any(s in low for s in _RESUME_SECTIONS["experience"])
+    has_edu = any(s in low for s in _RESUME_SECTIONS["education"])
+    has_skills = any(s in low for s in _RESUME_SECTIONS["skills"])
+    length_ok = RESUME_WORD_MIN <= wc <= RESUME_WORD_MAX
+    checks = [
+        ("Contact email", has_email, "A parseable email address is present." if has_email else "No email found: ATS needs one to contact you."),
+        ("Phone number", has_phone, "Phone number present." if has_phone else "Add a phone number."),
+        ("Experience section", has_exp, "Found a work-experience section." if has_exp else "Add a clearly labelled Experience section."),
+        ("Education section", has_edu, "Found an education section." if has_edu else "Add an Education section."),
+        ("Skills section", has_skills, "Found a skills section." if has_skills else "Add a Skills section with relevant keywords."),
+        ("Reasonable length", length_ok, f"{wc} words, good length." if length_ok else f"{wc} words: aim for ~1 page ({RESUME_WORD_MIN}-{RESUME_WORD_MAX} words)."),
+        ("Bullet points", bullets >= RESUME_MIN_BULLETS, f"{bullets} bullet points." if bullets >= RESUME_MIN_BULLETS else "Use bullet points for achievements, not paragraphs."),
+        ("Quantified impact", quantified >= RESUME_MIN_METRICS, f"{quantified} numbers/metrics found." if quantified >= RESUME_MIN_METRICS else "Quantify achievements (%, $, counts): ATS and recruiters reward metrics."),
+        ("Strong action verbs", action_hits >= RESUME_MIN_ACTION_VERBS, f"{action_hits} action verbs." if action_hits >= RESUME_MIN_ACTION_VERBS else "Start bullets with action verbs (Led, Built, Improved)."),
+        ("Third-person voice", first_person == 0, "No first-person pronouns." if first_person == 0 else "Drop first-person pronouns (I, my): resumes are written impersonally."),
+    ]
+    return [{"name": n, "pass": bool(p), "detail": d} for (n, p, d) in checks]
+
+
+def plan_resume_ats_score(*, det_score: int, content_score: int) -> int:
+    """Blend mechanical ATS checks with the LLM content review."""
+    return round(RESUME_DET_WEIGHT * int(det_score) + RESUME_CONTENT_WEIGHT * int(content_score))
 

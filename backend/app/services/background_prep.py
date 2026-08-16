@@ -12,7 +12,6 @@ from app.models import Document, Job, JobPriority, JobWorkload
 from app.repositories import workspace as workspace_repo
 from app.services.question_pool import (
     FIRST_QUESTION_BATCH_SIZE,
-    REFILL_BATCH_SIZE,
     count_assertions_on_page,
     get_page_coverage,
     get_progress,
@@ -26,7 +25,12 @@ from app.services.rag_window import (
     save_rag_window,
     sync_rag_window,
 )
-from app.services.session_design import evaluate_background_cook_tick, evaluate_page_prep_ready, evaluate_prep_progress
+from app.services.session_design import (
+    evaluate_background_cook_tick,
+    evaluate_page_prep_ready,
+    evaluate_prep_progress,
+    plan_refill_batch,
+)
 
 PREP_MODE_NOW = "now"
 PREP_MODE_BACKGROUND = "background"
@@ -34,8 +38,6 @@ PREP_MODE_BACKGROUND = "background"
 _PREP_PHASE_INDEXING = "indexing"
 _PREP_PHASE_COOKING = "cooking"
 _PREP_PHASE_COMPLETE = "complete"
-
-_INGEST_BATCH_SIZE = 8
 
 
 def is_background_prep(doc: Document | None) -> bool:
@@ -181,8 +183,9 @@ def _enqueue_missing_ingest_pages(
     if not pages:
         return
     from app.services.jobs import batch_enqueue_jobs
+    from app.services.session_design import plan_newspaper_ingest_batch
 
-    batch = pages[:_INGEST_BATCH_SIZE]
+    batch = list(plan_newspaper_ingest_batch(pages))
     batch_enqueue_jobs(
         db,
         [
@@ -356,7 +359,8 @@ def tick_background_cook(db: Session, document_id: uuid.UUID) -> Job | None:
     if verdict.action == "cook" and verdict.page is not None:
         generated = count_assertions_on_page(db, document_id, verdict.page)
         budget = get_question_budget(doc, verdict.page)
-        batch = min(REFILL_BATCH_SIZE, max(0, remaining or 0), budget)
+        capped = min(max(0, remaining or 0), budget)
+        batch = plan_refill_batch(remaining=capped)
         job = enqueue_page_batch(
             db,
             doc,

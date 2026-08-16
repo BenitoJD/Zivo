@@ -7,9 +7,11 @@ Version: qb.session.v1
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, Sequence
+from datetime import date
+from typing import Any, Literal, Mapping, Sequence
 
 from app.services.question_budget import SESSION_SOFT
+from app.services.token_budget import SUMMARIZE_SINGLE_SHOT_MAX_TOKENS
 
 SESSION_VERSION = "qb.session.v1"
 SESSION_SOFT_DEFAULT = SESSION_SOFT
@@ -23,6 +25,39 @@ TRANSITION_PREFETCH_RATIO = float(_os.getenv("ZIVO_TRANSITION_PREFETCH_RATIO", "
 TRANSITION_GENERATION_RATIO = float(_os.getenv("ZIVO_TRANSITION_GENERATION_RATIO", "0.15"))
 EAGER_TRIAGE_LOOKAHEAD = int(_os.getenv("ZIVO_EAGER_TRIAGE_LOOKAHEAD", "5"))
 REFILL_AFTER_ANSWERED = int(_os.getenv("ZIVO_REFILL_AFTER_ANSWERED", "2"))
+
+# Pipeline chunk only (not N_page). First job writes one question so Learn unblocks.
+FIRST_QUESTION_BATCH_SIZE = 1
+REFILL_BATCH_SIZE = 5
+# Cap background-prep so one huge PDF cannot flood the ETA queue.
+BACKGROUND_PREP_MAX_QUESTIONS = 200
+# Newspaper catalog heal: indexing vs ready-doc-uncooked timeouts (minutes).
+STUCK_INDEXING_TIMEOUT_MINUTES = 30
+STUCK_READY_DOC_TIMEOUT_MINUTES = 20
+# Ingest ETA recovery: grace before re-enqueue, plus per-tick batch caps.
+INDEXING_RECOVERY_GRACE_MINUTES = 2
+PREPPING_RECOVERY_GRACE_MINUTES = 5
+INDEXING_RECOVERY_BATCH = 50
+PREPPING_RECOVERY_BATCH = 25
+# Learners only see / keep editions inside this rolling window.
+NEWSPAPER_RETENTION_DAYS = 30
+# Auxiliary study artifacts (flashcards, outline, palace, quiz, bundle).
+FLASHCARD_MAX = 24
+TOPIC_OUTLINE_MAX = 15
+MEMORY_PALACE_MIN_STATIONS = 4
+MEMORY_PALACE_MAX_STATIONS = 8
+QUIZ_MAX_QUESTIONS = 40
+QUIZ_DEFAULT_COUNT = 10
+BUNDLE_UPLOAD_MAX_FILES = 20
+BUNDLE_UPLOAD_MIN_FILES = 2
+OPTION_COACH_PAGE_LIMIT = 60
+GRADE_FEEDBACK_TIMEOUT_SECONDS = int(_os.getenv("ZIVO_GRADE_FEEDBACK_TIMEOUT", "12"))
+INTERVIEW_MCQ_MAX_OPTIONS = 6
+INTERVIEW_CODING_MAX_TESTS = 6
+INTERVIEW_ASKED_CONTEXT = 8
+SAVED_NOTES_MAX = 500
+BRAINSTORM_IDEAS_MAX = 500
+BRAINSTORM_TREE_DEPTH_MAX = 12
 
 # Interview Mode round plans — session schedule for mock interviews.
 # Each round: name, kind ("mcq" | "typed" | "coding"), focus, questions (count).
@@ -490,6 +525,22 @@ def evaluate_newspaper_learn_complete(
     return learn_pool_count > 0 and all_learn_answered and not generation_pending
 
 
+def evaluate_newspaper_learn_complete_counts(
+    *,
+    answered_count: int,
+    pool_count: int,
+    generation_pending: bool = False,
+) -> bool:
+    """Hub display: Learn complete from answered vs pool counts (no ID set)."""
+    total = max(0, int(pool_count))
+    answered = max(0, int(answered_count))
+    return evaluate_newspaper_learn_complete(
+        learn_pool_count=total,
+        all_learn_answered=answered >= total,
+        generation_pending=generation_pending,
+    )
+
+
 def evaluate_newspaper_catalog_ready(
     *,
     is_newspaper: bool,
@@ -520,6 +571,53 @@ def plan_interview_question_shape(
     if planned_kind == "coding" and not coding_has_tests:
         return "coding_fallback"
     return planned_kind
+
+
+@dataclass(frozen=True)
+class InterviewGenContract:
+    schema: str
+    rules: str
+    kind: str
+    max_options: int = 0
+    max_tests: int = 0
+    policy_version: str = SESSION_VERSION
+
+
+def plan_interview_gen_contract(kind: str) -> InterviewGenContract:
+    """JSON schema + writer rules for the next interview question kind."""
+    k = (kind or "").strip().lower()
+    if k == "mcq":
+        return InterviewGenContract(
+            schema=(
+                '{"question":"...","options":["a","b","c","d"],"correct_index":0,'
+                '"explanation":"why the correct option is right"}'
+            ),
+            rules="Exactly 4 options, exactly one correct. correct_index is 0-3.",
+            kind="mcq",
+            max_options=INTERVIEW_MCQ_MAX_OPTIONS,
+        )
+    if k == "coding":
+        return InterviewGenContract(
+            schema=(
+                '{"question":"full problem statement incl. the exact stdin format and expected stdout format",'
+                '"starter_code":"a runnable Python 3 stub reading stdin","language_id":71,'
+                '"tests":[{"stdin":"...","expected_output":"..."}],'
+                '"explanation":"the intended approach"}'
+            ),
+            rules=(
+                "A self-contained coding problem the candidate solves by reading stdin and printing to "
+                "stdout (no function signatures, a full program). Give 3-5 tests with EXACT stdin and the "
+                "EXACT expected stdout (no trailing prose). starter_code must be valid Python 3 for "
+                "language_id 71. Keep it solvable in ~10 minutes."
+            ),
+            kind="coding",
+            max_tests=INTERVIEW_CODING_MAX_TESTS,
+        )
+    return InterviewGenContract(
+        schema='{"question":"..."}',
+        rules="An open-ended question the candidate answers by typing. No options.",
+        kind="typed",
+    )
 
 
 def pick_interview_coding_fallback(
@@ -727,3 +825,418 @@ def plan_transition_next(
     allow = bool(generate_next_page) and int(current_budget) > 0
     cook = allow and int(next_generated) == 0
     return TransitionNextPlan(False, cook)
+
+
+def evaluate_serial_cook_fallback(*, saved: int, has_targets: bool) -> bool:
+    """When a parallel batch saves nothing, retry remaining aspects serially."""
+    return int(saved) == 0 and bool(has_targets)
+
+
+def plan_eager_triage_pages(
+    *,
+    from_page: int,
+    study_pages: Sequence[int],
+    lookahead: int = EAGER_TRIAGE_LOOKAHEAD,
+    covered_pages: Sequence[int] = (),
+    active_triage_pages: Sequence[int] = (),
+) -> tuple[int, ...]:
+    """Rolling lookahead: pages after the reader that still need triage."""
+    study = list(study_pages)
+    if from_page not in study:
+        return ()
+    start = study.index(from_page) + 1
+    window = study[start : start + max(0, int(lookahead))]
+    covered = set(covered_pages)
+    active = set(active_triage_pages)
+    return tuple(p for p in window if p not in covered and p not in active)
+
+
+PageAdvanceAction = Literal["triage", "cook_first_batch", "ingest_rag", "noop"]
+
+
+@dataclass(frozen=True)
+class PageAdvancePlan:
+    action: PageAdvanceAction
+    policy_version: str = SESSION_VERSION
+
+
+def plan_page_advance_next(
+    *,
+    has_coverage: bool,
+    generated: int,
+    rag_ready: bool,
+) -> PageAdvancePlan:
+    """After a page turn: triage, first cook, RAG ingest, or nothing."""
+    if not has_coverage:
+        return PageAdvancePlan("triage")
+    if int(generated) <= 0:
+        return PageAdvancePlan("cook_first_batch")
+    if not rag_ready:
+        return PageAdvancePlan("ingest_rag")
+    return PageAdvancePlan("noop")
+
+
+def should_require_rag_on_page_advance(*, has_coverage: bool, generated: int) -> bool:
+    """Only wait on RAG ingest when the new page already has cooked questions."""
+    return bool(has_coverage) and int(generated) > 0
+
+
+NEWSPAPER_INGEST_BATCH = 8
+NEWSPAPER_RECOVERY_EDITION_LIMIT = 10
+NEWSPAPER_EDITION_QUESTIONS_DEFAULT = 40
+NEWSPAPER_EDITION_QUESTIONS_MAX = 80
+
+
+def plan_newspaper_ingest_batch(
+    missing: Sequence[int],
+    *,
+    batch_size: int = NEWSPAPER_INGEST_BATCH,
+) -> tuple[int, ...]:
+    """Cap missing-page ingest so one edition tick cannot flood the queue."""
+    if not missing:
+        return ()
+    cap = max(1, int(batch_size))
+    return tuple(int(p) for p in list(missing)[:cap])
+
+
+def plan_newspaper_recovery_batch() -> int:
+    """How many stuck ready-doc editions one uncooked recovery tick may re-enqueue."""
+    return NEWSPAPER_RECOVERY_EDITION_LIMIT
+
+
+def plan_newspaper_edition_questions_limit(requested: int | None = None) -> int:
+    """How many edition MCQs newspaper practice may list (default + hard max)."""
+    n = (
+        NEWSPAPER_EDITION_QUESTIONS_DEFAULT
+        if requested is None
+        else int(requested)
+    )
+    return max(1, min(n, NEWSPAPER_EDITION_QUESTIONS_MAX))
+
+
+def evaluate_edition_practice_window(edition_date: date, *, cutoff: date) -> bool:
+    """Learners may open editions on or after the retention cutoff."""
+    return edition_date >= cutoff
+
+
+@dataclass(frozen=True)
+class NewspaperServeScope:
+    stats_from_edition: bool
+    selection_from_page: bool
+    load_mode_pools: bool
+    edition_budget: bool
+    policy_version: str = SESSION_VERSION
+
+
+def plan_newspaper_serve_scope(*, newspaper: bool) -> NewspaperServeScope:
+    """Edition-wide stats; page-scoped adaptive pick so chrome does not jump."""
+    if newspaper:
+        return NewspaperServeScope(True, True, True, True)
+    return NewspaperServeScope(False, False, False, False)
+
+
+def plan_refill_batch(
+    *,
+    remaining: int,
+    batch_size: int = REFILL_BATCH_SIZE,
+) -> int:
+    """Rolling cook chunk: never one job for the entire remaining N_page."""
+    return max(0, min(int(batch_size), max(0, int(remaining))))
+
+
+NewspaperHealAction = Literal["reingest", "recook", "idle"]
+NewspaperUncookedFollowup = Literal["wait", "promote_ready"]
+
+
+def plan_newspaper_hub_heal(*, doc_status: str) -> NewspaperHealAction:
+    """Hub/schedule: stuck edition re-ingest vs recook vs ignore."""
+    status = (doc_status or "").strip().lower()
+    if status in ("indexing", "pending"):
+        return "reingest"
+    if status == "ready":
+        return "recook"
+    return "idle"
+
+
+def plan_newspaper_uncooked_followup(*, cook_enqueued: bool) -> NewspaperUncookedFollowup:
+    """After a ready-doc recook attempt: wait for the job or promote the catalog."""
+    return "wait" if cook_enqueued else "promote_ready"
+
+
+@dataclass(frozen=True)
+class GenerationBatchOutcome:
+    activity_status: Literal["succeeded", "failed"]
+    error_summary: str | None
+    error_code: str | None
+    policy_version: str = SESSION_VERSION
+
+
+def evaluate_generation_batch_outcome(
+    *,
+    saved: int,
+    has_targets: bool,
+) -> GenerationBatchOutcome:
+    """Cook batch: failed only when targets existed and quality saved nothing."""
+    if int(saved) <= 0 and bool(has_targets):
+        return GenerationBatchOutcome(
+            "failed",
+            "No questions passed quality gates",
+            "generation_empty",
+        )
+    return GenerationBatchOutcome("succeeded", None, None)
+
+
+@dataclass(frozen=True)
+class InterviewAdvancePlan:
+    complete: bool
+    round_index: int
+    q_in_round: int
+    policy_version: str = SESSION_VERSION
+
+
+def plan_interview_advance(
+    *,
+    round_index: int,
+    q_in_round: int,
+    round_question_count: int,
+    round_count: int,
+) -> InterviewAdvancePlan:
+    """Next question in round, else next round, else the interview is complete."""
+    qi = int(q_in_round) + 1
+    ri = int(round_index)
+    if qi >= int(round_question_count):
+        ri, qi = ri + 1, 0
+    if ri >= int(round_count):
+        return InterviewAdvancePlan(True, int(round_count), 0)
+    return InterviewAdvancePlan(False, ri, qi)
+
+
+@dataclass(frozen=True)
+class StudyRangeHealPlan:
+    clear_selected_range: bool
+    reset_to_pending: bool
+    policy_version: str = SESSION_VERSION
+
+
+def plan_study_range_heal(
+    *,
+    counted_pages: int,
+    selected_range: Mapping[str, Any] | None,
+    doc_status: str,
+) -> StudyRangeHealPlan:
+    """DOCX page-count heal: drop a stale auto-selected [1] when more pages exist."""
+    if int(counted_pages) <= 1 or not selected_range:
+        return StudyRangeHealPlan(False, False)
+    pages = selected_range.get("pages")
+    only_page_one = (isinstance(pages, list) and pages == [1]) or (
+        int(selected_range.get("from") or 0) == 1
+        and int(selected_range.get("to") or 0) == 1
+        and not pages
+    )
+    if not only_page_one:
+        return StudyRangeHealPlan(False, False)
+    reset = (doc_status or "").strip().lower() in {"ready", "indexing"}
+    return StudyRangeHealPlan(True, reset)
+
+
+AuxiliaryKind = Literal["flashcards", "topics", "memory_palace", "quiz"]
+
+
+@dataclass(frozen=True)
+class AuxiliaryArtifactCap:
+    kind: AuxiliaryKind
+    min_count: int
+    max_count: int
+    default_count: int
+    policy_version: str = SESSION_VERSION
+
+
+def plan_auxiliary_artifact_cap(kind: AuxiliaryKind) -> AuxiliaryArtifactCap:
+    """How many flashcards, topics, palace stations, or quiz items to keep."""
+    if kind == "flashcards":
+        return AuxiliaryArtifactCap("flashcards", 0, FLASHCARD_MAX, FLASHCARD_MAX)
+    if kind == "topics":
+        return AuxiliaryArtifactCap("topics", 0, TOPIC_OUTLINE_MAX, TOPIC_OUTLINE_MAX)
+    if kind == "memory_palace":
+        return AuxiliaryArtifactCap(
+            "memory_palace",
+            MEMORY_PALACE_MIN_STATIONS,
+            MEMORY_PALACE_MAX_STATIONS,
+            MEMORY_PALACE_MAX_STATIONS,
+        )
+    return AuxiliaryArtifactCap("quiz", 1, QUIZ_MAX_QUESTIONS, QUIZ_DEFAULT_COUNT)
+
+
+def clamp_auxiliary_count(kind: AuxiliaryKind, requested: int | None) -> int:
+    """Clamp a requested artifact count into the session cap."""
+    plan = plan_auxiliary_artifact_cap(kind)
+    n = int(requested) if requested else plan.default_count
+    return max(plan.min_count, min(n, plan.max_count))
+
+
+@dataclass(frozen=True)
+class AuxiliaryOutputVerdict:
+    keep: bool
+    reason: str
+    policy_version: str = SESSION_VERSION
+
+
+def evaluate_auxiliary_output(kind: AuxiliaryKind, count: int) -> AuxiliaryOutputVerdict:
+    """Keep or reject a generated auxiliary artifact after count is known."""
+    cap = plan_auxiliary_artifact_cap(kind)
+    if int(count) < cap.min_count:
+        return AuxiliaryOutputVerdict(False, "below_min")
+    return AuxiliaryOutputVerdict(True, "ok")
+
+
+AuxiliaryMapKind = Literal[
+    "flashcards", "topics", "memory_palace", "notes", "summarize", "audiobook"
+]
+AUXILIARY_MAP_CONCURRENCY = 6
+AUDIOBOOK_MAP_CONCURRENCY = 4
+AUXILIARY_CHUNK_LOAD_LIMIT = 200
+
+
+def plan_auxiliary_map_concurrency(kind: AuxiliaryMapKind) -> int:
+    """How many chunk-map LLM calls may run in parallel for one artifact cook."""
+    if kind == "audiobook":
+        return AUDIOBOOK_MAP_CONCURRENCY
+    return AUXILIARY_MAP_CONCURRENCY
+
+
+def plan_auxiliary_chunk_load_limit() -> int:
+    """How many stored chunks feed one auxiliary cook (summarize, notes, quiz, …)."""
+    return AUXILIARY_CHUNK_LOAD_LIMIT
+
+
+@dataclass(frozen=True)
+class IngestRecoverySchedule:
+    indexing_grace_minutes: int
+    prepping_grace_minutes: int
+    indexing_batch: int
+    prepping_batch: int
+    policy_version: str = SESSION_VERSION
+
+
+def plan_ingest_recovery_schedule() -> IngestRecoverySchedule:
+    """When indexing/prepping looks stuck, how long to wait and how many to heal."""
+    return IngestRecoverySchedule(
+        INDEXING_RECOVERY_GRACE_MINUTES,
+        PREPPING_RECOVERY_GRACE_MINUTES,
+        INDEXING_RECOVERY_BATCH,
+        PREPPING_RECOVERY_BATCH,
+    )
+
+
+LearnerListKind = Literal["saved_notes", "brainstorm"]
+
+
+def plan_learner_list_cap(kind: LearnerListKind) -> int:
+    """How many saved notes or brainstorm ideas a learner may keep per source."""
+    if kind == "saved_notes":
+        return SAVED_NOTES_MAX
+    return BRAINSTORM_IDEAS_MAX
+
+
+def plan_brainstorm_tree_depth() -> int:
+    """How deep a brainstorm export tree may nest."""
+    return BRAINSTORM_TREE_DEPTH_MAX
+
+
+@dataclass(frozen=True)
+class AuxiliaryFieldCaps:
+    kind: AuxiliaryKind
+    fields: Mapping[str, int]
+    policy_version: str = SESSION_VERSION
+
+    def limit(self, name: str) -> int:
+        return int(self.fields[name])
+
+
+def plan_auxiliary_field_caps(kind: AuxiliaryKind) -> AuxiliaryFieldCaps:
+    """Truncate generated artifact fields so a runaway model cannot store a wall of text."""
+    if kind == "flashcards":
+        return AuxiliaryFieldCaps("flashcards", {"front": 400, "back": 600})
+    if kind == "topics":
+        return AuxiliaryFieldCaps("topics", {"title": 120, "summary": 300})
+    if kind == "memory_palace":
+        return AuxiliaryFieldCaps(
+            "memory_palace",
+            {
+                "locus": 120,
+                "term": 120,
+                "fact": 400,
+                "image": 600,
+                "cue": 200,
+                "setting": 160,
+                "intro": 400,
+            },
+        )
+    return AuxiliaryFieldCaps(
+        "quiz",
+        {
+            "prompt": 600,
+            "explanation": 600,
+            "answer": 1200,
+            "options": 8,
+            "pairs": 8,
+        },
+    )
+
+
+AuxiliaryGenMode = Literal["single_shot", "map_reduce"]
+
+
+@dataclass(frozen=True)
+class AuxiliaryGenerationPlan:
+    mode: AuxiliaryGenMode
+    single_shot_max_tokens: int
+    policy_version: str = SESSION_VERSION
+
+
+def plan_auxiliary_generation_strategy(
+    token_count: int,
+    *,
+    single_shot_max_tokens: int | None = None,
+) -> AuxiliaryGenerationPlan:
+    """Single-shot vs map-reduce for notes, topics, flashcards, palace, summarize."""
+    cap = (
+        SUMMARIZE_SINGLE_SHOT_MAX_TOKENS
+        if single_shot_max_tokens is None
+        else int(single_shot_max_tokens)
+    )
+    if int(token_count) <= cap:
+        return AuxiliaryGenerationPlan("single_shot", cap)
+    return AuxiliaryGenerationPlan("map_reduce", cap)
+
+
+def plan_option_coach_page_limit() -> int:
+    """How many uncoached MCQs to warm option-feedback for on one page tick."""
+    return OPTION_COACH_PAGE_LIMIT
+
+
+def plan_grade_feedback_timeout() -> int:
+    """Seconds to wait for live grade coaching before falling back to the stored explanation."""
+    return GRADE_FEEDBACK_TIMEOUT_SECONDS
+
+
+def evaluate_option_coach_eligible(*, is_multi: bool) -> bool:
+    """Precomputed per-option coaching is only for single-answer MCQs."""
+    return not bool(is_multi)
+
+
+def plan_interview_asked_context() -> int:
+    """How many already-asked interview questions to paste into the next prompt."""
+    return INTERVIEW_ASKED_CONTEXT
+
+
+@dataclass(frozen=True)
+class BundleUploadPlan:
+    min_files: int
+    max_files: int
+    policy_version: str = SESSION_VERSION
+
+
+def plan_bundle_upload() -> BundleUploadPlan:
+    """How many files a learner must (and may) combine into one source."""
+    return BundleUploadPlan(BUNDLE_UPLOAD_MIN_FILES, BUNDLE_UPLOAD_MAX_FILES)

@@ -204,3 +204,27 @@ def test_label_selection_reason() -> None:
     assert label_selection_reason("difficulty_edge:band") == "right at your level"
     assert label_selection_reason("concept_reinforce") == "reinforces a recent miss"
     assert label_selection_reason("sequence") == "in order through this page"
+
+
+def test_plan_signal_load() -> None:
+    from app.services.adaptive_selection import plan_signal_load
+
+    seq = plan_signal_load(policy="sequence", state=_state())
+    assert not seq.load_concepts and not seq.load_difficulty
+    adaptive = plan_signal_load(policy="adaptive_v1", state=_state(last_assertion_id="x"))
+    assert adaptive.load_concepts and adaptive.load_difficulty
+    assert adaptive.load_lineage and adaptive.load_exposure
+    focus = plan_signal_load(
+        policy="sequence", state=_state(focus_concept="Photosynthesis")
+    )
+    assert focus.load_concepts and not focus.load_difficulty
+
+
+def test_study_mode_aliases() -> None:
+    from app.services.adaptive_selection import label_study_mode, persist_study_mode
+
+    assert label_study_mode("sequence") == "classic"
+    assert label_study_mode("adaptive_v1") == "adaptive"
+    assert label_study_mode(None) == "adaptive"
+    assert persist_study_mode("classic") == "sequence"
+    assert persist_study_mode("adaptive") == "adaptive_v1"

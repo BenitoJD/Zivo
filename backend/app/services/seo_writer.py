@@ -10,7 +10,13 @@ from sqlalchemy.orm import Session
 from app.services.llm_json import extract_json_obj
 from app.services.llm_router import acomplete_chat
 from app.services.llm_sync import run_coro_in_worker
-from app.services.seo_gate import plan_article_presentation
+from app.services.seo_gate import (
+    plan_article_format_contract,
+    plan_article_presentation,
+    plan_seo_article_source_chars,
+    plan_seo_digest_writer_contract,
+    plan_seo_faq_item_cap,
+)
 from app.services.seo_voice import humanize_fields
 
 logger = logging.getLogger(__name__)
@@ -43,13 +49,9 @@ def write_article(
     presentation = plan_article_presentation(stream, format_override=format_override)
     fmt = presentation.format
     cta_kind = presentation.cta_kind
+    format_rules = plan_article_format_contract(fmt).prompt_rule
 
-    format_rules = {
-        "explainer": "Write an explainer (800-1500 words target in body_md). Markdown with short headings.",
-        "faq": "Write an FAQ post. body_md with ## questions. Also fill faq_items as [{question, answer}, ...] (3-6 items).",
-        "list": "Write a numbered list post (5-9 concrete points). body_md markdown.",
-    }[fmt]
-
+    source_clip = (source_text or "")[: plan_seo_article_source_chars()]
     user = f"""Rewrite the material below into a public article.
 
 Stream: {stream}
@@ -75,7 +77,7 @@ JSON schema:
 
 MATERIAL (already PII-scrubbed; do not reveal origin):
 ---
-{source_text[:12000]}
+{source_clip}
 ---
 """
 
@@ -103,7 +105,7 @@ MATERIAL (already PII-scrubbed; do not reveal origin):
     if not isinstance(faq_items, list):
         faq_items = []
     faq_clean = []
-    for item in faq_items[:8]:
+    for item in faq_items[: plan_seo_faq_item_cap()]:
         if not isinstance(item, dict):
             continue
         q = humanize_fields(
@@ -149,12 +151,14 @@ def write_edition_digest(
     title_hint: str = "",
 ) -> dict[str, Any] | None:
     """Rewrite scrubbed edition text into a public digest that prepares MCQ practice."""
+    contract = plan_seo_digest_writer_contract()
+    excerpt = source_text[: contract.source_chars]
     user = f"""Write a digest for learners who will practice MCQs on this day's edition.
 
 Edition date: {edition_date}
 Working title hint: {title_hint or "(infer a clear title from the themes)"}
 
-Format: explainer digest (400-900 words in body_md). Markdown with 2-4 short ## headings.
+Format: explainer digest ({contract.min_words}-{contract.max_words} words in body_md). Markdown with 2-4 short ## headings.
 Cover only substantive current-affairs themes from the material below.
 The material is already pre-filtered for exam relevance; still omit any stray filler.
 No source attribution. Do not mention personal notices, weather, ads, or publication metadata.
@@ -171,7 +175,7 @@ JSON schema:
 
 EDITION MATERIAL (PII-scrubbed; do not reveal origin):
 ---
-{source_text[:16000]}
+{excerpt}
 ---
 """
 
@@ -180,7 +184,7 @@ EDITION MATERIAL (PII-scrubbed; do not reveal origin):
         from app.services.generation_cache import get as cache_get, put as cache_put
 
         digest_key = content_hash_key(
-            "seo_digest", _EDITION_SYSTEM, edition_date, title_hint, source_text[:16000]
+            "seo_digest", _EDITION_SYSTEM, edition_date, title_hint, excerpt
         )
         hit = cache_get(db, kind="seo_digest", cache_key=digest_key)
         if isinstance(hit, str) and hit.strip():

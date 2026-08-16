@@ -56,6 +56,14 @@ def test_interview_report_typed_average() -> None:
     assert "Technical" in v.result["strengths"]
 
 
+def test_label_interview_round_band() -> None:
+    from app.services.open_response import label_interview_round_band
+
+    assert label_interview_round_band(80) == "strength"
+    assert label_interview_round_band(40) == "focus"
+    assert label_interview_round_band(55) == "mid"
+
+
 def test_shape_interview_scores() -> None:
     v = shape_interview_scores({"problem_framing": 3, "depth": 99})
     assert v.result["scores"]["problem_framing"] == 3
@@ -164,6 +172,114 @@ def test_mains_attempt_and_coding_verify_gates() -> None:
         has_tests=False, has_reference=True, sandbox_error=False, passed=0, total=0
     )
     assert miss.persist is False and miss.retry is True
+    from app.services.open_response import evaluate_coding_bank_item
+
+    bank = evaluate_coding_bank_item(
+        {
+            "statement": "s",
+            "starter_code": "print(1)",
+            "reference_solution": "print(1)",
+            "tests": [
+                {"stdin": "1", "expected_output": "1"},
+                {"stdin": "2", "expected_output": "2"},
+                {"stdin": "3", "expected_output": "3"},
+            ],
+            "title": "Sum",
+        }
+    )
+    assert bank.ok and bank.resolved_title == "Sum"
+    from_concept = evaluate_coding_bank_item(
+        {
+            "statement": "s",
+            "starter_code": "print(1)",
+            "reference_solution": "print(1)",
+            "tests": [
+                {"stdin": "1", "expected_output": "1"},
+                {"stdin": "2", "expected_output": "2"},
+                {"stdin": "3", "expected_output": "3"},
+            ],
+            "title": "ab",
+            "concept": "Two pointers",
+        }
+    )
+    assert from_concept.ok and from_concept.resolved_title == "Two pointers"
+    from app.services.open_response import CODING_VERIFY_MAX_ATTEMPTS
+
+    assert CODING_VERIFY_MAX_ATTEMPTS == 3
+    from app.services.open_response import evaluate_debug_scenario_qa
+
+    skip = evaluate_debug_scenario_qa(
+        has_buggy=False,
+        has_fixed=False,
+        has_tests=False,
+        buggy_fails=False,
+        fixed_passes=False,
+    )
+    assert skip.persist is True and skip.reason == "no_qa_payload"
+    ok_debug = evaluate_debug_scenario_qa(
+        has_buggy=True,
+        has_fixed=True,
+        has_tests=True,
+        buggy_fails=True,
+        fixed_passes=True,
+    )
+    assert ok_debug.persist is True and ok_debug.reason == "inverse_ok"
+    bad_debug = evaluate_debug_scenario_qa(
+        has_buggy=True,
+        has_fixed=True,
+        has_tests=True,
+        buggy_fails=False,
+        fixed_passes=True,
+    )
+    assert bad_debug.persist is False and bad_debug.reason == "qa_failed"
+    from app.services.open_response import (
+        evaluate_debug_cook_input,
+        evaluate_debug_scenario_shape,
+        plan_debug_cook_input_tokens,
+        plan_debug_cook_yield,
+        plan_resume_analysis_caps,
+        plan_sd_design_caps,
+    )
+
+    assert plan_debug_cook_yield(None) == 3
+    assert plan_debug_cook_yield(0) == 3
+    assert plan_debug_cook_yield(99) == 10
+    assert plan_debug_cook_input_tokens() == 6000
+    assert evaluate_debug_cook_input(material="x" * 20, brief="").ok
+    assert not evaluate_debug_cook_input(material="short", brief="tiny").ok
+    assert evaluate_debug_scenario_shape(title="Bug", step_count=1).ok
+    assert not evaluate_debug_scenario_shape(title="Bug", step_count=0).ok
+    assert evaluate_debug_scenario_shape(title="Bug", step_count=0).reason == "no_steps"
+    assert not evaluate_debug_scenario_shape(title="ab", step_count=1).ok
+    resume_caps = plan_resume_analysis_caps()
+    assert resume_caps.strengths == 6 and resume_caps.improvements == 8
+    sd_caps = plan_sd_design_caps()
+    assert sd_caps.blocks == 24 and sd_caps.field_chars == 12_000
+    from app.services.open_response import (
+        plan_coding_assist_sample_display,
+        plan_coding_page_input_tokens,
+        plan_coding_teach_output_caps,
+        plan_debug_cook_store_caps,
+        plan_resume_chunk_limit,
+        plan_resume_input_tokens,
+        plan_resume_jd_input_tokens,
+        plan_resume_optimize_caps,
+    )
+
+    assert plan_resume_input_tokens() == 6000
+    assert plan_resume_jd_input_tokens() == 2000
+    assert plan_resume_chunk_limit() == 60
+    assert plan_coding_page_input_tokens() == 6000
+    assert plan_coding_assist_sample_display() == 4
+    store = plan_debug_cook_store_caps()
+    assert store.material == 100_000 and store.brief == 4_000
+    opt = plan_resume_optimize_caps()
+    assert opt.bullets == 20 and opt.missing_keywords == 20
+    teach = plan_coding_teach_output_caps()
+    assert teach.statement == 1200 and teach.source == 2500
+    assert teach.weak_concepts == 3 and teach.title == 120
+    assert teach.body == 2000 and teach.try_this == 400
+    assert teach.focus_tags == 6
 
 
 def test_merge_sd_grade_and_coding_solve_record() -> None:
@@ -190,3 +306,21 @@ def test_merge_sd_grade_and_coding_solve_record() -> None:
     assert should_record_coding_solve(has_subject=True, passed=True)
     assert not should_record_coding_solve(has_subject=True, passed=False)
     assert not should_record_coding_solve(has_subject=False, passed=True)
+
+
+def test_resume_ats_checks_and_blend() -> None:
+    from app.services.open_response import (
+        evaluate_resume_deterministic_checks,
+        plan_resume_ats_score,
+    )
+
+    good = (
+        "Jane Doe\njane@example.com  +1 415 555 1234\n"
+        "Experience\n- Led a team that improved latency by 40%\n- Built and shipped 3 services\n"
+        "- Reduced costs by 25% and increased signups 2x\nEducation\nBS CS, MIT\nSkills\nPython, Go, SQL"
+    )
+    checks = evaluate_resume_deterministic_checks(good)
+    assert sum(c["pass"] for c in checks) >= 8
+    bad = "i am a hard working person and i want a job. my email is missing."
+    assert sum(c["pass"] for c in evaluate_resume_deterministic_checks(bad)) <= 4
+    assert plan_resume_ats_score(det_score=80, content_score=60) == 70

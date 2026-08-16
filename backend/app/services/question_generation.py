@@ -7,6 +7,8 @@ import uuid
 from sqlalchemy.orm import Session
 
 from app.models import Document, Job, JobWorkload
+from app.services.open_response import plan_debug_cook_yield
+from app.services.question_budget import plan_coding_page_yield
 from app.services.question_pool import enqueue_initial_pool
 
 
@@ -28,7 +30,7 @@ def enqueue_coding_generation_for_page(
     *,
     page: int,
     account_id: uuid.UUID | None = None,
-    count: int = 1,
+    count: int | None = None,
 ) -> Job | None:
     """Spawn a ``generate.coding`` ETA job for one programmable page.
 
@@ -47,7 +49,7 @@ def enqueue_coding_generation_for_page(
         payload={
             "document_id": str(document_id),
             "page_number": int(page),
-            "count": int(count),
+            "count": plan_coding_page_yield(count),
         },
         account_id=account_id,
     )
@@ -59,7 +61,7 @@ def enqueue_debug_generation_for_page(
     *,
     page: int,
     account_id: uuid.UUID | None = None,
-    count: int = 2,
+    count: int | None = None,
 ) -> Job | None:
     """Spawn a ``generate.debug`` ETA job for one debuggable page."""
     from app.services.jobs import enqueue_job
@@ -71,7 +73,7 @@ def enqueue_debug_generation_for_page(
         payload={
             "document_id": str(document_id),
             "page_number": int(page),
-            "count": int(count),
+            "count": plan_debug_cook_yield(count),
         },
         account_id=account_id,
     )
