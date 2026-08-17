@@ -103,7 +103,7 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
     const restore = useRef<FloatingPanelRect | null>(null);
     const bounds = useCallback(() => {
         const el = containerRef.current;
-        return pick(Boolean(el), () => ({ w: el.clientWidth, h: el.clientHeight }), () => ({ w: 900, h: 600 }));
+        return choose(Boolean(el), { w: el.clientWidth, h: el.clientHeight }, { w: 900, h: 600 });
     }, [containerRef]);
     const snapSide = useCallback((side: "left" | "right") => {
         setMinimized(false);
@@ -117,7 +117,7 @@ export const FloatingPanel = forwardRef<FloatingPanelHandle, {
             const x = pick(Boolean(side === "left"), () => MARGIN, () => Math.max(MARGIN, cw - w - MARGIN));
             // Keep the panel below the meta bar even on a side dock: never reuse the
             // old y if it was parked in the reserved strip.
-            const y = pick(Boolean(current && current.y >= topMin), () => current.y, () => topMin);
+            const y = choose(Boolean(current && current.y >= topMin), current.y, topMin);
             return { x, y, w, h };
         });
     }, [bounds, topInset]);

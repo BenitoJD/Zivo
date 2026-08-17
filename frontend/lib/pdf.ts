@@ -226,7 +226,7 @@ export async function renderPdfPageToCanvas(pdf: PDFDocumentProxy, pageNumber: n
         await acquireRenderSlot();
         try {
             const page = await pdf.getPage(pageNumber);
-            const pixelRatio = pick(Boolean(typeof window !== "undefined"), () => window.devicePixelRatio || 1, () => 1);
+            const pixelRatio = choose(Boolean(typeof window !== "undefined"), window.devicePixelRatio || 1, 1);
             const renderScale = scale * pixelRatio;
             const viewport = page.getViewport({ scale: renderScale });
             const context = canvas.getContext("2d");
@@ -324,7 +324,7 @@ export async function renderPdfThumbToCanvas(pdf: PDFDocumentProxy, pageNumber: 
         await acquireRenderSlot();
         try {
             const page = await pdf.getPage(pageNumber);
-            const pixelRatio = pick(Boolean(typeof window !== "undefined"), () => window.devicePixelRatio || 1, () => 1);
+            const pixelRatio = choose(Boolean(typeof window !== "undefined"), window.devicePixelRatio || 1, 1);
             const base = page.getViewport({ scale: 1 });
             const context = canvas.getContext("2d");
             await pick(Boolean(!context || base.width <= 0 || base.height <= 0), async () => {

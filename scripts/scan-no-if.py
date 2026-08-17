@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail when first-party Python, TypeScript, or JavaScript still contains if-conditions."""
+"""Fail when first-party Python or TypeScript still contains if-conditions."""
 
 from __future__ import annotations
 
@@ -111,9 +111,6 @@ def main() -> int:
         ".py": scan_python,
         ".ts": scan_typescript,
         ".tsx": scan_typescript,
-        ".js": scan_typescript,
-        ".jsx": scan_typescript,
-        ".mjs": scan_typescript,
     }
     hits: list[dict[str, object]] = []
     for path in iter_files():

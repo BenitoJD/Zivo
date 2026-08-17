@@ -1072,7 +1072,7 @@ export default function WorkspaceArtifactPage({ params, }: {
             const stemSnapshot = question;
             const optionsSnapshot = [...options];
             const conceptSnapshot = currentConcept;
-            const multiSnapshot = pick(Boolean(isMulti), () => [...multiSelected], () => undefined);
+            const multiSnapshot = choose(Boolean(isMulti), [...multiSelected], undefined);
             setFeedback(null);
             return await pick(Boolean(studyingOffline && offlineDeck && offlinePack), async () => {
                 const assertion = offlineDeck.find((a) => a.id === answeredId);
@@ -1103,7 +1103,7 @@ export default function WorkspaceArtifactPage({ params, }: {
                                 },
                                 feedback: verdict.feedback || verdict.explanation,
                                 concept: conceptSnapshot,
-                                firstTryCorrect: pick(Boolean(prior), () => prior.firstTryCorrect, () => verdict.correct),
+                                firstTryCorrect: choose(Boolean(prior), prior.firstTryCorrect, verdict.correct),
                             },
                         ];
                     });
@@ -1182,7 +1182,7 @@ export default function WorkspaceArtifactPage({ params, }: {
                                                 gradeState: { correct, correctIndex, correctIndices },
                                                 feedback: verdictExplanation,
                                                 concept: conceptSnapshot,
-                                                firstTryCorrect: pick(Boolean(prior), () => prior.firstTryCorrect, () => correct),
+                                                firstTryCorrect: choose(Boolean(prior), prior.firstTryCorrect, correct),
                                             },
                                         ];
                                     });

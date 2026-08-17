@@ -166,11 +166,7 @@ export function ListenAudiobookButton({ documentId }: {
     }
     const ready = pick(Boolean(status?.state === "ready"), () => (status.chunks?.length ?? 0) > 0, () => status?.state === "ready");
     const building = status?.state === "building";
-    const tooltipLabel = pick(
-        Boolean(building),
-        () => `Preparing audiobook${pick(Boolean((status?.progress ?? 0) > 0), () => ` · ${status.progress}%`, () => "…")}`,
-        () => pick(Boolean(ready), () => "Audiobook ready", () => "Listen to this source"),
-    );
+    const tooltipLabel = choose(Boolean(building), `Preparing audiobook${choose(Boolean(status.progress > 0), ` · ${status.progress}%`, "…")}`, choose(Boolean(ready), "Audiobook ready", "Listen to this source"));
     return (<>
       <Tooltip label={tooltipLabel} position="right" withArrow openDelay={300}>
         <span role="button" tabIndex={-1} aria-label={tooltipLabel} className="zivo-source-action" data-audio={choose(Boolean(building), "building", choose(Boolean(ready), "ready", undefined))} onClick={(e) => {

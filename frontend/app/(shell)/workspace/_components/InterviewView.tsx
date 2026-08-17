@@ -37,11 +37,7 @@ export function InterviewView({ artifactId, compact = false }: {
     const [runResult, setRunResult] = useState<CodeRunResult | null>(null);
     const [running, setRunning] = useState(false);
     // Seed the editor when a new coding question appears (starter code + its language).
-    const codingQ = pick(
-        Boolean(data?.status === "in_progress" && phase === "answering" && data.current_question?.kind === "coding"),
-        () => data.current_question,
-        () => null,
-    );
+    const codingQ = choose(Boolean(data?.status === "in_progress" && phase === "answering" && data.current_question?.kind === "coding"), data.current_question, null);
     const codingKey = codingQ?.question ?? null;
     useEffect(() => {
         return pick(Boolean(!codingQ), () => {

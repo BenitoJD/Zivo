@@ -96,6 +96,6 @@ export function LearnMcqSection({ slug }: {
       <Text size="sm" c="dimmed">
         Question {index + 1} of {items.length}
       </Text>
-      {pick(Boolean(current), () => (<McqHeroPanel stem={current.question} options={current.options} selected={selected} onSelect={setSelected} multiSelect={isMulti} selectedIndices={multiSelected} onToggle={toggleMulti} feedback={feedback} mcqLoading={false} hasQuestion mode="learn" gradeState={gradeState} submitting={submitting} compact onSubmit={() => void handleSubmit()} onContinue={handleNext}/>), () => null)}
+      {choose(Boolean(current), (<McqHeroPanel stem={current.question} options={current.options} selected={selected} onSelect={setSelected} multiSelect={isMulti} selectedIndices={multiSelected} onToggle={toggleMulti} feedback={feedback} mcqLoading={false} hasQuestion mode="learn" gradeState={gradeState} submitting={submitting} compact onSubmit={() => void handleSubmit()} onContinue={handleNext}/>), null)}
     </Stack>));
 }
