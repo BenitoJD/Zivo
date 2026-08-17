@@ -9,7 +9,7 @@
  * engine is a throwaway projection whose grades are replayed server-side.
  */
 import type { OfflineAssertion } from "./db";
-import { pick, choose } from "@/lib/engineRuntime";
+import { pick } from "@/lib/engineRuntime";
 /** Verdict shape — matches the online grade stream's `verdict` event. */
 export interface LocalVerdict {
     correct: boolean;
@@ -34,7 +34,7 @@ export function localGrade(assertion: OfflineAssertion, choiceIndex: number, cho
     // chosen option's line; fall back to the explanation (mirrors the server's
     // grade_feedback fallback for items without option_feedback, e.g. multi-select).
     const optionFeedback = payload.option_feedback as Record<string, string> | undefined;
-    const chosenKey = String(choose(Boolean(choiceIndices && correctIndices), choiceIndices[0], choiceIndex));
+    const chosenKey = String(pick(Boolean(choiceIndices && correctIndices), () => choiceIndices[0], () => choiceIndex));
     const feedback = (pick(Boolean(optionFeedback), () => optionFeedback[chosenKey], () => optionFeedback)) || explanation || "Answer recorded.";
     const out: LocalVerdict = {
         correct,

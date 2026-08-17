@@ -385,7 +385,7 @@ def _apply_lineage_filter(
     return pick(
         not want,
         lambda: list(candidates),
-        lambda: choose(bool(routed), routed, list(candidates)),
+        lambda: pick(bool(routed), lambda: routed, lambda: list(candidates)),
     )
 
 

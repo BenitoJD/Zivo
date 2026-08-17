@@ -16,7 +16,7 @@ Same deployment model as [zivo](https://github.com/BenitoJD/zivo): **K3s + Helm 
 **Code should run, not the coder.**
 **Do not cram in if-else into code. Don't simply code. Build engines.**
 
-Decisions (rank, metric, gate, schedule, next-step, plumbing) live behind named engine facades whose bodies are **rule tables**, not if-else. Typed verdicts carry `policy_version`. Callers load signals, call the facade, and `apply()` the verdict via [engine_runtime](backend/app/engine_runtime.py). First-party Python/TS has no `if` / `elif` / `else` / ternary token ([ADR 0018](docs/adr/0018-zero-if-engine-tables.md)). Index: [docs/ENGINES.md](docs/ENGINES.md). Seam: [ADR 0004](docs/adr/0004-swappable-policy-seam.md).
+Decisions (rank, metric, gate, schedule, next-step, plumbing) live behind named engine facades whose bodies are **rule tables**, not if-else. Typed verdicts carry `policy_version`. Callers load signals, call the facade, and `apply()` the verdict via [engine_runtime](backend/app/engine_runtime.py). First-party Python/TS/JS has no `if` / `elif` / `else` / ternary token ([ADR 0018](docs/adr/0018-zero-if-engine-tables.md)). Index: [docs/ENGINES.md](docs/ENGINES.md). Seam: [ADR 0004](docs/adr/0004-swappable-policy-seam.md).
 
 ## Readiness checklist
 

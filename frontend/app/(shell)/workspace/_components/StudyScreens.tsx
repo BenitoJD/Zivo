@@ -55,7 +55,7 @@ export function StudyReportCard({ answered, report, showSummary = true, compact,
         }
         topics = [...byConcept.values()];
     });
-    const total = choose(Boolean(useServer), report.total, answered.length);
+    const total = pick(Boolean(useServer), () => report.total, () => answered.length);
     return pick(Boolean(total === 0), () => null, () => {
         const correct = pick(Boolean(useServer), () => report.correct, () => answered.filter((a) => a.firstTryCorrect).length);
         const wrong = total - correct;
@@ -332,7 +332,15 @@ export function StudyRangeReselectOverlay({ filename, pageCount, completedRange,
     onClose: () => void;
     onConfirmNow: () => void;
 }) {/*..............................................................................*/
-    const completedLabel = choose(Boolean(completedRange && completedRange.from === completedRange.to), `page ${completedRange.from}`, choose(Boolean(completedRange), `pages ${completedRange.from}-${completedRange.to}`, "your last selection"));
+    const completedLabel = pick(
+        Boolean(completedRange && completedRange.from === completedRange.to),
+        () => `page ${completedRange.from}`,
+        () => pick(
+            Boolean(completedRange),
+            () => `pages ${completedRange.from}-${completedRange.to}`,
+            () => "your last selection",
+        ),
+    );
     return (<Box pos="fixed" inset={0} style={{
             zIndex: 300,
             display: "flex",

@@ -24,6 +24,9 @@ def test_first_match_and_apply() -> None:
     assert apply("mastery", {"mastery": lambda: "stop", "continue": lambda: "go"}) == "stop"
     assert choose(True, "a", "b") == "a"
     assert pick(False, lambda: 1, lambda: 2) == 2
+    calls: list[str] = []
+    assert pick(True, lambda: calls.append("t") or 1, lambda: calls.append("f") or 2) == 1
+    assert calls == ["t"]
 
 
 def test_presence_auth_http() -> None:
