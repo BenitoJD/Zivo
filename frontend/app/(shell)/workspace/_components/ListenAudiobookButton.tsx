@@ -166,9 +166,16 @@ export function ListenAudiobookButton({ documentId }: {
     }
     const ready = pick(Boolean(status?.state === "ready"), () => (status.chunks?.length ?? 0) > 0, () => status?.state === "ready");
     const building = status?.state === "building";
+    const showBuildingProgress = pick(Boolean(busy), () => status?.state === "building", () => false);
+    const showStartingProgress = pick(Boolean(busy), () => pick(Boolean(!status), () => true, () => status.state === "none"), () => false);
+    const showChunkPlaylist = pick(Boolean(ready), () => Boolean(status?.chunks), () => false);
+    const showVoiceLine = pick(Boolean(ready), () => Boolean(status?.voice), () => false);
     const tooltipLabel = pick(
         Boolean(building),
-        () => `Preparing audiobook${pick(Boolean(status && (status.progress ?? 0) > 0), () => ` · ${status.progress}%`, () => "…")}`,
+        () => {
+            const pct = pick(Boolean(status), () => pick(Boolean((status.progress ?? 0) > 0), () => ` · ${status.progress}%`, () => "…"), () => "…");
+            return `Preparing audiobook${pct}`;
+        },
         () => pick(Boolean(ready), () => "Audiobook ready", () => "Listen to this source"),
     );
     return (<>
@@ -187,13 +194,13 @@ export function ListenAudiobookButton({ documentId }: {
             Your source, narrated as an audiobook. Rendered locally with an
             open-source voice. No internet needed after generation.
           </Text>
-          {pick(Boolean(busy && status?.state === "building"), () => (<Box>
+          {pick(Boolean(showBuildingProgress), () => (<Box>
               <Text size="xs" c="dimmed" mb={6}>
                 Building your narration… {status.progress}% — you can close this and keep studying.
               </Text>
               <Progress value={status.progress} size="sm" radius="xl" color="lavender"/>
             </Box>), () => null)}
-          {pick(Boolean(busy && (!status || status.state === "none")), () => (<Box>
+          {pick(Boolean(showStartingProgress), () => (<Box>
               <Text size="xs" c="dimmed" mb={6}>
                 Starting… this runs in the background — you can close this and keep studying.
               </Text>
@@ -208,7 +215,7 @@ export function ListenAudiobookButton({ documentId }: {
           {choose(Boolean(status?.state === "disabled"), (<Text size="sm" c="dimmed">
               Audio is not enabled yet.
             </Text>), null)}
-          {/*..............................................................................*/pick(Boolean(ready && status.chunks), () => (<Stack gap="sm">
+          {pick(Boolean(showChunkPlaylist), () => (<Stack gap="sm">
               {status.chunks.map((c) => (<Group key={c.index} gap="sm" wrap="nowrap">
                   <Text size="xs" c="dimmed" fw={600} ff="monospace" w={28}>
                     {String(c.index + 1).padStart(2, "0")}
@@ -218,7 +225,7 @@ export function ListenAudiobookButton({ documentId }: {
                   </Box>
                 </Group>))}
             </Stack>), () => null)}
-          {pick(Boolean(ready && status?.voice), () => (<Text size="xs" c="dimmed" fs="italic">
+          {pick(Boolean(showVoiceLine), () => (<Text size="xs" c="dimmed" fs="italic">
               Voice: {status.voice}
             </Text>), () => null)}
           {choose(Boolean(ready), (<Group justify="flex-end">
