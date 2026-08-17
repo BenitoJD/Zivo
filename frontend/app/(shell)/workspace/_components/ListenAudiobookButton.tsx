@@ -168,7 +168,7 @@ export function ListenAudiobookButton({ documentId }: {
     const building = status?.state === "building";
     const tooltipLabel = pick(
         Boolean(building),
-        () => `Preparing audiobook${pick(Boolean((status?.progress ?? 0) > 0), () => ` · ${status.progress}%`, () => "…")}`,
+        () => `Preparing audiobook${pick(Boolean(status && (status.progress ?? 0) > 0), () => ` · ${status.progress}%`, () => "…")}`,
         () => pick(Boolean(ready), () => "Audiobook ready", () => "Listen to this source"),
     );
     return (<>
@@ -187,18 +187,18 @@ export function ListenAudiobookButton({ documentId }: {
             Your source, narrated as an audiobook. Rendered locally with an
             open-source voice. No internet needed after generation.
           </Text>
-          {/*..............................................................................*/choose(Boolean(busy && status?.state === "building"), (<Box>
+          {pick(Boolean(busy && status?.state === "building"), () => (<Box>
               <Text size="xs" c="dimmed" mb={6}>
                 Building your narration… {status.progress}% — you can close this and keep studying.
               </Text>
               <Progress value={status.progress} size="sm" radius="xl" color="lavender"/>
-            </Box>), null)}
-          {/*..............................................................................*/choose(Boolean(busy && (!status || status.state === "none")), (<Box>
+            </Box>), () => null)}
+          {pick(Boolean(busy && (!status || status.state === "none")), () => (<Box>
               <Text size="xs" c="dimmed" mb={6}>
                 Starting… this runs in the background — you can close this and keep studying.
               </Text>
               <Progress value={10} size="sm" radius="xl" color="lavender"/>
-            </Box>), null)}
+            </Box>), () => null)}
           {choose(Boolean(error), (<Text size="sm" c="terracotta">
               {error}
             </Text>), null)}
@@ -218,9 +218,9 @@ export function ListenAudiobookButton({ documentId }: {
                   </Box>
                 </Group>))}
             </Stack>), () => null)}
-          {/*..............................................................................*/choose(Boolean(ready && status.voice), (<Text size="xs" c="dimmed" fs="italic">
+          {pick(Boolean(ready && status?.voice), () => (<Text size="xs" c="dimmed" fs="italic">
               Voice: {status.voice}
-            </Text>), null)}
+            </Text>), () => null)}
           {choose(Boolean(ready), (<Group justify="flex-end">
               <Button variant="light" color="lavender" radius="xl" size="compact-sm" onClick={() => setOpen(false)}>
                 Done
