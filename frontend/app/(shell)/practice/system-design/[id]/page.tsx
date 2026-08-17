@@ -92,7 +92,7 @@ export default function SystemDesignStudioPage({ params, }: {
     const sessionQ = useSystemDesignSessionQuery(sessionId, Boolean(sessionId));
     const session = sessionQ.data;
     const done = session?.status === "done";
-    const blocks = choose(Boolean(session?.building_blocks?.length), session.building_blocks, [
+    const blocks = pick(Boolean(session?.building_blocks?.length), () => session.building_blocks, () => [
         "Client",
         "API / Gateway",
         "Load balancer",

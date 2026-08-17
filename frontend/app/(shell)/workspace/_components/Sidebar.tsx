@@ -721,7 +721,7 @@ export function Sidebar({ documents, artifactId, wide, isMobile, reduceMotion, u
             <Group gap={2} align="center" wrap="nowrap">
               <UnstyledButton className="zivo-account" onClick={onSignIn} aria-label={choose(Boolean(username), `Account @${username}`, "Sign in")}>
                 <span className="zivo-avatar" aria-hidden>
-                  {choose(Boolean(username), username[0], <IconLogin size={14} stroke={1.8}/>)}
+                  {pick(Boolean(username), () => username[0], () => <IconLogin size={14} stroke={1.8}/>)}
                 </span>
                 <Text size="sm" fw={500} truncate>
                   {choose(Boolean(username), username, "Sign in")}

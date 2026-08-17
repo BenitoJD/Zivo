@@ -6,7 +6,7 @@
  * a reload with no signal doesn't white-screen. Offline CONTENT (the pack)
  * lives in IndexedDB and does not depend on this SW.
  *
- * Strategy:
+ * Strategy (rule table, same seam as engine_runtime):
  *  - navigations (HTML): network-first, fall back to the cached shell offline.
  *  - static assets (/_next/static, fonts): stale-while-revalidate.
  *  - API (/api/*): NEVER cached here — the trust model keeps the pack in
@@ -16,6 +16,42 @@
 const SHELL_CACHE = "zivo-shell-v1";
 const ASSET_CACHE = "zivo-assets-v1";
 const SHELL_URLS = ["/", "/offline"];
+
+const OPS = {
+  eq: (a, b) => a === b,
+  neq: (a, b) => a !== b,
+  truthy: (a) => Boolean(a),
+  falsey: (a) => !a,
+};
+
+function predOk(pred, signals) {
+  return OPS[pred.op || "truthy"](signals[pred.key], pred.value);
+}
+
+function firstMatch(rules, signals) {
+  return (
+    rules.find((rule) => rule.when.every((pred) => predOk(pred, signals))) || {
+      when: [],
+      action: "unmatched",
+    }
+  );
+}
+
+function apply(action, handlers) {
+  return handlers[action]();
+}
+
+function pick(flag, whenTrue, whenFalse) {
+  return { true: whenTrue, false: whenFalse }[String(Boolean(flag))]();
+}
+
+const FETCH_RULES = [
+  { when: [{ key: "isGet", op: "falsey" }], action: "ignore" },
+  { when: [{ key: "isApi", op: "truthy" }], action: "ignore" },
+  { when: [{ key: "isAsset", op: "truthy" }], action: "asset" },
+  { when: [{ key: "isNav", op: "truthy" }], action: "navigate" },
+  { when: [], action: "ignore" },
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -41,28 +77,24 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const req = event.request;
-  if (req.method !== "GET") return;
   const url = new URL(req.url);
-
-  // Never intercept API requests — see header comment (trust model).
-  if (url.pathname.startsWith("/api/")) return;
-
-  // Static assets: stale-while-revalidate.
-  if (
-    url.pathname.startsWith("/_next/") ||
-    url.pathname.includes("/fonts/") ||
-    req.destination === "style" ||
-    req.destination === "script" ||
-    req.destination === "font"
-  ) {
-    event.respondWith(staleWhileRevalidate(req));
-    return;
-  }
-
-  // Navigations: network-first, fall back to cached shell.
-  if (req.mode === "navigate") {
-    event.respondWith(networkFirstNavigation(req));
-  }
+  const hit = firstMatch(FETCH_RULES, {
+    isGet: req.method === "GET",
+    isApi: url.pathname.startsWith("/api/"),
+    isAsset:
+      url.pathname.startsWith("/_next/") ||
+      url.pathname.includes("/fonts/") ||
+      req.destination === "style" ||
+      req.destination === "script" ||
+      req.destination === "font",
+    isNav: req.mode === "navigate",
+  });
+  apply(hit.action, {
+    ignore: () => undefined,
+    asset: () => event.respondWith(staleWhileRevalidate(req)),
+    navigate: () => event.respondWith(networkFirstNavigation(req)),
+    unmatched: () => undefined,
+  });
 });
 
 async function networkFirstNavigation(req) {
@@ -81,10 +113,16 @@ async function staleWhileRevalidate(req) {
   const cache = await caches.open(ASSET_CACHE);
   const cached = await cache.match(req);
   const network = fetch(req)
-    .then((res) => {
-      if (res && res.status === 200) cache.put(req, res.clone()).catch(() => undefined);
-      return res;
-    })
+    .then((res) =>
+      pick(
+        Boolean(res && res.status === 200),
+        () => {
+          cache.put(req, res.clone()).catch(() => undefined);
+          return res;
+        },
+        () => res,
+      ),
+    )
     .catch(() => cached);
   return cached || network;
 }

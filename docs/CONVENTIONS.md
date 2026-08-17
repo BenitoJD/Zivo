@@ -76,7 +76,7 @@ from another project and is stale; fix it to match the proof above.
 
 - **Rule.** Every decision is a named engine whose body is a rule table
   (`Pred` / `Rule` / `first_match`). Callers load signals, call `evaluate_*`,
-  and `apply()` the action. First-party Python and TypeScript have no `if` /
+  and `apply()` the action. First-party Python, TypeScript, and JavaScript have no `if` /
   `elif` / `else` / ternary / comprehension-`if`, including `if TYPE_CHECKING:`
   and Alembic revisions ([ADR 0018](adr/0018-zero-if-engine-tables.md)).
   Era-guess policies still degrade safely ([ADR 0004](adr/0004-swappable-policy-seam.md)).

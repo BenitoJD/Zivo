@@ -60,7 +60,7 @@ export function SettingsModal({ opened, onClose, username, onReplayOnboarding }:
     // Live (Mantine broadcasts to every PetPlayground) - flip and the cats appear
     // or vanish app-wide at once, no Save needed.
     const [catEnabled, setCatEnabled] = useLocalStorage({ key: CAT_ENABLED_KEY, defaultValue: false });
-    const initial = (choose(Boolean(username), username[0], "g")).toUpperCase();
+    const initial = pick(Boolean(username), () => username[0], () => "g").toUpperCase();
     const displayName = choose(Boolean(username), `@${username}`, "Guest");
     const saveSettings = () => {
         writeStudyPreferences(studyMode);

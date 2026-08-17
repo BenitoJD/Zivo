@@ -43,10 +43,15 @@ export function apply<T>(action: string, handlers: Record<string, () => T>): T {
   return handlers[action]();
 }
 
+/** Eager: both branches evaluate. Use pick when a branch may throw. */
 export function choose<A, B>(flag: boolean, whenTrue: A, whenFalse: B): A | B {
   return ({ true: whenTrue, false: whenFalse } as Record<string, A | B>)[String(Boolean(flag))];
 }
 
 export function pick<A, B>(flag: boolean, whenTrue: () => A, whenFalse: () => B): A | B {
   return ({ true: whenTrue, false: whenFalse } as Record<string, () => A | B>)[String(Boolean(flag))]();
+}
+
+export function errorMessage(err: unknown, fallback: string): string {
+  return pick(err instanceof Error, () => (err as Error).message, () => fallback);
 }

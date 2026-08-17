@@ -58,7 +58,11 @@ export function CodeEditor({ problem, compact = false, onSubmitted, variant = "e
     }, [problem.id]);
     const languages = langData?.languages ?? [];
     const lastStatus = submitResult?.error ||
-        (choose(Boolean(submitResult), choose(Boolean(submitResult.all_passed), `Submit: ${submitResult.passed}/${submitResult.total} passed`, `Submit: ${submitResult.passed}/${submitResult.total} passed`), null)) ||
+        pick(
+            Boolean(submitResult),
+            () => `Submit: ${submitResult.passed}/${submitResult.total} passed`,
+            () => null,
+        ) ||
         runResult?.status ||
         null;
     async function handleRun() {
@@ -72,7 +76,7 @@ export function CodeEditor({ problem, compact = false, onSubmitted, variant = "e
             setRunResult({
                 status: "Sandbox unavailable",
                 stdout: "",
-                stderr: choose(Boolean(err instanceof Error), err.message, "Could not reach the code sandbox."),
+                stderr: pick(err instanceof Error, () => err.message, () => "Could not reach the code sandbox."),
                 compile_output: "",
             });
         }
@@ -95,7 +99,7 @@ export function CodeEditor({ problem, compact = false, onSubmitted, variant = "e
                 total: 0,
                 all_passed: false,
                 cases: [],
-                error: choose(Boolean(err instanceof Error), err.message, "Submit failed."),
+                error: pick(err instanceof Error, () => err.message, () => "Submit failed."),
                 status: "new",
             });
         }
@@ -411,12 +415,12 @@ function SubmitOutput({ result, onPracticeGap, }: {
               <Title order={5} ff="var(--font-serif)" fw={500} mb={4}>
                 {lesson?.title || "Lesson"}
               </Title>
-              {choose(Boolean(lesson?.body), (<Text fz="sm" lh={1.6} mb={choose(Boolean(lesson?.try_this), "xs", 0)}>
+              {pick(Boolean(lesson?.body), () => (<Text fz="sm" lh={1.6} mb={choose(Boolean(lesson?.try_this), "xs", 0)}>
                   {lesson.body}
-                </Text>), null)}
-              {choose(Boolean(lesson?.try_this), (<Text fz="sm" fs="italic" c="gray.7">
+                </Text>), () => null)}
+              {pick(Boolean(lesson?.try_this), () => (<Text fz="sm" fs="italic" c="gray.7">
                   Try this: {lesson.try_this}
-                </Text>), null)}
+                </Text>), () => null)}
             </Box>), null)}
           {pick(Boolean(result.weak_concepts?.length), () => (<Group gap={6} mb="sm">
               {result.weak_concepts.map((w) => (<Badge key={w} variant="light" color="gray" radius="sm" size="sm">

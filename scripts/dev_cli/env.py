@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
-from app.engine_runtime import pick  # noqa: E402
+from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick  # noqa: E402
 
 BACKEND_DIR = ROOT / "backend"
 AUTH_DIR = ROOT / "auth"
