@@ -1,0 +1,5 @@
+---
+# Defaults allow reusing this role on the load-balancer VM, which installs only
+# the kubectl client (Step 12b) and no cluster components.
+kubernetes_packages: [kubelet, kubeadm, kubectl]
+install_crictl: true

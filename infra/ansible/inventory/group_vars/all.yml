@@ -1,0 +1,47 @@
+---
+# Component versions: trusted stable / currently-supported release track.
+# Keep these in sync across every node; the guide pins exact patches.
+#
+# Target VMs run Ubuntu 24.04 LTS (cgroup v2 by default; kernel 6.8 satisfies
+# Cilium's minimum of kernel 5.10). All pinned components are distro-independent
+# binaries and apt repos, so they apply unchanged on noble.
+kubernetes_version: "1.36.3"        # kubeadm / kubelet / kubectl
+kubernetes_apt_channel: "v1.36"     # pkgs.k8s.io apt channel
+containerd_version: "2.3.3"         # containerd LTS branch (2.x config format)
+runc_version: "1.4.3"               # carries the CVE-2026-41579 fix
+cni_plugins_version: "v1.9.1"       # containernetworking plugins -> /opt/cni/bin
+crictl_version: "v1.36.0"           # matches the v1.36 control plane
+cilium_version: "1.20.1"            # Cilium CNI, e2e-tested against k8s 1.33-1.36
+cilium_cli_version: "latest"        # "latest" resolves cilium-cli stable.txt
+etcdctl_version: "v3.6.14"          # client compatible with any 3.6.x server
+
+# Cluster CIDRs. Verify against the real VM subnet before running: a pod CIDR that
+# overlaps the VM network breaks pod routing in confusing ways (guide, Step 11 warning).
+# The pod CIDR is passed both to kubeadm init and to Cilium's Cluster Pool IPAM so the
+# two always agree.
+pod_network_cidr: "192.168.0.0/16"
+service_cidr: "10.96.0.0/12"
+
+# API entrypoint: HAProxy frontend on the dedicated load-balancer VM.
+# kube-apiserver stays on its default port (6443) on each master.
+haproxy_frontend_port: 8443
+apiserver_port: 6443
+
+# Single stable endpoint every client (kubectl, kubelet, kubeadm join) talks to.
+control_plane_endpoint: "{{ hostvars[groups['load_balancer'][0]].ansible_host }}:{{ haproxy_frontend_port }}"
+
+# Node identity: set VM hostnames to the inventory names (so `kubectl get nodes`
+# shows master-1..3 / worker-1..3) and register all 7 VMs in /etc/hosts.
+set_node_hostnames: true
+populate_etc_hosts: true
+
+# Step 14b: spread the two CoreDNS replicas across control-plane nodes after bootstrap.
+rebalance_coredns: true
+
+# Optional end-to-end validation once all 6 Kubernetes nodes have joined
+# (`cilium connectivity test`; creates temporary test pods, takes several minutes).
+cilium_connectivity_test: false
+
+# Controller-local directory that receives admin.conf during bootstrap.
+# WARNING: contains cluster-admin credentials; gitignored.
+artifacts_dir: "{{ playbook_dir }}/.artifacts"

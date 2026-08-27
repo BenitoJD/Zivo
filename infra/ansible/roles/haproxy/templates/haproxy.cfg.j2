@@ -1,0 +1,39 @@
+# Managed by Ansible. HAProxy configuration for the Kubernetes API (guide, Step 10).
+# Frontend: 8443 on this load-balancer VM. Backend: kube-apiserver on 6443 on each
+# master. Health check is an HTTPS-layer GET /readyz (not a bare TCP check, and not
+# the deprecated /healthz aggregate); verify none is expected because the apiserver
+# serving cert is not issued for this host's name.
+
+global
+    log /dev/log local0
+    log /dev/log local1 notice
+    user haproxy
+    group haproxy
+    daemon
+
+defaults
+    log global
+    mode tcp
+    option tcplog
+    # kubectl exec/attach/port-forward and watches are long-lived connections.
+    timeout connect 10s
+    timeout client 30m
+    timeout server 30m
+
+frontend kubernetes-frontend
+    bind *:{{ haproxy_frontend_port }}
+    mode tcp
+    option tcplog
+    default_backend kubernetes-backend
+
+backend kubernetes-backend
+    mode tcp
+    option httpchk
+    http-check connect ssl
+    http-check send meth GET uri /readyz
+    http-check expect status 200
+    balance roundrobin
+    default-server inter 10s downinter 5s rise 2 fall 2 slowstart 60s maxconn 250 maxqueue 256 weight 100
+{% for host in groups['masters'] %}
+    server {{ host }} {{ hostvars[host].ansible_host }}:{{ apiserver_port }} check verify none
+{% endfor %}

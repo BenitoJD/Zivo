@@ -1,0 +1,23 @@
+---
+# Shared settings for all 7 VMs (guide: 7 VMs total: master-1..3, worker-1..3, master-lb).
+# The load balancer never runs kubelet; these tasks are identity-only and safe there.
+
+- name: Set the hostname to the inventory name
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+  when: set_node_hostnames | bool
+
+- name: Register every cluster VM in /etc/hosts
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} ANSIBLE MANAGED: HA Kubernetes cluster"
+    block: |
+      {% for host in groups['cluster'] %}
+      {{ hostvars[host].ansible_host }} {{ host }}
+      {% endfor %}
+  when: populate_etc_hosts | bool
+
+- name: Record the name each node will register with in Kubernetes
+  # Used later by kubectl wait / kubeadm join verification.
+  ansible.builtin.set_fact:
+    k8s_node_name: "{{ inventory_hostname if set_node_hostnames | bool else ansible_hostname }}"

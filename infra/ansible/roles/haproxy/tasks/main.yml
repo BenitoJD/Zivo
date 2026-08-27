@@ -1,0 +1,54 @@
+---
+# Part 2 of the guide: HAProxy on the dedicated load-balancer VM ONLY.
+# master-lb is not a Kubernetes node; it never runs kubelet or containerd.
+# HAProxy owns 8443 (frontend) and forwards to kube-apiserver on 6443 on each master.
+
+- name: Install HAProxy, curl and netcat (Step 9)
+  ansible.builtin.apt:
+    name: [haproxy, curl, netcat-openbsd]
+    state: present
+    update_cache: true
+
+- name: Configure the Kubernetes API frontend and backend (Step 10)
+  ansible.builtin.template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    mode: "0644"
+    backup: true
+    validate: haproxy -c -f %s
+  notify: Restart haproxy
+
+- name: Enable and start haproxy
+  ansible.builtin.systemd:
+    name: haproxy
+    enabled: true
+    state: started
+
+- name: Flush handlers so the new config is live
+  ansible.builtin.meta: flush_handlers
+
+- name: Probe each master on 6443 from the load balancer
+  # Connection refused is expected before kubeadm init; a timeout means lb cannot
+  # reach the master at all (firewall, security group, or routing problem).
+  ansible.builtin.shell: nc -zv -w 2 {{ hostvars[item].ansible_host }} {{ apiserver_port }}
+  loop: "{{ groups['masters'] }}"
+  loop_control:
+    label: "{{ item }}"
+  register: master_probe
+  failed_when: false
+  changed_when: false
+
+- name: Fail when a master is unreachable from the load balancer
+  ansible.builtin.assert:
+    that:
+      - (item.stderr ~ item.stdout) is not search('timed out')
+      - (item.stderr ~ item.stdout) is not search('No route to host')
+      - (item.stderr ~ item.stdout) is not search('Network is unreachable')
+    msg: >-
+      {{ item.item }} is not reachable from master-lb on {{ apiserver_port }}/tcp
+      ({{ (item.stderr ~ item.stdout) | trim }}). A connection refusal is fine before
+      kubeadm init; a timeout or unreachable error means a firewall, security group,
+      or routing problem that must be fixed before bootstrapping.
+  loop: "{{ master_probe.results }}"
+  loop_control:
+    label: "{{ item.item }}"

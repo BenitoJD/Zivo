@@ -1,0 +1,130 @@
+---
+# Final verification: all 6 nodes Ready through the load balancer, kube-system
+# pods healthy, Cilium status OK, etcd quorum across all 3 members, plus the
+# cluster view from master-lb (which never appears as a node).
+
+- name: Wait for every node to report Ready
+  ansible.builtin.command: kubectl wait --for=condition=Ready node --all --timeout=1200s
+  become: false
+  changed_when: false
+  vars:
+    ansible_command_timeout: 1300
+
+- name: Show the node list
+  ansible.builtin.command: kubectl get nodes
+  become: false
+  register: verify_nodes_out
+  changed_when: false
+
+- name: Nodes (master-lb must not appear here)
+  ansible.builtin.debug:
+    msg: "{{ verify_nodes_out.stdout_lines }}"
+
+- name: Wait for all kube-system pods to be Ready
+  ansible.builtin.command: kubectl wait --for=condition=Ready pod --all -n kube-system --timeout=900s
+  become: false
+  changed_when: false
+
+- name: Show all pods
+  ansible.builtin.command: kubectl get pods -A
+  become: false
+  register: verify_pods_out
+  changed_when: false
+
+- name: Pods
+  ansible.builtin.debug:
+    msg: "{{ verify_pods_out.stdout_lines }}"
+
+- name: Confirm one cilium agent per Kubernetes node
+  # Expect: 6 cilium agents + 6 kube-proxy pods; cilium-operator runs 2 replicas.
+  ansible.builtin.shell: >-
+    kubectl -n kube-system get pods -l k8s-app=cilium -o name | wc -l
+    && kubectl -n kube-system get pods -l k8s-app=cilium-operator -o name | wc -l
+    && kubectl -n kube-system get pods -l k8s-app=kube-proxy -o name | wc -l
+  become: false
+  register: cilium_counts_out
+  changed_when: false
+
+- name: Assert cilium / kube-proxy coverage matches the 6 Kubernetes nodes
+  ansible.builtin.assert:
+    that:
+      - cilium_counts_out.stdout_lines[0] | int == groups['k8s_nodes'] | length
+      - cilium_counts_out.stdout_lines[1] | int == 2
+      - cilium_counts_out.stdout_lines[2] | int == groups['k8s_nodes'] | length
+    msg: >-
+      Expected {{ groups['k8s_nodes'] | length }} cilium agents, 2 cilium operator
+      replicas and {{ groups['k8s_nodes'] | length }} kube-proxy pods; got
+      {{ cilium_counts_out.stdout_lines }}.
+
+- name: Optional end-to-end Cilium connectivity test (guide runs this after all 6 nodes joined)
+  ansible.builtin.command: cilium connectivity test
+  become: false
+  register: cilium_conn_out
+  changed_when: false
+  when: cilium_connectivity_test | bool
+  vars:
+    ansible_command_timeout: 3600
+
+- name: Connectivity test result summary
+  ansible.builtin.debug:
+    msg: "{{ (cilium_conn_out.stdout_lines | default(['(skipped)']))[-25:] }}"
+  when: cilium_connectivity_test | bool
+
+- name: Download etcdctl {{ etcdctl_version }}
+  ansible.builtin.get_url:
+    url: https://github.com/etcd-io/etcd/releases/download/{{ etcdctl_version }}/etcd-{{ etcdctl_version }}-linux-amd64.tar.gz
+    dest: /tmp/etcd-{{ etcdctl_version }}-linux-amd64.tar.gz
+    mode: "0644"
+    timeout: 300
+
+- name: Extract the etcd release to /tmp
+  ansible.builtin.unarchive:
+    src: /tmp/etcd-{{ etcdctl_version }}-linux-amd64.tar.gz
+    dest: /tmp
+    remote_src: true
+    creates: /tmp/etcd-{{ etcdctl_version }}-linux-amd64/etcdctl
+
+- name: Install etcdctl
+  ansible.builtin.command: install -m 755 /tmp/etcd-{{ etcdctl_version }}-linux-amd64/etcdctl /usr/local/bin/etcdctl
+  args:
+    creates: /usr/local/bin/etcdctl
+
+- name: Report etcdctl version
+  ansible.builtin.command: etcdctl version
+  changed_when: false
+  register: etcdctl_version_out
+
+- name: Check etcd health across the whole cluster
+  ansible.builtin.shell: >-
+    ETCDCTL_API=3 etcdctl
+    --endpoints=https://127.0.0.1:2379
+    --cacert=/etc/kubernetes/pki/etcd/ca.crt
+    --cert=/etc/kubernetes/pki/etcd/server.crt
+    --key=/etc/kubernetes/pki/etcd/server.key
+    endpoint health --cluster
+  register: etcd_health_out
+  changed_when: false
+
+- name: Show etcd health
+  ansible.builtin.debug:
+    msg: "{{ etcd_health_out.stdout_lines + etcd_health_out.stderr_lines }}"
+
+- name: Assert all etcd members are healthy
+  ansible.builtin.assert:
+    that:
+      - etcd_health_out.stdout.count('is healthy') | int == groups['masters'] | length
+    msg: >-
+      Expected all {{ groups['masters'] | length }} etcd endpoints healthy
+      (firewalls blocking 2379-2380 between masters break quorum); output was:
+      {{ etcd_health_out.stdout }}.
+
+- name: Show the cluster from master-lb to confirm its admin access works
+  ansible.builtin.command: kubectl get nodes
+  become: false
+  delegate_to: master-lb
+  register: lb_view_out
+  changed_when: false
+
+- name: Node list from master-lb
+  ansible.builtin.debug:
+    msg: "{{ lb_view_out.stdout_lines }}"

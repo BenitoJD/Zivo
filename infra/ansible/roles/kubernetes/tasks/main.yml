@@ -1,0 +1,104 @@
+---
+# Part 1, Steps 7-8 of the guide: Kubernetes apt repo + pinned kubelet/kubeadm/kubectl,
+# then crictl pinned and pointed at the containerd socket.
+# Also used (with defaults overrides) to install only kubectl on master-lb (Step 12b).
+
+- name: Install apt prerequisites
+  ansible.builtin.apt:
+    name: [apt-transport-https, ca-certificates, curl, gpg]
+    state: present
+    update_cache: true
+
+- name: Ensure /etc/apt/keyrings exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Download the Kubernetes apt repository key
+  ansible.builtin.get_url:
+    url: https://pkgs.k8s.io/core:/stable:/{{ kubernetes_apt_channel }}/deb/Release.key
+    dest: /tmp/kubernetes-apt-keyring.asc
+    mode: "0644"
+    timeout: 60
+
+- name: Dearmor the Kubernetes apt repository key
+  ansible.builtin.shell: gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/kubernetes-apt-keyring.asc
+  args:
+    creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+- name: Add the Kubernetes apt repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{{ kubernetes_apt_channel }}/deb/ /"
+    filename: kubernetes
+    state: present
+    mode: "0644"
+
+- name: Install pinned Kubernetes packages (Step 7)
+  ansible.builtin.apt:
+    name: "{{ item }}={{ kubernetes_version }}-*"
+    state: present
+    update_cache: true
+  loop: "{{ kubernetes_packages }}"
+
+- name: List currently held packages
+  ansible.builtin.command: apt-mark showhold
+  register: apt_holds
+  changed_when: false
+
+- name: Hold the Kubernetes packages at the pinned patch
+  ansible.builtin.command: apt-mark hold {{ kubernetes_packages | join(' ') }}
+  when: kubernetes_packages | difference(apt_holds.stdout_lines) | length > 0
+
+- name: Confirm kubeadm matches the pinned patch
+  ansible.builtin.command: kubeadm version -o json
+  register: kubeadm_version_check
+  changed_when: false
+  failed_when: (kubeadm_version_check.stdout | from_json).gitVersion != 'v' + kubernetes_version
+  when: "'kubeadm' in kubernetes_packages"
+
+- name: Confirm kubectl matches the pinned patch
+  ansible.builtin.command: kubectl version --client -o json
+  register: kubectl_version_check
+  changed_when: false
+  failed_when: (kubectl_version_check.stdout | from_json).clientVersion.gitVersion != 'v' + kubernetes_version
+  when: "'kubectl' in kubernetes_packages"
+
+- name: Download crictl {{ crictl_version }}
+  ansible.builtin.get_url:
+    url: https://github.com/kubernetes-sigs/cri-tools/releases/download/{{ crictl_version }}/crictl-{{ crictl_version }}-linux-amd64.tar.gz
+    dest: /tmp/crictl-{{ crictl_version }}-linux-amd64.tar.gz
+    mode: "0644"
+    timeout: 300
+  when: install_crictl | bool
+
+- name: Extract crictl to /usr/local/bin (Step 8)
+  ansible.builtin.unarchive:
+    src: /tmp/crictl-{{ crictl_version }}-linux-amd64.tar.gz
+    dest: /usr/local/bin
+    remote_src: true
+    creates: /usr/local/bin/crictl
+  when: install_crictl | bool
+
+- name: Point crictl at the containerd socket
+  ansible.builtin.copy:
+    dest: /etc/crictl.yaml
+    content: |
+      runtime-endpoint: unix:///var/run/containerd/containerd.sock
+      image-endpoint: unix:///var/run/containerd/containerd.sock
+    mode: "0644"
+  when: install_crictl | bool
+
+- name: Confirm crictl matches the pinned release
+  ansible.builtin.command: crictl --version
+  register: crictl_version_check
+  changed_when: false
+  failed_when: crictl_version_check.stdout is not search(crictl_version)
+  when: install_crictl | bool
+
+- name: Confirm crictl reports the systemd cgroup driver
+  # Guide verification: crictl info must show systemdCgroup true before bootstrap.
+  ansible.builtin.shell: crictl info | grep -A2 systemdCgroup
+  register: crictl_cgroup_check
+  changed_when: false
+  when: install_crictl | bool

@@ -1,0 +1,3 @@
+# Ansible ships these files verbatim to Ubuntu 24.04 VMs; keep them LF everywhere,
+# including on Windows controllers (a CRLF haproxy.cfg or task file breaks targets).
+* text eol=lf

@@ -1,0 +1,38 @@
+---
+# Step 12b (second half): copy admin.conf onto master-lb so the cluster can be
+# managed from the load-balancer VM itself. The kubectl binary was already
+# installed there by the `kubernetes` role play (packages only).
+#
+# WARNING: admin.conf carries unrestricted cluster-admin privileges. Treat master-lb
+# with the same access-control rigor as the masters.
+
+- name: Ensure ~/.kube exists on the load balancer
+  ansible.builtin.file:
+    path: /home/{{ ansible_user }}/.kube
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0750"
+
+- name: Copy admin.conf onto the load balancer
+  ansible.builtin.copy:
+    src: "{{ artifacts_dir }}/admin.conf"
+    dest: /home/{{ ansible_user }}/.kube/config
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0600"
+
+- name: Confirm kubectl reaches the API through the load balancer
+  # Retries: HAProxy needs rise 2 checks at inter 10s before it forwards to the
+  # freshly initialized apiserver.
+  ansible.builtin.command: kubectl get nodes
+  become: false
+  register: lb_nodes_out
+  until: lb_nodes_out.rc == 0
+  retries: 12
+  delay: 10
+  changed_when: false
+
+- name: Show the cluster as seen from master-lb
+  ansible.builtin.debug:
+    msg: "{{ lb_nodes_out.stdout_lines }}"

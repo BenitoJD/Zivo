@@ -1,0 +1,101 @@
+---
+# HA Kubernetes cluster bootstrap: 3 control-plane nodes, 3 workers, 1 dedicated
+# HAProxy load balancer. Automates the HA setup guide step by step; see README.md
+# for the mapping between the guide's steps and these plays.
+#
+# Run from infra/ansible after filling in inventory/hosts.ini:
+#   ansible-playbook site.yml
+
+- name: Common settings on all 7 VMs
+  hosts: cluster
+  become: true
+  tags: [common, prereq]
+  roles:
+    - common
+
+- name: Kubernetes prerequisites on the 6 Kubernetes nodes
+  hosts: k8s_nodes
+  become: true
+  tags: [prereq]
+  roles:
+    - k8s_prereqs
+
+- name: containerd, runc and CNI plugins on the 6 Kubernetes nodes
+  hosts: k8s_nodes
+  become: true
+  tags: [prereq]
+  roles:
+    - containerd
+
+- name: Kubernetes packages and crictl on the 6 Kubernetes nodes
+  hosts: k8s_nodes
+  become: true
+  tags: [prereq]
+  roles:
+    - kubernetes
+
+- name: HAProxy on the dedicated load-balancer VM
+  hosts: load_balancer
+  become: true
+  tags: [lb]
+  roles:
+    - haproxy
+
+- name: kubectl client on the load-balancer VM
+  hosts: load_balancer
+  become: true
+  tags: [lb]
+  roles:
+    - role: kubernetes
+      kubernetes_packages: [kubectl]
+      install_crictl: false
+
+- name: Bootstrap the control plane on master-1
+  hosts: master-1
+  become: true
+  tags: [bootstrap]
+  roles:
+    - control_plane_init
+
+- name: kubectl access on the load-balancer VM
+  hosts: load_balancer
+  become: true
+  tags: [bootstrap]
+  roles:
+    - lb_kubeconfig
+
+- name: Cilium CNI
+  hosts: master-1
+  become: true
+  tags: [cni]
+  roles:
+    - cilium
+
+- name: Join master-2 and master-3 as control-plane nodes
+  hosts: "masters:!master-1"
+  become: true
+  serial: 1
+  tags: [join]
+  roles:
+    - control_plane_join
+
+- name: Rebalance CoreDNS across control-plane nodes
+  hosts: master-1
+  become: true
+  tags: [join, coredns]
+  roles:
+    - coredns_rebalance
+
+- name: Join the worker nodes
+  hosts: workers
+  become: true
+  tags: [join]
+  roles:
+    - worker_join
+
+- name: Final verification
+  hosts: master-1
+  become: true
+  tags: [verify]
+  roles:
+    - cluster_verify

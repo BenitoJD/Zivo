@@ -1,0 +1,62 @@
+---
+# Part 1, Steps 1-3 of the guide: identical OS prerequisites on the 6 Kubernetes
+# nodes (master-1..3, worker-1..3). Never runs on master-lb.
+
+- name: Check which cgroup version the node runs
+  # Kubernetes v1.35+ refuses to start the kubelet on cgroup v1 with no obvious error.
+  ansible.builtin.command: stat -fc %T /sys/fs/cgroup/
+  register: cgroup_fs
+  changed_when: false
+
+- name: Require cgroup v2
+  ansible.builtin.assert:
+    that: cgroup_fs.stdout | trim == 'cgroup2fs'
+    msg: >-
+      {{ inventory_hostname }} mounts /sys/fs/cgroup as {{ cgroup_fs.stdout | trim }}
+      (cgroup v1). Migrate the VM to a cgroup v2 enabled image (Ubuntu 24.04 sets
+      this by default) before continuing; the kubelet will otherwise fail at startup.
+
+- name: Disable swap (Step 1)
+  ansible.builtin.shell: swapoff -a
+  when: ansible_swaptotal_mb | int > 0
+
+- name: Comment out swap entries in /etc/fstab
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: '^(?!\s*#)(?=[^#]*\sswap\s)(.+)$'
+    replace: '#\1'
+
+- name: Confirm no active swap remains
+  ansible.builtin.command: swapon --show
+  register: swapon_state
+  changed_when: false
+
+- name: Assert swap is fully off
+  ansible.builtin.assert:
+    that: swapon_state.stdout | trim | length == 0
+    msg: "swapoff -a ran but /proc/swaps still reports active swap on {{ inventory_hostname }}"
+
+- name: Load overlay and br_netfilter at boot (Step 2)
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      overlay
+      br_netfilter
+    mode: "0644"
+
+- name: Load the kernel modules now
+  ansible.builtin.shell: modprobe {{ item }}
+  loop:
+    - overlay
+    - br_netfilter
+  changed_when: false
+
+- name: Kernel networking parameters (Step 3)
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/k8s.conf
+    content: |
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.ipv4.ip_forward = 1
+    mode: "0644"
+  notify: Reload sysctl

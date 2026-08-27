@@ -1,0 +1,106 @@
+---
+# Part 3, Step 11 + Step 12: kubeadm init on master-1 ONLY, pointed at the load
+# balancer, plus kubectl setup on master-1 and the join commands the later join
+# plays consume. The certificate key is generated up front and passed explicitly
+# so control-plane joins never depend on parsing kubeadm init output.
+
+- name: Check whether the control plane is already initialized
+  ansible.builtin.stat:
+    path: /etc/kubernetes/admin.conf
+  register: kubeadm_admin_conf
+
+- name: Wait for the load-balancer frontend to accept connections
+  ansible.builtin.wait_for:
+    host: "{{ hostvars[groups['load_balancer'][0]].ansible_host }}"
+    port: "{{ haproxy_frontend_port }}"
+    timeout: 30
+
+- name: Generate the control-plane certificate key
+  ansible.builtin.command: kubeadm certs certificate-key
+  register: certificate_key_out
+  changed_when: false
+
+- name: Remember the certificate key for the join plays
+  ansible.builtin.set_fact:
+    kubeadm_certificate_key: "{{ certificate_key_out.stdout | trim }}"
+
+- name: Initialize the control plane (Step 11)
+  ansible.builtin.command:
+    argv:
+      - kubeadm
+      - init
+      - --control-plane-endpoint={{ control_plane_endpoint }}
+      - --upload-certs
+      - --certificate-key={{ kubeadm_certificate_key }}
+      - --pod-network-cidr={{ pod_network_cidr }}
+      - --service-cidr={{ service_cidr }}
+      - --kubernetes-version=v{{ kubernetes_version }}
+  register: kubeadm_init_out
+  when: not kubeadm_admin_conf.stat.exists
+  vars:
+    ansible_command_timeout: 1800
+
+- name: Show kubeadm init output
+  ansible.builtin.debug:
+    msg: "{{ kubeadm_init_out.stdout_lines | default([]) + (kubeadm_init_out.stderr_lines | default([])) }}"
+  when: not kubeadm_admin_conf.stat.exists
+
+- name: Refresh the uploaded certificates so joins always have a live key
+  # The certificate key expires after 2 hours; re-encrypt the uploaded certs with
+  # the known key when the control plane already existed (re-runs).
+  ansible.builtin.command:
+    argv:
+      - kubeadm
+      - init
+      - phase
+      - upload-certs
+      - --upload-certs
+      - --certificate-key={{ kubeadm_certificate_key }}
+  when: kubeadm_admin_conf.stat.exists
+  changed_when: false
+
+- name: Mint a fresh token and capture the worker join command
+  ansible.builtin.command: kubeadm token create --print-join-command
+  register: token_join_out
+  changed_when: false
+
+- name: Expose the join commands to the join plays
+  ansible.builtin.set_fact:
+    worker_join_command: "{{ token_join_out.stdout | trim }}"
+    control_plane_join_command: "{{ token_join_out.stdout | trim }} --control-plane --certificate-key {{ kubeadm_certificate_key }}"
+
+- name: Ensure ~/.kube exists on master-1
+  ansible.builtin.file:
+    path: /home/{{ ansible_user }}/.kube
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0750"
+
+- name: Configure kubectl for the admin user on master-1 (Step 12)
+  ansible.builtin.copy:
+    src: /etc/kubernetes/admin.conf
+    remote_src: true
+    dest: /home/{{ ansible_user }}/.kube/config
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0600"
+
+- name: Fetch admin.conf to the controller for the load-balancer VM (Step 12b)
+  ansible.builtin.fetch:
+    src: /etc/kubernetes/admin.conf
+    dest: "{{ artifacts_dir }}/admin.conf"
+    flat: true
+
+- name: Report cluster state from master-1
+  ansible.builtin.command: kubectl get nodes
+  become: false
+  register: init_nodes_out
+  until: init_nodes_out.rc == 0
+  retries: 10
+  delay: 5
+  changed_when: false
+
+- name: Show the node list from master-1
+  ansible.builtin.debug:
+    msg: "{{ init_nodes_out.stdout_lines }}"

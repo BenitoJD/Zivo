@@ -1,0 +1,104 @@
+---
+# Step 13: cilium-cli on master-1, then Cilium v1.20.1 with Cluster Pool IPAM
+# pinned to the guide's pod CIDR (Cilium ignores kubeadm's --pod-network-cidr, so
+# the range must be set here explicitly and must match kubeadm init).
+# Installs Cilium's default generic configuration (VXLAN encapsulation), which is
+# why only UDP 8472 needs to be open between the 6 Kubernetes nodes.
+
+- name: Resolve the latest cilium-cli version
+  ansible.builtin.uri:
+    url: https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt
+    return_content: true
+  register: cilium_stable_out
+  when: cilium_cli_version == 'latest'
+  changed_when: false
+
+- name: Pin the resolved cilium-cli version
+  ansible.builtin.set_fact:
+    cilium_cli_release: >-
+      {{ cilium_cli_version if cilium_cli_version != 'latest' else (cilium_stable_out.content | trim) }}
+
+- name: Detect the cilium-cli architecture
+  ansible.builtin.set_fact:
+    cilium_cli_arch: "{{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' }}"
+
+- name: Download cilium-cli {{ cilium_cli_release }}
+  ansible.builtin.get_url:
+    url: https://github.com/cilium/cilium-cli/releases/download/{{ cilium_cli_release }}/cilium-linux-{{ cilium_cli_arch }}.tar.gz
+    dest: /tmp/cilium-linux-{{ cilium_cli_arch }}.tar.gz
+    mode: "0644"
+    timeout: 300
+
+- name: Download the cilium-cli checksum
+  ansible.builtin.get_url:
+    url: https://github.com/cilium/cilium-cli/releases/download/{{ cilium_cli_release }}/cilium-linux-{{ cilium_cli_arch }}.tar.gz.sha256sum
+    dest: /tmp/cilium-linux-{{ cilium_cli_arch }}.tar.gz.sha256sum
+    mode: "0644"
+
+- name: Verify the cilium-cli download
+  # The .sha256sum file names the sibling tarball inside /tmp.
+  ansible.builtin.shell: sha256sum --check cilium-linux-{{ cilium_cli_arch }}.tar.gz.sha256sum
+  args:
+    chdir: /tmp
+  changed_when: false
+
+- name: Install cilium-cli to /usr/local/bin
+  ansible.builtin.unarchive:
+    src: /tmp/cilium-linux-{{ cilium_cli_arch }}.tar.gz
+    dest: /usr/local/bin
+    remote_src: true
+    creates: /usr/local/bin/cilium
+
+- name: Report the installed cilium-cli version
+  ansible.builtin.command: cilium version --client
+  become: false
+  register: cilium_cli_check
+  changed_when: false
+
+- name: Show cilium-cli version
+  ansible.builtin.debug:
+    msg: "{{ cilium_cli_check.stdout_lines }}"
+
+- name: Install Cilium with the pinned pod CIDR
+  ansible.builtin.command:
+    argv:
+      - cilium
+      - install
+      - --version
+      - "{{ cilium_version }}"
+      - --helm-set
+      # Literal braces around the CIDR must survive Jinja; never write {{{ var }}}
+      # here since Jinja would parse that as a set literal instead of a braced string.
+      - "ipam.operator.clusterPoolIPv4PodCIDRList={{ '{' ~ pod_network_cidr ~ '}' }}"
+  become: false
+  register: cilium_install_out
+  vars:
+    ansible_command_timeout: 1800
+
+- name: Wait for Cilium agent and operator to report OK
+  # cilium status --wait is a more precise signal than pods showing Running.
+  ansible.builtin.command: cilium status --wait
+  become: false
+  register: cilium_status_out
+  changed_when: false
+  vars:
+    ansible_command_timeout: 1200
+
+- name: Show Cilium status
+  ansible.builtin.debug:
+    msg: "{{ cilium_status_out.stdout_lines }}"
+
+- name: Wait for this master to report Ready
+  ansible.builtin.command: kubectl wait --for=condition=Ready node/{{ k8s_node_name }} --timeout=600s
+  become: false
+  changed_when: false
+
+- name: Show the node list after Cilium is up
+  ansible.builtin.command: kubectl get nodes
+  become: false
+  register: cilium_nodes_out
+  changed_when: false
+
+- name: Node list after Cilium
+  ansible.builtin.debug:
+    msg: "{{ cilium_nodes_out.stdout_lines }}"

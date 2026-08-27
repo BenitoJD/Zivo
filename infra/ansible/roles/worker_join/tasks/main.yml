@@ -1,0 +1,17 @@
+---
+# Step 15: plain worker join (no --control-plane). Workers get no kubeconfig;
+# they talk to the API through the load balancer via their own kubelet identity.
+
+- name: Check whether this worker has already joined
+  ansible.builtin.stat:
+    path: /etc/kubernetes/kubelet.conf
+  register: kubelet_conf
+
+- name: Join the cluster (Step 15)
+  ansible.builtin.shell: "{{ hostvars['master-1'].worker_join_command }}"
+  args:
+    creates: /etc/kubernetes/kubelet.conf
+  register: worker_join_out
+  when: not kubelet_conf.stat.exists
+  vars:
+    ansible_command_timeout: 1800

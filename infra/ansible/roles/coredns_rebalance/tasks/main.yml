@@ -1,0 +1,28 @@
+---
+# Step 14b (optional): after bootstrap, both CoreDNS replicas typically sit on
+# master-1 because it ran alone during init. Restarting the deployment lets its
+# preferred pod anti-affinity spread them once more control-plane nodes exist.
+
+- name: Restart CoreDNS so anti-affinity can reschedule the replicas
+  ansible.builtin.command: kubectl -n kube-system rollout restart deployment coredns
+  become: false
+  register: coredns_restart_out
+  changed_when: coredns_restart_out.rc == 0
+  when: rebalance_coredns | bool
+
+- name: Wait for the CoreDNS rollout to finish
+  ansible.builtin.command: kubectl -n kube-system rollout status deployment coredns --timeout=300s
+  become: false
+  changed_when: false
+  when: rebalance_coredns | bool
+
+- name: Show where the CoreDNS pods landed
+  ansible.builtin.command: kubectl -n kube-system get pods -l k8s-app=kube-dns -o wide
+  become: false
+  register: coredns_pods_out
+  changed_when: false
+  when: rebalance_coredns | bool
+
+- name: CoreDNS placement
+  ansible.builtin.debug:
+    msg: "{{ coredns_pods_out.stdout_lines | default(['(rebalance disabled)']) }}"
