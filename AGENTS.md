@@ -158,6 +158,8 @@ Product tables: `intel.*` (unchanged DDL) + additive `qb.*` — see [docs/WORKSP
 | **Namespace** | `zivo` |
 | **Runner labels** | `self-hosted`, `zivo` |
 
+**Fleet servers (Web Eye Soft):** the 9-VPS inventory (roles, specs, SSH aliases `zivo-node1`–`zivo-node9`, renewals) lives in [infra/SERVERS.md](infra/SERVERS.md).
+
 First-time server setup (if secrets were wiped):
 
 ```bash
