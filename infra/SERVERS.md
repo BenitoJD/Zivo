@@ -1,10 +1,10 @@
 # Server inventory: Web Eye Soft fleet
 
-All 9 VPS rented from **Web Eye Soft** ([client area](https://www.webeyesoft.com/client-area/accounts/services)),
-surveyed live over SSH on **2026-09-01**. Seven of them form the HA Kubernetes cluster that
-[infra/ansible](./ansible/) bootstraps (PR #27); one is idle; one runs unrelated standalone apps.
+Scope: the **8 working VPS** from the September 2026 client-area screenshot, surveyed live over
+SSH on 2026-09-01. Seven of them form the HA Kubernetes cluster that [infra/ansible](./ansible/)
+bootstraps (PR #27); one is a spare. SSH key access is installed and verified on all 8.
 
-**TL;DR for teammates:** `ssh zivo-node1` … `ssh zivo-node9` (key auth, root). See [SSH access](#ssh-access).
+**TL;DR for teammates:** `ssh zivo-node1` … `ssh zivo-node8` (key auth, root). See [SSH access](#ssh-access).
 
 ## Fleet at a glance
 
@@ -13,12 +13,11 @@ surveyed live over SSH on **2026-09-01**. Seven of them form the HA Kubernetes c
 | zivo-node1 | k8s worker | vm148786062.manageserver.in | 45.196.196.52 | Ubuntu 24.04.4 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-24 |
 | zivo-node2 | k8s worker | vm326035110.manageserver.in | 45.196.196.115 | Ubuntu 24.04.4 | 4 / 7.6 Gi / 96 G | LV 13 | 2026-09-24 |
 | zivo-node3 | k8s worker | vm127192563.manageserver.in | 45.196.196.191 | Ubuntu 24.04.4 | 4 / 7.6 Gi / 96 G | LV 13 | 2026-09-24 |
-| zivo-node4 | **idle / spare** | vm501272425.manageserver.in | 203.57.85.251 | Ubuntu 22.04.5 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-20 |
+| zivo-node4 | **spare (idle)** | vm501272425.manageserver.in | 203.57.85.251 | Ubuntu 22.04.5 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-20 |
 | zivo-node5 | k8s API load balancer | vm723139291.manageserver.in | 45.196.196.22 | Ubuntu 22.04.5 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-20 |
 | zivo-node6 | k8s control plane | vm759659741.manageserver.in | 203.57.85.250 | Ubuntu 22.04.5 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-12 |
 | zivo-node7 | k8s control plane | vm997512676.manageserver.in | 203.57.85.224 | Ubuntu 22.04.5 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-12 |
 | zivo-node8 | k8s control plane | vm130951261.manageserver.in | 203.57.85.157 | Ubuntu 22.04.5 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-12 |
-| zivo-node9 | standalone apps box | vm627572835.manageserver.in | 203.57.85.94 | Ubuntu 22.04.5 | 6 / 11 Gi / 140 G | LV 8 | 2026-10-01 |
 
 Notes:
 
@@ -32,7 +31,8 @@ Notes:
 ## The HA Kubernetes cluster
 
 Kubernetes **v1.36.3** via kubeadm, **Cilium 1.20.1** CNI + CoreDNS (system namespaces only, no app
-workloads deployed yet). Built from [infra/ansible](./ansible/) (PR #27).
+workloads deployed yet). Built from [infra/ansible](./ansible/) (PR #27); the live topology is now
+reflected in `infra/ansible/inventory/hosts.ini`.
 
 | Piece | Server | Detail |
 |------------------|-------------------------|----------------------------------------------|
@@ -40,19 +40,19 @@ workloads deployed yet). Built from [infra/ansible](./ansible/) (PR #27).
 | Workers | zivo-node1, node2, node3 | kubelet + kube-proxy + Cilium |
 | API load balancer | zivo-node5 | HAProxy `8443` → apiserver `6443`, `/readyz` HTTPS checks |
 | Cluster endpoint | `45.196.196.22:8443` | what kubectl / kubeadm join talk to |
-| Spare | zivo-node4 | bare Ubuntu 22.04, nothing installed |
+| Spare | zivo-node4 | bare Ubuntu, nothing installed; candidate 7th node |
 
 kubectl access: a working admin kubeconfig lives on **zivo-node5** (`/root/.kube/config`) and
 `/etc/kubernetes/admin.conf` on each control-plane node. `kubectl get nodes` from zivo-node5 shows
 all 6 nodes Ready.
 
-## zivo-node9: standalone apps box (not part of the Zivo cluster)
+### Watch items (checked 2026-09-01)
 
-14-week uptime, Docker + nginx + helm. Runs two throwaway-in-docker clusters and a few apps:
-
-- `k3d-prod-cluster` and `k3d-nonprod-cluster` (k3s v1.31.5 containers, apiserver on `6443`/`6444`)
-- `assetlink-app` (`:3010`) with `assetlink-minio` (`:9100/9101`), a second MinIO (`:9000/9001`), ChartDB (`:8080`)
-- PostgreSQL listening on `:5432`, nginx on `:80/:443`
+- The control planes are small (2 vCPU) and run hot under etcd + apiserver + Cilium duty
+  (1-minute load 2 to 8). Healthy, but do not co-locate extra workloads on nodes 6-8.
+- `cloud-final.service` shows failed on zivo-node7: a benign provider-image cloud-init quirk, no impact.
+- Ubuntu 24.04 nodes (1-3) use systemd socket activation for SSH (`ssh.socket`), so there is no
+  always-on `sshd` listener; SSH works as normal.
 
 ## SSH access
 
@@ -78,8 +78,6 @@ Host zivo-node7
     HostName 203.57.85.224
 Host zivo-node8
     HostName 203.57.85.157
-Host zivo-node9
-    HostName 203.57.85.94
 
 Host zivo-node*
     User root
@@ -90,7 +88,7 @@ Host zivo-node*
     ServerAliveCountMax 3
 ```
 
-- Fleet public key (installed in `/root/.ssh/authorized_keys` on all 9):
+- Fleet public key (installed in `/root/.ssh/authorized_keys` on all servers):
   `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPOsMijLpcSD7zpzQrbpq6Gpg7fvO6uQkJK+sEkg1Pur zivo-fleet-20260901`
 - **No passwords are committed to this repo.** They live in the Web Eye Soft client area;
   locally they are kept in `~/.ssh/zivo-fleet-creds` (chmod 600) on Benito's machine.
@@ -103,13 +101,14 @@ Host zivo-node*
 - Portal: <https://www.webeyesoft.com/client-area/accounts/services> ; the per-service *Manage* page
   shows IP, root password, OS, power state, and has START / SHUTDOWN / REBOOT / REINSTALL /
   CHANGE PASSWORD / VNC / SSH-console actions.
-- **Renewal watch:** 8 of the 9 servers renew between **2026-09-12 and 2026-09-24** (₹399–₹699
-  each; zivo-node9 ₹999 on 2026-10-01). Let them lapse and the cluster loses its etcd quorum.
+- **Renewal watch:** all 8 servers renew between **2026-09-12 and 2026-09-24** (₹399-₹699 each).
+  Letting the control planes (nodes 6-8) lapse takes out the etcd quorum and the whole cluster.
+- The account also holds one LV 8 VPS outside this scope (vm627572835, 203.57.85.94, renews
+  2026-10-01) that runs unrelated standalone apps; SSH alias `zivo-node9` exists for it.
 
 ## Related
 
-- [infra/ansible/](./ansible/): the bootstrap playbook for the HA cluster (masters / workers /
-  load_balancer groups in `inventory/hosts.ini` still hold placeholder IPs; fill them from the
-  table above when re-provisioning).
+- [infra/ansible/](./ansible/): the bootstrap playbook; `inventory/hosts.ini` now holds the real
+  IPs and live roles (masters / workers / load_balancer), `ansible_user=root` matching the key above.
 - Production zivo app stack: `103.194.228.47` (`ssh zivo-vps`, separate provider); see
   [AGENTS.md](../AGENTS.md#production-vps).

@@ -2,9 +2,10 @@
 # Component versions: trusted stable / currently-supported release track.
 # Keep these in sync across every node; the guide pins exact patches.
 #
-# Target VMs run Ubuntu 24.04 LTS (cgroup v2 by default; kernel 6.8 satisfies
-# Cilium's minimum of kernel 5.10). All pinned components are distro-independent
-# binaries and apt repos, so they apply unchanged on noble.
+# Target VMs mix Ubuntu 22.04 LTS (kernel 5.15, masters + LB) and 24.04 LTS
+# (kernel 6.8, workers); both default to cgroup v2 and satisfy Cilium's minimum
+# of kernel 5.10. All pinned components are distro-independent binaries and apt
+# repos, so they apply unchanged on both. See infra/SERVERS.md for the fleet.
 kubernetes_version: "1.36.3"        # kubeadm / kubelet / kubectl
 kubernetes_apt_channel: "v1.36"     # pkgs.k8s.io apt channel
 containerd_version: "2.3.3"         # containerd LTS branch (2.x config format)
