@@ -36,10 +36,11 @@
     msg: "{{ verify_pods_out.stdout_lines }}"
 
 - name: Confirm one cilium agent per Kubernetes node
-  # Expect: 6 cilium agents + 6 kube-proxy pods; cilium-operator runs 2 replicas.
+  # Expect: 6 cilium agents + 6 kube-proxy pods; the cilium-operator chart default
+  # runs 1 replica (bump operator.replicas and this assert together for HA).
   ansible.builtin.shell: >-
     kubectl -n kube-system get pods -l k8s-app=cilium -o name | wc -l
-    && kubectl -n kube-system get pods -l k8s-app=cilium-operator -o name | wc -l
+    && kubectl -n kube-system get pods -l io.cilium/app=operator -o name | wc -l
     && kubectl -n kube-system get pods -l k8s-app=kube-proxy -o name | wc -l
   become: false
   register: cilium_counts_out
@@ -49,11 +50,11 @@
   ansible.builtin.assert:
     that:
       - cilium_counts_out.stdout_lines[0] | int == groups['k8s_nodes'] | length
-      - cilium_counts_out.stdout_lines[1] | int == 2
+      - cilium_counts_out.stdout_lines[1] | int == 1
       - cilium_counts_out.stdout_lines[2] | int == groups['k8s_nodes'] | length
     msg: >-
-      Expected {{ groups['k8s_nodes'] | length }} cilium agents, 2 cilium operator
-      replicas and {{ groups['k8s_nodes'] | length }} kube-proxy pods; got
+      Expected {{ groups['k8s_nodes'] | length }} cilium agents, 1 cilium operator
+      replica and {{ groups['k8s_nodes'] | length }} kube-proxy pods; got
       {{ cilium_counts_out.stdout_lines }}.
 
 - name: Optional end-to-end Cilium connectivity test (guide runs this after all 6 nodes joined)
