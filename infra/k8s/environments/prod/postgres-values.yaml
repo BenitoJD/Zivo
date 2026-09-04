@@ -6,3 +6,13 @@ backup:
   schedule: "0 3 * * *"
   retentionDays: 14
   storage: 10Gi
+
+# Dedicated data node: tainted node.zivo/dedicated=data so ONLY postgres/minio
+# schedule here. See infra/SERVERS.md (zivo-node2 = vm326035110).
+nodeSelector:
+  kubernetes.io/hostname: vm326035110
+tolerations:
+  - key: node.zivo/dedicated
+    operator: Equal
+    value: data
+    effect: NoSchedule

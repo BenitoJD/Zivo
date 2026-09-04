@@ -11,7 +11,7 @@ bootstraps (PR #27); one is a spare. SSH key access is installed and verified on
 | Alias | Role | Vendor hostname | IP | OS | vCPU / RAM / disk | Plan | Renews |
 |-----------|--------------------------|--------------------------|-----------------|------------------|-------------------|-------|------------|
 | zivo-node1 | k8s worker | vm148786062.manageserver.in | 45.196.196.52 | Ubuntu 24.04.4 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-24 |
-| zivo-node2 | k8s worker | vm326035110.manageserver.in | 45.196.196.115 | Ubuntu 24.04.4 | 4 / 7.6 Gi / 96 G | LV 13 | 2026-09-24 |
+| zivo-node2 | **dedicated data node** (Postgres + MinIO only, tainted) | vm326035110.manageserver.in | 45.196.196.115 | Ubuntu 24.04.4 | 4 / 7.6 Gi / 96 G | LV 13 | 2026-09-24 |
 | zivo-node3 | k8s worker | vm127192563.manageserver.in | 45.196.196.191 | Ubuntu 24.04.4 | 4 / 7.6 Gi / 96 G | LV 13 | 2026-09-24 |
 | zivo-node4 | **spare (idle)** | vm501272425.manageserver.in | 203.57.85.251 | Ubuntu 22.04.5 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-20 |
 | zivo-node5 | k8s API load balancer | vm723139291.manageserver.in | 45.196.196.22 | Ubuntu 22.04.5 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-20 |
@@ -23,6 +23,9 @@ Notes:
 
 - The vendor hostnames (`vm*.manageserver.in`) **do not resolve in public DNS**; always connect by IP.
   (Inside the cluster the k8s node names are exactly these vendor hostnames.)
+- zivo-node2 is tainted (`node.zivo/dedicated=data:NoSchedule`) and runs only Postgres and MinIO;
+  the chart pins in `environments/prod/{postgres,minio}-values.yaml` hold it there. Traefik runs on
+  the two ingress workers (`node.zivo/ingress=true`), so the data node serves no public traffic.
 - Nodes span two provider subnets / host systems (`SER17111`, `SER17108`), so a single host failure
   cannot take the etcd quorum.
 - The client-area power status can be stale; `zivo-node8` showed "stopped" there while it was Ready

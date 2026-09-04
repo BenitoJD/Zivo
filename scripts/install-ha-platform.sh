@@ -28,10 +28,16 @@ TRAEFIK_VALUES=(
   --set 'securityContext.capabilities.add={NET_BIND_SERVICE}'
 )
 
-echo "==> label workers (Traefik hostNetwork targets)"
+DATA_NODE="${DATA_NODE:-vm326035110}"   # dedicated Postgres + MinIO box
+echo "==> prepare nodes: ingress workers + tainted dedicated data node"
 for n in $(kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o name); do
   kubectl label "$n" node.zivo/role=worker --overwrite >/dev/null
 done
+for n in $(kubectl get nodes -l 'node.zivo/role=worker' -o name | grep -v "$DATA_NODE"); do
+  kubectl label "$n" node.zivo/ingress=true --overwrite >/dev/null
+done
+kubectl label node "$DATA_NODE" node.zivo/role=worker node.zivo/data=true --overwrite >/dev/null
+kubectl taint node "$DATA_NODE" node.zivo/dedicated=data:NoSchedule --overwrite >/dev/null
 
 echo "==> default storage class: local-path (Immediate; the Postgres backup PVC has"
 echo "    no pod consumer, so WaitForFirstConsumer would never bind it)"
@@ -96,6 +102,11 @@ spec:
     requests:
       storage: 10Gi
 EOF
+fi
+
+echo "==> pin MinIO volume to the data node (Immediate mode needs the node hint)"
+if [[ "$(kubectl -n zivo get pvc data-minio-0 -o jsonpath='{.status.phase}')" != "Bound" ]]; then
+  kubectl -n zivo annotate pvc data-minio-0 volume.alpha.kubernetes.io/selected-node="$DATA_NODE" --overwrite
 fi
 
 echo "==> zivo-secrets"
