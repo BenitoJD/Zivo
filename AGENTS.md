@@ -160,6 +160,8 @@ Product tables: `intel.*` (unchanged DDL) + additive `qb.*` — see [docs/WORKSP
 
 **Fleet servers (Web Eye Soft):** the 9-VPS inventory (roles, specs, SSH aliases `zivo-node1`–`zivo-node9`, renewals) lives in [infra/SERVERS.md](infra/SERVERS.md).
 
+**2026-09-04 status:** the old single VPS was reimaged (SSH keys rejected, K3s stack, secrets and runner lost); zivo.fyi now runs from the Web Eye Soft HA cluster (ingress: worker IPs `45.196.196.52` / `.115` / `.191` on 80/443; kubectl via `KUBECONFIG=~/.kube/zivo-ha.conf`; platform rebuild: `scripts/install-ha-platform.sh`). DNS cutover and a new self-hosted runner are the open follow-ups.
+
 First-time server setup (if secrets were wiped):
 
 ```bash

@@ -96,6 +96,32 @@ Host zivo-node*
   `/root/.ssh/authorized_keys` on the servers they need (or re-run `ssh-copy-id` with the panel
   password).
 
+## zivo app platform on the HA cluster (September 2026)
+
+The HA cluster now runs the full zivo app stack (Zivo_0.1.364): Traefik ingress
+(hostNetwork DaemonSet on the three workers, ports 80/443, real client IPs preserved),
+cert-manager with the letsencrypt-prod ClusterIssuer, local-path default storage class,
+pgbouncer, Postgres (pgvector) and MinIO. Rebuild/re-run with
+`scripts/install-ha-platform.sh`; app releases replay via the release list in
+`scripts/deploy-vps-local-build.sh` (PREBUILT path).
+
+- kubectl from a workstation: `KUBECONFIG=~/.kube/zivo-ha.conf` (admin.conf fetched from
+  master-1; its server line already targets the LB at 45.196.196.22:8443).
+- Ingress entry points: any worker IP on 80/443 (45.196.196.52 / .115 / .191).
+- zivo-secrets: applied to the cluster; the secrets.env copy lives on master-1 at
+  `/root/.zivo/secrets.env` (chmod 600). Regenerated fresh on 2026-09-04 — external API
+  keys came from Benito's `backend/.env.local`, DB/MinIO/session secrets are new randoms.
+- TLS is intentionally OFF on all ingresses until the zivo.fyi DNS records move from the
+  old VPS IP to a worker IP; then set `tls: true` / `entrypoint: websecure` per values.
+
+## The old production VPS (zivo-vps) — REIMAGED, offline
+
+`103.194.228.47` was reimaged from a clean template on or before 2026-09-04: SSH host key
+changed, the fleet key and personal keys are rejected, nothing listens on 80/443, and the
+K3s stack, `/root/.zivo/secrets.env` and the GitHub Actions runner that deployed to it are
+gone. DNS still points zivo.fyi at that IP. Production recovery path = the HA cluster
+above + a DNS cutover + a new self-hosted runner.
+
 ## Client area & renewals
 
 - Portal: <https://www.webeyesoft.com/client-area/accounts/services> ; the per-service *Manage* page
