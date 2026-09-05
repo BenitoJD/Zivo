@@ -1,21 +1,28 @@
 ---
-# Step 14: join this node as a control-plane member. Runs with serial: 1 so the
-# etcd members are added one at a time (master-2, then master-3).
-# The join command and certificate key come from the control_plane_init role via
-# hostvars['master-1'].
+# Step 14: join this node as a control-plane member. serial: 1 so etcd members
+# are added one at a time (master-2, then master-3). The token and certificate
+# key are minted fresh on master-1 at run time, so this never depends on the
+# init play having run in the same ansible invocation.
 
 - name: Check whether this master has already joined
   ansible.builtin.stat:
     path: /etc/kubernetes/kubelet.conf
   register: kubelet_conf
 
+- name: Mint a fresh control-plane join command on master-1
+  ansible.builtin.shell: |
+    key=$(kubeadm certs certificate-key)
+    kubeadm token create --print-join-command | sed "s|$| --control-plane --certificate-key $key|"
+  register: cp_join_cmd
+  delegate_to: master-1
+  become: false
+  run_once: true
+  changed_when: false
+
 - name: Join as a control-plane node (Step 14)
-  # --certificate-key expires after 2 hours; the control_plane_init play refreshes
-  # the uploaded certs on every re-run, so this always has a live key.
-  ansible.builtin.shell: "{{ hostvars['master-1'].control_plane_join_command }}"
+  ansible.builtin.shell: "{{ hostvars['master-1'].cp_join_cmd.stdout }}"
   args:
     creates: /etc/kubernetes/kubelet.conf
-  register: cp_join_out
   when: not kubelet_conf.stat.exists
   vars:
     ansible_command_timeout: 1800
@@ -24,8 +31,6 @@
   ansible.builtin.file:
     path: /root/.kube
     state: directory
-    owner: "{{ ansible_user }}"
-    group: "{{ ansible_user }}"
     mode: "0750"
 
 - name: Configure kubectl on this master (end of Step 14)
@@ -33,12 +38,10 @@
     src: /etc/kubernetes/admin.conf
     remote_src: true
     dest: /root/.kube/config
-    owner: "{{ ansible_user }}"
-    group: "{{ ansible_user }}"
     mode: "0600"
 
 - name: Wait for this master to appear as Ready
-  ansible.builtin.command: kubectl wait --for=condition=Ready node/{{ k8s_node_name }} --timeout=900s
+  ansible.builtin.command: kubectl wait --for=condition=Ready node/{{ inventory_hostname }} --timeout=900s
   become: false
   register: cp_ready_out
   until: cp_ready_out.rc == 0
