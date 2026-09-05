@@ -59,7 +59,15 @@
   ansible.builtin.debug:
     msg: "{{ cilium_cli_check.stdout_lines }}"
 
-- name: Install Cilium with the pinned pod CIDR
+- name: Check whether Cilium is already installed
+  ansible.builtin.command: helm status cilium -n kube-system
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  register: cilium_existing
+  failed_when: false
+  changed_when: false
+
+- name: Install Cilium
+  when: cilium_existing.rc != 0 with the pinned pod CIDR
   ansible.builtin.command:
     argv:
       - cilium
