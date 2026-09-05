@@ -95,7 +95,7 @@
 
 - name: Show Cilium status
   ansible.builtin.debug:
-    msg: "{{ cilium_status_out.stdout_lines }}"
+    msg: "{{ cilium_wait_out.stdout_lines | default([]) }}"
 
 - name: Wait for this master to report Ready
   ansible.builtin.command: kubectl wait --for=condition=Ready node/{{ inventory_hostname }} --timeout=600s
