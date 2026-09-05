@@ -13,22 +13,24 @@
 - name: Schema migrations (auth -> storage -> practice -> content -> study -> library -> admin -> product)
   ansible.builtin.shell: |
     set -e
-    for spec in auth-schema zivo-auth auth-alembic-migrate \
-                storage-schema zivo-storage storage-alembic-migrate \
-                practice-schema zivo-practice practice-alembic-migrate \
-                content-schema zivo-content content-alembic-migrate \
-                study-schema zivo-study study-alembic-migrate \
-                library-schema zivo-library library-alembic-migrate \
-                admin-schema zivo-admin admin-alembic-migrate \
-                db-schema zivo-migrate alembic-migrate; do
-      set -- $spec
-      kubectl -n zivo delete job "$3" --ignore-not-found=true
-      helm upgrade --install "$1" {{ playbook_dir }}/../k8s/charts/db-schema -n zivo \
+    while read -r release repo jobname; do
+      [ -z "$release" ] && continue
+      kubectl -n zivo delete job "$jobname" --ignore-not-found=true
+      helm upgrade --install "$release" {{ playbook_dir }}/../k8s/charts/db-schema -n zivo \
         -f {{ playbook_dir }}/../k8s/environments/prod/backend-release-values.yaml \
-        --set image.tag={{ app_tag }} --set image.repository=ghcr.io/{{ ghcr_owner }}/$2 \
-        --set namespace=zivo --set jobName=$3 \
+        --set image.tag={{ app_tag }} --set image.repository=ghcr.io/{{ ghcr_owner }}/$repo \
+        --set namespace=zivo --set jobName=$jobname \
         {{ pull_args | join(' ') }} --wait --wait-for-jobs --timeout 15m
-    done
+    done <<'SPECS'
+    auth-schema zivo-auth auth-alembic-migrate
+    storage-schema zivo-storage storage-alembic-migrate
+    practice-schema zivo-practice practice-alembic-migrate
+    content-schema zivo-content content-alembic-migrate
+    study-schema zivo-study study-alembic-migrate
+    library-schema zivo-library library-alembic-migrate
+    admin-schema zivo-admin admin-alembic-migrate
+    db-schema zivo-migrate alembic-migrate
+    SPECS
   environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
   args: { executable: /bin/bash }
   changed_when: true
@@ -52,20 +54,22 @@
 - name: Services (auth storage practice content study library admin web)
   ansible.builtin.shell: |
     set -e
-    for spec in zivo-auth auth auth-values.yaml \
-                zivo-storage storage storage-values.yaml \
-                zivo-practice practice practice-values.yaml \
-                zivo-content content content-values.yaml \
-                zivo-study study study-values.yaml \
-                zivo-library library library-values.yaml \
-                zivo-admin admin admin-values.yaml \
-                zivo-web web web-values.yaml; do
-      set -- $spec
-      helm upgrade --install "$1" {{ playbook_dir }}/../k8s/charts/$2 -n zivo \
-        -f {{ playbook_dir }}/../k8s/environments/prod/$3 \
+    while read -r release chart values; do
+      [ -z "$release" ] && continue
+      helm upgrade --install "$release" {{ playbook_dir }}/../k8s/charts/$chart -n zivo \
+        -f {{ playbook_dir }}/../k8s/environments/prod/$values \
         --set image.tag={{ app_tag }} \
         {{ pull_args | join(' ') }} --wait --timeout 20m
-    done
+    done <<'SPECS'
+    zivo-auth auth auth-values.yaml
+    zivo-storage storage storage-values.yaml
+    zivo-practice practice practice-values.yaml
+    zivo-content content content-values.yaml
+    zivo-study study study-values.yaml
+    zivo-library library library-values.yaml
+    zivo-admin admin admin-values.yaml
+    zivo-web web web-values.yaml
+    SPECS
   environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
   args: { executable: /bin/bash }
   changed_when: true
