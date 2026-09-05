@@ -9,7 +9,7 @@ image:
 imagePullSecrets: []
 
 # Judge0 code-execution sandbox (coding practice) - dedicated box.
-judge0Url: "http://203.57.85.20:2358"
+judge0Url: "http://45.196.196.22:2358"
 
 service:
   port: 8000
