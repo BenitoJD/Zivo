@@ -66,8 +66,8 @@
   failed_when: false
   changed_when: false
 
-- name: Install Cilium
-  when: cilium_existing.rc != 0 with the pinned pod CIDR
+- name: Install Cilium (skip when the release already exists)
+  when: cilium_existing.rc != 0
   ansible.builtin.command:
     argv:
       - cilium
