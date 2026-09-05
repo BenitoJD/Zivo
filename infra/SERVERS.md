@@ -9,6 +9,10 @@
 > (`infra/ansible/site.yml` + `scripts/install-ha-platform.sh` + the deploy release
 > list) once key access is re-injected via the panel console. Two new LV 10 servers
 > (zivo-lb1/lb2) were bought to act as the HAProxy application load balancers.
+>
+> **Key status:** zivo-lb1 + zivo-lb2 have the fleet key (SSH verified). Nodes 1-8
+> reject their panel passwords after the reinstall — reset each via the panel's
+> CHANGE PASSWORD, then the key gets installed over SSH.
 
 Scope: the **8 working VPS** from the September 2026 client-area screenshot, surveyed live over
 SSH on 2026-09-01. Seven of them form the HA Kubernetes cluster that [infra/ansible](./ansible/)
@@ -21,7 +25,7 @@ bootstraps (PR #27); one is a spare. SSH key access is installed and verified on
 | Alias | Role (planned) | Vendor hostname | IP | OS | vCPU / RAM / disk | Plan | Renews |
 |-----------|--------------------------|--------------------------|-----------------|------------------|-------------------|-------|------------|
 | zivo-lb1 | **app load balancer** (HAProxy) — EMPTY, fleet key installed | vm464833534.manageserver.in | 45.196.196.98 | Ubuntu 24.04 | 1 / 0.9 Gi / 19 G | LV 10 | 2026-10-05 |
-| zivo-lb2 | **app load balancer** (HAProxy) | vm418674611.manageserver.in | 45.196.196.233 | Ubuntu 24.04 | 1 / 1 GB / small | LV 10 | 2026-10-05 |
+| zivo-lb2 | **app load balancer** (HAProxy) — EMPTY, fleet key installed | vm418674611.manageserver.in | 45.196.196.233 | Ubuntu 24.04 | 1 / 0.9 Gi / 19 G | LV 10 | 2026-10-05 |
 | zivo-node6 | k8s control plane (rebuild) | vm759659741.manageserver.in | 203.57.85.250 | Ubuntu 22.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-12 |
 | zivo-node7 | k8s control plane (rebuild) | vm997512676.manageserver.in | 203.57.85.224 | Ubuntu 22.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-12 |
 | zivo-node8 | k8s control plane (rebuild) | vm130951261.manageserver.in | 203.57.85.157 | Ubuntu 22.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-12 |
