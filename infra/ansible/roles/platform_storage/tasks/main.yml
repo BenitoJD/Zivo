@@ -6,20 +6,9 @@
   register: lpp
   changed_when: "'created' in lpp.stdout"
 
-- name: Default local-path StorageClass (Immediate binding; backup PVC has no pod consumer)
-  ansible.builtin.shell: |
-    kubectl get sc local-path >/dev/null 2>&1 || cat <<'YAML' | kubectl apply -f -
-    apiVersion: storage.k8s.io/v1
-    kind: StorageClass
-    metadata:
-      name: local-path
-      annotations:
-        storageclass.kubernetes.io/is-default-class: "true"
-    provisioner: rancher.io/local-path
-    reclaimPolicy: Delete
-    volumeBindingMode: Immediate
-    allowVolumeExpansion: false
-    YAML
-    exit 0
+- name: Make local-path the default StorageClass (idempotent annotation)
+  ansible.builtin.command: >-
+    kubectl annotate storageclass local-path
+    storageclass.kubernetes.io/is-default-class=true --overwrite
   environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
-  changed_when: false
+  changed_when: true

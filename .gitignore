@@ -77,4 +77,4 @@ backend/piper_voices/
 graphify-out/cache/
 graphify-out/cost.json
 .kube/
-infra/ansible/inventory/group_vars/secrets.yml
+infra/ansible/inventory/group_vars/all/secrets.yml
