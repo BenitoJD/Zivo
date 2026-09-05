@@ -97,7 +97,7 @@
     msg: "{{ cilium_status_out.stdout_lines }}"
 
 - name: Wait for this master to report Ready
-  ansible.builtin.command: kubectl wait --for=condition=Ready node/{{ k8s_node_name }} --timeout=600s
+  ansible.builtin.command: kubectl wait --for=condition=Ready node/{{ inventory_hostname }} --timeout=600s
   become: false
   changed_when: false
 
