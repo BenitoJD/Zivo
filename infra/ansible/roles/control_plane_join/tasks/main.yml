@@ -10,8 +10,11 @@
   register: kubelet_conf
 
 - name: Mint a fresh control-plane join command on master-1
+  # The uploaded certs are re-encrypted with THIS key so the join can decrypt
+  # them (init and join never share a key across separate ansible runs).
   ansible.builtin.shell: |
     key=$(kubeadm certs certificate-key)
+    kubeadm init phase upload-certs --upload-certs --certificate-key="$key" >/dev/null
     kubeadm token create --print-join-command | sed "s|$| --control-plane --certificate-key $key|"
   register: cp_join_cmd
   delegate_to: master-1
