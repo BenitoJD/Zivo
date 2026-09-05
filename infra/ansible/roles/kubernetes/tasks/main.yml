@@ -99,7 +99,7 @@
 - name: Confirm crictl reports the systemd cgroup driver
   # Guide verification: crictl info must show systemdCgroup true before bootstrap.
   # Retried: containerd may still be settling right after its restart.
-  ansible.builtin.shell: crictl info | grep -A2 systemdCgroup
+  ansible.builtin.shell: crictl info | grep -iA2 systemdCgroup
   register: crictl_cgroup_check
   changed_when: false
   retries: 6
