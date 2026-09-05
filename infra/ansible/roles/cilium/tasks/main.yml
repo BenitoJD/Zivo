@@ -59,9 +59,8 @@
   ansible.builtin.debug:
     msg: "{{ cilium_cli_check.stdout_lines }}"
 
-- name: Check whether Cilium is already installed
-  ansible.builtin.command: helm status cilium -n kube-system
-  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+- name: Check whether Cilium is already installed and healthy
+  ansible.builtin.command: cilium status
   register: cilium_existing
   failed_when: false
   changed_when: false
