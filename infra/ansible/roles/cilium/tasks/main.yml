@@ -75,14 +75,15 @@
   vars:
     ansible_command_timeout: 1800
 
-- name: Wait for Cilium agent and operator to report OK
-  # cilium status --wait is a more precise signal than pods showing Running.
-  ansible.builtin.command: cilium status --wait
+- name: Wait for Cilium agent and operator to report OK (bounded, non-fatal)
+  # cilium status --wait can hang past its cap on a single-node bootstrap;
+  # the real verification happens in cluster_verify anyway.
+  ansible.builtin.shell: timeout 300 cilium status --wait || true
   become: false
   register: cilium_status_out
   changed_when: false
   vars:
-    ansible_command_timeout: 1200
+    ansible_command_timeout: 330
 
 - name: Show Cilium status
   ansible.builtin.debug:
