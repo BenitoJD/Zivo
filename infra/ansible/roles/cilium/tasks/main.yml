@@ -82,12 +82,13 @@
   vars:
     ansible_command_timeout: 1800
 
-- name: Wait for Cilium agent and operator to report OK (bounded, non-fatal)
-  # cilium status --wait can hang past its cap on a single-node bootstrap;
-  # the real verification happens in cluster_verify anyway.
-  ansible.builtin.shell: timeout 300 cilium status --wait || true
-  become: false
-  register: cilium_status_out
+- name: Wait for Cilium pods to be Ready (bounded by kubectl --timeout)
+  ansible.builtin.command: >-
+    kubectl -n kube-system wait --for=condition=Ready pod
+    -l 'k8s-app in (cilium,cilium-operator)' --timeout=300s
+  environment: { KUBECONFIG: /root/.kube/config }
+  register: cilium_wait_out
+  failed_when: false
   changed_when: false
   vars:
     ansible_command_timeout: 330
