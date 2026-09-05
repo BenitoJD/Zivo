@@ -35,6 +35,9 @@
 
 - name: Install and start the runner service (as root; unit runs as github-runner)
   ansible.builtin.shell: cd /home/github-runner && ./svc.sh install github-runner && ./svc.sh start
+  args:
+    chdir: /home/github-runner
+    creates: /etc/systemd/system/actions.runner.BenitoJD-Zivo.worker-4.service
   changed_when: true
 
 - name: Kubeconfig for CI deploys (cluster-admin via API LB)
