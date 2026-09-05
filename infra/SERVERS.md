@@ -3,6 +3,9 @@
 # Server inventory: Web Eye Soft fleet
 
 > **STATUS 2026-09-05:** nodes 1-8 were **reinstalled from fresh images** (fleet-wide TCP
+> blackout #1; recovered after ~2h). **Blackout #2 on 2026-09-06 ~01:12 IST**: total TCP loss
+> on all 10 servers again (ping fine) — recurred mid-rebuild. Log incidents with Web Eye Soft
+> every time; if blackouts continue, the provider is not production-grade.
 > blackout, then all SSH keys rejected).
 > The cluster, platform and app are rebuilt entirely from this repo's automation
 > (`infra/ansible/site.yml` + `scripts/install-ha-platform.sh` + the deploy release
