@@ -28,6 +28,14 @@ service_cidr: "10.96.0.0/12"
 haproxy_frontend_port: 8443
 apiserver_port: 6443
 
+# App traffic backends: Traefik on the ingress workers (node.zivo/ingress=true).
+# Both HAProxy LBs (node4 app-lb, node5 master-lb) forward 80/443 to these.
+app_lb_backends:
+  - { name: worker-1, ip: 45.196.196.52 }
+  - { name: worker-3, ip: 45.196.196.191 }
+  - { name: worker-4, ip: 203.57.85.251 }
+  - { name: worker-5, ip: 45.196.196.22 }
+
 # Single stable endpoint every client (kubectl, kubelet, kubeadm join) talks to.
 control_plane_endpoint: "{{ hostvars[groups['load_balancer'][0]].ansible_host }}:{{ haproxy_frontend_port }}"
 

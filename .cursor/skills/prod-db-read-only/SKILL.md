@@ -9,7 +9,7 @@ description: "Read-only access to the zivo production PostgreSQL database on the
 
 | Parameter | Value |
 |-----------|-------|
-| Prod host | VPS (`ssh zivo-vps`) running K3s |
+| Prod host | HA cluster (`KUBECONFIG=~/.kube/zivo-ha.conf`, API entry `45.196.196.233:8443`) |
 | Postgres | in-cluster StatefulSet, Helm release `zivo-postgres`, namespace `zivo` |
 | Database | `zivo` |
 | DB user (in-cluster) | `zivo` |
@@ -29,17 +29,17 @@ Keep all queries read-only (`SELECT`, `EXPLAIN`); never run `INSERT`, `UPDATE`,
 `DELETE`, `DROP`, `TRUNCATE`, or DDL without a separate state-changing approval.
 
 ```bash
-ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; \
+KUBECONFIG=~/.kube/zivo-ha.conf \
   kubectl -n zivo exec statefulset/zivo-postgres -- \
-  psql -U zivo -d zivo -c "<SQL>"'
+  psql -U zivo -d zivo -c "<SQL>"
 ```
 
 Alternatively, port-forward to your machine and run `psql` locally:
 
 ```bash
 # Terminal 1: forward the in-cluster Postgres to localhost:5453
-ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; \
-  kubectl -n zivo port-forward statefulset/zivo-postgres 5453:5432'
+KUBECONFIG=~/.kube/zivo-ha.conf \
+  kubectl -n zivo port-forward statefulset/zivo-postgres 5453:5432
 
 # Terminal 2: query over the forwarded port
 psql -h 127.0.0.1 -p 5453 -U zivo -d zivo -c "<SQL>"
@@ -50,6 +50,6 @@ psql -h 127.0.0.1 -p 5453 -U zivo -d zivo -c "<SQL>"
 If the StatefulSet name differs, list candidates first:
 
 ```bash
-ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo get statefulset'
-ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo get pods -l app.kubernetes.io/name=postgres'
+KUBECONFIG=~/.kube/zivo-ha.conf kubectl -n zivo get statefulset
+KUBECONFIG=~/.kube/zivo-ha.conf kubectl -n zivo get pods -l app.kubernetes.io/name=postgres
 ```

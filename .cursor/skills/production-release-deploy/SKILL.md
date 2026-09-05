@@ -116,7 +116,7 @@ Expected deploy behavior:
 Prod is a single VPS running K3s. SSH alias:
 
 ```bash
-ssh zivo-vps
+export KUBECONFIG=~/.kube/zivo-ha.conf
 ```
 
 Then set the kubeconfig for kubectl:
@@ -134,16 +134,16 @@ zivo
 Read-only monitoring commands:
 
 ```bash
-ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo get pods -o wide'
-ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo get deploy'
-ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo get ingress'
-ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo get pods -o jsonpath='\''{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{range .spec.containers[*]}{.image}{" "}{end}{"\n"}{end}'\'''
+KUBECONFIG=~/.kube/zivo-ha.conf kubectl -n zivo get pods -o wide
+KUBECONFIG=~/.kube/zivo-ha.conf kubectl -n zivo get deploy
+KUBECONFIG=~/.kube/zivo-ha.conf kubectl -n zivo get ingress
+KUBECONFIG=~/.kube/zivo-ha.conf kubectl -n zivo get pods -o jsonpath=\''{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{range .spec.containers[*]}{.image}{" "}{end}{"\n"}{end}'\'''
 ```
 
 Inspect the migration job that runs before rollout:
 
 ```bash
-ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo logs job/alembic-migrate'
+KUBECONFIG=~/.kube/zivo-ha.conf kubectl -n zivo logs job/alembic-migrate
 ```
 
 For each rollout, verify:
@@ -159,9 +159,9 @@ For each rollout, verify:
 Useful waits, still read-only:
 
 ```bash
-ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo rollout status deployment/zivo-auth --timeout=10m'
-ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo rollout status deployment/worker-eta-cpu --timeout=10m'
-ssh zivo-vps 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl -n zivo rollout status deployment/worker-eta-io --timeout=10m'
+KUBECONFIG=~/.kube/zivo-ha.conf kubectl -n zivo rollout status deployment/zivo-auth --timeout=10m
+KUBECONFIG=~/.kube/zivo-ha.conf kubectl -n zivo rollout status deployment/worker-eta-cpu --timeout=10m
+KUBECONFIG=~/.kube/zivo-ha.conf kubectl -n zivo rollout status deployment/worker-eta-io --timeout=10m
 ```
 
 If a deployment name differs from the Helm release name, inspect current

@@ -1,0 +1,5 @@
+---
+# Ingress workers (node.zivo/ingress=true). node2 is the tainted data node.
+app_lb_backends:
+  - { name: worker-1, ip: 45.196.196.52 }
+  - { name: worker-3, ip: 45.196.196.191 }

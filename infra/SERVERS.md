@@ -3,7 +3,7 @@
 # Server inventory: Web Eye Soft fleet
 
 > **STATUS 2026-09-05:** nodes 1-8 were **reinstalled from fresh images** (fleet-wide TCP
-> blackout, then all SSH keys rejected). Node9 and vm365558148 were NOT touched.
+> blackout, then all SSH keys rejected).
 > The cluster, platform and app are rebuilt entirely from this repo's automation
 > (`infra/ansible/site.yml` + `scripts/install-ha-platform.sh` + the deploy release
 > list) once key access is re-injected via the panel console. Two new LV 10 servers
@@ -133,14 +133,6 @@ pgbouncer, Postgres (pgvector) and MinIO. Rebuild/re-run with
 - TLS is intentionally OFF on all ingresses until the zivo.fyi DNS records move from the
   old VPS IP to a worker IP; then set `tls: true` / `entrypoint: websecure` per values.
 
-## The old production VPS (zivo-vps) — REIMAGED, offline
-
-`103.194.228.47` was reimaged from a clean template on or before 2026-09-04: SSH host key
-changed, the fleet key and personal keys are rejected, nothing listens on 80/443, and the
-K3s stack, `/root/.zivo/secrets.env` and the GitHub Actions runner that deployed to it are
-gone. DNS still points zivo.fyi at that IP. Production recovery path = the HA cluster
-above + a DNS cutover + a new self-hosted runner.
-
 ## Client area & renewals
 
 - Portal: <https://www.webeyesoft.com/client-area/accounts/services> ; the per-service *Manage* page
@@ -148,12 +140,8 @@ above + a DNS cutover + a new self-hosted runner.
   CHANGE PASSWORD / VNC / SSH-console actions.
 - **Renewal watch:** all 8 servers renew between **2026-09-12 and 2026-09-24** (₹399-₹699 each).
   Letting the control planes (nodes 6-8) lapse takes out the etcd quorum and the whole cluster.
-- The account also holds one LV 8 VPS outside this scope (vm627572835, 203.57.85.94, renews
-  2026-10-01) that runs unrelated standalone apps; SSH alias `zivo-node9` exists for it.
 
 ## Related
 
 - [infra/ansible/](./ansible/): the bootstrap playbook; `inventory/hosts.ini` now holds the real
   IPs and live roles (masters / workers / load_balancer), `ansible_user=root` matching the key above.
-- Production zivo app stack: `103.194.228.47` (`ssh zivo-vps`, separate provider); see
-  [AGENTS.md](../AGENTS.md#production-vps).

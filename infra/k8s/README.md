@@ -6,10 +6,9 @@ Helm charts and prod values. Deploy model matches [zivo](https://github.com/Beni
 
 | | |
 |---|---|
-| IP | `103.194.228.47` |
-| SSH | `ssh zivo-vps` |
-| K3s | Installed |
-| Runner | `self-hosted`, `zivo` |
+| App entry (LB) | `45.196.196.98` (HAProxy -> Traefik workers) |
+| K8s API entry | `45.196.196.233:8443` (`KUBECONFIG=~/.kube/zivo-ha.conf`) |
+| Runner | `self-hosted`, `zivo` (on worker node4) |
 | App namespace | `zivo` (recreated on deploy) |
 
 ## Charts
@@ -37,17 +36,17 @@ Prod values: `environments/prod/*.yaml`
 
 | Host | Points to |
 |------|-----------|
-| `zivo.fyi` | `103.194.228.47` |
-| `www.zivo.fyi` | `103.194.228.47` |
-| `api.zivo.fyi` | `103.194.228.47` |
-| `auth.zivo.fyi` | `103.194.228.47` |
-| `storage.zivo.fyi` | `103.194.228.47` |
-| `practice.zivo.fyi` | `103.194.228.47` |
-| `content.zivo.fyi` | `103.194.228.47` |
-| `study.zivo.fyi` | `103.194.228.47` |
-| `library.zivo.fyi` | `103.194.228.47` |
-| `admin.zivo.fyi` | `103.194.228.47` |
-| `s3.zivo.fyi` | `103.194.228.47` |
+| `zivo.fyi` | `45.196.196.98` |
+| `www.zivo.fyi` | `45.196.196.98` |
+| `api.zivo.fyi` | `45.196.196.98` |
+| `auth.zivo.fyi` | `45.196.196.98` |
+| `storage.zivo.fyi` | `45.196.196.98` |
+| `practice.zivo.fyi` | `45.196.196.98` |
+| `content.zivo.fyi` | `45.196.196.98` |
+| `study.zivo.fyi` | `45.196.196.98` |
+| `library.zivo.fyi` | `45.196.196.98` |
+| `admin.zivo.fyi` | `45.196.196.98` |
+| `s3.zivo.fyi` | `45.196.196.98` |
 
 ## Deploy
 
@@ -104,7 +103,7 @@ cert-manager ClusterIssuer: `infra/k8s/cert-manager/cluster-issuer.yaml`
 Install: `scripts/install-cert-manager.sh`
 
 `auth.zivo.fyi`, `storage.zivo.fyi`, `practice.zivo.fyi`, `content.zivo.fyi`,
-and `study.zivo.fyi` need A records to `103.194.228.47` before Let's Encrypt
+and `study.zivo.fyi` need A records to `45.196.196.98` before Let's Encrypt
 will issue. Until those records exist:
 
 - Docker build must leave `NEXT_PUBLIC_AUTH_URL` and `NEXT_PUBLIC_STORAGE_URL`

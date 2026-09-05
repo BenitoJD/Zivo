@@ -39,8 +39,8 @@ Decisions (rank, metric, gate, schedule, next-step, plumbing) live behind named 
 | **Helm / K8s** | Ready | postgres, minio, auth, storage, practice, content, study, library, admin, web, worker, db-schema charts |
 | **CI** | Ready | `.github/workflows/ci.yml` — self-hosted `zivo` runner on VPS |
 | **Deploy workflow** | Ready | `.github/workflows/deploy.yml` (needs push + workflow run) |
-| **VPS base** | Ready | K3s, Traefik, cert-manager, GH runner at `103.194.228.47` |
-| **VPS app stack** | Auth live | Storage/practice/content/study/library/admin/worker roll out this deploy. Add A records for `auth.zivo.fyi`, `storage.zivo.fyi`, `practice.zivo.fyi`, `content.zivo.fyi`, `study.zivo.fyi`, `library.zivo.fyi`, and `admin.zivo.fyi` → `103.194.228.47` before TLS. |
+| **HA k8s cluster** | Ready | 3 masters + 5 workers + 2 LBs on Web Eye Soft VPS — see [infra/SERVERS.md](infra/SERVERS.md) |
+| **App stack** | Ready | Full Zivo stack deployed on the HA cluster; DNS cutover to `45.196.196.98` is the open step before TLS. |
 | **Question generation** | Ready | Upload source → MCQs; Budget + Quality + Graph + priors |
 | **Question evaluation** | Ready (engine) | `docs/QUALITY_EVALUATION_ENGINE.md` + `quality_evaluation.py` |
 | **Adaptive selection** | Ready (engine) | `docs/ADAPTIVE_SELECTION_ENGINE.md` + `adaptive_selection.py` |
@@ -149,29 +149,23 @@ Identity migrations: `auth/alembic/versions/` with version table `alembic_versio
 
 Product tables: `intel.*` (unchanged DDL) + additive `qb.*` — see [docs/WORKSPACE.md](docs/WORKSPACE.md) and [ADR 0002](docs/adr/0002-intel-frozen-qb-additive.md).
 
-## Production (VPS)
+## Production (HA Kubernetes cluster)
 
 | | |
 |---|---|
-| **Host** | `103.194.228.47` (`ssh zivo-vps`) |
-| **DNS** | `zivo.fyi`, `www.zivo.fyi`, `api.zivo.fyi`, `auth.zivo.fyi`, `storage.zivo.fyi`, `practice.zivo.fyi`, `content.zivo.fyi`, `study.zivo.fyi`, `library.zivo.fyi`, `admin.zivo.fyi`, `s3.zivo.fyi` → VPS IP |
+| **App entry (LB)** | `45.196.196.98` (HAProxy → Traefik on workers) |
+| **K8s API entry (LB)** | `45.196.196.233:8443` (`KUBECONFIG=~/.kube/zivo-ha.conf`) |
+| **DNS** | `zivo.fyi`, `www.zivo.fyi`, `api.zivo.fyi`, `auth.zivo.fyi`, `storage.zivo.fyi`, `practice.zivo.fyi`, `content.zivo.fyi`, `study.zivo.fyi`, `library.zivo.fyi`, `admin.zivo.fyi`, `s3.zivo.fyi` → `45.196.196.98` |
 | **Namespace** | `zivo` |
-| **Runner labels** | `self-hosted`, `zivo` |
+| **Runner** | Self-hosted on worker node4, labels `self-hosted`, `zivo` |
 
-**Fleet servers (Web Eye Soft):** the 9-VPS inventory (roles, specs, SSH aliases `zivo-node1`–`zivo-node9`, renewals) lives in [infra/SERVERS.md](infra/SERVERS.md).
+**Fleet servers (Web Eye Soft):** the 10-VPS inventory (roles, specs, SSH aliases `zivo-lb1`, `zivo-lb2`, `zivo-node1`–`zivo-node8`, renewals) lives in [infra/SERVERS.md](infra/SERVERS.md).
 
-**2026-09-04 status:** the old single VPS was reimaged (SSH keys rejected, K3s stack, secrets and runner lost); zivo.fyi now runs from the Web Eye Soft HA cluster (ingress: worker IPs `45.196.196.52` / `.115` / `.191` on 80/443; kubectl via `KUBECONFIG=~/.kube/zivo-ha.conf`; platform rebuild: `scripts/install-ha-platform.sh`). DNS cutover and a new self-hosted runner are the open follow-ups.
-
-First-time server setup (if secrets were wiped):
-
-```bash
-RUNNER_TOKEN=$(gh api --method POST repos/BenitoJD/Zivo/actions/runners/registration-token --jq .token)
-ssh zivo-vps "RUNNER_TOKEN=$RUNNER_TOKEN bash -s" < scripts/bootstrap-vps.sh
-```
+**Full rebuild (bare Ubuntu → production):** inject the fleet key, then `ansible-playbook infra/ansible/site.yml`, then `KUBECONFIG=~/.kube/zivo-ha.conf ./scripts/install-ha-platform.sh`, then the release list in `scripts/deploy-vps-local-build.sh`. Runbook: [infra/SERVERS.md](infra/SERVERS.md).
 
 Deploy: GitHub → Actions → **Deploy Zivo** → Run workflow.
 
-Google OAuth redirect URI in production is `https://auth.zivo.fyi/api/auth/google/callback` (Google Cloud Console + `GOOGLE_REDIRECT_URI` in `zivo-secrets`). Add A records for `auth.zivo.fyi`, `storage.zivo.fyi`, `practice.zivo.fyi`, `content.zivo.fyi`, `study.zivo.fyi`, `library.zivo.fyi`, and `admin.zivo.fyi` to the VPS before TLS will issue. Until then, keep those Ingresses HTTP-only and leave `NEXT_PUBLIC_*` empty so apex rewrites hit in-cluster services.
+Google OAuth redirect URI in production is `https://auth.zivo.fyi/api/auth/google/callback` (Google Cloud Console + `GOOGLE_REDIRECT_URI` in `zivo-secrets`). Every hostname's A record must point at `45.196.196.98` before TLS will issue. Until then, keep those Ingresses HTTP-only and leave `NEXT_PUBLIC_*` empty so apex rewrites hit in-cluster services.
 
 ## Frontend UI
 

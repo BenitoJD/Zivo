@@ -93,6 +93,13 @@
   roles:
     - worker_join
 
+- name: Application load balancer on the dedicated app LB VM
+  hosts: app_load_balancer
+  become: true
+  tags: [app-lb]
+  roles:
+    - app_lb
+
 - name: Final verification
   hosts: master-1
   become: true

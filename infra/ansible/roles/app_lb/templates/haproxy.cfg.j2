@@ -1,0 +1,39 @@
+# Managed by Ansible: application load balancer (TCP pass-through to Traefik).
+# Client IPs pass through untouched (no SNAT in TCP mode); TLS terminates at
+# Traefik. Health checks pull a dead ingress worker out of rotation automatically.
+
+global
+    log /dev/log local0
+    user haproxy
+    group haproxy
+    daemon
+
+defaults
+    log global
+    mode tcp
+    option tcplog
+    timeout connect 10s
+    timeout client 24h
+    timeout server 24h
+
+frontend app-http
+    bind *:80
+    default_backend app_http
+
+backend app_http
+    balance roundrobin
+    option tcp-check
+{% for b in app_lb_backends %}
+    server {{ b.name }} {{ b.ip }}:80 check inter 5s fall 3 rise 2
+{% endfor %}
+
+frontend app-https
+    bind *:443
+    default_backend app_https
+
+backend app_https
+    balance roundrobin
+    option tcp-check
+{% for b in app_lb_backends %}
+    server {{ b.name }} {{ b.ip }}:443 check inter 5s fall 3 rise 2
+{% endfor %}

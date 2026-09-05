@@ -85,7 +85,7 @@ API, workers, and Next.js run **on the host** via `dev.sh start` (not in compose
 
 ## VPS
 
-- SSH: `ssh zivo-vps` (`103.194.228.47`)
+- Kubectl: `KUBECONFIG=~/.kube/zivo-ha.conf` (API entry `45.196.196.233:8443`)
 - Prod: K3s namespace `zivo`, deploy via GitHub Actions `Deploy Zivo`
 
 ## Related skills

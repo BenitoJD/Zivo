@@ -78,7 +78,7 @@ the real resque worker, so it masked the real issue.
 
 ## Related gotchas
 - **Firewall:** the box is public. `ufw allow OpenSSH` + `ufw allow from <PROD_EGRESS_IP> to any
-  port 2358 proto tcp` + `ufw --force enable`. Prod egress IP: `ssh zivo-vps "curl -s ifconfig.me"`.
+  port 2358 proto tcp` + `ufw --force enable`. Prod egress IP: `ssh zivo-node5 "curl -s ifconfig.me"`.
 - **Deploy Zivo Action helm step** can fail with `open /etc/rancher/k3s/k3s.yaml: permission denied`
   (runner user can't read the kubeconfig). Images still build+import fine; finish the rollout on the
   VPS with `sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade ...` (see the deploy script).

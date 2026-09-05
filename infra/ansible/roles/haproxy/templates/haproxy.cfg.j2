@@ -37,3 +37,4 @@ backend kubernetes-backend
 {% for host in groups['masters'] %}
     server {{ host }} {{ hostvars[host].ansible_host }}:{{ apiserver_port }} check verify none
 {% endfor %}
+
