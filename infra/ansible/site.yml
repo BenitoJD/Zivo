@@ -166,3 +166,9 @@
   become: true
   tags: [judge0]
   roles: [judge0]
+
+- name: Argo CD (GitOps control plane)
+  hosts: master-1
+  become: true
+  tags: [gitops, argocd]
+  roles: [argocd]
