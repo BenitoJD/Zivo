@@ -1,0 +1,28 @@
+---
+- name: Add traefik helm repo
+  ansible.builtin.command: helm repo add traefik https://traefik.github.io/charts
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  changed_when: false
+  failed_when: false
+
+- name: Install Traefik (hostNetwork DaemonSet on ingress workers, 80/443, root + NET_BIND_SERVICE)
+  ansible.builtin.command: >-
+    helm upgrade --install traefik traefik/traefik -n kube-system
+    --set deployment.kind=DaemonSet
+    --set hostNetwork=true
+    --set deployment.dnsPolicy=ClusterFirstWithHostNet
+    --set updateStrategy.rollingUpdate.maxUnavailable=1
+    --set updateStrategy.rollingUpdate.maxSurge=0
+    --set service.type=ClusterIP
+    --set ingressRoute.dashboard.enabled=false
+    --set ports.web.port=80
+    --set ports.websecure.port=443
+    --set podSecurityContext.runAsUser=0
+    --set podSecurityContext.runAsGroup=0
+    --set podSecurityContext.runAsNonRoot=false
+    --set securityContext.capabilities.add={NET_BIND_SERVICE}
+    --set-string 'nodeSelector.node\.zivo/ingress=true'
+    --wait --timeout 300s
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  register: traefik
+  changed_when: "'has been deployed' in traefik.stdout or '_upgrade' in traefik.stdout"

@@ -1,0 +1,40 @@
+---
+- name: Install docker + compose
+  ansible.builtin.apt:
+    name: [docker.io, docker-compose-v2]
+    state: present
+    update_cache: true
+
+- name: Enable docker
+  ansible.builtin.systemd: { name: docker, enabled: true, state: started }
+
+- name: Create judge0 directory
+  ansible.builtin.file: { path: /opt/judge0, state: directory, mode: "0755" }
+
+- name: Download Judge0 release bundle
+  ansible.builtin.get_url:
+    url: https://github.com/judge0/judge0/releases/download/v1.13.0/judge0-v1.13.0.zip
+    dest: /opt/judge0/judge0.zip
+    mode: "0644"
+    timeout: 300
+
+- name: Extract
+  ansible.builtin.unarchive:
+    src: /opt/judge0/judge0.zip
+    dest: /opt/judge0
+    remote_src: true
+    creates: /opt/judge0/judge0-1.13.0/docker-compose.yml
+
+- name: Generate redis + postgres passwords
+  ansible.builtin.lineinfile:
+    path: /opt/judge0/judge0-1.13.0/.env
+    regexp: "^{{ item.key }}="
+    line: "{{ item.key }}={{ item.value }}"
+  loop:
+    - { key: REDIS_PASSWORD, value: "{{ judge0_redis_password }}" }
+    - { key: POSTGRES_PASSWORD, value: "{{ judge0_postgres_password }}" }
+
+- name: Start Judge0 stack
+  ansible.builtin.command: docker compose -f docker-compose.yml up -d
+  args: { chdir: /opt/judge0/judge0-1.13.0 }
+  changed_when: true

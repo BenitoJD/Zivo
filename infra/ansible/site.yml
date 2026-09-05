@@ -106,3 +106,63 @@
   tags: [verify]
   roles:
     - cluster_verify
+
+- name: Node labels and taints (data node, ingress workers)
+  hosts: master-1
+  become: true
+  tags: [labels]
+  roles: [cluster_labels]
+
+- name: Helm binary on master-1
+  hosts: master-1
+  become: true
+  tags: [platform]
+  roles: [helm_bin]
+
+- name: Default storage class (local-path)
+  hosts: master-1
+  become: true
+  tags: [platform]
+  roles: [platform_storage]
+
+- name: Traefik ingress (hostNetwork DaemonSet on ingress workers)
+  hosts: master-1
+  become: true
+  tags: [platform]
+  roles: [platform_traefik]
+
+- name: cert-manager + letsencrypt-prod
+  hosts: master-1
+  become: true
+  tags: [platform]
+  roles: [platform_certmanager]
+
+- name: Data layer (secrets, Postgres, MinIO, PgBouncer)
+  hosts: master-1
+  become: true
+  tags: [data]
+  roles: [platform_data]
+
+- name: Application releases
+  hosts: master-1
+  become: true
+  tags: [releases]
+  roles: [app_releases]
+
+- name: etcd snapshot backups
+  hosts: master-1
+  become: true
+  tags: [backups]
+  roles: [etcd_backups]
+
+- name: GitHub Actions runner on worker node4
+  hosts: worker-4
+  become: true
+  tags: [runner]
+  roles: [gh_runner]
+
+- name: Judge0 sandbox on worker node5
+  hosts: worker-5
+  become: true
+  tags: [judge0]
+  roles: [judge0]

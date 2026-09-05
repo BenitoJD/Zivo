@@ -1,0 +1,2 @@
+---
+data_node: worker-2   # tainted; Postgres + MinIO only

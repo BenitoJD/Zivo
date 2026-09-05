@@ -1,0 +1,25 @@
+---
+- name: Install local-path provisioner
+  ansible.builtin.command: >-
+    kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.31/deploy/local-path-storage.yaml
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  register: lpp
+  changed_when: "'created' in lpp.stdout"
+
+- name: Default local-path StorageClass (Immediate binding; backup PVC has no pod consumer)
+  ansible.builtin.shell: |
+    kubectl get sc local-path >/dev/null 2>&1 || cat <<'YAML' | kubectl apply -f -
+    apiVersion: storage.k8s.io/v1
+    kind: StorageClass
+    metadata:
+      name: local-path
+      annotations:
+        storageclass.kubernetes.io/is-default-class: "true"
+    provisioner: rancher.io/local-path
+    reclaimPolicy: Delete
+    volumeBindingMode: Immediate
+    allowVolumeExpansion: false
+    YAML
+    exit 0
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  changed_when: false

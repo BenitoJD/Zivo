@@ -1,0 +1,18 @@
+---
+- name: Install cert-manager
+  ansible.builtin.command: >-
+    kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.4/cert-manager.yaml
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  register: cm
+  changed_when: "'created' in cm.stdout or 'configured' in cm.stdout"
+
+- name: Wait for cert-manager deployments
+  ansible.builtin.command: kubectl -n cert-manager wait --for=condition=Available deployment --all --timeout=300s
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  changed_when: false
+
+- name: Apply letsencrypt-prod ClusterIssuer
+  ansible.builtin.command: kubectl apply -f {{ playbook_dir }}/../k8s/cert-manager/cluster-issuer.yaml
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  register: issuer
+  changed_when: "'created' in issuer.stdout or 'configured' in issuer.stdout"

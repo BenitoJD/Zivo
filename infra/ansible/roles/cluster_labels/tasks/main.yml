@@ -1,0 +1,25 @@
+---
+- name: Taint the dedicated data node (nothing else schedules there)
+  ansible.builtin.command: >-
+    kubectl taint node {{ data_node }} node.zivo/dedicated=data:NoSchedule --overwrite
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  delegate_to: master-1
+  become: false
+  changed_when: true
+
+- name: Label the data node
+  ansible.builtin.command: >-
+    kubectl label node {{ data_node }} node.zivo/role=data --overwrite
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  delegate_to: master-1
+  become: false
+  changed_when: false
+
+- name: Label all other workers as ingress nodes (Traefik target)
+  ansible.builtin.command: >-
+    kubectl label node {{ item }} node.zivo/ingress=true node.zivo/role=worker --overwrite
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  loop: "{{ groups['workers'] | difference([data_node]) }}"
+  delegate_to: master-1
+  become: false
+  changed_when: false

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+TS=$(date +%Y%m%d-%H%M%S)
+DIR=/var/backups/etcd
+mkdir -p "$DIR"
+ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key \
+  snapshot save "$DIR/snap-$TS.db"
+ls -1t "$DIR"/snap-*.db | tail -n +4 | xargs -r rm -f
+export MC_HOST_minio="http://$(kubectl -n zivo get secret zivo-secrets -o jsonpath='{.data.MINIO_ROOT_USER}' | base64 -d):$(kubectl -n zivo get secret zivo-secrets -o jsonpath='{.data.MINIO_ROOT_PASSWORD}' | base64 -d)@minio.zivo.svc:9000"
+mc mb -p minio/etcd-backups >/dev/null 2>&1 || true
+mc cp "$DIR/snap-$TS.db" "minio/etcd-backups/snap-$TS.db"
+mc rm --older-than 14d --recursive --force minio/etcd-backups || true

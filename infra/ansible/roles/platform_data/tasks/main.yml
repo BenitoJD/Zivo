@@ -1,0 +1,76 @@
+---
+- name: zivo namespace
+  ansible.builtin.command: kubectl create namespace zivo
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  register: ns
+  failed_when: ns.rc != 0 and 'AlreadyExists' not in ns.stderr
+  changed_when: ns.rc == 0
+
+- name: Render zivo-secrets manifest
+  ansible.builtin.template:
+    src: zivo-secrets.yaml.j2
+    dest: /root/zivo-secrets.yaml
+    mode: "0600"
+  delegate_to: master-1
+
+- name: Apply zivo-secrets
+  ansible.builtin.command: kubectl apply -f /root/zivo-secrets.yaml
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  delegate_to: master-1
+  register: sec
+  changed_when: "'configured' in sec.stdout or 'created' in sec.stdout"
+
+- name: Remove rendered secrets file from master-1
+  ansible.builtin.file: { path: /root/zivo-secrets.yaml, state: absent }
+  delegate_to: master-1
+
+- name: Wire DATABASE_URL through pgbouncer (DIRECT kept for migrations)
+  ansible.builtin.shell: |
+    kubectl -n zivo patch secret zivo-secrets --type merge -p "$(python3 -c "
+    import base64, json, subprocess, os
+    def d(k): return base64.b64decode(json.loads(subprocess.check_output(['kubectl','-n','zivo','get','secret','zivo-secrets','-o','json']))['data'][k]).decode()
+    u, p = d('POSTGRES_USER'), d('POSTGRES_PASSWORD')
+    print(json.dumps({'data': {'DATABASE_URL': base64.b64encode(f'postgresql+psycopg://{u}:{p}@pgbouncer:5432/zivo'.encode()).decode(),
+                                'DATABASE_URL_DIRECT': base64.b64encode(f'postgresql+psycopg://{u}:{p}@postgres:5432/zivo'.encode()).decode()}}))
+    ")"
+
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  delegate_to: master-1
+  changed_when: true
+
+- name: Postgres (pgvector) with prod values
+  ansible.builtin.command: >-
+    helm upgrade --install zivo-postgres {{ playbook_dir }}/../k8s/charts/postgres -n zivo
+    -f {{ playbook_dir }}/../k8s/environments/prod/postgres-values.yaml --wait --timeout 600s
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  register: pg
+  changed_when: "'deployed' in pg.stdout"
+
+- name: Pin MinIO data PVC to the data node if unbound (Immediate mode needs the node hint)
+  ansible.builtin.shell: |
+    phase=$(kubectl -n zivo get pvc data-minio-0 -o jsonpath='{.status.phase}' 2>/dev/null || echo missing)
+    if [ "$phase" != "Bound" ] && [ "$phase" != "missing" ]; then
+      kubectl -n zivo annotate pvc data-minio-0 volume.alpha.kubernetes.io/selected-node={{ data_node | default('worker-2') }} --overwrite || true
+    fi
+    exit 0
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  delegate_to: master-1
+  changed_when: false
+
+- name: MinIO with prod values (ingress HTTP-only until DNS cutover)
+  ansible.builtin.command: >-
+    helm upgrade --install zivo-minio {{ playbook_dir }}/../k8s/charts/minio -n zivo
+    -f {{ playbook_dir }}/../k8s/environments/prod/minio-values.yaml
+    --set ingress.tls=false --set ingress.entrypoint=web --set publicUrl=http://s3.zivo.fyi
+    --wait --timeout 600s
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  register: minio
+  changed_when: "'deployed' in minio.stdout"
+
+- name: PgBouncer
+  ansible.builtin.command: >-
+    helm upgrade --install pgbouncer {{ playbook_dir }}/../k8s/charts/pgbouncer -n zivo
+    -f {{ playbook_dir }}/../k8s/environments/prod/pgbouncer-values.yaml --wait --timeout 300s
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  register: pgb
+  changed_when: "'deployed' in pgb.stdout"

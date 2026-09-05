@@ -1,0 +1,20 @@
+---
+- name: Install mc (MinIO client)
+  ansible.builtin.get_url:
+    url: https://dl.min.io/client/mc/release/linux-amd64/mc
+    dest: /usr/local/bin/mc
+    mode: "0755"
+    timeout: 180
+
+- name: Install etcd snapshot script
+  ansible.builtin.template:
+    src: etcd-snapshot.sh.j2
+    dest: /usr/local/bin/etcd-snapshot.sh
+    mode: "0755"
+
+- name: Nightly etcd snapshot cron (03:30)
+  ansible.builtin.copy:
+    dest: /etc/cron.d/etcd-snapshot
+    mode: "0644"
+    content: |
+      30 3 * * * root /usr/local/bin/etcd-snapshot.sh >> /var/log/etcd-snapshot.log 2>&1

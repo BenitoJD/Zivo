@@ -1,0 +1,82 @@
+---
+- name: Check for the ghcr-pull secret (only zivo-content is private)
+  ansible.builtin.command: kubectl -n zivo get secret ghcr-pull
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  register: pull_secret
+  failed_when: false
+  changed_when: false
+
+- name: Set pull-secret args
+  ansible.builtin.set_fact:
+    pull_args: "{{ ['--set', 'imagePullSecrets[0].name=ghcr-pull'] if pull_secret.rc == 0 else [] }}"
+
+- name: Schema migrations (auth -> storage -> practice -> content -> study -> library -> admin -> product)
+  ansible.builtin.shell: |
+    set -e
+    for spec in auth-schema zivo-auth auth-alembic-migrate \
+                storage-schema zivo-storage storage-alembic-migrate \
+                practice-schema zivo-practice practice-alembic-migrate \
+                content-schema zivo-content content-alembic-migrate \
+                study-schema zivo-study study-alembic-migrate \
+                library-schema zivo-library library-alembic-migrate \
+                admin-schema zivo-admin admin-alembic-migrate \
+                db-schema zivo-migrate alembic-migrate; do
+      set -- $spec
+      kubectl -n zivo delete job "$3" --ignore-not-found=true
+      helm upgrade --install "$1" {{ playbook_dir }}/../k8s/charts/db-schema -n zivo \
+        -f {{ playbook_dir }}/../k8s/environments/prod/backend-release-values.yaml \
+        --set image.tag={{ app_tag }} --set image.repository=ghcr.io/{{ ghcr_owner }}/$2 \
+        --set namespace=zivo --set jobName=$3 \
+        {{ pull_args | join(' ') }} --wait --wait-for-jobs --timeout 15m
+    done
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  args: { executable: /bin/bash }
+  changed_when: true
+
+- name: Workers (io / cpu+newspaper)
+  ansible.builtin.shell: |
+    set -e
+    for release in zivo-worker-io zivo-worker-cpu; do
+      io=true cpu=false newspaper=false
+      [ "$release" = zivo-worker-cpu ] && { io=false cpu=true newspaper=true; }
+      helm upgrade --install "$release" {{ playbook_dir }}/../k8s/charts/worker -n zivo \
+        -f {{ playbook_dir }}/../k8s/environments/prod/worker-values.yaml \
+        --set image.tag={{ app_tag }} --set image.repository=ghcr.io/{{ ghcr_owner }}/zivo-worker \
+        --set workloads.io.enabled=$io --set workloads.cpu.enabled=$cpu --set workloads.newspaper.enabled=$newspaper \
+        {{ pull_args | join(' ') }} --wait --timeout 15m
+    done
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  args: { executable: /bin/bash }
+  changed_when: true
+
+- name: Services (auth storage practice content study library admin web)
+  ansible.builtin.shell: |
+    set -e
+    for spec in zivo-auth auth auth-values.yaml \
+                zivo-storage storage storage-values.yaml \
+                zivo-practice practice practice-values.yaml \
+                zivo-content content content-values.yaml \
+                zivo-study study study-values.yaml \
+                zivo-library library library-values.yaml \
+                zivo-admin admin admin-values.yaml \
+                zivo-web web web-values.yaml; do
+      set -- $spec
+      helm upgrade --install "$1" {{ playbook_dir }}/../k8s/charts/$2 -n zivo \
+        -f {{ playbook_dir }}/../k8s/environments/prod/$3 \
+        --set image.tag={{ app_tag }} \
+        {{ pull_args | join(' ') }} --wait --timeout 20m
+    done
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  args: { executable: /bin/bash }
+  changed_when: true
+
+- name: HTTP-only ingresses until DNS cutover (web + minio ship tls:true in values)
+  ansible.builtin.shell: |
+    kubectl -n zivo annotate ingress zivo-web-ingress traefik.ingress.kubernetes.io/router.entrypoints=web --overwrite || true
+    for i in $(kubectl -n zivo get ingress -o name); do
+      kubectl -n zivo patch "$i" --type=json -p='[{"op":"remove","path":"/spec/tls"}]' 2>/dev/null || true
+    done
+    kubectl -n zivo delete certificate --all --ignore-not-found=true
+    exit 0
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  changed_when: false

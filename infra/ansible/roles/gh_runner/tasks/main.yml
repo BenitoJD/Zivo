@@ -1,0 +1,41 @@
+---
+- name: Install docker
+  ansible.builtin.apt: { name: docker.io, state: present, update_cache: true }
+
+- name: Enable docker
+  ansible.builtin.systemd: { name: docker, enabled: true, state: started }
+
+- name: Create runner user
+  ansible.builtin.user: { name: github-runner, shell: /bin/bash, create_home: true }
+
+- name: Docker group for runner user
+  ansible.builtin.user: { name: github-runner, groups: docker, append: true }
+
+- name: Fetch runner registration token (controller, via gh)
+  ansible.builtin.command: gh api --method POST repos/{{ gh_repo }}/actions/runners/registration-token --jq .token
+  delegate_to: localhost
+  become: false
+  register: reg_token
+  changed_when: false
+
+- name: Set runner token fact
+  ansible.builtin.set_fact:
+    runner_token: "{{ reg_token.stdout }}"
+
+- name: Download and configure the runner
+  become_user: github-runner
+  ansible.builtin.shell: |
+    set -e
+    cd /home/github-runner
+    [ -d actions-runner ] && exit 0
+    curl -fsSL -o runner.tar.gz https://github.com/actions/runner/releases/download/v2.323.0/actions-runner-linux-x64-2.323.0.tar.gz
+    tar xzf runner.tar.gz && rm runner.tar.gz
+    ./config.sh --url https://github.com/{{ gh_repo }} --token {{ runner_token }} --labels {{ runner_labels }} --unattended --replace
+  args: { creates: /home/github-runner/.credentials }
+
+- name: Install and start the runner service
+  become: true
+  become_user: github-runner
+  ansible.builtin.shell: cd /home/github-runner && ./svc.sh install github-runner && ./svc.sh start
+  args: { chdir: /home/github-runner }
+  changed_when: true

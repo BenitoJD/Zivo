@@ -1,0 +1,11 @@
+---
+- name: Check helm presence
+  ansible.builtin.stat: { path: /usr/local/bin/helm }
+  register: helm_bin
+
+- name: Install helm
+  when: not helm_bin.stat.exists
+  ansible.builtin.shell: |
+    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  args: { creates: /usr/local/bin/helm }
+  changed_when: true
