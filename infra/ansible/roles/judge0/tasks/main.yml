@@ -25,14 +25,9 @@
     remote_src: true
     creates: /opt/judge0/judge0-1.13.0/docker-compose.yml
 
-- name: Generate redis + postgres passwords
-  ansible.builtin.lineinfile:
-    path: /opt/judge0/judge0-1.13.0/.env
-    regexp: "^{{ item.key }}="
-    line: "{{ item.key }}={{ item.value }}"
-  loop:
-    - { key: REDIS_PASSWORD, value: "{{ judge0_redis_password }}" }
-    - { key: POSTGRES_PASSWORD, value: "{{ judge0_postgres_password }}" }
+- name: Judge0 config sanity (shipped judge0.conf holds db/redis defaults)
+  ansible.builtin.command: grep -q "POSTGRES" /opt/judge0/judge0-v1.13.0/judge0.conf
+  changed_when: false
 
 - name: Start Judge0 stack
   ansible.builtin.command: docker compose -f docker-compose.yml up -d
