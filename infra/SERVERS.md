@@ -20,7 +20,7 @@ bootstraps (PR #27); one is a spare. SSH key access is installed and verified on
 
 | Alias | Role (planned) | Vendor hostname | IP | OS | vCPU / RAM / disk | Plan | Renews |
 |-----------|--------------------------|--------------------------|-----------------|------------------|-------------------|-------|------------|
-| zivo-lb1 | **app load balancer** (HAProxy) | vm464833534.manageserver.in | 45.196.196.98 | Ubuntu 24.04 | 1 / 1 GB / small | LV 10 | 2026-10-05 |
+| zivo-lb1 | **app load balancer** (HAProxy) — EMPTY, fleet key installed | vm464833534.manageserver.in | 45.196.196.98 | Ubuntu 24.04 | 1 / 0.9 Gi / 19 G | LV 10 | 2026-10-05 |
 | zivo-lb2 | **app load balancer** (HAProxy) | vm418674611.manageserver.in | 45.196.196.233 | Ubuntu 24.04 | 1 / 1 GB / small | LV 10 | 2026-10-05 |
 | zivo-node6 | k8s control plane (rebuild) | vm759659741.manageserver.in | 203.57.85.250 | Ubuntu 22.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-12 |
 | zivo-node7 | k8s control plane (rebuild) | vm997512676.manageserver.in | 203.57.85.224 | Ubuntu 22.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-12 |
