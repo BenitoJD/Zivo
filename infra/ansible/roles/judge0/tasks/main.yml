@@ -1,7 +1,7 @@
 ---
 - name: Install docker + compose
   ansible.builtin.apt:
-    name: [docker.io, docker-compose-v2]
+    name: [docker.io, docker-compose-v2, unzip]
     state: present
     update_cache: true
 
