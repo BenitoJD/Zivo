@@ -8,7 +8,7 @@
 
 - name: Ensure ~/.kube exists on the load balancer
   ansible.builtin.file:
-    path: /home/{{ ansible_user }}/.kube
+    path: /root/.kube
     state: directory
     owner: "{{ ansible_user }}"
     group: "{{ ansible_user }}"
@@ -17,7 +17,7 @@
 - name: Copy admin.conf onto the load balancer
   ansible.builtin.copy:
     src: "{{ artifacts_dir }}/admin.conf"
-    dest: /home/{{ ansible_user }}/.kube/config
+    dest: /root/.kube/config
     owner: "{{ ansible_user }}"
     group: "{{ ansible_user }}"
     mode: "0600"

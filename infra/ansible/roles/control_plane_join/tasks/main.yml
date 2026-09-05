@@ -22,7 +22,7 @@
 
 - name: Ensure ~/.kube exists on this master
   ansible.builtin.file:
-    path: /home/{{ ansible_user }}/.kube
+    path: /root/.kube
     state: directory
     owner: "{{ ansible_user }}"
     group: "{{ ansible_user }}"
@@ -32,7 +32,7 @@
   ansible.builtin.copy:
     src: /etc/kubernetes/admin.conf
     remote_src: true
-    dest: /home/{{ ansible_user }}/.kube/config
+    dest: /root/.kube/config
     owner: "{{ ansible_user }}"
     group: "{{ ansible_user }}"
     mode: "0600"
