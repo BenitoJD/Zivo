@@ -16,11 +16,10 @@
   register: cp_join_cmd
   delegate_to: master-1
   become: false
-  run_once: true
   changed_when: false
 
 - name: Join as a control-plane node (Step 14)
-  ansible.builtin.shell: "{{ hostvars['master-1'].cp_join_cmd.stdout }}"
+  ansible.builtin.shell: "{{ cp_join_cmd.stdout }}"
   args:
     creates: /etc/kubernetes/kubelet.conf
   when: not kubelet_conf.stat.exists

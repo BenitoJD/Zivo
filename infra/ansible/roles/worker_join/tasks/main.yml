@@ -12,11 +12,10 @@
   register: worker_join_cmd
   delegate_to: master-1
   become: false
-  run_once: true
   changed_when: false
 
 - name: Join the cluster (Step 15)
-  ansible.builtin.shell: "{{ hostvars['master-1'].worker_join_cmd.stdout }}"
+  ansible.builtin.shell: "{{ worker_join_cmd.stdout }}"
   args:
     creates: /etc/kubernetes/kubelet.conf
   when: not kubelet_conf.stat.exists
