@@ -38,10 +38,20 @@
   delegate_to: master-1
   changed_when: true
 
+- name: Sync charts and prod values to master-1 (tgz + scp)
+  ansible.builtin.shell: |
+    tar -C {{ playbook_dir }}/../k8s -czf /tmp/zivo-k8s.tgz .
+    scp -O -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -i ~/.ssh/zivo_fleet_ed25519 /tmp/zivo-k8s.tgz root@{{ hostvars['master-1'].ansible_host }}:/tmp/zivo-k8s.tgz
+    ssh -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -i ~/.ssh/zivo_fleet_ed25519 root@{{ hostvars['master-1'].ansible_host }} 'mkdir -p /root/zivo-k8s && tar -C /root/zivo-k8s -xzf /tmp/zivo-k8s.tgz && rm /tmp/zivo-k8s.tgz'
+    rm /tmp/zivo-k8s.tgz
+  delegate_to: localhost
+  become: false
+  changed_when: true
+
 - name: Postgres (pgvector) with prod values
   ansible.builtin.command: >-
-    helm upgrade --install zivo-postgres {{ playbook_dir }}/../k8s/charts/postgres -n zivo
-    -f {{ playbook_dir }}/../k8s/environments/prod/postgres-values.yaml --wait --timeout 600s
+    helm upgrade --install zivo-postgres /root/zivo-k8s/charts/postgres -n zivo
+    -f /root/zivo-k8s/environments/prod/postgres-values.yaml --wait --timeout 600s
   environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
   register: pg
   changed_when: "'deployed' in pg.stdout"
@@ -59,8 +69,8 @@
 
 - name: MinIO with prod values (ingress HTTP-only until DNS cutover)
   ansible.builtin.command: >-
-    helm upgrade --install zivo-minio {{ playbook_dir }}/../k8s/charts/minio -n zivo
-    -f {{ playbook_dir }}/../k8s/environments/prod/minio-values.yaml
+    helm upgrade --install zivo-minio /root/zivo-k8s/charts/minio -n zivo
+    -f /root/zivo-k8s/environments/prod/minio-values.yaml
     --set ingress.tls=false --set ingress.entrypoint=web --set publicUrl=http://s3.zivo.fyi
     --wait --timeout 600s
   environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
@@ -69,8 +79,8 @@
 
 - name: PgBouncer
   ansible.builtin.command: >-
-    helm upgrade --install pgbouncer {{ playbook_dir }}/../k8s/charts/pgbouncer -n zivo
-    -f {{ playbook_dir }}/../k8s/environments/prod/pgbouncer-values.yaml --wait --timeout 300s
+    helm upgrade --install pgbouncer /root/zivo-k8s/charts/pgbouncer -n zivo
+    -f /root/zivo-k8s/environments/prod/pgbouncer-values.yaml --wait --timeout 300s
   environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
   register: pgb
   changed_when: "'deployed' in pgb.stdout"
