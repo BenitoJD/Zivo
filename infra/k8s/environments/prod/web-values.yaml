@@ -40,8 +40,9 @@ ingress:
   className: traefik
   host: zivo.fyi
   wwwHost: www.zivo.fyi
-  tls: true
-  entrypoint: websecure
+  # HTTP-only until DNS points at 45.196.196.98; after cutover: tls true + entrypoint websecure
+  tls: false
+  entrypoint: web
 resources:
   requests:
     cpu: 50m
