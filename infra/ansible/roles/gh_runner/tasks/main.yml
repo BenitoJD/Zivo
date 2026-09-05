@@ -40,11 +40,26 @@
     creates: /etc/systemd/system/actions.runner.BenitoJD-Zivo.worker-4.service
   changed_when: true
 
+- name: Read admin.conf from master-1
+  ansible.builtin.command: cat /etc/kubernetes/admin.conf
+  register: admin_conf
+  delegate_to: master-1
+  become: false
+  changed_when: false
+  no_log: true
+
+- name: Kubeconfig dir for the runner user
+  ansible.builtin.file:
+    path: /home/github-runner/.kube
+    state: directory
+    owner: github-runner
+    group: github-runner
+    mode: "0750"
+
 - name: Kubeconfig for CI deploys (cluster-admin via API LB)
   ansible.builtin.copy:
-    src: /etc/kubernetes/admin.conf
+    content: "{{ admin_conf.stdout }}\n"
     dest: /home/github-runner/.kube/config
-    remote_src: true
     owner: github-runner
     group: github-runner
     mode: "0600"
