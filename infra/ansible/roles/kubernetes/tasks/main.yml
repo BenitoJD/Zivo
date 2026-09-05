@@ -54,7 +54,7 @@
   ansible.builtin.command: kubeadm version -o json
   register: kubeadm_version_check
   changed_when: false
-  failed_when: (kubeadm_version_check.stdout | from_json).gitVersion != 'v' + kubernetes_version
+  failed_when: (kubeadm_version_check.stdout | from_json).clientVersion.gitVersion != 'v' + kubernetes_version
   when: "'kubeadm' in kubernetes_packages"
 
 - name: Confirm kubectl matches the pinned patch
