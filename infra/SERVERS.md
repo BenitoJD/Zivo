@@ -28,15 +28,15 @@ bootstraps (PR #27); one is a spare. SSH key access is installed and verified on
 | Alias | Role (planned) | Vendor hostname | IP | OS | vCPU / RAM / disk | Plan | Renews |
 |-----------|--------------------------|--------------------------|-----------------|------------------|-------------------|-------|------------|
 | zivo-lb1 | **app load balancer** (HAProxy) — EMPTY, SSH key verified working | vm464833534.manageserver.in | 45.196.196.98 | Ubuntu 24.04.4 | 1 / 0.9 Gi / 19 G | LV 10 | 2026-10-05 |
-| zivo-lb2 | **app load balancer** (HAProxy) — EMPTY, SSH key verified working | vm418674611.manageserver.in | 45.196.196.233 | Ubuntu 24.04.4 | 1 / 0.9 Gi / 19 G | LV 10 | 2026-10-05 |
-| zivo-node6 | k8s control plane (rebuild) — wiped, **needs CHANGE PASSWORD** | vm759659741.manageserver.in | 203.57.85.250 | Ubuntu 22.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-12 |
-| zivo-node7 | k8s control plane (rebuild) — wiped, **needs CHANGE PASSWORD** | vm997512676.manageserver.in | 203.57.85.224 | Ubuntu 22.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-12 |
-| zivo-node8 | k8s control plane (rebuild) — wiped, **needs CHANGE PASSWORD** | vm130951261.manageserver.in | 203.57.85.157 | Ubuntu 22.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-12 |
-| zivo-node5 | k8s API load balancer (rebuild) — wiped, **needs CHANGE PASSWORD** | vm723139291.manageserver.in | 45.196.196.22 | Ubuntu 22.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-20 |
-| zivo-node1 | k8s worker (rebuild) — wiped, **key installed** | vm148786062.manageserver.in | 45.196.196.52 | Ubuntu 24.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-24 |
+| zivo-lb2 | **K8s API load balancer** (HAProxy 8443 -> masters 6443) | vm418674611.manageserver.in | 45.196.196.233 | Ubuntu 24.04.4 | 1 / 0.9 Gi / 19 G | LV 10 | 2026-10-05 |
+| zivo-node6 | k8s control plane + etcd snapshot cron | vm759659741.manageserver.in | 203.57.85.250 | Ubuntu 22.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-12 |
+| zivo-node7 | k8s control plane + etcd | vm997512676.manageserver.in | 203.57.85.224 | Ubuntu 22.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-12 |
+| zivo-node8 | k8s control plane + etcd | vm130951261.manageserver.in | 203.57.85.157 | Ubuntu 22.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-12 |
+| zivo-node5 | **Judge0 server** (docker compose, :2358, cgroup v1 — outside k8s) | vm723139291.manageserver.in | 45.196.196.22 | Ubuntu 24.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-20 |
+| zivo-node1 | k8s worker + Traefik ingress | vm148786062.manageserver.in | 45.196.196.52 | Ubuntu 24.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-24 |
 | zivo-node2 | **dedicated data node** (Postgres + MinIO, tainted) | vm326035110.manageserver.in | 45.196.196.115 | Ubuntu 24.04 | 4 / 7.6 Gi / 96 G | LV 13 | 2026-09-24 |
-| zivo-node3 | k8s worker (rebuild) — wiped, **key installed** | vm127192563.manageserver.in | 45.196.196.191 | Ubuntu 24.04 | 4 / 7.6 Gi / 96 G | LV 13 | 2026-09-24 |
-| zivo-node4 | spare / monitoring candidate — wiped, **needs CHANGE PASSWORD** | vm501272425.manageserver.in | 203.57.85.251 | Ubuntu 22.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-20 |
+| zivo-node3 | k8s worker + Traefik ingress | vm127192563.manageserver.in | 45.196.196.191 | Ubuntu 24.04 | 4 / 7.6 Gi / 96 G | LV 13 | 2026-09-24 |
+| zivo-node4 | k8s worker + GitHub Actions runner | vm501272425.manageserver.in | 203.57.85.251 | Ubuntu 22.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-20 |
 
 Notes:
 
