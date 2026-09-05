@@ -36,3 +36,12 @@
 - name: Install and start the runner service (as root; unit runs as github-runner)
   ansible.builtin.shell: cd /home/github-runner && ./svc.sh install github-runner && ./svc.sh start
   changed_when: true
+
+- name: Kubeconfig for CI deploys (cluster-admin via API LB)
+  ansible.builtin.copy:
+    src: /etc/kubernetes/admin.conf
+    dest: /home/github-runner/.kube/config
+    remote_src: true
+    owner: github-runner
+    group: github-runner
+    mode: "0600"
