@@ -1,0 +1,59 @@
+---
+- name: argocd namespace
+  ansible.builtin.command: kubectl create namespace argocd
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  register: ns
+  failed_when: ns.rc != 0 and 'AlreadyExists' not in ns.stderr
+  changed_when: ns.rc == 0
+
+- name: Install Argo CD (stable)
+  ansible.builtin.command: >-
+    kubectl apply -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+    -n argocd
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  register: install
+  changed_when: "'created' in install.stdout or 'configured' in install.stdout"
+
+- name: Wait for Argo CD deployments
+  ansible.builtin.command: kubectl -n argocd wait --for=condition=Available deployment --all --timeout=600s
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  changed_when: false
+
+- name: Ensure apache2-utils for bcrypt
+  ansible.builtin.apt: { name: apache2-utils, state: present, update_cache: true }
+
+- name: Set Argo CD admin password
+  ansible.builtin.shell: |
+    hash=$(htpasswd -bnBC 10 "" '{{ argocd_admin_password }}' | tr -d ':\n')
+    kubectl -n argocd patch secret argocd-secret -p "{\"stringData\": {\"admin.password\": \"$hash\", \"admin.passwordMtime\": \"$(date +%FT%T%Z)\"}}"
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  no_log: true
+  changed_when: true
+
+- name: Register the private repo credential for Argo CD
+  ansible.builtin.shell: |
+    kubectl -n argocd create secret generic zivo-repo-creds \
+      --from-literal=url=https://github.com/{{ gh_repo }}.git \
+      --from-literal=username={{ gh_repo_user }} \
+      --from-literal=password={{ gh_repo_token }} \
+      --type=Opaque \
+      -l argocd.argoproj.io/secret-type=repository \
+      --dry-run=client -o yaml | kubectl apply -f -
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  no_log: true
+  changed_when: true
+
+- name: Copy Argo CD manifests to master-1
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../argocd/"
+    dest: /root/zivo-argocd/
+    mode: "0644"
+
+- name: Apply ingress + Applications
+  ansible.builtin.command: kubectl apply -f /root/zivo-argocd/{{ item }}
+  loop:
+    - ingress.yaml
+    - apps/applications.yaml
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  register: apps_apply
+  changed_when: "'created' in apps_apply.stdout or 'configured' in apps_apply.stdout"

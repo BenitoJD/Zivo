@@ -1,0 +1,376 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: zivo-postgres
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/BenitoJD/Zivo.git
+    targetRevision: main
+    path: infra/k8s/charts/postgres
+    helm:
+      releaseName: zivo-postgres
+      valueFiles:
+        - $values/infra/k8s/environments/prod/postgres-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: zivo
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: zivo-minio
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/BenitoJD/Zivo.git
+    targetRevision: main
+    path: infra/k8s/charts/minio
+    helm:
+      releaseName: zivo-minio
+      valueFiles:
+        - $values/infra/k8s/environments/prod/minio-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: zivo
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: pgbouncer
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/BenitoJD/Zivo.git
+    targetRevision: main
+    path: infra/k8s/charts/pgbouncer
+    helm:
+      releaseName: pgbouncer
+      valueFiles:
+        - $values/infra/k8s/environments/prod/pgbouncer-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: zivo
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: zivo-auth
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/BenitoJD/Zivo.git
+    targetRevision: main
+    path: infra/k8s/charts/auth
+    helm:
+      releaseName: zivo-auth
+      valueFiles:
+        - $values/infra/k8s/environments/prod/auth-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: zivo
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: zivo-storage
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/BenitoJD/Zivo.git
+    targetRevision: main
+    path: infra/k8s/charts/storage
+    helm:
+      releaseName: zivo-storage
+      valueFiles:
+        - $values/infra/k8s/environments/prod/storage-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: zivo
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: zivo-practice
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/BenitoJD/Zivo.git
+    targetRevision: main
+    path: infra/k8s/charts/practice
+    helm:
+      releaseName: zivo-practice
+      valueFiles:
+        - $values/infra/k8s/environments/prod/practice-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: zivo
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: zivo-content
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/BenitoJD/Zivo.git
+    targetRevision: main
+    path: infra/k8s/charts/content
+    helm:
+      releaseName: zivo-content
+      valueFiles:
+        - $values/infra/k8s/environments/prod/content-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: zivo
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: zivo-study
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/BenitoJD/Zivo.git
+    targetRevision: main
+    path: infra/k8s/charts/study
+    helm:
+      releaseName: zivo-study
+      valueFiles:
+        - $values/infra/k8s/environments/prod/study-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: zivo
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: zivo-library
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/BenitoJD/Zivo.git
+    targetRevision: main
+    path: infra/k8s/charts/library
+    helm:
+      releaseName: zivo-library
+      valueFiles:
+        - $values/infra/k8s/environments/prod/library-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: zivo
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: zivo-admin
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/BenitoJD/Zivo.git
+    targetRevision: main
+    path: infra/k8s/charts/admin
+    helm:
+      releaseName: zivo-admin
+      valueFiles:
+        - $values/infra/k8s/environments/prod/admin-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: zivo
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: zivo-web
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/BenitoJD/Zivo.git
+    targetRevision: main
+    path: infra/k8s/charts/web
+    helm:
+      releaseName: zivo-web
+      valueFiles:
+        - $values/infra/k8s/environments/prod/web-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: zivo
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: zivo-worker-io
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/BenitoJD/Zivo.git
+    targetRevision: main
+    path: infra/k8s/charts/worker
+    helm:
+      releaseName: zivo-worker-io
+      valueFiles:
+        - $values/infra/k8s/environments/prod/worker-values.yaml
+      parameters:
+        - name: image.tag
+          value: Zivo_0.1.364
+        - name: image.repository
+          value: ghcr.io/benitojd/zivo-worker
+        - name: workloads.io.enabled
+          value: "true"
+        - name: workloads.cpu.enabled
+          value: "false"
+        - name: workloads.newspaper.enabled
+          value: "false"
+        - name: imagePullSecrets[0].name
+          value: ghcr-pull
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: zivo
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: zivo-worker-cpu
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/BenitoJD/Zivo.git
+    targetRevision: main
+    path: infra/k8s/charts/worker
+    helm:
+      releaseName: zivo-worker-cpu
+      valueFiles:
+        - $values/infra/k8s/environments/prod/worker-values.yaml
+      parameters:
+        - name: image.tag
+          value: Zivo_0.1.364
+        - name: image.repository
+          value: ghcr.io/benitojd/zivo-worker
+        - name: workloads.io.enabled
+          value: "false"
+        - name: workloads.cpu.enabled
+          value: "true"
+        - name: workloads.newspaper.enabled
+          value: "true"
+        - name: imagePullSecrets[0].name
+          value: ghcr-pull
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: zivo
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+
