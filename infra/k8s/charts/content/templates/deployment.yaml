@@ -50,6 +50,10 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
           readinessProbe:
             httpGet:
               path: /health
