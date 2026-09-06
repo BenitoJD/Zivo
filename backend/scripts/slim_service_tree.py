@@ -5,6 +5,10 @@ Used by Dockerfiles after COPY of that process's files plus ``backend/app``.
 Profiles drop FastAPI route modules the process does not serve, sibling HTTP
 packages, worker/migrate entrypoints it does not run, and ``app.*`` modules the
 process never imports (AST reachability from the process entrypoints).
+
+The engine dispatch primitives are inlined (not imported from ``app``) so the
+script also runs standalone inside image builds, where it lives in /tmp with no
+backend tree beside it.
 """
 
 from __future__ import annotations
@@ -13,10 +17,49 @@ import argparse
 import ast
 import shutil
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app.engine_runtime import Pred, Rule, apply, first_match, pick  # noqa: E402
+
+
+@dataclass(frozen=True)
+class Pred:
+    key: str
+    op: str = "truthy"
+    value: Any = None
+
+
+@dataclass(frozen=True)
+class Rule:
+    when: tuple[Pred, ...]
+    action: str
+    rationale: str = ""
+    extras: dict[str, Any] = field(default_factory=dict)
+
+
+def _truthy(a: Any, _b: Any) -> bool:
+    return bool(a)
+
+
+_OPS: dict[str, Callable[[Any, Any], bool]] = {"truthy": _truthy}
+
+
+def _pred_ok(pred: Pred, signals: dict[str, Any]) -> bool:
+    return _OPS[pred.op](signals[pred.key], pred.value)
+
+
+def first_match(rules, signals, default=None):
+    return next(filter(lambda rule: all(_pred_ok(p, signals) for p in rule.when), rules), default or Rule(when=(), action="unmatched"))
+
+
+def apply(action: str, handlers: dict[str, Callable], *args: Any, **kwargs: Any) -> Any:
+    return handlers[action](*args, **kwargs)
+
+
+def pick(flag: bool, when_true: Callable, when_false: Callable) -> Any:
+    return {True: when_true, False: when_false}[bool(flag)]()
 
 API_KEEP: dict[str, set[str]] = {
     "worker": set(),
