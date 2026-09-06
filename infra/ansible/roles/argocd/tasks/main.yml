@@ -50,7 +50,7 @@
   changed_when: true
 
 - name: Restart Argo CD controller to pick up health customization
-  ansible.builtin.shell: kubectl -n argocd rollout restart deploy/argocd-application-controller && sleep 5 && kubectl -n argocd rollout status deploy/argocd-application-controller --timeout=300s
+  ansible.builtin.shell: kubectl -n argocd delete pod -l app.kubernetes.io/name=argocd-application-controller --ignore-not-found=true && sleep 10
   changed_when: true
 
 - name: Copy Argo CD manifests to master-1
