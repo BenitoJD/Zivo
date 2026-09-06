@@ -25,8 +25,8 @@ resources:
     memory: 1536Mi
 autoscaling:
   enabled: true
-  minReplicas: 1
-  maxReplicas: 1
+  minReplicas: 2
+  maxReplicas: 5
   targetCPUUtilizationPercentage: 80
 podDisruptionBudget:
   enabled: true
