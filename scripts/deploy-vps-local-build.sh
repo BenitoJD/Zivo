@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build images on the CI runner (the small Judge0 box), push them to GHCR, then roll out to the prod
-# K3s over the network (KUBECONFIG points at the prod API; k3s pulls the public images from GHCR).
+# Build images on the CI runner (node4), push them to GHCR, then Argo CD / helm roll out to the
+# HA cluster (KUBECONFIG points at the API LB via the runner's kubeconfig).
 # Requires a prior `docker login ghcr.io` for the push. Set PREBUILT=1 to skip build+push and just
 # roll out tags already in GHCR. Run by the Deploy Zivo workflow; also runnable by hand.
 set -euo pipefail
@@ -9,18 +9,12 @@ set -euo pipefail
 # defaults to the legacy builder, so force BuildKit on.
 export DOCKER_BUILDKIT=1
 
-export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
-
-# The self-hosted runner (github-runner) can't read root's k3s.yaml (0600 root:root), so helm/kubectl
-# fail with "Kubernetes cluster unreachable ... permission denied". Stage a runner-readable copy using
-# the runner's scoped passwordless sudo (limited to `k3s` — not cp/install). Regenerated each deploy,
-# so k3s restarts (which reset k3s.yaml to 0600) never break us.
-if [[ ! -r "$KUBECONFIG" ]]; then
-  RUNNER_KUBECONFIG="${HOME}/.kube/config"
-  mkdir -p "$(dirname "$RUNNER_KUBECONFIG")"
-  sudo -n k3s kubectl config view --raw > "$RUNNER_KUBECONFIG"
-  chmod 600 "$RUNNER_KUBECONFIG"
-  export KUBECONFIG="$RUNNER_KUBECONFIG"
+# The cluster kubeconfig is staged by the workflow env (KUBECONFIG=/home/github-runner/.kube/config).
+# On the new HA cluster, this file was installed by the gh_runner ansible role and points at
+# the API load balancer (zivo-lb2:8443). No k3s fallback needed.
+if [[ ! -s "$KUBECONFIG" ]]; then
+  echo "ERROR: KUBECONFIG ($KUBECONFIG) is empty or missing — cannot deploy" >&2
+  exit 1
 fi
 TAG="${1:-Zivo_0.1.$(date +%Y%m%d%H%M)}"
 REPO="${REPO:-/opt/zivo}"
