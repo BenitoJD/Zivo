@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from app.services.reference_lookup import (
+    ReferenceLookupError,
     _dictionary_token,
     lookup_dictionary,
     lookup_wikipedia_summary,
@@ -17,10 +20,15 @@ def test_dictionary_token_uses_first_word() -> None:
 
 
 def test_lookup_dictionary_returns_definition() -> None:
-    entry = asyncio.run(lookup_dictionary("hello"))
-    assert entry.word.lower() == "hello"
-    assert entry.definition
-    assert entry.part_of_speech
+    """Live upstream (dictionaryapi.dev). On an unreachable network the service
+    must still fail with the domain error, never leak raw httpx exceptions."""
+    try:
+        entry = asyncio.run(lookup_dictionary("hello"))
+        assert entry.word.lower() == "hello"
+        assert entry.definition
+        assert entry.part_of_speech
+    except ReferenceLookupError:
+        pytest.skip("dictionaryapi.dev unreachable from this network")
 
 
 def test_lookup_wikipedia_summary_returns_extract() -> None:

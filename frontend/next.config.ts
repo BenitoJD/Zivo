@@ -48,6 +48,7 @@ const nextConfig: NextConfig = {
       { source: "/api/chat/:path*", destination: `${studyProxy}/api/chat/:path*` },
       { source: "/api/chat", destination: `${studyProxy}/api/chat` },
       { source: "/api/mcq/:path*", destination: `${studyProxy}/api/mcq/:path*` },
+      { source: "/api/quiz/:path*", destination: `${studyProxy}/api/quiz/:path*` },
       { source: "/api/progress/:path*", destination: `${studyProxy}/api/progress/:path*` },
       { source: "/api/progress", destination: `${studyProxy}/api/progress` },
       { source: "/api/guest/:path*", destination: `${studyProxy}/api/guest/:path*` },

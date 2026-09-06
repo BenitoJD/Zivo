@@ -624,6 +624,20 @@ Set `type_concept_id` → concept URI `/vocab/assertion/question.mcq` (add as vo
 
 ---
 
+## Quiz Share (application tables, `046_quiz_share`)
+
+Standalone shareable MCQ sets (public links, no account required). Owned by the study service; API under `/api/quiz/*`.
+
+| Table | Purpose |
+|-------|---------|
+| `mcq_quiz_sets` | One shared quiz: title, description, creator name, unique `share_slug`, `is_public` |
+| `mcq_quiz_questions` | Ordered MCQs per set: `question_text`, `options` (JSON array of 4), `correct_index`, `explanation` |
+| `mcq_quiz_attempts` | Completed takes: `taker_name`, `score`, `total_questions`, `answers` (JSON verdicts), `completed_at` |
+
+Both child tables cascade on set delete. Scoring and shape validation run through the quiz-share rule table (`qb.quiz_share.v1`, `app/services/quiz_share.py`); LLM drafting/polish routes through `llm_router` with the `quiz_enabled` flag.
+
+---
+
 ## What to build first (Year 1)
 
 | Priority | Tables |

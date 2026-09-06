@@ -519,19 +519,25 @@ def transition_prep_job(payload: dict) -> dict:
 @eta(name="generate.questions", workload=JobWorkload.cpu, priority=JobPriority.HIGH)
 def generate_questions_job(payload: dict) -> dict:
     from app.config import get_settings
-    if not get_settings().mcq_generation_enabled:
-        return {"status": "skipped", "reason": "mcq_generation_enabled=false"}
-    from app.graphs.generation_graph import run_generation
-    from app.services.question_pool import on_batch_failed
 
-    document_id = UUID(payload["document_id"])
-    page_number = int(payload.get("page_number") or 0)
-    with SessionLocal() as db:
-        try:
-            return run_generation(db, document_id, payload)
-        except Exception:
-            on_batch_failed(db, document_id, page=page_number)
-            raise
+    def _run() -> dict:
+        from app.graphs.generation_graph import run_generation
+        from app.services.question_pool import on_batch_failed
+
+        document_id = UUID(payload["document_id"])
+        page_number = int(payload.get("page_number") or 0)
+        with SessionLocal() as db:
+            try:
+                return run_generation(db, document_id, payload)
+            except Exception:
+                on_batch_failed(db, document_id, page=page_number)
+                raise
+
+    return pick(
+        get_settings().mcq_generation_enabled,
+        _run,
+        lambda: {"status": "skipped", "reason": "mcq_generation_enabled=false"},
+    )
 
 
 @eta(name="generate.coding", workload=JobWorkload.cpu)

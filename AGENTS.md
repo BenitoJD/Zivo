@@ -219,6 +219,7 @@ Transitions use `cubic-bezier(0.32, 0.72, 0, 1)` over ~280ms; always respect `pr
 - `/workspace/[artifactId]` — page selection → MCQ → source + tutor
 - `/workspace/models` — admin model management
 - `/practice` — practice hub; `/practice/coding`, `/practice/newspaper`, `/practice/system-design`, `/practice/c/[qid]`
+- `/quiz` — public Quiz Share: build an MCQ set (AI-drafted or manual), share `/quiz/[slug]`, results at `/quiz/[slug]/manage` (`app/quiz/`)
 - Shared shell (sidebar, add-source modal, delete modal) — `app/(shell)/layout.tsx` wraps `/workspace/**` and `/practice/**` (`Sidebar`, `AddSourceModal`, `DeleteSourceModal` under `app/(shell)/workspace/_components/`). Auth is handled by `/login`, not a modal.
 
 ```bash

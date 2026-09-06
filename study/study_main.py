@@ -19,6 +19,7 @@ from study_api import (
     mcq,
     offline,
     progress,
+    quiz,
     reference,
     study,
     topics,
@@ -136,6 +137,7 @@ api_router.include_router(reference.router, prefix="/reference", tags=["referenc
 api_router.include_router(artifacts.router, prefix="/artifacts", tags=["artifacts"])
 api_router.include_router(assertions.router, prefix="/assertions", tags=["assertions"])
 api_router.include_router(learn.router, prefix="/artifacts", tags=["learn"])
+api_router.include_router(quiz.router, tags=["quiz-share"])
 api_router.include_router(topics.router, prefix="/artifacts", tags=["topics"])
 api_router.include_router(study.router, prefix="/artifacts", tags=["study"])
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])

@@ -76,27 +76,33 @@ def summarize_start(payload: dict) -> dict:
 @eta(name="summarize.generate", workload=JobWorkload.io)
 def summarize_generate(payload: dict) -> dict:
     from app.config import get_settings
-    if not get_settings().summarize_enabled:
-        return {"status": "skipped", "reason": "summarize_enabled=false"}
-    import asyncio
 
-    from app.graphs.summarize_graph import generate_whole_doc_summary
-    from app.services.source_fingerprint import mark_artifact_fresh
+    def _run() -> dict:
+        import asyncio
 
-    document_id = UUID(payload["document_id"])
-    with SessionLocal() as db:
-        summary = asyncio.run(generate_whole_doc_summary(db, document_id))
-        doc = db.get(Document, document_id)
+        from app.graphs.summarize_graph import generate_whole_doc_summary
+        from app.services.source_fingerprint import mark_artifact_fresh
 
-        def _stamp() -> None:
-            meta = dict(doc.meta or {})
-            meta["summary"] = summary
-            doc.meta = meta
-            mark_artifact_fresh(db, document_id, "summary")
-            db.commit()
+        document_id = UUID(payload["document_id"])
+        with SessionLocal() as db:
+            summary = asyncio.run(generate_whole_doc_summary(db, document_id))
+            doc = db.get(Document, document_id)
 
-        pick(bool(doc), _stamp, lambda: None)
-    return {"document_id": str(document_id), "summary": summary}
+            def _stamp() -> None:
+                meta = dict(doc.meta or {})
+                meta["summary"] = summary
+                doc.meta = meta
+                mark_artifact_fresh(db, document_id, "summary")
+                db.commit()
+
+            pick(bool(doc), _stamp, lambda: None)
+        return {"document_id": str(document_id), "summary": summary}
+
+    return pick(
+        get_settings().summarize_enabled,
+        _run,
+        lambda: {"status": "skipped", "reason": "summarize_enabled=false"},
+    )
 
 
 @eta(name="topics.generate", workload=JobWorkload.io)

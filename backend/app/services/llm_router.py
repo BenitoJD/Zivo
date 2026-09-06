@@ -29,6 +29,10 @@ class LlmDisabledError(RuntimeError):
 
     def __init__(self, log_tag: str = "llm") -> None:
         super().__init__(f"LLM calls are disabled (llm_enabled=false) [{log_tag}]")
+
+
+def _raise_llm_disabled(log_tag: str) -> None:
+    raise LlmDisabledError(log_tag)
 from app.services.llm_pool import (
     is_failover_eligible,
     is_llm_pool_enabled,
@@ -483,9 +487,14 @@ async def acomplete_chat(
 
     `strip_output` normalizes em/en dashes in the result; pass False when the output
     must be verbatim (e.g. OCR transcription of a user's answer)."""
+
     from app.config import get_settings
-    if not get_settings().llm_enabled:
-        raise LlmDisabledError(log_tag)
+
+    pick(
+        get_settings().llm_enabled,
+        lambda: None,
+        lambda: _raise_llm_disabled(log_tag),
+    )
 
     import litellm
 
