@@ -28,7 +28,7 @@ jobs:
 
       - name: Start Postgres
         run: |
-          docker rm -f "$CI_POSTGRES_CONTAINER" 2>/dev/null || true
+          docker rm -f $(docker ps -aq --filter name=ci-postgres) 2>/dev/null || true
           docker run -d --name "$CI_POSTGRES_CONTAINER" \
             -e POSTGRES_USER=zivo \
             -e POSTGRES_PASSWORD=zivo \
@@ -108,7 +108,7 @@ jobs:
 
       - name: Start Postgres
         run: |
-          docker rm -f "$CI_POSTGRES_CONTAINER" 2>/dev/null || true
+          docker rm -f $(docker ps -aq --filter name=ci-postgres) 2>/dev/null || true
           docker run -d --name "$CI_POSTGRES_CONTAINER" \
             -e POSTGRES_USER=zivo \
             -e POSTGRES_PASSWORD=zivo \
@@ -165,7 +165,7 @@ jobs:
 
       - name: Start Postgres
         run: |
-          docker rm -f "$CI_POSTGRES_CONTAINER" 2>/dev/null || true
+          docker rm -f $(docker ps -aq --filter name=ci-postgres) 2>/dev/null || true
           docker run -d --name "$CI_POSTGRES_CONTAINER" \
             -e POSTGRES_USER=zivo \
             -e POSTGRES_PASSWORD=zivo \
@@ -223,7 +223,7 @@ jobs:
 
       - name: Start Postgres
         run: |
-          docker rm -f "$CI_POSTGRES_CONTAINER" 2>/dev/null || true
+          docker rm -f $(docker ps -aq --filter name=ci-postgres) 2>/dev/null || true
           docker run -d --name "$CI_POSTGRES_CONTAINER" \
             -e POSTGRES_USER=zivo \
             -e POSTGRES_PASSWORD=zivo \
@@ -281,7 +281,7 @@ jobs:
 
       - name: Start Postgres
         run: |
-          docker rm -f "$CI_POSTGRES_CONTAINER" 2>/dev/null || true
+          docker rm -f $(docker ps -aq --filter name=ci-postgres) 2>/dev/null || true
           docker run -d --name "$CI_POSTGRES_CONTAINER" \
             -e POSTGRES_USER=zivo \
             -e POSTGRES_PASSWORD=zivo \
@@ -339,7 +339,7 @@ jobs:
 
       - name: Start Postgres
         run: |
-          docker rm -f "$CI_POSTGRES_CONTAINER" 2>/dev/null || true
+          docker rm -f $(docker ps -aq --filter name=ci-postgres) 2>/dev/null || true
           docker run -d --name "$CI_POSTGRES_CONTAINER" \
             -e POSTGRES_USER=zivo \
             -e POSTGRES_PASSWORD=zivo \
@@ -397,7 +397,7 @@ jobs:
 
       - name: Start Postgres
         run: |
-          docker rm -f "$CI_POSTGRES_CONTAINER" 2>/dev/null || true
+          docker rm -f $(docker ps -aq --filter name=ci-postgres) 2>/dev/null || true
           docker run -d --name "$CI_POSTGRES_CONTAINER" \
             -e POSTGRES_USER=zivo \
             -e POSTGRES_PASSWORD=zivo \
@@ -455,7 +455,7 @@ jobs:
 
       - name: Start Postgres
         run: |
-          docker rm -f "$CI_POSTGRES_CONTAINER" 2>/dev/null || true
+          docker rm -f $(docker ps -aq --filter name=ci-postgres) 2>/dev/null || true
           docker run -d --name "$CI_POSTGRES_CONTAINER" \
             -e POSTGRES_USER=zivo \
             -e POSTGRES_PASSWORD=zivo \
