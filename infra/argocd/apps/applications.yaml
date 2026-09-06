@@ -312,8 +312,9 @@ spec:
       valueFiles:
         - $values/infra/k8s/environments/prod/worker-values.yaml
       parameters:
-        - name: image.tag
-          value: Zivo_0.1.364
+        # image.tag lives in worker-values.yaml; the deploy workflow's promote
+        # step rewrites it per release. Pinning it here froze workers on an
+        # old tag while every other service moved.
         - name: image.repository
           value: ghcr.io/benitojd/zivo-worker
         - name: workloads.io.enabled
@@ -351,8 +352,9 @@ spec:
       valueFiles:
         - $values/infra/k8s/environments/prod/worker-values.yaml
       parameters:
-        - name: image.tag
-          value: Zivo_0.1.364
+        # image.tag lives in worker-values.yaml; the deploy workflow's promote
+        # step rewrites it per release. Pinning it here froze workers on an
+        # old tag while every other service moved.
         - name: image.repository
           value: ghcr.io/benitojd/zivo-worker
         - name: workloads.io.enabled
