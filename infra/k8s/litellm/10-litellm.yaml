@@ -1,0 +1,95 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-config
+  namespace: zivo
+data:
+  config.yaml: |
+    model_list:
+      - model_name: "openai/deepseek-v4-flash"
+        litellm_params:
+          model: "openai/deepseek-v4-flash"
+          api_base: "https://api.deepseek.com/v1"
+          api_key: "os.environ/DEEPSEEK_API_KEY"
+      - model_name: "openai/mimo-v2.5"
+        litellm_params:
+          model: "openai/mimo-v2.5"
+          api_base: "https://token-plan-sgp.xiaomimimo.com/v1"
+          api_key: "os.environ/OPENAI_API_KEY"
+      - model_name: "openai/step-3.5-flash"
+        litellm_params:
+          model: "openai/step-3.5-flash"
+          api_base: "https://api.stepfun.ai/step_plan/v1"
+          api_key: "os.environ/STEPFUN_API_KEY"
+      - model_name: "openai/step-3.7-flash"
+        litellm_params:
+          model: "openai/step-3.7-flash"
+          api_base: "https://api.stepfun.ai/step_plan/v1"
+          api_key: "os.environ/STEPFUN_API_KEY"
+      - model_name: "openai/glm-4.7"
+        litellm_params:
+          model: "openai/glm-4.7"
+          api_base: "https://api.z.ai/api/coding/paas/v4"
+          api_key: "os.environ/ZAI_API_KEY"
+      - model_name: "openrouter/openrouter/free"
+        litellm_params:
+          model: "openrouter/openrouter/free"
+          api_key: "os.environ/OPENROUTER_API_KEY"
+
+    general_settings:
+      master_key: "os.environ/LITELLM_MASTER_KEY"
+
+    litellm_settings:
+      cache: true
+      drop_params: true
+
+    cache:
+      type: redis
+      host: "redis.zivo.svc.cluster.local"
+      port: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm
+  namespace: zivo
+  labels: {app: litellm}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: litellm}}
+  template:
+    metadata: {labels: {app: litellm}}
+    spec:
+      containers:
+        - name: litellm
+          image: ghcr.io/berriai/litellm:main-v1.74.9.stable
+          args: ["--config", "/app/config.yaml", "--port", "4000"]
+          ports: [{containerPort: 4000}]
+          envFrom:
+            - secretRef: {name: zivo-secrets}
+          env:
+            - name: LITELLM_MASTER_KEY
+              valueFrom: {secretKeyRef: {name: zivo-secrets, key: LITELLM_MASTER_KEY}}
+          volumeMounts:
+            - {name: config, mountPath: /app/config.yaml, subPath: config.yaml}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          readinessProbe:
+            httpGet: {path: /health/liveliness, port: 4000}
+            initialDelaySeconds: 15
+      volumes:
+        - name: config
+          configMap: {name: litellm-config}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm
+  namespace: zivo
+spec:
+  selector: {app: litellm}
+  ports:
+    - port: 4000
+      targetPort: 4000
