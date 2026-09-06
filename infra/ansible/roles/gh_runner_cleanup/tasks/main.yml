@@ -1,0 +1,48 @@
+---
+- name: Install docker cleanup script
+  ansible.builtin.template:
+    src: docker-cleanup.sh.j2
+    dest: /usr/local/sbin/docker-cleanup.sh
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install docker cleanup service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/docker-cleanup.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Docker disk hygiene (old Zivo tags, build cache, orphaned volumes)
+      # Refuse to reclaim disk while a deploy build is mid-flight on this box.
+      ConditionPathExists=!/home/github-runner/.deploy-in-progress
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/docker-cleanup.sh
+      IOSchedulingClass=idle
+      Nice=10
+
+- name: Install docker cleanup daily timer
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/docker-cleanup.timer
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Run docker-cleanup daily in the small hours
+
+      [Timer]
+      # Persistent catch-up: a powered-off box cleans up right after boot.
+      OnCalendar=*-*-* 04:10:00
+      RandomizedDelaySec=20m
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+
+- name: Enable docker cleanup timer
+  ansible.builtin.systemd:
+    daemon_reload: true
+    enabled: true
+    state: started
+    name: docker-cleanup.timer

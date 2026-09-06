@@ -161,6 +161,12 @@
   tags: [runner]
   roles: [gh_runner]
 
+- name: Docker disk hygiene on the runner box (daily timer)
+  hosts: worker-4
+  become: true
+  tags: [runner]
+  roles: [gh_runner_cleanup]
+
 - name: Judge0 sandbox on worker node5
   hosts: worker-5
   become: true

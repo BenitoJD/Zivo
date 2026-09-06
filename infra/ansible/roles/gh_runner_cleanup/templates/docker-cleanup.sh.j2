@@ -1,0 +1,39 @@
+{% raw -%}
+#!/usr/bin/env bash
+# Docker disk hygiene for the self-hosted Actions runner box.
+# Invoked by docker-cleanup.timer (see gh_runner_cleanup role) and safe to run
+# by hand. Keeps the newest KEEP_TAGS Zivo release tags per repository so a
+# rollback target always exists, caps the BuildKit cache so rebuilds stay warm,
+# and reclaims orphaned CI volumes (judge0 volumes are in use and untouched).
+set -uo pipefail
+
+KEEP_TAGS="${KEEP_TAGS:-3}"
+
+echo "== docker cleanup start $(date -Is) =="
+
+# 1. Old Zivo release tags: keep the newest KEEP_TAGS per repository.
+mapfile -t old_images < <(docker images --format '{{.Repository}} {{.Tag}} {{.CreatedAt}}' \
+  | awk -v keep="$KEEP_TAGS" '
+    $2 ~ /^Zivo_[0-9]/ {
+      count[$1]++
+      if (count[$1] > keep) print $1 ":" $2
+    }')
+if ((${#old_images[@]} > 0)); then
+  echo "removing ${#old_images[@]} old release tags:"
+  printf '  %s\n' "${old_images[@]}"
+  docker rmi -f "${old_images[@]}" >/dev/null 2>&1 || true
+fi
+
+# 2. Dangling images + exited containers.
+docker container prune -f >/dev/null
+docker image prune -f >/dev/null
+
+# 3. BuildKit cache: keep a warm floor for fast builds, drop the excess.
+docker builder prune -f --keep-storage "${KEEP_BUILDER_GB:-8}GB" >/dev/null
+
+# 4. Orphaned volumes (CI postgres leftovers; attached volumes are skipped).
+docker volume prune -f >/dev/null
+
+echo "== docker cleanup done $(date -Is) =="
+df -h / | tail -1
+{%- endraw %}
