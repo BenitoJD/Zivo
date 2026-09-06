@@ -28,6 +28,7 @@
     hash=$(htpasswd -bnBC 10 "" '{{ argocd_admin_password }}' | tr -d ':\n')
     kubectl -n argocd patch secret argocd-secret -p "{\"stringData\": {\"admin.password\": \"$hash\", \"admin.passwordMtime\": \"$(date +%FT%T%Z)\"}}"
   environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  no_log: true
   changed_when: true
 
 - name: Register the private repo credential for Argo CD
