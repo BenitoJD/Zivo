@@ -14,8 +14,8 @@ ingress:
   host: auth.zivo.fyi
   # HTTP only until auth.zivo.fyi has an A record; cert-manager cannot issue TLS
   # while DNS is NXDOMAIN, and the ACME solver pod fights the auth rollout.
-  tls: false
-  entrypoint: web
+  tls: true
+  entrypoint: websecure
   tlsSecret: zivo-auth-tls
 resources:
   requests:

@@ -13,8 +13,8 @@ ingress:
   className: traefik
   host: study.zivo.fyi
   # HTTP only until study.zivo.fyi has an A record; same ACME trap as auth/storage.
-  tls: false
-  entrypoint: web
+  tls: true
+  entrypoint: websecure
   tlsSecret: zivo-study-tls
 resources:
   requests:

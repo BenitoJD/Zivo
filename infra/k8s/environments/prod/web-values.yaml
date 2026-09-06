@@ -42,8 +42,8 @@ ingress:
   host: zivo.fyi
   wwwHost: www.zivo.fyi
   # HTTP-only until DNS points at 45.196.196.98; after cutover: tls true + entrypoint websecure
-  tls: false
-  entrypoint: web
+  tls: true
+  entrypoint: websecure
 resources:
   requests:
     cpu: 50m
