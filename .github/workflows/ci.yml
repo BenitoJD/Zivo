@@ -3,6 +3,13 @@ name: CI
 on:
   push:
     branches: [main]
+    # Infra-only pushes skip CI: one self-hosted runner serves CI and deploys,
+    # and a full CI run delays a chart/script deploy by an hour for no signal.
+    paths-ignore:
+      - "infra/**"
+      - "docs/**"
+      - "scripts/**"
+      - "**.md"
   pull_request:
     branches: [main]
 
