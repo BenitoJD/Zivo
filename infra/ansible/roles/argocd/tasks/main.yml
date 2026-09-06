@@ -8,11 +8,12 @@
 
 - name: Install Argo CD (stable)
   ansible.builtin.command: >-
-    kubectl apply -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+    kubectl apply --server-side --force-conflicts
+    -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
     -n argocd
   environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
   register: install
-  changed_when: "'created' in install.stdout or 'configured' in install.stdout"
+  changed_when: "'created' in install.stdout or 'configured' in install.stdout or 'field manager' in install.stdout"
 
 - name: Wait for Argo CD deployments
   ansible.builtin.command: kubectl -n argocd wait --for=condition=Available deployment --all --timeout=600s
