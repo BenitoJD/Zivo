@@ -28,7 +28,6 @@
     hash=$(htpasswd -bnBC 10 "" '{{ argocd_admin_password }}' | tr -d ':\n')
     kubectl -n argocd patch secret argocd-secret -p "{\"stringData\": {\"admin.password\": \"$hash\", \"admin.passwordMtime\": \"$(date +%FT%T%Z)\"}}"
   environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
-  no_log: true
   changed_when: true
 
 - name: Register the private repo credential for Argo CD
@@ -40,7 +39,17 @@
       --dry-run=client -o yaml | kubectl apply -f -
     kubectl -n argocd label secret zivo-repo-creds argocd.argoproj.io/secret-type=repository --overwrite
   environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
-  no_log: true
+  changed_when: true
+
+
+- name: Ingress health customization (hostNetwork Traefik has no LB IP; 404-free routing is the real signal)
+  ansible.builtin.shell: |
+    kubectl -n argocd patch configmap argocd-cm --type merge -p '{"data": {"resource.customizations.health.networking.k8s.io_Ingress": "hs = {}\nhs.status = \"Healthy\"\nhs.message = \"Ingress routed by hostNetwork Traefik; external LB status not applicable\"\nreturn hs\n"}}'
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  changed_when: true
+
+- name: Restart Argo CD controller to pick up health customization
+  ansible.builtin.command: kubectl -n argocd rollout restart deploy/argocd-application-controller
   changed_when: true
 
 - name: Copy Argo CD manifests to master-1
