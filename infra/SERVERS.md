@@ -148,3 +148,18 @@ pgbouncer, Postgres (pgvector) and MinIO. Rebuild/re-run with
 
 - [infra/ansible/](./ansible/): the bootstrap playbook; `inventory/hosts.ini` now holds the real
   IPs and live roles (masters / workers / load_balancer), `ansible_user=root` matching the key above.
+
+## Argo CD (GitOps) — installed 2026-09-06
+
+Argo CD runs in the `argocd` namespace, watching **main**. 13 Applications
+(postgres, minio, pgbouncer, auth, storage, practice, content, study, library,
+admin, web, worker-io, worker-cpu) auto-sync from
+`infra/k8s/charts/*` + `infra/k8s/environments/prod/*`.
+
+- **UI:** `http://argocd.zivo.fyi` (after DNS) — admin / see `~/.ssh/zivo-fleet-creds`
+- **CLI-less access:** `kubectl -n argocd get applications` (kubeconfig: `~/.kube/zivo-ha.conf`)
+- **Schema migrations stay CI-run** (deploy workflow via runner); Argo CD manages
+  the long-running workloads only.
+- **Known cosmetic:** ingress-backed apps show *Degraded* in Argo CD — the
+  hostNetwork Traefik has no `loadBalancer` IP for Argo's ingress health rule;
+  routing is verified working. Health customization applied via `argocd-cm`.
