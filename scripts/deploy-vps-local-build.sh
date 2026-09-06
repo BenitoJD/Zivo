@@ -167,15 +167,18 @@ if [[ "${PREBUILT:-0}" != "1" ]]; then
   # inherits it, so the heavy layers are downloaded, built, pushed, and
   # pulled by each node exactly once (see docker/python-deps.Dockerfile).
   docker build --pull -t "${DEPS_IMAGE}" -f docker/python-deps.Dockerfile .
-  docker build --pull -t "${MIGRATE_IMAGE}" -f backend/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" backend/
+  docker push "${DEPS_IMAGE}"
+  # No --pull on the inheriting builds: BuildKit would resolve the freshly
+  # built deps image from the registry; the local tag is the freshest copy.
+  docker build -t "${MIGRATE_IMAGE}" -f backend/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" backend/
   docker build --pull -t "${AUTH_IMAGE}" -f auth/Dockerfile --target runtime auth/
   docker build --pull -t "${STORAGE_IMAGE}" -f storage/Dockerfile --target runtime storage/
-  docker build --pull -t "${PRACTICE_IMAGE}" -f practice/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
-  docker build --pull -t "${CONTENT_IMAGE}" -f content/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
-  docker build --pull -t "${STUDY_IMAGE}" -f study/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
-  docker build --pull -t "${LIBRARY_IMAGE}" -f library/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
-  docker build --pull -t "${ADMIN_IMAGE}" -f admin/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
-  docker build --pull -t "${WORKER_IMAGE}" -f workers/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
+  docker build -t "${PRACTICE_IMAGE}" -f practice/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
+  docker build -t "${CONTENT_IMAGE}" -f content/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
+  docker build -t "${STUDY_IMAGE}" -f study/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
+  docker build -t "${LIBRARY_IMAGE}" -f library/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
+  docker build -t "${ADMIN_IMAGE}" -f admin/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
+  docker build -t "${WORKER_IMAGE}" -f workers/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
   docker build --pull -t "${WEB_IMAGE}" -f frontend/Dockerfile --target runtime \
     --build-arg NEXT_PUBLIC_API_URL= \
     --build-arg NEXT_PUBLIC_AUTH_URL= \
