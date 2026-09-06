@@ -29,7 +29,14 @@
   ansible.builtin.command: grep -q "POSTGRES" /opt/judge0/judge0-v1.13.0/judge0.conf
   changed_when: false
 
+- name: Check Judge0 server container
+  ansible.builtin.shell: docker ps --format '{{.Names}}' | grep -q judge0-v1130-server-1
+  register: j0_running
+  failed_when: false
+  changed_when: false
+
 - name: Start Judge0 stack
+  when: j0_running.rc != 0
   ansible.builtin.command: docker compose -f docker-compose.yml up -d
   args: { chdir: /opt/judge0/judge0-1.13.0 }
   changed_when: true
