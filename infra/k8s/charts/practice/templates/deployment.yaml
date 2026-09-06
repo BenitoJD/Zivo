@@ -63,13 +63,24 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 10
             failureThreshold: 12
+            timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 30
             periodSeconds: 15
+            timeoutSeconds: 5
             failureThreshold: 6
+          # Practice imports a heavy dependency chain (~2.5 min cold boot on a
+          # busy node); the startup probe owns the boot budget so liveness
+          # never kills a pod that is still starting.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 40
 ---
 apiVersion: v1
 kind: Service

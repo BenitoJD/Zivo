@@ -35,12 +35,22 @@ ROLLBACK_RELEASES=()
 rollback() {
   local code=$?
   if [[ $code -ne 0 && ${#ROLLBACK_RELEASES[@]} -gt 0 ]]; then
-    echo "Deploy failed (exit $code) — rolling back Helm releases..."
+    echo "Deploy failed (exit $code) — rolling back only releases left in a failed state..."
     for entry in "${ROLLBACK_RELEASES[@]}"; do
       release="${entry%%:*}"
       rev="${entry##*:}"
-      echo "helm rollback $release $rev"
-      helm rollback "$release" "$rev" -n "$NS" || true
+      # A release that actually rolled out stays; reverting it would un-ship
+      # working services and re-trigger rollout churn on a busy cluster.
+      status=$(helm status "$release" -n "$NS" -o json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('info', {}).get('status', ''))" 2>/dev/null || echo "")
+      case "$status" in
+        failed|pending-upgrade|pending-install|pending-rollback)
+          echo "helm rollback $release $rev (status: $status)"
+          helm rollback "$release" "$rev" -n "$NS" || true
+          ;;
+        *)
+          echo "keep $release (status: ${status:-unknown})"
+          ;;
+      esac
     done
   fi
   exit "$code"
