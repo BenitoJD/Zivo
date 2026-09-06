@@ -30,7 +30,7 @@
   changed_when: false
 
 - name: Check Judge0 server container
-  ansible.builtin.shell: docker ps --format '{{.Names}}' | grep -q judge0-v1130-server-1
+  ansible.builtin.shell: docker ps -q --filter name=judge0-v1130-server-1 | grep -q .
   register: j0_running
   failed_when: false
   changed_when: false
