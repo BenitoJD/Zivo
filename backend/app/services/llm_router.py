@@ -22,6 +22,13 @@ from sqlalchemy.orm import Session
 from app.engine_runtime import Pred, Rule, apply, choose, first_match, pick
 from app.eta.llm_concurrency import llm_slot_async, provider_slot_async
 from app.services.llm_usage_log import record_llm_usage
+
+
+class LlmDisabledError(RuntimeError):
+    """Raised when the master LLM switch is off."""
+
+    def __init__(self, log_tag: str = "llm") -> None:
+        super().__init__(f"LLM calls are disabled (llm_enabled=false) [{log_tag}]")
 from app.services.llm_pool import (
     is_failover_eligible,
     is_llm_pool_enabled,
@@ -461,6 +468,7 @@ async def stream_chat_completion(
 
 
 async def acomplete_chat(
+
     messages: list[dict],
     db: Session,
     *,
@@ -475,6 +483,10 @@ async def acomplete_chat(
 
     `strip_output` normalizes em/en dashes in the result; pass False when the output
     must be verbatim (e.g. OCR transcription of a user's answer)."""
+    from app.config import get_settings
+    if not get_settings().llm_enabled:
+        raise LlmDisabledError(log_tag)
+
     import litellm
 
     litellm.drop_params = True  # drop provider-unsupported params (e.g. 'thinking') instead of erroring

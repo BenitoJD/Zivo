@@ -151,6 +151,19 @@ class Settings(BaseSettings):
     # Path to the piper binary + a voices directory of .onnx models. Empty paths
     # keep the listen endpoints inert (404) until the worker image ships Piper.
     audiobook_enabled: bool = False
+
+    # ── LLM feature flags ─────────────────────────────────────────
+    # Master switch: when false, ALL LLM calls return 503 at the router level.
+    # Individual features can be disabled independently for cost control.
+    llm_enabled: bool = True
+    mcq_generation_enabled: bool = True
+    flashcards_enabled: bool = True
+    quiz_enabled: bool = True
+    lesson_enabled: bool = True
+    summarize_enabled: bool = True
+    notes_enabled: bool = True
+    newspaper_enabled: bool = True
+    chat_enabled: bool = True
     piper_bin: str = "piper"
     piper_voices_dir: str = ""
 

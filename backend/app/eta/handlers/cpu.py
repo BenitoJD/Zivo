@@ -518,6 +518,9 @@ def transition_prep_job(payload: dict) -> dict:
 
 @eta(name="generate.questions", workload=JobWorkload.cpu, priority=JobPriority.HIGH)
 def generate_questions_job(payload: dict) -> dict:
+    from app.config import get_settings
+    if not get_settings().mcq_generation_enabled:
+        return {"status": "skipped", "reason": "mcq_generation_enabled=false"}
     from app.graphs.generation_graph import run_generation
     from app.services.question_pool import on_batch_failed
 

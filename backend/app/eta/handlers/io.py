@@ -75,6 +75,9 @@ def summarize_start(payload: dict) -> dict:
 
 @eta(name="summarize.generate", workload=JobWorkload.io)
 def summarize_generate(payload: dict) -> dict:
+    from app.config import get_settings
+    if not get_settings().summarize_enabled:
+        return {"status": "skipped", "reason": "summarize_enabled=false"}
     import asyncio
 
     from app.graphs.summarize_graph import generate_whole_doc_summary
