@@ -1,5 +1,6 @@
 // @ts-nocheck
 import type { Metadata, Viewport } from "next";
+import Script from "next/script";
 import { cookies, headers } from "next/headers";
 import { Figtree, EB_Garamond } from "next/font/google";
 import "@mantine/core/styles.css";
@@ -146,6 +147,12 @@ export default async function RootLayout({ children }: Readonly<{
               }
             `,
         }}/>
+        <Script
+          async
+          src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-3919552493314049"
+          crossOrigin="anonymous"
+          strategy="afterInteractive"
+        />
       </head>
       <body style={{
             height: "100dvh",
