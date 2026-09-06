@@ -5,10 +5,11 @@ ingress:
   enabled: true
   className: traefik
   host: s3.zivo.fyi
-  tls: true
-  entrypoint: websecure
+  # flip to true + websecure after DNS cutover to 45.196.196.98
+  tls: false
+  entrypoint: web
   tlsSecret: zivo-s3-tls
-publicUrl: https://s3.zivo.fyi
+publicUrl: http://s3.zivo.fyi
 
 # Dedicated data node: tainted node.zivo/dedicated=data so ONLY postgres/minio
 # schedule here. See infra/SERVERS.md (zivo-node2 = vm326035110).
