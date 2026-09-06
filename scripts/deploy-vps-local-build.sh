@@ -19,6 +19,7 @@ fi
 TAG="${1:-Zivo_0.1.$(date +%Y%m%d%H%M)}"
 REPO="${REPO:-/opt/zivo}"
 OWNER="${OWNER:-benitojd}"
+DEPS_IMAGE="ghcr.io/${OWNER}/zivo-python-deps:${TAG}"
 MIGRATE_IMAGE="ghcr.io/${OWNER}/zivo-migrate:${TAG}"
 AUTH_IMAGE="ghcr.io/${OWNER}/zivo-auth:${TAG}"
 STORAGE_IMAGE="ghcr.io/${OWNER}/zivo-storage:${TAG}"
@@ -160,16 +161,21 @@ git fetch origin main
 git reset --hard origin/main
 echo "Deploying $(git rev-parse --short HEAD) as ${TAG}"
 
+DEPS_BUILD_ARGS=("--build-arg" "PYTHON_DEPS_IMAGE=${DEPS_IMAGE}")
 if [[ "${PREBUILT:-0}" != "1" ]]; then
-  docker build --pull -t "${MIGRATE_IMAGE}" -f backend/Dockerfile --target runtime backend/
+  # The shared venv builds ONCE per deploy; every backend service image
+  # inherits it, so the heavy layers are downloaded, built, pushed, and
+  # pulled by each node exactly once (see docker/python-deps.Dockerfile).
+  docker build --pull -t "${DEPS_IMAGE}" -f docker/python-deps.Dockerfile .
+  docker build --pull -t "${MIGRATE_IMAGE}" -f backend/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" backend/
   docker build --pull -t "${AUTH_IMAGE}" -f auth/Dockerfile --target runtime auth/
   docker build --pull -t "${STORAGE_IMAGE}" -f storage/Dockerfile --target runtime storage/
-  docker build --pull -t "${PRACTICE_IMAGE}" -f practice/Dockerfile --target runtime .
-  docker build --pull -t "${CONTENT_IMAGE}" -f content/Dockerfile --target runtime .
-  docker build --pull -t "${STUDY_IMAGE}" -f study/Dockerfile --target runtime .
-  docker build --pull -t "${LIBRARY_IMAGE}" -f library/Dockerfile --target runtime .
-  docker build --pull -t "${ADMIN_IMAGE}" -f admin/Dockerfile --target runtime .
-  docker build --pull -t "${WORKER_IMAGE}" -f workers/Dockerfile --target runtime .
+  docker build --pull -t "${PRACTICE_IMAGE}" -f practice/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
+  docker build --pull -t "${CONTENT_IMAGE}" -f content/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
+  docker build --pull -t "${STUDY_IMAGE}" -f study/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
+  docker build --pull -t "${LIBRARY_IMAGE}" -f library/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
+  docker build --pull -t "${ADMIN_IMAGE}" -f admin/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
+  docker build --pull -t "${WORKER_IMAGE}" -f workers/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
   docker build --pull -t "${WEB_IMAGE}" -f frontend/Dockerfile --target runtime \
     --build-arg NEXT_PUBLIC_API_URL= \
     --build-arg NEXT_PUBLIC_AUTH_URL= \
@@ -183,6 +189,7 @@ if [[ "${PREBUILT:-0}" != "1" ]]; then
     --build-arg ADMIN_PROXY_URL=http://zivo-admin:8000 \
     frontend/
   # Push to GHCR; prod k3s pulls these (images are public, unique tag per deploy).
+  docker push "${DEPS_IMAGE}"
   docker push "${MIGRATE_IMAGE}"
   docker push "${AUTH_IMAGE}"
   docker push "${STORAGE_IMAGE}"
@@ -306,6 +313,18 @@ wait_job alembic-migrate 15m
 
 # Note: code execution (Judge0) runs on a dedicated box, not in this cluster (see
 # infra/judge0/). Practice reaches it via JUDGE0_URL (set in the practice chart).
+
+# ROLLOUT_MODE=argocd (the default): this script builds + pushes images and runs
+# schema migrations, then the workflow promotes the image tags in git and ArgoCD
+# rolls every service/worker release from the chart values. Helm must not touch
+# ArgoCD-managed releases — two controllers fighting over one cluster caused the
+# 2026-09-06 rollout storm (helm upgrades reverted by auto-sync mid-rollout).
+# ROLLOUT_MODE=helm keeps the legacy direct helm rollout for break-glass use.
+ROLLOUT_MODE="${ROLLOUT_MODE:-argocd}"
+if [[ "$ROLLOUT_MODE" == "argocd" ]]; then
+  echo "ROLLOUT_MODE=argocd — migrations done; ArgoCD will roll releases from the promoted tags."
+  exit 0
+fi
 
 for release in zivo-worker-io zivo-worker-cpu; do
   helm_record "$release"

@@ -1,5 +1,7 @@
 FROM python:3.12-slim AS builder
 
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 WORKDIR /build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -8,14 +10,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+ENV PATH="/opt/venv/bin:$PATH" \
+    UV_LINK_MODE=copy
 
+# Wheel cache stays in a BuildKit cache mount, never in the layer.
 COPY requirements.txt .
-RUN pip install --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt \
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install -r requirements.txt \
     && find /opt/venv -depth -type d -name '__pycache__' -exec rm -rf {} + \
     && find /opt/venv -type f -name '*.pyc' -delete \
-    && { pip uninstall -y wheel pip || true; }
+    && { uv pip uninstall wheel pip || true; }
 
 FROM python:3.12-slim AS runtime
 

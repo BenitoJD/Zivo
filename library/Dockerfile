@@ -1,23 +1,12 @@
 # HTTP microservice image: product library (slimmed) + this process's entrypoint.
 # Build from repo root: docker build -f library/Dockerfile .
-FROM python:3.12-slim AS builder
+# Builder inherits the shared venv built once by docker/python-deps.Dockerfile;
+# the deploy script pins PYTHON_DEPS_IMAGE to the release tag so every service
+# of a release shares identical venv layers (built once, pulled once per node).
+ARG PYTHON_DEPS_IMAGE="ghcr.io/benitojd/zivo-python-deps:latest"
+FROM ${PYTHON_DEPS_IMAGE} AS builder
 
-WORKDIR /build
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-
-COPY backend/requirements.txt .
-RUN pip install --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt \
-    && find /opt/venv -depth -type d -name '__pycache__' -exec rm -rf {} + \
-    && find /opt/venv -type f -name '*.pyc' -delete \
-    && { pip uninstall -y wheel pip || true; }
 
 FROM python:3.12-slim AS runtime
 
