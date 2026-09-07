@@ -106,6 +106,8 @@ kind: Application
 metadata:
   name: zivo-auth
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   project: default
   source:
@@ -140,6 +142,8 @@ kind: Application
 metadata:
   name: zivo-storage
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   project: default
   source:
@@ -174,6 +178,8 @@ kind: Application
 metadata:
   name: zivo-practice
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   project: default
   source:
@@ -208,6 +214,8 @@ kind: Application
 metadata:
   name: zivo-content
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   project: default
   source:
@@ -242,6 +250,8 @@ kind: Application
 metadata:
   name: zivo-study
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   project: default
   source:
@@ -276,6 +286,8 @@ kind: Application
 metadata:
   name: zivo-library
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   project: default
   source:
@@ -310,6 +322,8 @@ kind: Application
 metadata:
   name: zivo-admin
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   project: default
   source:
@@ -344,6 +358,8 @@ kind: Application
 metadata:
   name: zivo-web
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
 spec:
   project: default
   source:
@@ -378,6 +394,8 @@ kind: Application
 metadata:
   name: zivo-worker-io
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   project: default
   source:
@@ -423,6 +441,8 @@ kind: Application
 metadata:
   name: zivo-worker-cpu
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   project: default
   source:
