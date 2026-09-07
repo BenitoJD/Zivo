@@ -2,7 +2,7 @@ replicaCount: 2
 namespace: zivo
 image:
   repository: ghcr.io/benitojd/zivo-migrate
-  tag: Zivo_0.1.374
+  tag: Zivo_0.1.375
   pullPolicy: IfNotPresent
 # Images are built on the VPS and imported into k3s containerd before rollout
 # (pullPolicy IfNotPresent), so no registry pull happens — no pull secret needed.
