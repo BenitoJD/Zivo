@@ -65,9 +65,11 @@ alertmanager:
 
 grafana:
   admin:
-    existingSecret: zivo-secrets
-    userKey: GRAFANA_ADMIN_USER
-    passwordKey: GRAFANA_ADMIN_PASSWORD
+    # Secrets never live in git: this one is rendered from the Ansible vault
+    # (platform_data role) into the monitoring namespace.
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
   resources:
     requests:
       cpu: 50m
@@ -86,6 +88,19 @@ grafana:
 # DaemonSet per node (~30m CPU each) — the per-node CPU/memory/disk graphs.
 nodeExporter:
   enabled: true
+
+# Monitoring agents belong on every node, including tainted masters and the
+# dedicated data node.
+prometheus-node-exporter:
+  tolerations:
+    - operator: Exists
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
 
 kubeStateMetrics:
   enabled: true

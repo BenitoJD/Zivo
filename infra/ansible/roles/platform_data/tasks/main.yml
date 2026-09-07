@@ -20,6 +20,32 @@
   register: sec
   changed_when: "'configured' in sec.stdout or 'created' in sec.stdout"
 
+- name: Monitoring namespace (ArgoCD also creates it; cheap idempotent guard)
+  ansible.builtin.command: kubectl create namespace monitoring
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  delegate_to: master-1
+  register: mns
+  failed_when: mns.rc != 0 and 'AlreadyExists' not in mns.stderr
+  changed_when: mns.rc == 0
+
+- name: Render grafana-admin secret for the monitoring namespace
+  ansible.builtin.template:
+    src: grafana-admin-secret.yaml.j2
+    dest: /root/grafana-admin-secret.yaml
+    mode: "0600"
+  delegate_to: master-1
+
+- name: Apply grafana-admin secret
+  ansible.builtin.command: kubectl apply -f /root/grafana-admin-secret.yaml
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
+  delegate_to: master-1
+  register: gsec
+  changed_when: "'configured' in gsec.stdout or 'created' in gsec.stdout"
+
+- name: Remove rendered grafana secret file from master-1
+  ansible.builtin.file: { path: /root/grafana-admin-secret.yaml, state: absent }
+  delegate_to: master-1
+
 - name: Remove rendered secrets file from master-1
   ansible.builtin.file: { path: /root/zivo-secrets.yaml, state: absent }
   delegate_to: master-1
