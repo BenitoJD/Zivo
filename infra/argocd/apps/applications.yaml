@@ -17,6 +17,13 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: zivo
+  ignoreDifferences:
+    # HPAs own .spec.replicas; without this ignore, selfHeal and the HPA
+    # fight over the field and flap the deployments forever.
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
   syncPolicy:
     automated:
       prune: false
@@ -44,6 +51,13 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: zivo
+  ignoreDifferences:
+    # HPAs own .spec.replicas; without this ignore, selfHeal and the HPA
+    # fight over the field and flap the deployments forever.
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
   syncPolicy:
     automated:
       prune: false
@@ -71,6 +85,13 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: zivo
+  ignoreDifferences:
+    # HPAs own .spec.replicas; without this ignore, selfHeal and the HPA
+    # fight over the field and flap the deployments forever.
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
   syncPolicy:
     automated:
       prune: false
@@ -98,6 +119,13 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: zivo
+  ignoreDifferences:
+    # HPAs own .spec.replicas; without this ignore, selfHeal and the HPA
+    # fight over the field and flap the deployments forever.
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
   syncPolicy:
     automated:
       prune: false
@@ -125,6 +153,13 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: zivo
+  ignoreDifferences:
+    # HPAs own .spec.replicas; without this ignore, selfHeal and the HPA
+    # fight over the field and flap the deployments forever.
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
   syncPolicy:
     automated:
       prune: false
@@ -152,6 +187,13 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: zivo
+  ignoreDifferences:
+    # HPAs own .spec.replicas; without this ignore, selfHeal and the HPA
+    # fight over the field and flap the deployments forever.
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
   syncPolicy:
     automated:
       prune: false
@@ -179,6 +221,13 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: zivo
+  ignoreDifferences:
+    # HPAs own .spec.replicas; without this ignore, selfHeal and the HPA
+    # fight over the field and flap the deployments forever.
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
   syncPolicy:
     automated:
       prune: false
@@ -206,6 +255,13 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: zivo
+  ignoreDifferences:
+    # HPAs own .spec.replicas; without this ignore, selfHeal and the HPA
+    # fight over the field and flap the deployments forever.
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
   syncPolicy:
     automated:
       prune: false
@@ -233,6 +289,13 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: zivo
+  ignoreDifferences:
+    # HPAs own .spec.replicas; without this ignore, selfHeal and the HPA
+    # fight over the field and flap the deployments forever.
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
   syncPolicy:
     automated:
       prune: false
@@ -260,6 +323,13 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: zivo
+  ignoreDifferences:
+    # HPAs own .spec.replicas; without this ignore, selfHeal and the HPA
+    # fight over the field and flap the deployments forever.
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
   syncPolicy:
     automated:
       prune: false
@@ -287,6 +357,13 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: zivo
+  ignoreDifferences:
+    # HPAs own .spec.replicas; without this ignore, selfHeal and the HPA
+    # fight over the field and flap the deployments forever.
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
   syncPolicy:
     automated:
       prune: false
@@ -326,6 +403,13 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: zivo
+  ignoreDifferences:
+    # HPAs own .spec.replicas; without this ignore, selfHeal and the HPA
+    # fight over the field and flap the deployments forever.
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
   syncPolicy:
     automated:
       prune: false
@@ -364,6 +448,13 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: zivo
+  ignoreDifferences:
+    # HPAs own .spec.replicas; without this ignore, selfHeal and the HPA
+    # fight over the field and flap the deployments forever.
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
   syncPolicy:
     automated:
       prune: false
