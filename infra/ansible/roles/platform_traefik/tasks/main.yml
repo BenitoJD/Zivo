@@ -17,6 +17,9 @@
     --set ingressRoute.dashboard.enabled=false
     --set ports.web.port=80
     --set ports.websecure.port=443
+    # 9100 is node-exporter's hostPort (kube-prometheus-stack); Traefik's
+    # metrics default collides with it on hostNetwork ingress workers.
+    --set ports.metrics.port=9101
     --set podSecurityContext.runAsUser=0
     --set podSecurityContext.runAsGroup=0
     --set podSecurityContext.runAsNonRoot=false
