@@ -59,11 +59,12 @@
     dest: /root/zivo-argocd/
     mode: "0644"
 
-- name: Apply ingress + Applications
+- name: Apply ingress + Applications + root app-of-apps
   ansible.builtin.command: kubectl apply -f /root/zivo-argocd/{{ item }}
   loop:
     - ingress.yaml
     - apps/applications.yaml
+    - root-app.yaml
   environment: { KUBECONFIG: /etc/kubernetes/admin.conf, HOME: /root }
   register: apps_apply
   changed_when: "'created' in apps_apply.stdout or 'configured' in apps_apply.stdout"

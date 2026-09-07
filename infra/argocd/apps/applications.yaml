@@ -20,7 +20,7 @@ spec:
   syncPolicy:
     automated:
       prune: false
-      selfHeal: false
+      selfHeal: true
     syncOptions:
       - CreateNamespace=false
       - ServerSideApply=true
@@ -47,7 +47,7 @@ spec:
   syncPolicy:
     automated:
       prune: false
-      selfHeal: false
+      selfHeal: true
     syncOptions:
       - CreateNamespace=false
       - ServerSideApply=true
@@ -74,7 +74,7 @@ spec:
   syncPolicy:
     automated:
       prune: false
-      selfHeal: false
+      selfHeal: true
     syncOptions:
       - CreateNamespace=false
       - ServerSideApply=true
@@ -101,7 +101,7 @@ spec:
   syncPolicy:
     automated:
       prune: false
-      selfHeal: false
+      selfHeal: true
     syncOptions:
       - CreateNamespace=false
       - ServerSideApply=true
@@ -128,7 +128,7 @@ spec:
   syncPolicy:
     automated:
       prune: false
-      selfHeal: false
+      selfHeal: true
     syncOptions:
       - CreateNamespace=false
       - ServerSideApply=true
@@ -155,7 +155,7 @@ spec:
   syncPolicy:
     automated:
       prune: false
-      selfHeal: false
+      selfHeal: true
     syncOptions:
       - CreateNamespace=false
       - ServerSideApply=true
@@ -182,7 +182,7 @@ spec:
   syncPolicy:
     automated:
       prune: false
-      selfHeal: false
+      selfHeal: true
     syncOptions:
       - CreateNamespace=false
       - ServerSideApply=true
@@ -209,7 +209,7 @@ spec:
   syncPolicy:
     automated:
       prune: false
-      selfHeal: false
+      selfHeal: true
     syncOptions:
       - CreateNamespace=false
       - ServerSideApply=true
@@ -236,7 +236,7 @@ spec:
   syncPolicy:
     automated:
       prune: false
-      selfHeal: false
+      selfHeal: true
     syncOptions:
       - CreateNamespace=false
       - ServerSideApply=true
@@ -263,7 +263,7 @@ spec:
   syncPolicy:
     automated:
       prune: false
-      selfHeal: false
+      selfHeal: true
     syncOptions:
       - CreateNamespace=false
       - ServerSideApply=true
@@ -290,7 +290,7 @@ spec:
   syncPolicy:
     automated:
       prune: false
-      selfHeal: false
+      selfHeal: true
     syncOptions:
       - CreateNamespace=false
       - ServerSideApply=true
@@ -323,15 +323,13 @@ spec:
           value: "false"
         - name: workloads.newspaper.enabled
           value: "false"
-        - name: imagePullSecrets[0].name
-          value: ghcr-pull
   destination:
     server: https://kubernetes.default.svc
     namespace: zivo
   syncPolicy:
     automated:
       prune: false
-      selfHeal: false
+      selfHeal: true
     syncOptions:
       - CreateNamespace=false
       - ServerSideApply=true
@@ -363,15 +361,13 @@ spec:
           value: "true"
         - name: workloads.newspaper.enabled
           value: "true"
-        - name: imagePullSecrets[0].name
-          value: ghcr-pull
   destination:
     server: https://kubernetes.default.svc
     namespace: zivo
   syncPolicy:
     automated:
       prune: false
-      selfHeal: false
+      selfHeal: true
     syncOptions:
       - CreateNamespace=false
       - ServerSideApply=true

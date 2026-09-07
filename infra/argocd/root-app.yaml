@@ -1,0 +1,28 @@
+# Root app-of-apps: Argo CD manages its own Application definitions from git.
+# Child Application CRs live in infra/argocd/apps/ and reconcile on every push,
+# so app-spec changes never need a manual kubectl apply (Ansible seeds this
+# root once at bootstrap; git owns everything after that).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: zivo-root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/BenitoJD/Zivo.git
+    targetRevision: main
+    path: infra/argocd/apps
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
