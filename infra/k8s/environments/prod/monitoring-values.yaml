@@ -1,0 +1,108 @@
+# kube-prometheus-stack — Prometheus, Alertmanager, Grafana, node-exporter.
+# Fleet is small (4 workers, some 8GB): keep requests modest, retention short,
+# and pin the time-series pods to worker-3 (96G disk, lightest loaded) since
+# local-path PVs are node-local.
+namespaceOverride: monitoring
+
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    retentionSize: 15GB
+    resources:
+      requests:
+        cpu: 200m
+        memory: 1Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 20Gi
+    nodeSelector:
+      kubernetes.io/hostname: worker-3
+    # Scrape everything in the cluster including the monitoring ns itself.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+  ingress:
+    enabled: false
+
+alertmanager:
+  alertmanagerSpec:
+    retention: 72h
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 2Gi
+    nodeSelector:
+      kubernetes.io/hostname: worker-3
+  # Alerts evaluate and land in the UI; wire real receivers (email/Slack)
+  # here when credentials exist. null receiver = drop, no noise.
+  config:
+    route:
+      group_by: ["alertname", "namespace"]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: "null"
+    receivers:
+      - name: "null"
+
+grafana:
+  admin:
+    existingSecret: zivo-secrets
+    userKey: GRAFANA_ADMIN_USER
+    passwordKey: GRAFANA_ADMIN_PASSWORD
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    hosts:
+      - grafana.zivo.fyi
+    # HTTP until the deliberate TLS cutover (same as every other host).
+    tls: []
+
+# DaemonSet per node (~30m CPU each) — the per-node CPU/memory/disk graphs.
+nodeExporter:
+  enabled: true
+
+kubeStateMetrics:
+  enabled: true
+
+# kubeadm ships cAdvisor via kubelet; keep the default scrape config.
+kubelet:
+  enabled: true
+kubeControllerManager:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeScheduler:
+  enabled: false
+coreDns:
+  enabled: true
+
+# Keep the footprint small; defaults add ~200Mi of exporters we don't read.
+prometheus-node-exporter:
+  hostRootFsMount:
+    enabled: true
