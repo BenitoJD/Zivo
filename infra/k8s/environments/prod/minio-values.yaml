@@ -5,9 +5,10 @@ ingress:
   enabled: true
   className: traefik
   host: s3.zivo.fyi
-  # flip to true + websecure after DNS cutover to 45.196.196.98
-  tls: true
-  entrypoint: websecure
+  # HTTP until the deliberate TLS cutover (cert-manager needs every host A
+  # record live; flipping this on is the cutover step itself).
+  tls: false
+  entrypoint: web
   tlsSecret: zivo-s3-tls
 publicUrl: http://s3.zivo.fyi
 
