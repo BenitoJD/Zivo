@@ -13,8 +13,11 @@
  *    IndexedDB, not the HTTP cache; caching API responses would be wrong.
  */
 
-const SHELL_CACHE = "zivo-shell-v1";
-const ASSET_CACHE = "zivo-assets-v1";
+// v2: the 2026-09 rebuild changed every chunk hash; v1 caches held the old
+// build and broke hydration for returning visitors. Bump on every deploy that
+// changes chunk output — the activate handler deletes non-current caches.
+const SHELL_CACHE = "zivo-shell-v2";
+const ASSET_CACHE = "zivo-assets-v2";
 const SHELL_URLS = ["/", "/offline"];
 
 const OPS = {
