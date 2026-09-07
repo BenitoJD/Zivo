@@ -87,6 +87,16 @@ wait_job() {
 
 ensure_ghcr_pull_secret() {
   PULL_SECRET_SET=()
+  # The operator manages ghcr-pull via the platform_data Ansible role from the
+  # vaulted ghcr_pull_token. The workflow's server-to-server token works for
+  # docker login HERE but GitHub 403s it when kubelet exchanges it from the
+  # cluster nodes — overwriting the secret with it broke every authenticated
+  # pull fleet-wide (2026-09-07). Keep the existing secret; create only if absent.
+  if kubectl -n "$NS" get secret ghcr-pull >/dev/null 2>&1; then
+    echo "ghcr-pull secret exists (operator-managed) — keeping it"
+    PULL_SECRET_SET=(--set "imagePullSecrets[0].name=ghcr-pull")
+    return 0
+  fi
   if [[ -z "${GITHUB_TOKEN:-}" ]]; then
     # Self-hosted jobs often omit GITHUB_TOKEN from the script env; docker login
     # already stored the Actions token in ~/.docker/config.json.
