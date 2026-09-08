@@ -1,4 +1,16 @@
 ---
+# The runner shares a 4GB box with production pods; docker builds spike past
+# free RAM and the kernel OOM killer starts shooting pods. A swapfile absorbs
+# build spikes; the fstab line makes it survive reimages.
+- name: Swap file for build memory spikes
+  ansible.builtin.shell: |
+    if [ ! -f /swapfile ]; then
+      fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile >/dev/null
+      echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    fi
+    swapon /swapfile 2>/dev/null || true
+  changed_when: false
+
 - name: Install docker + buildx plugin (BuildKit cache mounts need buildx)
   ansible.builtin.apt:
     name:
