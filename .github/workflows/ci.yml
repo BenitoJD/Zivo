@@ -20,6 +20,8 @@ concurrency:
 jobs:
   backend:
     runs-on: [self-hosted, zivo]
+    # One runner serves CI + deploys; a hung job must never hog it for hours.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: backend
@@ -97,6 +99,8 @@ jobs:
 
   auth:
     runs-on: [self-hosted, zivo]
+    # One runner serves CI + deploys; a hung job must never hog it for hours.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: auth
@@ -154,6 +158,8 @@ jobs:
 
   storage:
     runs-on: [self-hosted, zivo]
+    # One runner serves CI + deploys; a hung job must never hog it for hours.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: storage
@@ -211,6 +217,8 @@ jobs:
 
   practice:
     runs-on: [self-hosted, zivo]
+    # One runner serves CI + deploys; a hung job must never hog it for hours.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: practice
@@ -269,6 +277,8 @@ jobs:
 
   content:
     runs-on: [self-hosted, zivo]
+    # One runner serves CI + deploys; a hung job must never hog it for hours.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: content
@@ -327,6 +337,8 @@ jobs:
 
   study:
     runs-on: [self-hosted, zivo]
+    # One runner serves CI + deploys; a hung job must never hog it for hours.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: study
@@ -385,6 +397,8 @@ jobs:
 
   library:
     runs-on: [self-hosted, zivo]
+    # One runner serves CI + deploys; a hung job must never hog it for hours.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: library
@@ -443,6 +457,8 @@ jobs:
 
   admin:
     runs-on: [self-hosted, zivo]
+    # One runner serves CI + deploys; a hung job must never hog it for hours.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: admin
@@ -501,6 +517,8 @@ jobs:
 
   frontend:
     runs-on: [self-hosted, zivo]
+    # One runner serves CI + deploys; a hung job must never hog it for hours.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: frontend
