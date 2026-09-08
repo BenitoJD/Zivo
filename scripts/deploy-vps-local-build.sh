@@ -172,47 +172,91 @@ git reset --hard origin/main
 echo "Deploying $(git rev-parse --short HEAD) as ${TAG}"
 
 DEPS_BUILD_ARGS=("--build-arg" "PYTHON_DEPS_IMAGE=${DEPS_IMAGE}")
+BUILD_LOG_DIR="$(mktemp -d /tmp/zivo-build-logs.XXXXXX)"
+BUILD_FAILURES=()
+
+# Run builds/pushes concurrently; each job logs to its own file so a failure
+# is printable without interleaving. The runner box has ~4 spare cores, so
+# waves of 4 saturate it without thrashing BuildKit.
+run_jobs() {
+  local pids=() names=() i failed
+  for i in "${!JOB_CMDS[@]}"; do
+    names+=("${JOB_NAMES[$i]}")
+    ( eval "${JOB_CMDS[$i]}" ) > "${BUILD_LOG_DIR}/${JOB_NAMES[$i]}.log" 2>&1 &
+    pids+=($!)
+  done
+  failed=0
+  for i in "${!pids[@]}"; do
+    if wait "${pids[$i]}"; then
+      echo "  ok   ${names[$i]}"
+    else
+      echo "  FAIL ${names[$i]} (log: ${BUILD_LOG_DIR}/${names[$i]}.log)"
+      BUILD_FAILURES+=("${names[$i]}")
+      failed=1
+    fi
+  done
+  if [[ $failed -ne 0 ]]; then
+    for name in "${BUILD_FAILURES[@]}"; do
+      echo "----- ${name} log tail -----"
+      tail -30 "${BUILD_LOG_DIR}/${name}.log" || true
+    done
+    exit 1
+  fi
+}
+
 if [[ "${PREBUILT:-0}" != "1" ]]; then
   # The shared venv builds ONCE per deploy; every backend service image
   # inherits it, so the heavy layers are downloaded, built, pushed, and
   # pulled by each node exactly once (see docker/python-deps.Dockerfile).
-  docker build --pull -t "${DEPS_IMAGE}" -f docker/python-deps.Dockerfile .
-  docker push "${DEPS_IMAGE}"
-  # No --pull on the inheriting builds: BuildKit would resolve the freshly
-  # built deps image from the registry; the local tag is the freshest copy.
-  docker build -t "${MIGRATE_IMAGE}" -f backend/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" backend/
-  docker build --pull -t "${AUTH_IMAGE}" -f auth/Dockerfile --target runtime auth/
-  docker build --pull -t "${STORAGE_IMAGE}" -f storage/Dockerfile --target runtime storage/
-  docker build -t "${PRACTICE_IMAGE}" -f practice/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
-  docker build -t "${CONTENT_IMAGE}" -f content/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
-  docker build -t "${STUDY_IMAGE}" -f study/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
-  docker build -t "${LIBRARY_IMAGE}" -f library/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
-  docker build -t "${ADMIN_IMAGE}" -f admin/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
-  docker build -t "${WORKER_IMAGE}" -f workers/Dockerfile --target runtime "${DEPS_BUILD_ARGS[@]}" .
-  docker build --pull -t "${WEB_IMAGE}" -f frontend/Dockerfile --target runtime \
-    --build-arg NEXT_PUBLIC_API_URL= \
-    --build-arg NEXT_PUBLIC_AUTH_URL= \
-    --build-arg NEXT_PUBLIC_STORAGE_URL= \
-    --build-arg AUTH_PROXY_URL=http://zivo-auth:8000 \
-    --build-arg STORAGE_PROXY_URL=http://zivo-storage:8000 \
-    --build-arg PRACTICE_PROXY_URL=http://zivo-practice:8000 \
-    --build-arg CONTENT_PROXY_URL=http://zivo-content:8000 \
-    --build-arg STUDY_PROXY_URL=http://zivo-study:8000 \
-    --build-arg LIBRARY_PROXY_URL=http://zivo-library:8000 \
-    --build-arg ADMIN_PROXY_URL=http://zivo-admin:8000 \
-    frontend/
-  # Push to GHCR; prod k3s pulls these (images are public, unique tag per deploy).
-  docker push "${DEPS_IMAGE}"
-  docker push "${MIGRATE_IMAGE}"
-  docker push "${AUTH_IMAGE}"
-  docker push "${STORAGE_IMAGE}"
-  docker push "${PRACTICE_IMAGE}"
-  docker push "${CONTENT_IMAGE}"
-  docker push "${STUDY_IMAGE}"
-  docker push "${LIBRARY_IMAGE}"
-  docker push "${ADMIN_IMAGE}"
-  docker push "${WORKER_IMAGE}"
-  docker push "${WEB_IMAGE}"
+  #
+  # Builds run in parallel waves: wave 1 is everything that does not depend
+  # on the deps image (web/auth/storage plus deps itself); wave 2 is the
+  # seven images that inherit it. No --pull on the inheriting builds:
+  # BuildKit would resolve the freshly built deps image from the registry;
+  # the local tag is the freshest copy.
+
+  echo "== build wave 1: deps + web + auth + storage (parallel) =="
+  JOB_NAMES=(); JOB_CMDS=()
+  JOB_NAMES+=("deps");    JOB_CMDS+=("docker build --pull -t '${DEPS_IMAGE}' -f docker/python-deps.Dockerfile .")
+  JOB_NAMES+=("web");     JOB_CMDS+=("docker build --pull -t '${WEB_IMAGE}' -f frontend/Dockerfile --target runtime --build-arg NEXT_PUBLIC_API_URL= --build-arg NEXT_PUBLIC_AUTH_URL= --build-arg NEXT_PUBLIC_STORAGE_URL= --build-arg AUTH_PROXY_URL=http://zivo-auth:8000 --build-arg STORAGE_PROXY_URL=http://zivo-storage:8000 --build-arg PRACTICE_PROXY_URL=http://zivo-practice:8000 --build-arg CONTENT_PROXY_URL=http://zivo-content:8000 --build-arg STUDY_PROXY_URL=http://zivo-study:8000 --build-arg LIBRARY_PROXY_URL=http://zivo-library:8000 --build-arg ADMIN_PROXY_URL=http://zivo-admin:8000 frontend/")
+  JOB_NAMES+=("auth");    JOB_CMDS+=("docker build --pull -t '${AUTH_IMAGE}' -f auth/Dockerfile --target runtime auth/")
+  JOB_NAMES+=("storage"); JOB_CMDS+=("docker build --pull -t '${STORAGE_IMAGE}' -f storage/Dockerfile --target runtime storage/")
+  run_jobs
+
+  echo "== push wave 1 (parallel) =="
+  JOB_NAMES=(); JOB_CMDS=()
+  for name in deps web auth storage; do
+    JOB_NAMES+=("push-$name")
+    case "$name" in
+      deps)    JOB_CMDS+=("docker push '${DEPS_IMAGE}'") ;;
+      web)     JOB_CMDS+=("docker push '${WEB_IMAGE}'") ;;
+      auth)    JOB_CMDS+=("docker push '${AUTH_IMAGE}'") ;;
+      storage) JOB_CMDS+=("docker push '${STORAGE_IMAGE}'") ;;
+    esac
+  done
+  run_jobs
+
+  echo "== build wave 2: deps-inheriting images (parallel) =="
+  JOB_NAMES=(); JOB_CMDS=()
+  JOB_NAMES+=("migrate");  JOB_CMDS+=("docker build -t '${MIGRATE_IMAGE}' -f backend/Dockerfile --target runtime ${DEPS_BUILD_ARGS[*]} backend/")
+  JOB_NAMES+=("practice"); JOB_CMDS+=("docker build -t '${PRACTICE_IMAGE}' -f practice/Dockerfile --target runtime ${DEPS_BUILD_ARGS[*]} .")
+  JOB_NAMES+=("content");  JOB_CMDS+=("docker build -t '${CONTENT_IMAGE}' -f content/Dockerfile --target runtime ${DEPS_BUILD_ARGS[*]} .")
+  JOB_NAMES+=("study");    JOB_CMDS+=("docker build -t '${STUDY_IMAGE}' -f study/Dockerfile --target runtime ${DEPS_BUILD_ARGS[*]} .")
+  JOB_NAMES+=("library");  JOB_CMDS+=("docker build -t '${LIBRARY_IMAGE}' -f library/Dockerfile --target runtime ${DEPS_BUILD_ARGS[*]} .")
+  JOB_NAMES+=("admin");    JOB_CMDS+=("docker build -t '${ADMIN_IMAGE}' -f admin/Dockerfile --target runtime ${DEPS_BUILD_ARGS[*]} .")
+  JOB_NAMES+=("worker");   JOB_CMDS+=("docker build -t '${WORKER_IMAGE}' -f workers/Dockerfile --target runtime ${DEPS_BUILD_ARGS[*]} .")
+  run_jobs
+
+  echo "== push wave 2 (parallel) =="
+  JOB_NAMES=(); JOB_CMDS=()
+  JOB_NAMES+=("push-migrate");  JOB_CMDS+=("docker push '${MIGRATE_IMAGE}'")
+  JOB_NAMES+=("push-practice"); JOB_CMDS+=("docker push '${PRACTICE_IMAGE}'")
+  JOB_NAMES+=("push-content");  JOB_CMDS+=("docker push '${CONTENT_IMAGE}'")
+  JOB_NAMES+=("push-study");    JOB_CMDS+=("docker push '${STUDY_IMAGE}'")
+  JOB_NAMES+=("push-library");  JOB_CMDS+=("docker push '${LIBRARY_IMAGE}'")
+  JOB_NAMES+=("push-admin");    JOB_CMDS+=("docker push '${ADMIN_IMAGE}'")
+  JOB_NAMES+=("push-worker");   JOB_CMDS+=("docker push '${WORKER_IMAGE}'")
+  run_jobs
 else
   echo "PREBUILT=1 - ${MIGRATE_IMAGE}, ${AUTH_IMAGE}, ${STORAGE_IMAGE}, ${PRACTICE_IMAGE}, ${CONTENT_IMAGE}, ${STUDY_IMAGE}, ${LIBRARY_IMAGE}, ${ADMIN_IMAGE}, ${WORKER_IMAGE}, and ${WEB_IMAGE} assumed already in GHCR"
 fi
