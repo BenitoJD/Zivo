@@ -22,7 +22,8 @@ resources:
     cpu: 50m
     memory: 128Mi
   limits:
-    cpu: "500m"
+    # bcrypt logins are CPU-heavy; 500m throttled each login to 3-7s.
+    cpu: "1"
     memory: 1Gi
 autoscaling:
   enabled: true
