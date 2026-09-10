@@ -56,7 +56,7 @@ default, its kernel (6.8) satisfies Cilium's minimum of kernel 5.10, and its HAP
    ansible_user=ubuntu
    ```
 
-2. Review `inventory/group_vars/all.yml`. Before running, confirm the pod CIDR
+2. Review `inventory/group_vars/all/00-main.yml`. Before running, confirm the pod CIDR
    (`192.168.0.0/16`) and service CIDR (`10.96.0.0/12`) do NOT overlap your VM
    subnet. If they do, change `pod_network_cidr` there: it flows to both kubeadm
    init and Cilium's Cluster Pool IPAM so the two stay consistent.
@@ -142,9 +142,9 @@ the load-balancer VM ever goes down.
 - **admin.conf grants cluster-admin.** Restrict SSH on the masters and master-lb;
   rotate the cluster CA if any copy leaks.
 - **Versions are pinned exactly** (`1.36.3-*` etc.) so every node reports the same
-  patch; change them only in `inventory/group_vars/all.yml`, everywhere at once.
+  patch; change them only in `inventory/group_vars/all/00-main.yml`, everywhere at once.
 - **Optional end-to-end check**: set `cilium_connectivity_test: true` in
-  `inventory/group_vars/all.yml` to have the final verification play run
+  `inventory/group_vars/all/00-main.yml` to have the final verification play run
   `cilium connectivity test` after all 6 nodes join (slower, creates temporary
   test pods across nodes). Off by default.
 - **CoreDNS still colocated after the rebalance restart?** Its restart relies on
