@@ -20,6 +20,20 @@ LLM_MAX_CONCURRENT = int(os.getenv("LLM_MAX_CONCURRENT", "8"))
 
 _thread_semaphore = threading.Semaphore(LLM_MAX_CONCURRENT)
 
+_SLOT_POLL_SECONDS = 0.05
+
+
+async def _acquire_async(sem: threading.Semaphore) -> None:
+    """Claim a semaphore without parking a pool thread on a blocked acquire.
+
+    asyncio.to_thread(sem.acquire) strands one default-executor worker per
+    waiter; that pool is cpu_count() + 4, so on a small pod the waiters alone
+    can consume every worker and the holders' releases never run: deadlock.
+    Polling keeps each worker visit microscopic and the loop responsive.
+    """
+    while not await asyncio.to_thread(sem.acquire, blocking=False):
+        await asyncio.sleep(_SLOT_POLL_SECONDS)
+
 
 @contextmanager
 def llm_slot_sync():
@@ -34,7 +48,7 @@ def llm_slot_sync():
 @asynccontextmanager
 async def llm_slot_async():
     """Same process-wide cap for asyncio workers and the API."""
-    await asyncio.to_thread(_thread_semaphore.acquire)
+    await _acquire_async(_thread_semaphore)
     try:
         yield
     finally:
@@ -205,7 +219,7 @@ async def provider_slot_async(slug: str | None, limit: int | None):
     skip = _skip_provider(slug, limit)
     sem = pick(skip, lambda: None, lambda: _provider_semaphore(slug, int(limit)))
     slot = pick(skip, lambda: None, lambda: _global_slot(slug, int(limit)))
-    await pick(skip, _async_noop, lambda: asyncio.to_thread(sem.acquire))
+    await pick(skip, _async_noop, lambda: _acquire_async(sem))
     try:
         await pick(skip, _async_noop, lambda: asyncio.to_thread(slot.__enter__))
         try:

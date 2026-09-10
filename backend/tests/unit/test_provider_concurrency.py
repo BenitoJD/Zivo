@@ -81,6 +81,38 @@ def test_async_slot_caps_concurrent_holders() -> None:
     assert state["live"] == 0
 
 
+def test_async_acquire_survives_a_tiny_executor_pool() -> None:
+    """Blocked acquires must never eat the worker pool (2-core pod deadlock).
+
+    With a 2-worker pool and a cap of 2, a blocking to_thread(acquire) wedged
+    forever on the CI runner: every worker parked inside acquire, so the
+    holders could not run their releases. The 10s ceiling turns a regression
+    into a failure instead of a hang.
+    """
+    import concurrent.futures
+
+    async def main() -> None:
+        state = {"live": 0, "peak": 0}
+
+        async def hold() -> None:
+            async with provider_slot_async("prov-tiny", 2):
+                state["live"] += 1
+                state["peak"] = max(state["peak"], state["live"])
+                await asyncio.sleep(0.01)
+                state["live"] -= 1
+
+        async def capped() -> None:
+            loop = asyncio.get_running_loop()
+            loop.set_default_executor(
+                concurrent.futures.ThreadPoolExecutor(max_workers=2)
+            )
+            await asyncio.gather(*(hold() for _ in range(6)))
+
+        await asyncio.wait_for(capped(), timeout=10)
+
+    asyncio.run(main())
+
+
 def test_slot_key_is_stable_and_int4() -> None:
     assert _slot_key("stepfun") == _slot_key("stepfun")
     assert _slot_key("stepfun") != _slot_key("deepseek")
