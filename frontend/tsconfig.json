@@ -37,6 +37,9 @@
       ]
     }
   },
+  "files": [
+    "vendor/system-design-lab/src/components/lucide-icons.d.ts"
+  ],
   "include": [
     "next-env.d.ts",
     "**/*.ts",
@@ -45,6 +48,7 @@
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "vendor"
   ]
 }

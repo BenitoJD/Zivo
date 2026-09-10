@@ -8,7 +8,7 @@ import { pick, choose } from "@/lib/engineRuntime";
 import { useEffect } from "react";
 import { Badge, Box, Button, Container, Drawer, Group, Paper, Stack, Text, Title, } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
-import { IconArrowRight, IconPlayerPlay, IconRoute, } from "@tabler/icons-react";
+import { IconArrowRight, IconFlask, IconPlayerPlay, IconRoute, } from "@tabler/icons-react";
 import { useRouter } from "next/navigation";
 import { ensureGuestSession } from "@/lib/api/client";
 import { useSystemDesignPathQuery, useSystemDesignRecommendedQuery, type SdConceptState, type SdPathConcept, } from "@/lib/api/queries";
@@ -50,6 +50,14 @@ export default function SystemDesignDoorPage() {
       <Container size="sm" py={{ base: 36, md: 64 }}>
         <Stack gap="xl">
           <LearnerPageHeader align="left" compact eyebrow="System design" title="System Design" subtitle="Path → case → design → mentor truth → close the gap."/>
+
+          {/* The lab is fully client-side, so its entry must not sit inside the
+              data-dependent branch below: it works even when the bank is down. */}
+          <Group gap="xs">
+            <Button component="a" href="/practice/system-design/lab" radius="xl" variant="subtle" color="gray" size="compact-sm" leftSection={<IconFlask size={15}/>}>
+              Open the simulation lab
+            </Button>
+          </Group>
 
           {pick(Boolean(loading), () => (<Text c="dimmed">Loading your path…</Text>), () => pick(Boolean(errored), () => (<Text c="terracotta">Couldn&rsquo;t load System Design right now.</Text>), () => (<>
               {pick(Boolean(focusTitle), () => (<Text fz="sm" c="dimmed">

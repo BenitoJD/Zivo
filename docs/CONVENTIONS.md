@@ -85,7 +85,8 @@ from another project and is stale; fix it to match the proof above.
 - **Proof.** `app/engine_runtime.py` (`first_match`, `apply`, `choose`, `pick`);
   `app/services/mastery_evidence.py` (`evaluate_stop` as `_STOP_RULES`);
   `app/services/item_health.py` (`evaluate_item_health` as `_RULES`).
-  Scanner: `scripts/scan-no-if.py`.
+  Scanner: `scripts/scan-no-if.py` (vendored third-party code under
+  `frontend/vendor/` is exempt — [ADR 0019](adr/0019-vendored-simulation-lab.md)).
 
 ### 2.5 Background work goes through the ETA job system
 

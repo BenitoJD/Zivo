@@ -74,6 +74,7 @@ zivo/
 ├── admin/                # models + debug HTTP
 ├── workers/              # slim ETA worker image
 ├── frontend/             # Next.js App Router UI — Mantine-only UI in app/
+├── frontend/vendor/      # vendored Design Lab engine — see frontend/vendor/system-design-lab/VENDOR.md + ADR 0019
 ├── infra/k8s/            # Helm charts + prod values
 ├── scripts/              # dev.sh, bootstrap-vps.sh, deploy helpers
 ├── docker-compose.yml    # local postgres + minio only
@@ -217,7 +218,7 @@ Transitions use `cubic-bezier(0.32, 0.72, 0, 1)` over ~280ms; always respect `pr
 - `/workspace` — library / empty-state (`app/(shell)/workspace/page.tsx`)
 - `/workspace/[artifactId]` — page selection → MCQ → source + tutor
 - `/workspace/models` — admin model management
-- `/practice` — practice hub; `/practice/coding`, `/practice/newspaper`, `/practice/system-design`, `/practice/c/[qid]`
+- `/practice` — practice hub; `/practice/coding`, `/practice/newspaper`, `/practice/system-design`, `/practice/system-design/lab` (Design Lab), `/practice/c/[qid]`
 - `/quiz` — public Quiz Share: build an MCQ set (AI-drafted or manual), share `/quiz/[slug]`, results at `/quiz/[slug]/manage` (`app/quiz/`)
 - Shared shell (sidebar, add-source modal, delete modal) — `app/(shell)/layout.tsx` wraps `/workspace/**` and `/practice/**` (`Sidebar`, `AddSourceModal`, `DeleteSourceModal` under `app/(shell)/workspace/_components/`). Auth is handled by `/login`, not a modal.
 

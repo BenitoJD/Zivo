@@ -28,5 +28,6 @@ behind the shape those rules describe.
 | [0016](0016-owned-http-packages.md) | Route modules live with their HTTP process; scheduler lives with IO workers | 2026-08-14 |
 | [0017](0017-owned-copy-no-api-shell.md) | Images COPY owned packages plus `backend/app`; drop the zivo-api health shell | 2026-08-14 |
 | [0018](0018-zero-if-engine-tables.md) | First-party code has no `if` token; engines are rule tables; callers `apply()` | 2026-08-16 |
+| [0019](0019-vendored-simulation-lab.md) | The System Design lab ships as a vendored engine; `frontend/vendor/` is third-party, exempt from no-if and Mantine-only | 2026-09-10 |
 
 To add one: scan for the highest number, increment, keep it short.

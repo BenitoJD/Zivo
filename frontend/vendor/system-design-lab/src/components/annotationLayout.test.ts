@@ -1,0 +1,292 @@
+import { describe, expect, it } from 'vitest';
+
+/**
+ * The pure geometry behind canvas annotations: note text wrapping (whose
+ * measured widths drive both the SVG rendering and the marquee hit test)
+ * and section resizing (whose clamps are what keep a frame from inverting
+ * through its own far edge).
+ *
+ * These run in the node environment, where textMetrics has no canvas and
+ * degrades to its deterministic per-character estimate; the invariants
+ * pinned here (line count monotonicity, containment, clamping) hold under
+ * any monotonic measure, which is exactly why they are the things asserted
+ * rather than pixel-exact wrap points.
+ */
+import {
+  NOTE_SIZES,
+  TAB,
+  TAB_SIZE,
+  applyTab,
+  scaledSpec,
+  layoutNote,
+  noteStyle,
+  resizeRect,
+  handleAnchor,
+  wrapText,
+} from './annotationLayout';
+import { measureText } from './textMetrics';
+
+const style = noteStyle('md');
+
+describe('wrapText', () => {
+  it('keeps short text on one line', () => {
+    expect(wrapText('hello world', 10_000, style)).toEqual(['hello world']);
+  });
+
+  it('honours explicit newlines, including empty lines', () => {
+    expect(wrapText('a\n\nb', 10_000, style)).toEqual(['a', '', 'b']);
+  });
+
+  it('wraps on spaces so every line fits the width', () => {
+    const text = 'one two three four five six seven eight nine ten';
+    const width = measureText('one two three', style) + 1;
+    const lines = wrapText(text, width, style);
+    expect(lines.length).toBeGreaterThan(1);
+    for (const line of lines) {
+      expect(measureText(line, style)).toBeLessThanOrEqual(width);
+    }
+    // Nothing is lost or reordered by the wrap.
+    expect(lines.join(' ').split(' ').filter(Boolean)).toEqual(text.split(' '));
+  });
+
+  it('character-breaks a single word wider than the note', () => {
+    const word = 'x'.repeat(200);
+    const width = measureText('x'.repeat(20), style);
+    const lines = wrapText(word, width, style);
+    expect(lines.length).toBeGreaterThan(1);
+    for (const line of lines) {
+      expect(measureText(line, style)).toBeLessThanOrEqual(width);
+    }
+    expect(lines.join('')).toBe(word);
+  });
+});
+
+describe('layoutNote', () => {
+  it('derives height from the wrapped line count', () => {
+    const l = layoutNote('a\nb\nc', 10_000, 'md');
+    expect(l.lines).toHaveLength(3);
+    expect(l.height).toBe(3 * NOTE_SIZES.md.line);
+  });
+
+  it('never reports less than one line of height', () => {
+    const l = layoutNote('a', 10_000, 'lg');
+    expect(l.height).toBe(NOTE_SIZES.lg.line);
+  });
+
+  it('uses the size-specific metrics', () => {
+    expect(layoutNote('a', 100, 'sm').font).toBe(NOTE_SIZES.sm.font);
+    expect(layoutNote('a', 100, 'lg').lineH).toBe(NOTE_SIZES.lg.line);
+  });
+});
+
+describe('resizeRect', () => {
+  const origin = { x: 100, y: 200, w: 300, h: 240 };
+  const id = (v: number) => v;
+  const snap8 = (v: number) => Math.round(v / 8) * 8;
+
+  it('a se corner drag moves only the far edges', () => {
+    const r = resizeRect(origin, 'se', 40, 24, id, 120, 90);
+    expect(r).toEqual({ x: 100, y: 200, w: 340, h: 264 });
+  });
+
+  it('a nw corner drag moves only the near edges', () => {
+    const r = resizeRect(origin, 'nw', 16, 8, id, 120, 90);
+    expect(r).toEqual({ x: 116, y: 208, w: 284, h: 232 });
+  });
+
+  it('a side handle moves one axis and leaves the other alone', () => {
+    const r = resizeRect(origin, 'e', 50, 999, id, 120, 90);
+    expect(r).toEqual({ x: 100, y: 200, w: 350, h: 240 });
+  });
+
+  it('clamps to the minimum by pinning the moving edge', () => {
+    // Drag the east edge far past the west edge: the frame stops at the
+    // minimum with its static (west) edge untouched, never inverting.
+    const r = resizeRect(origin, 'e', -1000, 0, id, 120, 90);
+    expect(r).toEqual({ x: 100, y: 200, w: 120, h: 240 });
+    // And from the west, the EAST edge is the anchor.
+    const r2 = resizeRect(origin, 'w', 1000, 0, id, 120, 90);
+    expect(r2.x + r2.w).toBe(origin.x + origin.w);
+    expect(r2.w).toBe(120);
+  });
+
+  it('snaps only the moving edges', () => {
+    const r = resizeRect(origin, 'se', 3, 3, snap8, 120, 90);
+    // Static corner untouched even by a snap that would move it.
+    expect(r.x).toBe(100);
+    expect(r.y).toBe(200);
+    // Moving edges land on the grid.
+    expect((r.x + r.w) % 8).toBe(0);
+    expect((r.y + r.h) % 8).toBe(0);
+  });
+});
+
+describe('handleAnchor', () => {
+  const rect = { x: 0, y: 0, w: 100, h: 50 };
+
+  it('places corners and side midpoints', () => {
+    expect(handleAnchor(rect, 'nw')).toEqual({ x: 0, y: 0 });
+    expect(handleAnchor(rect, 'se')).toEqual({ x: 100, y: 50 });
+    expect(handleAnchor(rect, 'n')).toEqual({ x: 50, y: 0 });
+    expect(handleAnchor(rect, 'w')).toEqual({ x: 0, y: 25 });
+  });
+});
+
+describe('applyTab', () => {
+  it('indents at the caret rather than moving focus', () => {
+    // Tab in a note is formatting, not navigation. The alternative is that a
+    // half-written note commits itself and the caret lands on a toolbar
+    // button, which is what a bare textarea does and is always wrong here.
+    expect(applyTab({ value: 'abc', start: 0, end: 0 }, false)).toEqual({
+      value: `${TAB}abc`,
+      start: TAB_SIZE,
+      end: TAB_SIZE,
+    });
+  });
+
+  it('replaces the selection rather than inserting beside it', () => {
+    expect(applyTab({ value: 'abcdef', start: 1, end: 4 }, false)).toEqual({
+      value: `a${TAB}ef`,
+      start: 1 + TAB_SIZE,
+      end: 1 + TAB_SIZE,
+    });
+  });
+
+  it('outdents only the caret line, and only its leading spaces', () => {
+    const value = 'one\n    two';
+    // Caret sits inside the second line's indent.
+    const out = applyTab({ value, start: 8, end: 8 }, true);
+    expect(out.value).toBe('one\n  two');
+    expect(out.start).toBe(8 - TAB_SIZE);
+  });
+
+  it('returns the state untouched when there is nothing to outdent', () => {
+    // Identity, so the caller can skip pushing a draft that did not change.
+    const state = { value: 'flush left', start: 4, end: 4 };
+    expect(applyTab(state, true)).toBe(state);
+  });
+
+  it('outdents a partial indent without eating the text', () => {
+    // One space where TAB_SIZE is two: remove the one that is there, and
+    // stop, rather than running on into the word.
+    const out = applyTab({ value: ' x', start: 2, end: 2 }, true);
+    expect(out.value).toBe('x');
+    expect(out.start).toBe(1);
+  });
+
+  it('indents the first line correctly when it is not the first line', () => {
+    const value = 'a\nb';
+    expect(applyTab({ value, start: 3, end: 3 }, false).value).toBe(`a\nb${TAB}`);
+  });
+
+  it('never inserts a literal tab', () => {
+    // SVG text has no tab stops: a real \t measures as nothing and would be
+    // an indent that exists in the model and is invisible on the canvas.
+    const out = applyTab({ value: '', start: 0, end: 0 }, false);
+    expect(out.value.includes('\t')).toBe(false);
+    expect(out.value).toBe(TAB);
+  });
+});
+
+describe('note resize', () => {
+  /**
+   * The width arithmetic the canvas runs on a note handle drag, in isolation.
+   *
+   * Only the width is resizable: a note's height is derived from its wrapped
+   * text on every layout and never stored, so there is no bottom edge to
+   * drag. The subtle half is the WEST handle, which must move x as well as
+   * width so the opposite edge stays where it is instead of the note sliding
+   * across the canvas.
+   */
+  function resizeNote(
+    origin: { x: number; w: number },
+    dir: 'w' | 'e',
+    dx: number,
+    min = 80,
+    max = 900,
+  ): { x: number; width: number } {
+    const east = origin.x + origin.w;
+    if (dir === 'e') {
+      return { x: origin.x, width: Math.min(Math.max(origin.w + dx, min), max) };
+    }
+    let x = origin.x + dx;
+    let width = east - x;
+    if (width < min) {
+      width = min;
+      x = east - min;
+    } else if (width > max) {
+      width = max;
+      x = east - max;
+    }
+    return { x, width };
+  }
+
+  it('grows to the right from the east handle, leaving x alone', () => {
+    expect(resizeNote({ x: 100, w: 200 }, 'e', 60)).toEqual({ x: 100, width: 260 });
+  });
+
+  it('grows to the left from the west handle, pinning the east edge', () => {
+    // The whole point: dragging the left handle left must widen the note,
+    // not carry it leftward at a fixed width.
+    const out = resizeNote({ x: 100, w: 200 }, 'w', -60);
+    expect(out).toEqual({ x: 40, width: 260 });
+    expect(out.x + out.width).toBe(300);
+  });
+
+  it('shrinks from either side without crossing over', () => {
+    expect(resizeNote({ x: 100, w: 200 }, 'e', -80)).toEqual({ x: 100, width: 120 });
+    const w = resizeNote({ x: 100, w: 200 }, 'w', 80);
+    expect(w).toEqual({ x: 180, width: 120 });
+    expect(w.x + w.width).toBe(300);
+  });
+
+  it('stops at the minimum instead of inverting', () => {
+    // Dragged far past its own far edge, a note pins at the minimum rather
+    // than flipping inside out, matching how resizeRect treats a section.
+    const e = resizeNote({ x: 100, w: 200 }, 'e', -1000);
+    expect(e.width).toBe(80);
+    const w = resizeNote({ x: 100, w: 200 }, 'w', 1000);
+    expect(w.width).toBe(80);
+    // And the edge it was NOT dragging has not moved.
+    expect(w.x + w.width).toBe(300);
+  });
+
+  it('stops at the maximum, keeping the anchored edge still', () => {
+    const e = resizeNote({ x: 100, w: 200 }, 'e', 5000);
+    expect(e).toEqual({ x: 100, width: 900 });
+    const w = resizeNote({ x: 100, w: 200 }, 'w', -5000);
+    expect(w.width).toBe(900);
+    expect(w.x + w.width).toBe(300);
+  });
+});
+
+describe('scaledSpec', () => {
+  it('leaves the preset alone at scale 1', () => {
+    // Identity, so an unscaled note pays nothing and cannot drift off the
+    // preset by a rounding error.
+    expect(scaledSpec('md')).toBe(NOTE_SIZES.md);
+    expect(scaledSpec('md', 1)).toBe(NOTE_SIZES.md);
+  });
+
+  it('scales the line height with the font, not just the font', () => {
+    // Holding the leading fixed while the type grew would collide the lines
+    // at any scale above about 1.3.
+    const md = NOTE_SIZES.md;
+    const big = scaledSpec('md', 2);
+    expect(big.font).toBe(md.font * 2);
+    expect(big.line).toBe(md.line * 2);
+  });
+
+  it('keeps the weight, which is not a size', () => {
+    expect(scaledSpec('lg', 1.5).weight).toBe(NOTE_SIZES.lg.weight);
+  });
+
+  it('returns whole pixels, so the SVG and the editor can agree', () => {
+    // The in-place editor is an HTML textarea positioned over the painted
+    // text; a sub-pixel difference between them shows as the text shifting
+    // the moment the editor opens.
+    const s = scaledSpec('sm', 1.37);
+    expect(Number.isInteger(s.font)).toBe(true);
+    expect(Number.isInteger(s.line)).toBe(true);
+  });
+});

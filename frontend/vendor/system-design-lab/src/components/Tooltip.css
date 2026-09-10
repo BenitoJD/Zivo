@@ -1,0 +1,263 @@
+/* ==========================================================================
+   Explanation tooltips.
+
+   THE AFFORDANCE PROBLEM.
+
+   Two requirements pull in opposite directions. The marker appears beside
+   forty terms on one screen, so it has to be quiet enough that the interface
+   does not look like a ransom note. But a student who does not know what p99
+   means has to be able to SEE that an answer is on offer, or the feature may
+   as well not exist.
+
+   A dotted underline in the existing --border-strong ink resolves both. It is
+   invisible until you look for it and unmistakable once you do; it is a
+   century-old convention for "defined term" that needs no teaching; and
+   because it is a text-decoration rather than a border it hugs the glyphs,
+   wraps correctly across a line break, and costs no layout. Nothing here
+   reserves space, so turning a label into a <Term> never moves anything.
+
+   The underline is deliberately NOT accent-coloured at rest. Blue is reserved
+   in this system for "you did this" — focus, selection, the primary button —
+   and spending it on forty passive markers would strip that meaning. Accent
+   appears only once the term is actually engaged.
+
+   This file owns .term and .tip only. It declares no font size outside the
+   scale, no colour outside the tokens, and no radius outside the ladder.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Trigger
+   -------------------------------------------------------------------------- */
+
+.term{
+  /* text-decoration rather than border-bottom: it follows the glyphs, breaks
+     correctly across lines, and does not participate in layout.
+
+     THE INK IS --line-3, AND THIS IS MEASURED, NOT TASTE.
+
+     The instinct is to use --border-strong, the quietest divider in the
+     system. Measured, that lands at 1.58:1 on --surface and 1.46:1 on
+     --surface-2. WCAG 1.4.11 requires 3:1 for a graphical object you need in
+     order to understand the interface, and this marker is precisely that: it
+     is the only thing telling a student an explanation exists. Below 3:1 the
+     feature silently fails for the readers who most need it, which is worse
+     than not shipping it.
+
+     --line-3 measures 3.27:1 on --surface, 3.11:1 on --bg and 3.00:1 on
+     --surface-2 — clearing the bar on every surface a term can sit on. It is
+     an existing token, so this adds no colour to the system.
+
+     Dotted rather than solid is what keeps it quiet at that strength: the
+     gaps cut the mark's visual mass roughly in half, so it reads as a hint
+     across forty terms while each dot is genuinely visible. */
+  text-decoration: underline dotted var(--line-3);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  /* The one correct cursor for "there is an explanation here". */
+  cursor: help;
+  border-radius: var(--r-sm);
+  transition:
+    text-decoration-color var(--dur-fast) var(--ease),
+    background-color var(--dur-fast) var(--ease);
+}
+
+/* Engaged: hovered, or holding the open tooltip. The tint is the same
+   --accent-soft the rest of the system uses for an active chip, and --text on
+   it measures 13.23:1. */
+.term:hover,
+.term[data-open='true']{
+  text-decoration-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* The shared focus ring. Not `:focus`, so a mouse user who clicks a term does
+   not get a ring they did not ask for. */
+.term:focus-visible{
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  background: var(--accent-soft);
+}
+
+/* For the few places where the surrounding element already reads as a label
+   and a second underline is only noise. Still focusable, still explains, and
+   still shows the tint on engagement — the affordance moves from the
+   underline to the hover state rather than disappearing. */
+.term-bare{
+  text-decoration: none;
+}
+
+/* --------------------------------------------------------------------------
+   Panel
+
+   Portalled to <body> and fixed-positioned, so no panel's overflow can clip
+   it. Every rail and strip in this app scrolls internally, which would
+   otherwise cut a tooltip in half at the exact moment it is needed.
+   -------------------------------------------------------------------------- */
+
+.tip{
+  position: fixed;
+  /* Above every panel and the canvas, below a modal scrim. */
+  z-index: 400;
+  width: max-content;
+  /* ~60 characters: the comfortable measure for a paragraph read in one pass.
+     Mirrored by PANEL_MAX_W in Tooltip.tsx, which measures against it. */
+  max-width: 300px;
+  padding: var(--sp-3);
+  background: var(--surface);
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-btn);
+  box-shadow: var(--shadow-lg);
+  /* The pointer must be able to travel in to reach a "see also" link. */
+  pointer-events: auto;
+  /* A tooltip is transient: it must never be the reason the page can scroll,
+     and it must not trap a wheel gesture aimed at the panel underneath. */
+  overscroll-behavior: contain;
+}
+
+/* --------------------------------------------------------------------------
+   Arrow
+
+   A rotated square with two borders, so the panel's outline continues
+   unbroken around the point. --tip-arrow is set from Tooltip.tsx, which is
+   the same value its placement maths uses; the two cannot drift.
+   -------------------------------------------------------------------------- */
+
+.tip-arrow{
+  position: absolute;
+  width: calc(var(--tip-arrow) * 2);
+  height: calc(var(--tip-arrow) * 2);
+  background: var(--surface);
+  border: var(--bw) solid var(--border-strong);
+  /* Only the two edges that face outward are painted, so the arrow reads as a
+     continuation of the panel's border rather than as a diamond stuck to it. */
+  border-top: none;
+  border-left: none;
+}
+
+/* Panel above the trigger: the point hangs off the bottom edge. */
+.tip-top .tip-arrow{
+  bottom: calc(var(--tip-arrow) * -1);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.tip-bottom .tip-arrow{
+  top: calc(var(--tip-arrow) * -1);
+  transform: translateX(-50%) rotate(225deg);
+}
+
+.tip-left .tip-arrow{
+  right: calc(var(--tip-arrow) * -1);
+  transform: translateY(-50%) rotate(-45deg);
+}
+
+.tip-right .tip-arrow{
+  left: calc(var(--tip-arrow) * -1);
+  transform: translateY(-50%) rotate(135deg);
+}
+
+/* --------------------------------------------------------------------------
+   Content
+
+   Three registers, in the order a reader needs them: what it is called, what
+   it means in one line, then why it matters. The third is the part that
+   actually teaches, so it gets full-contrast ink and open leading rather than
+   being demoted to a caption.
+   -------------------------------------------------------------------------- */
+
+.tip-term{
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-med);
+  line-height: var(--lh-sm);
+  color: var(--text);
+}
+
+.tip-short{
+  /* The term and its one-line definition are one unit, so they sit at the
+     tightest step on the scale. */
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-body);
+  line-height: var(--lh-sm);
+  color: var(--text-dim);
+  text-wrap: pretty;
+}
+
+.tip-why{
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-body);
+  line-height: var(--lh-prose);
+  color: var(--text);
+  text-wrap: pretty;
+}
+
+/* --------------------------------------------------------------------------
+   See also
+
+   Two same-coloured surfaces meet here, which is the one case the boundary
+   rule allows a hairline for.
+   -------------------------------------------------------------------------- */
+
+.tip-see{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1) var(--sp-2);
+  margin: var(--sp-3) 0 0;
+  padding-top: var(--sp-2);
+  border-top: var(--bw) solid var(--border);
+}
+
+/* Inherits the .label register without the class, because it is a caption
+   inside a sentence rather than a section heading. */
+.tip-see-label{
+  font-size: var(--fs-label);
+  font-weight: var(--fw-med);
+  line-height: var(--lh-label);
+  letter-spacing: var(--tr-label);
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.tip-see-link{
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-body);
+  line-height: var(--lh-sm);
+  /* 6.90:1 on --surface. A link must not be identified by colour alone, so it
+     carries an underline as well. */
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.tip-see-link:hover{
+  color: var(--accent);
+}
+
+.tip-see-link:focus-visible{
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   Reduced motion
+
+   index.css already neutralises every transition globally. This is here so
+   the intent is stated locally too: the tooltip has no entrance animation to
+   suppress, only interactive colour transitions.
+   -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .term,
+.tip-see-link{
+    transition: none;
+  }
+}

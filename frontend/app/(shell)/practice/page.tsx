@@ -10,7 +10,7 @@ import { pick, choose } from "@/lib/engineRuntime";
  */
 import { useEffect, useState } from "react";
 import { Anchor, Box, Button, Center, Container, Group, Paper, Stack, Text, TextInput, Title, } from "@mantine/core";
-import { IconArrowRight, IconSearch } from "@tabler/icons-react";
+import { IconArrowRight, IconFlask, IconSearch } from "@tabler/icons-react";
 import { apiGet, ensureGuestSession } from "@/lib/api/client";
 import { Shell } from "@/app/practice/_components/Shell";
 import { LearnerPageHeader } from "@/app/_components/study/LearnerPageHeader";
@@ -169,9 +169,14 @@ export default function PracticeHubPage() {
                         Mastery path — design a case, get mentor truth, close the gap.
                       </Text>
                     </Box>
-                    <Button component="a" href="/practice/system-design" radius="xl" variant="light" color="lavender" fullWidth maw={{ base: "100%", xs: 180 }} rightSection={<IconArrowRight size={16}/>}>
-                      Open path
-                    </Button>
+                    <Stack gap="xs" w={{ base: "100%", xs: 180 }}>
+                      <Button component="a" href="/practice/system-design" radius="xl" variant="light" color="lavender" fullWidth rightSection={<IconArrowRight size={16}/>}>
+                        Open path
+                      </Button>
+                      <Button component="a" href="/practice/system-design/lab" radius="xl" variant="subtle" color="gray" fullWidth rightSection={<IconFlask size={16}/>}>
+                        Simulation lab
+                      </Button>
+                    </Stack>
                   </Group>
                 </Paper>
                 <Text size="sm" c="dimmed" fw={500} mt="sm">

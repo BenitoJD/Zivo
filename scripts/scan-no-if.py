@@ -26,7 +26,9 @@ SKIP_DIR_NAMES = {
     "coverage",
 }
 
-SKIP_PATH_PARTS: tuple[str, ...] = ()
+# Vendored third-party code is not first-party (ADR 0019): the Design Lab
+# simulator ships upstream sources as-is under frontend/vendor/.
+SKIP_PATH_PARTS: tuple[str, ...] = ("vendor/",)
 
 TS_IF_RE = re.compile(r"(?:^|[^A-Za-z0-9_])if\s*\(")
 TS_TERNARY_RE = re.compile(r"[^=]\?[^?:\n]{1,120}:")
