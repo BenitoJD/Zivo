@@ -124,8 +124,8 @@ The HA cluster now runs the full zivo app stack (Zivo_0.1.364): Traefik ingress
 (hostNetwork DaemonSet on the three workers, ports 80/443, real client IPs preserved),
 cert-manager with the letsencrypt-prod ClusterIssuer, local-path default storage class,
 pgbouncer, Postgres (pgvector) and MinIO. Rebuild/re-run with
-`scripts/install-ha-platform.sh`; app releases replay via the release list in
-`scripts/deploy-vps-local-build.sh` (PREBUILT path).
+`scripts/install-ha-platform.sh`; app releases replay from git via ArgoCD sync
+(see the Argo CD section below).
 
 - kubectl from a workstation: `KUBECONFIG=~/.kube/zivo-ha.conf` (admin.conf fetched from
   master-1; its server line already targets the LB at 45.196.196.22:8443).
@@ -158,8 +158,9 @@ admin, web, worker-io, worker-cpu) auto-sync from
 
 - **UI:** `http://argocd.zivo.fyi` (after DNS) — admin / see `~/.ssh/zivo-fleet-creds`
 - **CLI-less access:** `kubectl -n argocd get applications` (kubeconfig: `~/.kube/zivo-ha.conf`)
-- **Schema migrations stay CI-run** (deploy workflow via runner); Argo CD manages
-  the long-running workloads only.
+- **Schema migrations are manual**: run `scripts/run-k8s-schema-migrate.sh` from a
+  workstation with the admin kubeconfig. The `cicd` pipeline only builds and
+  promotes images; Argo CD manages the long-running workloads only.
 - **Known cosmetic:** ingress-backed apps show *Degraded* in Argo CD — the
   hostNetwork Traefik has no `loadBalancer` IP for Argo's ingress health rule;
   routing is verified working. Health customization applied via `argocd-cm`.

@@ -57,26 +57,6 @@
     creates: /etc/systemd/system/actions.runner.BenitoJD-Zivo.worker-4.service
   changed_when: true
 
-- name: Read admin.conf from master-1
-  ansible.builtin.command: cat /etc/kubernetes/admin.conf
-  register: admin_conf
-  delegate_to: master-1
-  become: false
-  changed_when: false
-  no_log: true
-
-- name: Kubeconfig dir for the runner user
-  ansible.builtin.file:
-    path: /home/github-runner/.kube
-    state: directory
-    owner: github-runner
-    group: github-runner
-    mode: "0750"
-
-- name: Kubeconfig for CI deploys (cluster-admin via API LB)
-  ansible.builtin.copy:
-    content: "{{ admin_conf.stdout }}\n"
-    dest: /home/github-runner/.kube/config
-    owner: github-runner
-    group: github-runner
-    mode: "0600"
+# The runner is CI-only: it builds images, pushes them to GHCR with the `ghcr`
+# environment secrets, and promotes tags via git. It holds no cluster
+# credentials; ArgoCD is the only writer to the cluster after bootstrap.

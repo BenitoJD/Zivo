@@ -143,12 +143,6 @@
   tags: [data]
   roles: [platform_data]
 
-- name: Application releases
-  hosts: master-1
-  become: true
-  tags: [releases]
-  roles: [app_releases]
-
 - name: etcd snapshot backups
   hosts: master-1
   become: true

@@ -37,8 +37,7 @@ Decisions (rank, metric, gate, schedule, next-step, plumbing) live behind named 
 | **Workers (jobs)** | Ready | Slim `zivo-worker` image; ETA IO+CPU lease `qb.jobs`. [ADR 0009](docs/adr/0009-jobs-workers-are-the-process.md) |
 | **Workspace UI** | Ready | `/workspace` — Mantine `AppShell`, Learn/Test layout in `app/` routes |
 | **Helm / K8s** | Ready | postgres, minio, auth, storage, practice, content, study, library, admin, web, worker, db-schema charts |
-| **CI** | Ready | `.github/workflows/ci.yml` — self-hosted `zivo` runner on VPS |
-| **Deploy workflow** | Ready | `.github/workflows/deploy.yml` (needs push + workflow run) |
+| **CI/CD pipeline** | Ready | `.github/workflows/cicd.yml` — unit tests, GHCR images (semver on `main`, sha on branches), `production` approval gate, ArgoCD promote; setup: [.github/workflows/README.md](.github/workflows/README.md) |
 | **HA k8s cluster** | Ready | 3 masters + 5 workers + 2 LBs on Web Eye Soft VPS — see [infra/SERVERS.md](infra/SERVERS.md) |
 | **App stack** | Ready | Full Zivo stack deployed on the HA cluster; DNS cutover to `45.196.196.98` is the open step before TLS. |
 | **Question generation** | Ready | Upload source → MCQs; Budget + Quality + Graph + priors |
@@ -161,9 +160,9 @@ Product tables: `intel.*` (unchanged DDL) + additive `qb.*` — see [docs/WORKSP
 
 **Fleet servers (Web Eye Soft):** the 10-VPS inventory (roles, specs, SSH aliases `zivo-lb1`, `zivo-lb2`, `zivo-node1`–`zivo-node8`, renewals) lives in [infra/SERVERS.md](infra/SERVERS.md).
 
-**Full rebuild (bare Ubuntu → production):** inject the fleet key, then `ansible-playbook infra/ansible/site.yml`, then `KUBECONFIG=~/.kube/zivo-ha.conf ./scripts/install-ha-platform.sh`, then the release list in `scripts/deploy-vps-local-build.sh`. Runbook: [infra/SERVERS.md](infra/SERVERS.md).
+**Full rebuild (bare Ubuntu → production):** inject the fleet key, then `ansible-playbook infra/ansible/site.yml`, then `KUBECONFIG=~/.kube/zivo-ha.conf ./scripts/install-ha-platform.sh`; ArgoCD then syncs every release from git on the first `main` push through the `cicd` pipeline. Runbook: [infra/SERVERS.md](infra/SERVERS.md).
 
-Deploy: GitHub → Actions → **Deploy Zivo** → Run workflow.
+Deploy: push to `main` → `cicd` tests, builds, and pushes images to GHCR → approve the `production` environment gate → the promote commit makes ArgoCD roll out. (Manual re-run: Actions → **cicd** → Run workflow.)
 
 Google OAuth redirect URI in production is `https://auth.zivo.fyi/api/auth/google/callback` (Google Cloud Console + `GOOGLE_REDIRECT_URI` in `zivo-secrets`). Every hostname's A record must point at `45.196.196.98` before TLS will issue. Until then, keep those Ingresses HTTP-only and leave `NEXT_PUBLIC_*` empty so apex rewrites hit in-cluster services.
 

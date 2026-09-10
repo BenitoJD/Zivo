@@ -14,8 +14,8 @@
     content: |
       [Unit]
       Description=Docker disk hygiene (old Zivo tags, build cache, orphaned volumes)
-      # Refuse to reclaim disk while a deploy build is mid-flight on this box.
-      ConditionPathExists=!/home/github-runner/.deploy-in-progress
+      # The in-flight-build check lives in the script itself (a stale guard
+      # self-heals there); a systemd condition could never recover.
 
       [Service]
       Type=oneshot

@@ -3,9 +3,10 @@
 **Gold** = the same checks CI runs on `main`, plus frontend lint. A change is not
 ready to commit, merge, or deploy until ship gates pass locally.
 
-Deploy does **not** re-run lint. If you skip gates locally, CI fails on push and
-the Docker build can fail on type or compile errors. Run gates **before** you
-commit or trigger **Deploy Zivo**.
+CI runs only the unit-test suites (`.github/workflows/cicd.yml`); lint, import
+smokes, and the frontend build are local ship gates. A red push wastes a full
+runner cycle (tests + 11 Docker builds), so run gates **before** you commit or
+push.
 
 ## When to run
 
@@ -13,7 +14,7 @@ commit or trigger **Deploy Zivo**.
 |--------|-----------|
 | Before committing backend or frontend code | **Yes** |
 | Before pushing to `main` | **Yes** |
-| Before `gh workflow run deploy.yml` | **Yes** |
+| Before running the `cicd` workflow by hand | **Yes** |
 | After fixing a CI failure | **Yes** (re-run full gates) |
 
 Agents: if you touched `backend/`, `auth/`, `storage/`, `practice/`, `content/`, `study/`, `library/`, `admin/`, or `frontend/`, run ship gates before telling
@@ -74,9 +75,9 @@ that fails if the process loaded a sibling `*_api` package.
 1. `npm run lint` — ESLint (core-web-vitals)
 2. `npm run build` — TypeScript + Next.js compile
 
-CI today: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml). Frontend
-`npm run lint` is in ship gates even though CI still only runs `npm run build`
-(see [ADR 0005](../docs/adr/0005-enforcement-and-known-divergences.md)).
+CI today: [`.github/workflows/cicd.yml`](../.github/workflows/cicd.yml) runs the
+unit-test suites only; `npm run lint` and `npm run build` are enforced by ship
+gates locally, not in CI.
 
 ## If a gate fails
 
@@ -90,13 +91,15 @@ Common fixes:
 - **ESLint errors** — fix the rule violation; warnings are OK for now.
 - **Build / type errors** — fix types or imports; Next build is strict.
 
-## Deploy workflow
+## Deploy pipeline
 
-Production deploy ([`deploy.yml`](../.github/workflows/deploy.yml)) builds Docker
-images and rolls out to K3s. It assumes `main` already passed CI. Agents following
+The [`cicd`](../.github/workflows/cicd.yml) pipeline unit-tests, builds and pushes
+all service images to GHCR, and on `main` waits for the `production` environment
+approval gate before promoting the new tag into the prod helm values for ArgoCD
+to roll out. Agents following
 [`production-release-deploy`](../.cursor/skills/production-release-deploy/SKILL.md)
-must run ship gates (or confirm CI green on the target SHA) before dispatching
-deploy.
+must run ship gates (or confirm CI green on the target SHA) before pushing to
+`main`.
 
 ## Holy grail tie-in
 

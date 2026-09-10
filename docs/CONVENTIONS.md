@@ -31,7 +31,7 @@ workers ship `workers/Dockerfile`, product Alembic ships `zivo-migrate`,
 frontend is `frontend/`, and the package manager is
 `npm`** (proof:
 [frontend/package-lock.json](../frontend/package-lock.json),
-CI `npm ci` ([.github/workflows/ci.yml](../.github/workflows/ci.yml)),
+CI `npm ci` ([.github/workflows/cicd.yml](../.github/workflows/cicd.yml)),
 auth, storage, practice, content, study, library, and admin import checks in the same workflow). If a skill or
 doc names a different frontend directory or a different package manager, it was ported
 from another project and is stale; fix it to match the proof above.
@@ -138,13 +138,12 @@ from another project and is stale; fix it to match the proof above.
   `storage.*`. Credentials and MinIO writes are not performed from the product API.
   See [ADR 0007](adr/0007-auth-microservice.md) and
   [ADR 0008](adr/0008-storage-microservice.md).
-- **Why.** Reproducible, ordered, CI-verified migrations; an untouched legacy schema;
+- **Why.** Reproducible, ordered, script-verified migrations; an untouched legacy schema;
   identity and object-storage write-ownership stay in their own services.
 - **Proof.** `backend/alembic/versions/001_intel_foundation.py` …
   `045_auth_account_split.py`; `auth/alembic/versions/001_auth_schema.py`;
   `storage/alembic/versions/001_storage_schema.py`;
-  CI steps "Alembic migrations", auth "Apply schema", and storage "Apply schema" in
-  [.github/workflows/ci.yml](../.github/workflows/ci.yml).
+  `backend/scripts/test_alembic_migrations.sh` verifies the chain on demand.
 
 ## 3. Frontend (Next.js App Router + Mantine)
 
@@ -171,7 +170,7 @@ truth for UI; this file does not restate it.
 - **Proof.** CI "Unit tests" steps run `backend/tests/unit/`, `auth/tests/unit/`,
   `storage/tests/unit/`, `practice/tests/unit/`, `content/tests/unit/`,
   `study/tests/unit/`, `library/tests/unit/`, and `admin/tests/unit/`
-  ([.github/workflows/ci.yml](../.github/workflows/ci.yml)); the skip pattern is in
+  ([.github/workflows/cicd.yml](../.github/workflows/cicd.yml)); the skip pattern is in
   `tests/integration/test_learn_queue_api.py` and
   `auth/tests/unit/test_auth_session.py` (`pytest.skip` when `auth.account` is missing).
 
@@ -179,7 +178,7 @@ truth for UI; this file does not restate it.
 
 | Rule area | Enforcement today | Gap |
 |-----------|-------------------|-----|
-| Import health, migrations, unit tests | CI (`ci.yml` backend + auth + storage + practice + content + study + library + admin) | — |
+| Import health, migrations, unit tests | CI (`cicd.yml` backend + auth + storage + practice + content + study + library + admin) | — |
 | Dead code, unused imports, undefined names | **`ruff check` (E9, F) in CI** ([backend/ruff.toml](../backend/ruff.toml)) | ruleset is conservative |
 | Frontend build + lint | CI (`npm run build`, `npm run lint`) | warnings only in eslint today |
 | Python format + broader lint (`I`/`B`) | none | `ruff format`, import sorting not on yet |

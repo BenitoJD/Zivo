@@ -8,7 +8,7 @@
 # Usage:   KUBECONFIG=~/.kube/zivo-ha.conf ./scripts/install-ha-platform.sh
 #
 # The k8s *cluster* itself is built by infra/ansible (site.yml). This script is the
-# app-layer equivalent; deploy-vps-local-build.sh stays the CI path for releases.
+# app-layer equivalent; releases replay from git via ArgoCD sync (cicd pipeline promotes tags).
 set -euo pipefail
 : "${KUBECONFIG:?export KUBECONFIG to the HA cluster admin kubeconfig first}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"

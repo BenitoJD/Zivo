@@ -50,7 +50,7 @@ Prod values: `environments/prod/*.yaml`
 
 ## Deploy
 
-**Normal path:** GitHub Actions → **Deploy Zivo** (builds API + auth + storage + practice + content + study + library + admin + worker + web images, Helm upgrade on VPS).
+**Normal path:** GitHub Actions → **cicd** (unit tests → builds and pushes all service images to GHCR; on `main`, a `production` environment approval promotes the new tag into `infra/k8s/environments/prod/*-values.yaml` → ArgoCD rolls every release).
 
 **Manual** (on VPS with repo checked out):
 
