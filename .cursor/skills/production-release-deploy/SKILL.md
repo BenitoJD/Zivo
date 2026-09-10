@@ -111,8 +111,10 @@ Expected pipeline behavior:
   `zivo-admin`, `zivo-worker`, and `zivo-web` build and push to GHCR. Tags:
   semver on `main` (e.g. `1.2.4`, patch auto-bumped from the latest `v*` git
   tag), `sha-<short sha>` on every other branch.
-- GHCR credentials come from the `ghcr` environment secrets (`GHCR_USERNAME` /
-  `GHCR_TOKEN`), never from the workflow token or Ansible.
+- GHCR pushes use a GitHub App installation token minted at runtime from the
+  `ghcr` environment secrets (`GHCR_APP_ID` / `GHCR_APP_PRIVATE_KEY`); no PAT
+  anywhere. The workflow token is used only for repo writes in the gated
+  promote job.
 - On `main`, the `promote` job pauses on the `production` environment until a
   required reviewer approves; the approval commits the new tag into
   `infra/k8s/environments/prod/*-values.yaml` and ArgoCD rolls out.

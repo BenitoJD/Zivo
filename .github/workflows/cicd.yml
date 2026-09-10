@@ -7,9 +7,12 @@ name: cicd
 # PRs run unit tests only (no images, no GHCR login needed).
 # Tags: semver on main (patch auto-bumped from the latest v* git tag, or the
 # `version` dispatch input), sha-<short sha> on every other branch.
-# GHCR credentials come from the `ghcr` environment secrets (GHCR_USERNAME /
-# GHCR_TOKEN). The manual gate is the `production` environment (required
-# reviewers configured in repo settings).
+# GHCR pushes use a GitHub App installation token minted at runtime from the
+# `ghcr` environment secrets (GHCR_APP_ID / GHCR_APP_PRIVATE_KEY); no PAT
+# anywhere. The app is registry-only: repo writes (promote commit, tag,
+# release) still use the workflow token inside the gated promote job.
+# The manual gate is the `production` environment (required reviewers
+# configured in repo settings).
 
 on:
   push:
@@ -112,8 +115,15 @@ jobs:
       - name: Mark builds in progress (pauses nightly docker cleanup)
         run: touch /home/github-runner/.deploy-in-progress
 
+      - id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GHCR_APP_ID }}
+          private-key: ${{ secrets.GHCR_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
       - name: Log in to GHCR
-        run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
+        run: echo "${{ steps.app-token.outputs.token }}" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
 
       - id: resolve
         name: Resolve tag (semver on main, sha elsewhere)
@@ -185,8 +195,15 @@ jobs:
       - name: Mark builds in progress (pauses nightly docker cleanup)
         run: touch /home/github-runner/.deploy-in-progress
 
+      - id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GHCR_APP_ID }}
+          private-key: ${{ secrets.GHCR_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
       - name: Log in to GHCR
-        run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
+        run: echo "${{ steps.app-token.outputs.token }}" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
 
       - name: Set image vars
         run: |

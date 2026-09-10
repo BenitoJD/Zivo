@@ -22,26 +22,37 @@ unit-tests (backend, auth, storage, practice, content, study, library, admin)
 
 ## Steps before running the pipeline (one-time setup)
 
-### 1. Create a GHCR personal access token
+### 1. Create a GitHub App for GHCR pushes
 
-The pipeline never uses the workflow's ephemeral `GITHUB_TOKEN` for pushes; it logs in with environment secrets.
+The pipeline never uses a personal access token and never uses the workflow's
+ephemeral `GITHUB_TOKEN` for pushes. It mints a short-lived (~1h) installation
+token from a GitHub App at runtime. The app is registry-only: it cannot touch
+code, secrets, or settings.
 
-1. GitHub → your avatar → **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)**.
-2. **Generate new token (classic)** with scopes:
-   - `write:packages` (push images)
-   - `read:packages` (pull images)
-   - `repo` (only needed if your repository/packages are private)
-3. Copy the token; you will not see it again.
+1. GitHub → your avatar → **Settings** → **Developer settings** → **GitHub Apps** → **New GitHub App**.
+2. Fill in the registration form:
+   - **GitHub App name**: e.g. `zivo-ghcr-pusher` (names are global; append a suffix if taken).
+   - **Homepage URL**: `https://github.com/BenitoJD/Zivo` (anything valid works).
+   - **Webhook**: uncheck **Active** (the app receives no webhooks).
+   - **Permissions** → **Repository permissions**:
+     - **Contents**: `Read-only`
+     - **Packages**: `Read and write`
+   - Leave every other permission at `No access`.
+   - **Where can this GitHub App be installed**: `Only on this account` (or `Any account` if you plan to reuse it).
+3. Click **Create GitHub App**.
+4. On the app's page, note the **App ID** (in the "About" section). You will need it as a secret.
+5. Scroll to **Private keys** → **Generate a private key**. A `.pem` file downloads; store it safely. This is the only long-lived secret, and rotating it does not change any consumer behavior.
+6. Install the app: on the app's page → **Install App** → install on your account (`BenitoJD`) → **Only select repositories** → `BenitoJD/Zivo`.
 
 ### 2. Create the `ghcr` environment (image push credentials)
 
 1. Repository → **Settings** → **Environments** → **New environment** → name it exactly `ghcr`.
 2. Add **no protection rules** (no required reviewers; builds must never wait for approval).
 3. **Add environment secret** twice:
-   - `GHCR_USERNAME` → your GitHub username.
-   - `GHCR_TOKEN` → the PAT from step 1.
+   - `GHCR_APP_ID` → the numeric App ID from step 1.4.
+   - `GHCR_APP_PRIVATE_KEY` → the **full contents** of the downloaded `.pem` file, including the `-----BEGIN RSA PRIVATE KEY-----` and `-----END RSA PRIVATE KEY-----` lines, pasted exactly as-is.
 
-The `build` and `images` jobs declare `environment: ghcr`, which is what gives them these secrets.
+The `build` and `images` jobs declare `environment: ghcr`, which is what gives them these secrets. Each job mints a fresh installation token with `actions/create-github-app-token` and logs in to GHCR with it; the token expires about an hour later on its own. If you previously created `GHCR_USERNAME` / `GHCR_TOKEN` secrets from an older PAT setup, delete them.
 
 ### 3. Create the `production` environment (the manual gate)
 
