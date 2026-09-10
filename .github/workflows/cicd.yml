@@ -42,7 +42,9 @@ concurrency:
 jobs:
   unit-tests:
     runs-on: [self-hosted, zivo]
-    timeout-minutes: 30
+    # Two-core runner shares the node with k8s pods: pip alone can take 15+
+    # minutes when the box is loaded. 30 was not enough for one suite.
+    timeout-minutes: 60
     strategy:
       fail-fast: false  # run every suite even if one fails
       max-parallel: 1   # strictly sequential
