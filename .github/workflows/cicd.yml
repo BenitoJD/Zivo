@@ -76,7 +76,8 @@ jobs:
       run:
         working-directory: ${{ matrix.name }}
     env:
-      DATABASE_URL: postgresql+psycopg://zivo:zivo@localhost:5432/zivo
+      # Unit tests are DB-free: no DATABASE_URL on purpose. A dead host here
+      # only invites import-time connection retries inside the suite.
       ENVIRONMENT: development
       SECRET_KEY: dev-secret-change-me
       CSRF_SECRET: dev-csrf-change-me
@@ -95,7 +96,7 @@ jobs:
         run: pip install -r ${{ matrix.requirements }}
 
       - name: Unit tests
-        run: python -m pytest tests/unit/ -q --tb=no
+        run: python -u -m pytest tests/unit/ -q --tb=no
 
   build:
     name: Build zivo-python-deps + resolve tag
