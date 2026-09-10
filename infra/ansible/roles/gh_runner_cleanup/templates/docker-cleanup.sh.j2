@@ -9,12 +9,31 @@ set -uo pipefail
 
 KEEP_TAGS="${KEEP_TAGS:-3}"
 
+# The cicd pipeline creates this flag while docker builds are in flight so a
+# nightly prune never lands mid-build. A flag younger than 4h means a build is
+# (probably) running: skip. Older than 4h means a run died hard and left it
+# behind: self-heal by removing it and cleaning as usual.
+GUARD=/home/github-runner/.deploy-in-progress
+if [ -f "$GUARD" ]; then
+  if [ -n "$(find "$GUARD" -mmin +240 -print 2>/dev/null)" ]; then
+    echo "stale deploy guard (>4h old) - removing and continuing"
+    rm -f "$GUARD"
+  else
+    echo "build in progress (guard present) - skipping cleanup"
+    exit 0
+  fi
+fi
+
 echo "== docker cleanup start $(date -Is) =="
 
 # 1. Old Zivo release tags: keep the newest KEEP_TAGS per repository.
+#    Covers every tag scheme the pipeline has used: legacy Zivo_0.1.N,
+#    semver (1.2.4), and branch builds (sha-abc1234). The repo filter keeps
+#    base images (python, node, pgvector) out of the sweep.
 mapfile -t old_images < <(docker images --format '{{.Repository}} {{.Tag}} {{.CreatedAt}}' \
   | awk -v keep="$KEEP_TAGS" '
-    $2 ~ /^Zivo_[0-9]/ {
+    $1 ~ /(^|\/)zivo-/ &&
+    ($2 ~ /^Zivo_[0-9]/ || $2 ~ /^v?[0-9]+\.[0-9]+\.[0-9]+$/ || $2 ~ /^sha-[0-9a-f]{7,40}$/) {
       count[$1]++
       if (count[$1] > keep) print $1 ":" $2
     }')

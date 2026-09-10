@@ -1,0 +1,315 @@
+name: cicd
+
+# Simple pipeline: unit tests -> build + push all service images to GHCR ->
+# (main only, after the production approval gate) promote the tag into the prod
+# helm values so ArgoCD rolls the release, then cut a GitHub release.
+#
+# PRs run unit tests only (no images, no GHCR login needed).
+# Tags: semver on main (patch auto-bumped from the latest v* git tag, or the
+# `version` dispatch input), sha-<short sha> on every other branch.
+# GHCR pushes use a GitHub App installation token minted at runtime from the
+# `ghcr` environment secrets (GHCR_APP_ID / GHCR_APP_PRIVATE_KEY); no PAT
+# anywhere. The app is registry-only: repo writes (promote commit, tag,
+# release) still use the workflow token inside the gated promote job.
+# The manual gate is the `production` environment (required reviewers
+# configured in repo settings).
+
+on:
+  push:
+    branches: ["**"]
+    # Docs/chart-only pushes change no image; this also stops the promote
+    # commit from retriggering the pipeline ([skip ci] is the backstop).
+    paths-ignore:
+      - "docs/**"
+      - "infra/**"
+      - "**.md"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Override semver for main (e.g. 2.0.0); ignored on other branches"
+        required: false
+        default: ""
+
+permissions:
+  contents: read  # only the promote job needs write (helm tag commit + release)
+
+concurrency:
+  group: cicd-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  unit-tests:
+    runs-on: [self-hosted, zivo]
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false  # run every suite even if one fails
+      max-parallel: 1   # strictly sequential
+      matrix:
+        include:
+          - name: backend
+            requirements: requirements-dev.txt
+            pythonpath: ""
+          - name: auth
+            requirements: requirements-dev.txt
+            pythonpath: ""
+          - name: storage
+            requirements: requirements-dev.txt
+            pythonpath: ""
+          - name: practice
+            requirements: ../backend/requirements-dev.txt
+            pythonpath: "backend:practice"
+          - name: content
+            requirements: ../backend/requirements-dev.txt
+            pythonpath: "backend:content"
+          - name: study
+            requirements: ../backend/requirements-dev.txt
+            pythonpath: "backend:study"
+          - name: library
+            requirements: ../backend/requirements-dev.txt
+            pythonpath: "backend:library"
+          - name: admin
+            requirements: ../backend/requirements-dev.txt
+            pythonpath: "backend:admin"
+    defaults:
+      run:
+        working-directory: ${{ matrix.name }}
+    env:
+      DATABASE_URL: postgresql+psycopg://zivo:zivo@localhost:5432/zivo
+      ENVIRONMENT: development
+      SECRET_KEY: dev-secret-change-me
+      CSRF_SECRET: dev-csrf-change-me
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Configure PYTHONPATH
+        if: matrix.pythonpath != ''
+        run: echo "PYTHONPATH=${GITHUB_WORKSPACE}/${{ matrix.pythonpath }}" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: pip install -r ${{ matrix.requirements }}
+
+      - name: Unit tests
+        run: python -m pytest tests/unit/ -q --tb=no
+
+  build:
+    name: Build zivo-python-deps + resolve tag
+    needs: unit-tests
+    if: github.event_name != 'pull_request'
+    runs-on: [self-hosted, zivo]
+    timeout-minutes: 60
+    environment: ghcr
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      is_main: ${{ steps.resolve.outputs.is_main }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # full history + tags, so the semver bump can read the latest v* tag
+
+      - name: Mark builds in progress (pauses nightly docker cleanup)
+        run: touch /home/github-runner/.deploy-in-progress
+
+      - id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GHCR_APP_ID }}
+          private-key: ${{ secrets.GHCR_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Log in to GHCR
+        run: echo "${{ steps.app-token.outputs.token }}" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
+
+      - id: resolve
+        name: Resolve tag (semver on main, sha elsewhere)
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            INPUT_VERSION="${{ github.event.inputs.version || '' }}"
+            if [[ -n "$INPUT_VERSION" ]]; then
+              if ! [[ "$INPUT_VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "version input must be semver (e.g. 1.2.3), got: $INPUT_VERSION" >&2
+                exit 1
+              fi
+              VERSION="${INPUT_VERSION#v}"
+            else
+              LATEST="$(git tag -l 'v[0-9]*' --sort=-v:refname | head -n 1)"
+              LATEST="${LATEST#v}"
+              [[ -z "$LATEST" ]] && LATEST="0.0.0"
+              MAJOR="${LATEST%%.*}"
+              MINOR="$(( $(echo "$LATEST" | cut -d. -f2) ))"
+              PATCH="$(( $(echo "$LATEST" | cut -d. -f3) + 1 ))"
+              VERSION="${MAJOR}.${MINOR}.${PATCH}"
+            fi
+            echo "Main release tag: ${VERSION}"
+            echo "tag=${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "is_main=true" >> "$GITHUB_OUTPUT"
+          else
+            VERSION="sha-${GITHUB_SHA::7}"
+            echo "Branch build tag: ${VERSION}"
+            echo "tag=${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "is_main=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push zivo-python-deps
+        run: |
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          DOCKER_BUILDKIT=1 docker build --pull \
+            -t "ghcr.io/${OWNER}/zivo-python-deps:${{ steps.resolve.outputs.tag }}" \
+            -f docker/python-deps.Dockerfile .
+          docker push "ghcr.io/${OWNER}/zivo-python-deps:${{ steps.resolve.outputs.tag }}"
+
+      - name: Clear builds-in-progress flag
+        if: always()
+        run: rm -f /home/github-runner/.deploy-in-progress
+
+  images:
+    name: Build and push service images
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: [self-hosted, zivo]
+    timeout-minutes: 180
+    environment: ghcr
+    strategy:
+      fail-fast: true   # one failed image stops the rest; promote gates on this anyway
+      max-parallel: 1   # strictly sequential
+      matrix:
+        include:
+          - { name: migrate,  context: backend,  dockerfile: backend/Dockerfile,  deps_arg: true }
+          - { name: auth,     context: auth,     dockerfile: auth/Dockerfile,     deps_arg: false }
+          - { name: storage,  context: storage,  dockerfile: storage/Dockerfile,  deps_arg: false }
+          - { name: practice, context: .,        dockerfile: practice/Dockerfile, deps_arg: true }
+          - { name: content,  context: .,        dockerfile: content/Dockerfile,  deps_arg: true }
+          - { name: study,    context: .,        dockerfile: study/Dockerfile,    deps_arg: true }
+          - { name: library,  context: .,        dockerfile: library/Dockerfile,  deps_arg: true }
+          - { name: admin,    context: .,        dockerfile: admin/Dockerfile,    deps_arg: true }
+          - { name: worker,   context: .,        dockerfile: workers/Dockerfile,  deps_arg: true }
+          - { name: web,      context: frontend, dockerfile: frontend/Dockerfile, deps_arg: false }
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Mark builds in progress (pauses nightly docker cleanup)
+        run: touch /home/github-runner/.deploy-in-progress
+
+      - id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GHCR_APP_ID }}
+          private-key: ${{ secrets.GHCR_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Log in to GHCR
+        run: echo "${{ steps.app-token.outputs.token }}" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
+
+      - name: Set image vars
+        run: |
+          {
+            echo "OWNER=${GITHUB_REPOSITORY_OWNER,,}"
+            echo "TAG=${{ needs.build.outputs.tag }}"
+            echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/zivo-${{ matrix.name }}:${{ needs.build.outputs.tag }}"
+          } >> "$GITHUB_ENV"
+
+      - name: Build image
+        run: |
+          ARGS=(--pull --target runtime -t "$IMAGE" -f "${{ matrix.dockerfile }}")
+          if [[ "${{ matrix.deps_arg }}" == "true" ]]; then
+            ARGS+=(--build-arg "PYTHON_DEPS_IMAGE=ghcr.io/${OWNER}/zivo-python-deps:${TAG}")
+          fi
+          if [[ "${{ matrix.name }}" == "web" ]]; then
+            ARGS+=(
+              --build-arg NEXT_PUBLIC_API_URL=
+              --build-arg NEXT_PUBLIC_AUTH_URL=
+              --build-arg NEXT_PUBLIC_STORAGE_URL=
+              --build-arg AUTH_PROXY_URL=http://zivo-auth:8000
+              --build-arg STORAGE_PROXY_URL=http://zivo-storage:8000
+              --build-arg PRACTICE_PROXY_URL=http://zivo-practice:8000
+              --build-arg CONTENT_PROXY_URL=http://zivo-content:8000
+              --build-arg STUDY_PROXY_URL=http://zivo-study:8000
+              --build-arg LIBRARY_PROXY_URL=http://zivo-library:8000
+              --build-arg ADMIN_PROXY_URL=http://zivo-admin:8000
+            )
+          fi
+          DOCKER_BUILDKIT=1 docker build "${ARGS[@]}" "${{ matrix.context }}"
+
+      - name: Push image
+        run: docker push "$IMAGE"
+
+      - name: Clear builds-in-progress flag
+        if: always()
+        run: rm -f /home/github-runner/.deploy-in-progress
+
+  promote:
+    name: Promote tag to helm (manual gate)
+    needs: [build, images]
+    if: github.event_name != 'pull_request' && needs.build.outputs.is_main == 'true'
+    runs-on: [self-hosted, zivo]
+    timeout-minutes: 15
+    # Required reviewers on this environment ARE the manual gate: the job waits
+    # for approval before any tag lands in git / ArgoCD syncs.
+    environment: production
+    permissions:
+      contents: write  # helm values commit, v* tag, GitHub release
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Rewrite image tags in prod helm values
+        run: |
+          TAG="${{ needs.build.outputs.tag }}"
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          PROD=infra/k8s/environments/prod
+          for entry in \
+            backend-release:zivo-migrate \
+            auth:zivo-auth \
+            storage:zivo-storage \
+            practice:zivo-practice \
+            content:zivo-content \
+            study:zivo-study \
+            library:zivo-library \
+            admin:zivo-admin \
+            worker:zivo-worker \
+            web:zivo-web
+          do
+            file="${PROD}/${entry%%:*}-values.yaml"
+            repo="ghcr.io/${OWNER}/${entry##*:}"
+            yq -i ".image.tag = \"${TAG}\"" "$file"
+            yq -i ".image.repository = \"${repo}\"" "$file"
+          done
+
+      - name: Commit, tag, and push
+        run: |
+          TAG="${{ needs.build.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add infra/k8s/environments/prod/
+          if git diff --staged --quiet; then
+            echo "No tag changes to promote"
+            exit 0
+          fi
+          git commit -m "chore: promote ${TAG} [skip ci]"
+          git pull --rebase origin main
+          git push origin HEAD:main
+          git tag -a "v${TAG}" -m "Release ${TAG}"
+          git push origin "refs/tags/v${TAG}" \
+            || echo "WARN: could not push v${TAG}; the next main run may recompute the same version"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="${{ needs.build.outputs.tag }}"
+          if gh release view "v${TAG}" >/dev/null 2>&1; then
+            echo "Release v${TAG} already exists"
+            exit 0
+          fi
+          # Creates the tag first if the promote push above failed; ArgoCD has
+          # already received the helm update at this point.
+          gh release create "v${TAG}" \
+            --title "v${TAG}" \
+            --generate-notes

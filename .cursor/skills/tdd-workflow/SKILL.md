@@ -14,7 +14,7 @@ the *workflow* around them.
 - **Backend:** `pytest`. CI runs the DB-free unit trees `tests/unit/` and
   `tests/unit/`; DB-bound tests live in `tests/integration/` and
   self-skip when Postgres is unreachable. See
-  [.github/workflows/ci.yml](../../../.github/workflows/ci.yml).
+  [.github/workflows/cicd.yml](../../../.github/workflows/cicd.yml).
 - **Frontend:** the quality gates are `npm run build` and `npm run lint` in
   `frontend/` — there is **no** frontend unit-test runner configured. Do not invent one
   (no Jest/Vitest/RTL/Playwright unless you are deliberately adding and wiring it).

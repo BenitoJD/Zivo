@@ -49,7 +49,7 @@ curl http://127.0.0.1:8201/health
 ./scripts/dev.sh db seed
 ```
 
-Production: `alembic-migrate` K8s Job via `zivo-migrate` (`scripts/deploy-vps-local-build.sh`).
+Production: `alembic-migrate` K8s Job via `zivo-migrate` — run manually with `scripts/run-k8s-schema-migrate.sh` (admin kubeconfig). The `cicd` pipeline builds the image and promotes the tag; ArgoCD rolls out.
 
 ## Docker
 

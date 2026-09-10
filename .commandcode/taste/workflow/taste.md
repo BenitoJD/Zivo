@@ -1,6 +1,6 @@
 # Workflow Preferences
 
-- Prefers deploying via GitHub Actions workflow (`gh workflow run "Deploy Zivo" --ref main`) rather than manual deploy commands. Confidence: 0.95
+- Prefers deploying via GitHub Actions workflow (`gh workflow run cicd --ref main`) rather than manual deploy commands. Confidence: 0.95
 - Git flow: branch from main → commit → fetch + ff-merge onto origin/main → push → deploy → delete branch. Always resets `frontend/next-env.d.ts` after builds. Confidence: 0.95
 - Dev via `./scripts/dev.sh start` (API on :8200/:8201, CPU/IO workers, frontend on :3000, logs in `logs/zivo-dev/`). Confidence: 0.9
 - Commits frequently during a session and deploys after every meaningful batch of work — does not batch up many changes for a single deploy. Confidence: 0.85

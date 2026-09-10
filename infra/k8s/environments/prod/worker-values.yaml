@@ -5,10 +5,10 @@ image:
   tag: Zivo_0.1.381
   pullPolicy: IfNotPresent
 secretName: zivo-secrets
-# Images are built on the VPS and imported into k3s containerd before rollout
-# (pullPolicy IfNotPresent), so no registry pull happens — no pull secret needed.
-# A ref to a nonexistent secret only spams FailedToRetrieveImagePullSecret.
-imagePullSecrets: []
+# Images pull from GHCR (built by the cicd pipeline). Nodes authenticate with
+# the operator-managed ghcr-pull secret (read-scoped credential).
+imagePullSecrets:
+  - name: ghcr-pull
 workloads:
   io:
     enabled: true
