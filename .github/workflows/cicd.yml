@@ -227,7 +227,16 @@ jobs:
               --build-arg ADMIN_PROXY_URL=http://zivo-admin:8000
             )
           fi
-          DOCKER_BUILDKIT=1 docker build "${ARGS[@]}" "${{ matrix.context }}"
+          # GHCR occasionally answers a metadata HEAD with a spurious 401;
+          # BuildKit's layer cache makes a retry nearly free.
+          for attempt in 1 2 3; do
+            if DOCKER_BUILDKIT=1 docker build "${ARGS[@]}" "${{ matrix.context }}"; then
+              exit 0
+            fi
+            echo "::warning::docker build failed (attempt ${attempt}/3); retrying in 20s"
+            sleep 20
+          done
+          exit 1
 
       - name: Push image
         run: docker push "$IMAGE"
