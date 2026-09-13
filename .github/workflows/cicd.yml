@@ -7,10 +7,11 @@ name: cicd
 # PRs run unit tests only (no images, no GHCR login needed).
 # Tags: semver on main (patch auto-bumped from the latest v* git tag, or the
 # `version` dispatch input), sha-<short sha> on every other branch.
-# GHCR pushes use a GitHub App installation token minted at runtime from the
-# `ghcr` environment secrets (GHCR_APP_ID / GHCR_APP_PRIVATE_KEY); no PAT
-# anywhere. The app is registry-only: repo writes (promote commit, tag,
-# release) still use the workflow token inside the gated promote job.
+# GHCR pushes use the workflow's ephemeral GITHUB_TOKEN (packages: write on the
+# build + images jobs); no PAT anywhere. App installation tokens cannot create
+# user-namespace packages, so the GHCR App design only fits an org account.
+# Repo writes (promote commit, tag, release) still use the workflow token
+# inside the gated promote job.
 # The manual gate is the `production` environment (required reviewers
 # configured in repo settings).
 
@@ -106,7 +107,8 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: [self-hosted, zivo]
     timeout-minutes: 60
-    environment: ghcr
+    permissions:
+      packages: write  # GHCR push; GITHUB_TOKEN-created packages stay linked to this repo
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
       is_main: ${{ steps.resolve.outputs.is_main }}
@@ -118,15 +120,8 @@ jobs:
       - name: Mark builds in progress (pauses nightly docker cleanup)
         run: touch /home/github-runner/.deploy-in-progress
 
-      - id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.GHCR_APP_ID }}
-          private-key: ${{ secrets.GHCR_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-
       - name: Log in to GHCR
-        run: echo "${{ steps.app-token.outputs.token }}" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - id: resolve
         name: Resolve tag (semver on main, sha elsewhere)
@@ -176,7 +171,8 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: [self-hosted, zivo]
     timeout-minutes: 180
-    environment: ghcr
+    permissions:
+      packages: write  # GHCR push; GITHUB_TOKEN-created packages stay linked to this repo
     strategy:
       fail-fast: true   # one failed image stops the rest; promote gates on this anyway
       max-parallel: 1   # strictly sequential
@@ -198,15 +194,8 @@ jobs:
       - name: Mark builds in progress (pauses nightly docker cleanup)
         run: touch /home/github-runner/.deploy-in-progress
 
-      - id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.GHCR_APP_ID }}
-          private-key: ${{ secrets.GHCR_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-
       - name: Log in to GHCR
-        run: echo "${{ steps.app-token.outputs.token }}" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Set image vars
         run: |
