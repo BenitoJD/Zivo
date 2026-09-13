@@ -108,6 +108,7 @@ jobs:
     runs-on: [self-hosted, zivo]
     timeout-minutes: 60
     permissions:
+      contents: read   # job-level map replaces the top-level one; keep checkout working
       packages: write  # GHCR push; GITHUB_TOKEN-created packages stay linked to this repo
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
@@ -172,6 +173,7 @@ jobs:
     runs-on: [self-hosted, zivo]
     timeout-minutes: 180
     permissions:
+      contents: read   # job-level map replaces the top-level one; keep checkout working
       packages: write  # GHCR push; GITHUB_TOKEN-created packages stay linked to this repo
     strategy:
       fail-fast: true   # one failed image stops the rest; promote gates on this anyway
