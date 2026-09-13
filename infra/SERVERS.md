@@ -36,7 +36,7 @@ bootstraps (PR #27); one is a spare. SSH key access is installed and verified on
 | zivo-node1 | k8s worker + Traefik ingress | vm148786062.manageserver.in | 45.196.196.52 | Ubuntu 24.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-24 |
 | zivo-node2 | **dedicated data node** (Postgres + MinIO, tainted) | vm326035110.manageserver.in | 45.196.196.115 | Ubuntu 24.04 | 4 / 7.6 Gi / 96 G | LV 13 | 2026-09-24 |
 | zivo-node3 | k8s worker + Traefik ingress | vm127192563.manageserver.in | 45.196.196.191 | Ubuntu 24.04 | 4 / 7.6 Gi / 96 G | LV 13 | 2026-09-24 |
-| zivo-node4 | k8s worker + GitHub Actions runner | vm501272425.manageserver.in | 203.57.85.251 | Ubuntu 22.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-20 |
+| zivo-node4 | **dedicated GitHub Actions CI runner** (removed from k8s 2026-09-14; kubelet/kubeadm/kubectl purged, `kubeadm reset` done; only Docker + the runner service remain) | vm501272425.manageserver.in | 203.57.85.251 | Ubuntu 22.04 | 2 / 3.7 Gi / 48 G | LV 12 | 2026-09-20 |
 
 Notes:
 
@@ -62,7 +62,7 @@ reflected in `infra/ansible/inventory/hosts.ini`.
 | Workers | zivo-node1, node2, node3 | kubelet + kube-proxy + Cilium |
 | API load balancer | zivo-node5 | HAProxy `8443` → apiserver `6443`, `/readyz` HTTPS checks |
 | Cluster endpoint | `45.196.196.22:8443` | what kubectl / kubeadm join talk to |
-| Spare | zivo-node4 | bare Ubuntu, nothing installed; candidate 7th node |
+| CI runner (outside cluster) | zivo-node4 | GitHub Actions runner + Docker only; `kubeadm reset` 2026-09-14 — do not join to the cluster |
 
 kubectl access: a working admin kubeconfig lives on **zivo-node5** (`/root/.kube/config`) and
 `/etc/kubernetes/admin.conf` on each control-plane node. `kubectl get nodes` from zivo-node5 shows
