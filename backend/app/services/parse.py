@@ -14,7 +14,7 @@ import re
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
-import fitz
+import pymupdf
 from docx import Document as DocxDocument
 from docx.oxml.ns import qn
 from docx.table import Table
@@ -107,7 +107,7 @@ def _pdf_entry(i: int, page: object) -> dict:
 def _parse_pdf(data: bytes) -> list[dict]:
     """PDF physical pages are native units — never soft-merge them."""
     pages: list[dict] = []
-    with fitz.open(stream=data, filetype="pdf") as doc:
+    with pymupdf.open(stream=data, filetype="pdf") as doc:
         pages.extend(_pdf_entry(i, page) for i, page in enumerate(doc, start=1))
     return pages or [{"page": 1, "text": "", "sparse_text": True}]
 
@@ -115,7 +115,7 @@ def _parse_pdf(data: bytes) -> list[dict]:
 def parse_pdf_page(data: bytes, page_number: int) -> dict:
     """Extract text for a single 1-indexed PDF page."""
     page_number = max(1, int(page_number))
-    with fitz.open(stream=data, filetype="pdf") as doc:
+    with pymupdf.open(stream=data, filetype="pdf") as doc:
         return pick(
             page_number > doc.page_count,
             lambda: {"page": page_number, "text": ""},
@@ -181,7 +181,7 @@ def parse_document_page(
 
 
 def count_pdf_pages(data: bytes) -> int:
-    with fitz.open(stream=data, filetype="pdf") as doc:
+    with pymupdf.open(stream=data, filetype="pdf") as doc:
         return max(1, doc.page_count)
 
 
@@ -199,7 +199,7 @@ def count_document_pages(content_type: str, data: bytes) -> int:
 def refresh_document_page_count(db, doc) -> int:
     """Ensure ``meta.page_count`` matches the file (heals pre-soft-paginate DOCX).
 
-    Cheap for PDF (fitz page count). For Word/text/paste, re-parses once when the
+    Cheap for PDF (pymupdf page count). For Word/text/paste, re-parses once when the
     stored count is missing or still ``1`` on a non-trivial file — those were the
     docs that got stuck as a single mega-page before soft pagination shipped.
     """
@@ -273,16 +273,16 @@ def render_pdf_page_png(
         rect = page.rect
         long_edge = max(float(rect.width), float(rect.height), 1.0)
         scale = min(2.0, max_edge / long_edge)
-        pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
         png = pix.tobytes("png")
         while len(png) > max_bytes and scale > 0.35:
             scale *= 0.75
-            pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
             png = pix.tobytes("png")
         return choose(len(png) > max_bytes, None, png)
 
     def _render() -> bytes | None:
-        with fitz.open(stream=data, filetype="pdf") as doc:
+        with pymupdf.open(stream=data, filetype="pdf") as doc:
             return pick(
                 page_number > doc.page_count,
                 lambda: None,

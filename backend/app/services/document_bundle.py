@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import fitz
+import pymupdf
 from fastapi import HTTPException
 
 from app.engine_runtime import choose, pick
@@ -30,10 +30,10 @@ def _bundle_display_filename(filenames: list[str], *, merged_pdf: bool) -> str:
 
 
 def _merge_pdf_bytes(parts: list[bytes]) -> bytes:
-    merged = fitz.open()
+    merged = pymupdf.open()
     try:
         for part in parts:
-            src = fitz.open(stream=part, filetype="pdf")
+            src = pymupdf.open(stream=part, filetype="pdf")
             try:
                 merged.insert_pdf(src)
             finally:

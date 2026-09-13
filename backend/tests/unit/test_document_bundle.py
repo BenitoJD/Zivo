@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import fitz
+import pymupdf
 import pytest
 from fastapi import HTTPException
 
@@ -10,7 +10,7 @@ from app.services.document_bundle import build_document_bundle
 
 
 def _mini_pdf(label: str) -> bytes:
-    doc = fitz.open()
+    doc = pymupdf.open()
     page = doc.new_page()
     page.insert_text((72, 72), label)
     data = doc.tobytes()
@@ -31,7 +31,7 @@ def test_merge_two_pdfs_into_one_document() -> None:
     assert len(meta["source_files"]) == 2
     assert meta["page_count"] == 2
 
-    with fitz.open(stream=data, filetype="pdf") as merged:
+    with pymupdf.open(stream=data, filetype="pdf") as merged:
         assert merged.page_count == 2
 
 
