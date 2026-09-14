@@ -1,4 +1,4 @@
-replicaCount: 2
+replicaCount: 1
 namespace: zivo
 image:
   repository: ghcr.io/benitojd/zivo-storage
@@ -24,10 +24,10 @@ resources:
     cpu: "500m"
     memory: 1Gi
 autoscaling:
-  enabled: true
+  enabled: false
   minReplicas: 1
   maxReplicas: 4
   targetCPUUtilizationPercentage: 80
 podDisruptionBudget:
-  enabled: true
+  enabled: false
   minAvailable: 1

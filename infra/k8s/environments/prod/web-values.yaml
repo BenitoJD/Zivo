@@ -51,11 +51,11 @@ resources:
     cpu: "1"
     memory: 512Mi
 autoscaling:
-  enabled: true
+  enabled: false
   # Single 12GB VPS: cap web replicas so Traefik stays healthy under load.
   minReplicas: 2
   maxReplicas: 6
   targetCPUUtilizationPercentage: 80
 podDisruptionBudget:
-  enabled: true
+  enabled: false
   minAvailable: 1

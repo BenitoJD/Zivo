@@ -1,5 +1,5 @@
 namespace: zivo
-replicaCount: 2
+replicaCount: 1
 image:
   repository: ghcr.io/benitojd/zivo-worker
   tag: 0.0.2
@@ -12,7 +12,7 @@ imagePullSecrets:
 workloads:
   io:
     enabled: true
-    replicaCount: 2
+    replicaCount: 1
     command: ["python", "run_eta_worker_async.py"]
     env:
       ETA_WORKER_WORKLOADS: io
@@ -39,11 +39,11 @@ resources:
     cpu: "2"
     memory: 2Gi
 autoscaling:
-  enabled: true
+  enabled: false
   # CPU workers use ~1.2Gi each; keep headroom for Traefik, Postgres, and k3s.
   minReplicas: 1
   maxReplicas: 2
   targetCPUUtilizationPercentage: 80
 podDisruptionBudget:
-  enabled: true
+  enabled: false
   minAvailable: 1

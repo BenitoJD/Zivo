@@ -24,10 +24,10 @@ resources:
     cpu: "500m"
     memory: 1Gi
 autoscaling:
-  enabled: true
+  enabled: false
   minReplicas: 2
   maxReplicas: 6
   targetCPUUtilizationPercentage: 80
 podDisruptionBudget:
-  enabled: true
+  enabled: false
   minAvailable: 1
