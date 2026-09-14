@@ -45,6 +45,14 @@ spec:
     server: https://kubernetes.default.svc
     namespace: zivo
   syncPolicy:
+  ignoreDifferences:
+    # the API server fills volumeMode/storageClassName into
+    # volumeClaimTemplates; the chart renders them bare, so the diff
+    # never clears. VCTs are immutable anyway.
+    - group: apps
+      kind: StatefulSet
+      jsonPointers:
+        - /spec/volumeClaimTemplates
     automated:
       prune: false
       selfHeal: false
