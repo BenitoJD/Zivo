@@ -5,12 +5,12 @@ ingress:
   enabled: true
   className: traefik
   host: s3.zivo.fyi
-  # HTTP until the deliberate TLS cutover (cert-manager needs every host A
-  # record live; flipping this on is the cutover step itself).
-  tls: false
-  entrypoint: web
+  # TLS cutover done 2026-09-14: DNS A record live, cert zivo-s3-tls already
+  # issued by cert-manager (letsencrypt-prod).
+  tls: true
+  entrypoint: websecure
   tlsSecret: zivo-s3-tls
-publicUrl: http://s3.zivo.fyi
+publicUrl: https://s3.zivo.fyi
 
 # Dedicated data node: tainted node.zivo/dedicated=data so ONLY postgres/minio
 # schedule here. See infra/SERVERS.md (zivo-node2 = vm326035110).
