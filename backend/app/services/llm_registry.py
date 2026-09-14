@@ -630,11 +630,24 @@ def _ensure_deepseek(db: Session, settings: Settings) -> tuple[bool, LlmModel | 
         .filter(LlmModel.provider_id == deepseek.id, LlmModel.slug == "deepseek-v4-flash")
         .first()
     )
+    # Auto-pin deepseek only when it is the configured default. Unconditionally
+    # pinning on key presence raced sync_default_chat_model_from_env: with both a
+    # deepseek key and LITELLM_MODEL naming another provider, the refresh flushed
+    # two is_default=True chat rows and tripped uq_llm_models_default_per_kind,
+    # aborting the whole bootstrap (tutor then 500s "could not reach tutor").
+    litellm_slug = settings.litellm_model.strip().split("/", 1)[-1].replace("/", "-")
     dirty = any(
         [
             before_ds == 0,
             pick(
-                bool(settings.deepseek_api_key) and bool(deepseek_model) and not deepseek_model.is_default,
+                bool(settings.deepseek_api_key)
+                and bool(deepseek_model)
+                and not deepseek_model.is_default
+                and pick(
+                    bool(settings.litellm_model.strip()),
+                    lambda: litellm_slug == deepseek_model.slug,
+                    lambda: True,
+                ),
                 lambda: _pin_default(db, deepseek_model),
                 lambda: False,
             ),
@@ -1305,6 +1318,11 @@ def _seed_empty_registry(db: Session, settings: Settings) -> None:
 def bootstrap_llm_registry_from_env(db: Session, settings: Settings | None = None) -> None:
     """Seed or refresh providers/models from env on startup (idempotent)."""
     settings = settings or get_settings()
+    # Hold the registry lock BEFORE the empty-check: during a rolling deploy two
+    # pods can both observe count() == 0, and the loser's seed then collides on
+    # uq_llm_models_default_per_kind. The lock serializes the decision with the
+    # other pod's commit (pg_advisory_xact_lock re-enters safely in _seed/_refresh).
+    _acquire_registry_lock(db)
     pick(
         db.query(LlmProvider).count() == 0,
         lambda: _seed_empty_registry(db, settings),
