@@ -157,7 +157,7 @@ Product tables: `intel.*` (unchanged DDL) + additive `qb.*` — see [docs/WORKSP
 | **K8s API entry (LB)** | `45.196.196.233:8443` (`KUBECONFIG=~/.kube/zivo-ha.conf`) |
 | **DNS** | `zivo.fyi`, `www.zivo.fyi`, `api.zivo.fyi`, `auth.zivo.fyi`, `storage.zivo.fyi`, `practice.zivo.fyi`, `content.zivo.fyi`, `study.zivo.fyi`, `library.zivo.fyi`, `admin.zivo.fyi`, `s3.zivo.fyi` → `45.196.196.98` |
 | **Namespace** | `zivo` |
-| **Runner** | Self-hosted on worker node4, labels `self-hosted`, `zivo` |
+| **Runner** | Self-hosted on the dedicated runner VPS (`zivo-runner-1`), labels `self-hosted`, `zivo` |
 
 **Fleet servers (Web Eye Soft):** the 10-VPS inventory (roles, specs, SSH aliases `zivo-lb1`, `zivo-lb2`, `zivo-node1`–`zivo-node8`, renewals) lives in [infra/SERVERS.md](infra/SERVERS.md).
 

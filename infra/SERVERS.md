@@ -19,9 +19,31 @@
 
 Scope: the **8 working VPS** from the September 2026 client-area screenshot, surveyed live over
 SSH on 2026-09-01. Seven of them form the HA Kubernetes cluster that [infra/ansible](./ansible/)
-bootstraps (PR #27); one is a spare. SSH key access is installed and verified on all 8.
+bootstraps (PR #27); one is the CI runner. SSH key access is installed and verified on all 8.
 
-**TL;DR for teammates:** `ssh zivo-node1` … `ssh zivo-node8` (key auth, root). See [SSH access](#ssh-access).
+**TL;DR for teammates:** `ssh zivo-runner-1`, `ssh zivo-db-1`, `ssh zivo-master-1` … (role-based
+names). The older `zivo-node1`…`zivo-node8` aliases still work.
+
+## Role-based naming (2026-09-14)
+
+The old aliases numbered servers by purchase order, so "worker-4" was the CI runner and
+"worker-2" was the database. Use the role name; the number keys stay as legacy aliases.
+
+| Role name (new) | Legacy alias | Kubernetes node | Job |
+|-----------------|--------------|-----------------|-----|
+| `zivo-ingress-1` | zivo-node1 | worker-1 | k8s worker + Traefik ingress |
+| `zivo-db-1` | zivo-node2 | worker-2 | **dedicated data node**: Postgres + MinIO (tainted, no other workloads) |
+| `zivo-ingress-2` | zivo-node3 | worker-3 | k8s worker + Traefik ingress |
+| `zivo-runner-1` | zivo-node4 | (left the cluster 2026-09-14) | **dedicated GitHub Actions CI runner** — nothing else |
+| `zivo-spare-1` | zivo-node5 | — | API LB host, Judge0 sandbox candidate |
+| `zivo-master-1` | zivo-node6 | master-1 | k8s control plane + etcd |
+| `zivo-master-2` | zivo-node7 | master-2 | k8s control plane + etcd |
+| `zivo-master-3` | zivo-node8 | master-3 | k8s control plane + etcd |
+
+Kubernetes node names (`worker-1`, `worker-2`, …, `master-3`) are **not renamed**: kubeadm certs
+and etcd embed the control-plane hostnames, and worker-2's local-path PVs pin Postgres data to
+that node name. Renaming them means drain + rejoin per node and is not worth the risk for
+cosmetics — the role names above are what humans and SSH use.
 
 ## Fleet at a glance
 
@@ -83,25 +105,25 @@ passwords; `~/.ssh/config` carries the aliases below. Password auth still works 
 (root password per server is visible in the client area under *Manage → VPS Information*).
 
 ```sshconfig
-# ~/.ssh/config: Web Eye Soft fleet
-Host zivo-node1
+# ~/.ssh/config: Web Eye Soft fleet — role names (legacy zivo-node* also work)
+Host zivo-ingress-1
     HostName 45.196.196.52
-Host zivo-node2
+Host zivo-db-1
     HostName 45.196.196.115
-Host zivo-node3
+Host zivo-ingress-2
     HostName 45.196.196.191
-Host zivo-node4
+Host zivo-runner-1
     HostName 203.57.85.251
-Host zivo-node5
+Host zivo-spare-1
     HostName 45.196.196.22
-Host zivo-node6
+Host zivo-master-1
     HostName 203.57.85.250
-Host zivo-node7
+Host zivo-master-2
     HostName 203.57.85.224
-Host zivo-node8
+Host zivo-master-3
     HostName 203.57.85.157
 
-Host zivo-node*
+Host zivo-node* zivo-ingress-* zivo-db-* zivo-runner-* zivo-spare-* zivo-master-*
     User root
     IdentityFile ~/.ssh/zivo_fleet_ed25519
     IdentitiesOnly yes

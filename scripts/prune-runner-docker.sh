@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reclaim disk on the CI runner box (zivo-node4) when Docker fills it.
+# Reclaim disk on the CI runner box (zivo-runner-1) when Docker fills it.
 #
 # The nightly docker-cleanup.timer normally keeps the disk in check, but a
 # burst of builds can outrun it (it happened 2026-09-14: 89% full). Run this
@@ -15,7 +15,7 @@
 # lost because pushed images live on GHCR and can be re-pulled.
 set -euo pipefail
 
-RUNNER_HOST="${RUNNER_HOST:-zivo-node4}"
+RUNNER_HOST="${RUNNER_HOST:-zivo-runner-1}"
 GUARD="/home/github-runner/.deploy-in-progress"
 AGGRESSIVE=0
 FORCE=0
