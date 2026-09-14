@@ -2,7 +2,7 @@ replicaCount: 1
 namespace: zivo
 image:
   repository: ghcr.io/benitojd/zivo-migrate
-  tag: 0.0.2
+  tag: 0.0.3
   pullPolicy: IfNotPresent
 # Images pull from GHCR (built by the cicd pipeline). Nodes authenticate with
 # the operator-managed ghcr-pull secret (read-scoped credential).

@@ -2,7 +2,7 @@ namespace: zivo
 replicaCount: 1
 image:
   repository: ghcr.io/benitojd/zivo-worker
-  tag: 0.0.2
+  tag: 0.0.3
   pullPolicy: IfNotPresent
 secretName: zivo-secrets
 # Images pull from GHCR (built by the cicd pipeline). Nodes authenticate with
