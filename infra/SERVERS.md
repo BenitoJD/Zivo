@@ -35,7 +35,7 @@ The old aliases numbered servers by purchase order, so "worker-4" was the CI run
 | `zivo-db-1` | zivo-node2 | worker-2 | **dedicated data node**: Postgres + MinIO (tainted, no other workloads) |
 | `zivo-ingress-2` | zivo-node3 | worker-3 | k8s worker + Traefik ingress |
 | `zivo-runner-1` | zivo-node4 | (left the cluster 2026-09-14) | **dedicated GitHub Actions CI runner** — nothing else |
-| `zivo-spare-1` | zivo-node5 | — | API LB host, Judge0 sandbox candidate |
+| `zivo-spare-1` | zivo-node5 | — | **Judge0 code-execution sandbox** (:2358) + Uptime Kuma (:3001), outside k8s |
 | `zivo-master-1` | zivo-node6 | master-1 | k8s control plane + etcd |
 | `zivo-master-2` | zivo-node7 | master-2 | k8s control plane + etcd |
 | `zivo-master-3` | zivo-node8 | master-3 | k8s control plane + etcd |
