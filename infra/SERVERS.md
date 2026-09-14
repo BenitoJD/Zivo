@@ -35,7 +35,7 @@ The old aliases numbered servers by purchase order, so "worker-4" was the CI run
 | `zivo-db-1` | zivo-node2 | worker-2 | **dedicated data node**: Postgres + MinIO (tainted, no other workloads) |
 | `zivo-ingress-2` | zivo-node3 | worker-3 | k8s worker + Traefik ingress |
 | `zivo-runner-1` | zivo-node4 | (left the cluster 2026-09-14) | **dedicated GitHub Actions CI runner** — nothing else |
-| `zivo-spare-1` | zivo-node5 | — | **Judge0 code-execution sandbox** (:2358) + Uptime Kuma (:3001), outside k8s |
+| `zivo-sandbox-1` | zivo-node5 | — | **Judge0 code-execution sandbox** (:2358) + Uptime Kuma (:3001), outside k8s |
 | `zivo-master-1` | zivo-node6 | master-1 | k8s control plane + etcd |
 | `zivo-master-2` | zivo-node7 | master-2 | k8s control plane + etcd |
 | `zivo-master-3` | zivo-node8 | master-3 | k8s control plane + etcd |
@@ -114,7 +114,7 @@ Host zivo-ingress-2
     HostName 45.196.196.191
 Host zivo-runner-1
     HostName 203.57.85.251
-Host zivo-spare-1
+Host zivo-sandbox-1
     HostName 45.196.196.22
 Host zivo-master-1
     HostName 203.57.85.250
@@ -123,7 +123,7 @@ Host zivo-master-2
 Host zivo-master-3
     HostName 203.57.85.157
 
-Host zivo-node* zivo-ingress-* zivo-db-* zivo-runner-* zivo-spare-* zivo-master-*
+Host zivo-node* zivo-ingress-* zivo-db-* zivo-runner-* zivo-sandbox-* zivo-master-*
     User root
     IdentityFile ~/.ssh/zivo_fleet_ed25519
     IdentitiesOnly yes
